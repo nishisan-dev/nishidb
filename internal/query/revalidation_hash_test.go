@@ -23,7 +23,7 @@ import (
 // PLANO INDEXADO de fato escolhido (linha final), e não de um FullScan que
 // coincidentemente devolveria o mesmo vazio.
 func TestRevalidacaoDeCandidatoDoIndiceHash(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	h.ingere(`{"id":"CMP-0001","_SEQ":1,"NAS-Identifier":"core-01","User-Name":"joao"}`)
 
 	nas, ok := h.sch.FieldByName([]byte("NAS-Identifier"))

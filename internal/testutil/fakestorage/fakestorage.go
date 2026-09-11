@@ -231,7 +231,7 @@ func (s *Store) validateIndexable(payload []byte) error {
 }
 
 // applyPostings liga uma posting para CADA campo indexado presente no payload
-// novo, e não remove nenhuma. É o espelho exato do aplicaIndiceSets do Store
+// novo, e não remove nenhuma. É o espelho exato do aplicaIndexSets do Store
 // real, e a palavra "exato" é o requisito, não um elogio.
 //
 // Ela substituiu um diff (merge linear sobre os dois payloads, removendo o valor
@@ -483,6 +483,7 @@ type Dict struct {
 	next  types.FieldID
 }
 
+// NewDict ...
 func NewDict() *Dict {
 	return &Dict{
 		ids:   map[string]types.FieldID{},
@@ -491,6 +492,8 @@ func NewDict() *Dict {
 		next:  1,
 	}
 }
+
+// LookupOrCreate ...
 
 func (d *Dict) LookupOrCreate(name []byte) (types.FieldID, error) {
 	if id, ok := d.ids[string(name)]; ok {
@@ -501,6 +504,7 @@ func (d *Dict) LookupOrCreate(name []byte) (types.FieldID, error) {
 	d.ids[string(name)] = id
 	d.names[id] = string(name)
 	return id, nil
+	// Name ...
 }
 
 func (d *Dict) Name(id types.FieldID) (string, bool) {

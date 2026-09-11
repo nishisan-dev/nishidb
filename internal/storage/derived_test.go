@@ -8,9 +8,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// põeUmaLinha grava um record e faz checkpoint, para que o manifest passe a
+// põeOneRow grava um record e faz checkpoint, para que o manifest passe a
 // declarar RowCount > 0 — que é a condição sob a qual a recusa vale.
-func põeUmaLinha(t *testing.T, s *Store) {
+func põeOneRow(t *testing.T, s *Store) {
 	t.Helper()
 	// O Put recusa fieldID fora do dicionário: registrar "id" aqui é o que lhe
 	// dá o ID 1 que fldID nomeia.
@@ -35,7 +35,7 @@ func põeUmaLinha(t *testing.T, s *Store) {
 func TestColunaDerivadaNovaEmDatasetComLinhasERecusada(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{Dir: dir})
-	põeUmaLinha(t, s)
+	põeOneRow(t, s)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestDatasetCriadoComDerivadaReabreDepoisDeTerLinhas(t *testing.T) {
 	opts := Options{Dir: dir, SegmentSize: 1 << 20, DerivedColumnNames: []string{"probe_ip"}}
 
 	s := openStore(t, opts)
-	põeUmaLinha(t, s)
+	põeOneRow(t, s)
 	// Registra a derivada como o Compile faria num dataset criado com extract.
 	if _, err := s.FieldDict().LookupOrCreate([]byte("probe_ip")); err != nil {
 		t.Fatal(err)

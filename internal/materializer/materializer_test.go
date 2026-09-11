@@ -343,7 +343,7 @@ func TestApplySequenceEqualEMenorDescartam(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, patchYAML)
 			created := h.apply(`{"id":"CMP-001","_SEQ":100,"Acct-Input-Octets":10}`)
-			putsAntes := len(h.st.PutCalls)
+			putsBefore := len(h.st.PutCalls)
 
 			r := h.apply(fmt.Sprintf(`{"id":"CMP-001","_SEQ":%d,"Acct-Input-Octets":999}`, tc.seq))
 			if r.Action != ActionStale {
@@ -353,8 +353,8 @@ func TestApplySequenceEqualEMenorDescartam(t *testing.T) {
 				t.Errorf("RowID = %d, want %d (a row do estado corrente)", r.RowID, created.RowID)
 			}
 			// Descarte é SEM efeito colateral: nenhuma escrita chegou ao store.
-			if len(h.st.PutCalls) != putsAntes {
-				t.Errorf("evento stale gerou Put: %+v", h.st.PutCalls[putsAntes:])
+			if len(h.st.PutCalls) != putsBefore {
+				t.Errorf("evento stale gerou Put: %+v", h.st.PutCalls[putsBefore:])
 			}
 			h.wantInt(h.state("CMP-001"), "Acct-Input-Octets", 10)
 			if mt := h.m.Metrics(); mt.StaleTotal != 1 || mt.EventsTotal != 2 {
@@ -364,7 +364,7 @@ func TestApplySequenceEqualEMenorDescartam(t *testing.T) {
 	}
 }
 
-const semSequenceYAML = `
+const withoutSequenceYAML = `
 version: 1
 name: sem_sequence
 materialization:
@@ -384,7 +384,7 @@ schema:
 // Sem sequence configurada vale a ordem de chegada (§26): nada é stale, nem
 // mesmo um evento que "volta no tempo".
 func TestApplySemSequenceAplicaTudo(t *testing.T) {
-	h := newHarness(t, semSequenceYAML)
+	h := newHarness(t, withoutSequenceYAML)
 	h.apply(`{"id":"A","counter":10}`)
 	r := h.apply(`{"id":"A","counter":5}`)
 	if r.Action != ActionUpdated {
@@ -679,28 +679,28 @@ func TestApplyContinuaAposEventoRuim(t *testing.T) {
 	}
 }
 
-// storeErro injeta erro no Put mantendo o resto do fake intacto.
-type storeErro struct {
+// storeErr injeta erro no Put mantendo o resto do fake intacto.
+type storeErr struct {
 	*fakestorage.Store
 	put error
 	get error
 }
 
-func (s storeErro) Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error) {
+func (s storeErr) Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error) {
 	if s.put != nil {
 		return 0, false, s.put
 	}
 	return s.Store.Put(key, seq, flags, payload, prev)
 }
 
-func (s storeErro) State(key, buf []byte) (types.Record, []byte, types.Presence, error) {
+func (s storeErr) State(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	if s.get != nil {
 		return types.Record{}, buf, types.PresenceAbsent, s.get
 	}
 	return s.Store.State(key, buf)
 }
 
-func (s storeErro) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
+func (s storeErr) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
 	if s.get != nil {
 		return types.Record{}, buf, false, s.get
 	}
@@ -711,7 +711,7 @@ func (s storeErro) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record,
 // é inútil até o dataset reabrir, então o Apply marca Fatal e o caller para.
 func TestApplyWriterFailedEhFatal(t *testing.T) {
 	c := compileYAML(t, patchYAML)
-	st := storeErro{Store: fakestorage.New(fakestorage.Indexes{}),
+	st := storeErr{Store: fakestorage.New(fakestorage.Indexes{}),
 		put: fmt.Errorf("%w: fdatasync do segmento", types.ErrWriterFailed)}
 	m := mustNew(t, c, st)
 
@@ -739,7 +739,7 @@ func TestApplyWriterFailedEhFatal(t *testing.T) {
 // defeito se esconde na métrica de fonte ruidosa.
 func TestApplyErroDeStorageNaoEhEventoRuim(t *testing.T) {
 	c := compileYAML(t, patchYAML)
-	st := storeErro{Store: fakestorage.New(fakestorage.Indexes{}),
+	st := storeErr{Store: fakestorage.New(fakestorage.Indexes{}),
 		put: fmt.Errorf("%w: key vazia", types.ErrInvalidArgument)}
 	m := mustNew(t, c, st)
 
@@ -760,7 +760,7 @@ func TestApplyErroDeStorageNaoEhEventoRuim(t *testing.T) {
 // evento gravaria um create sobre uma entidade que existe.
 func TestApplyErroDeLeituraEhFailed(t *testing.T) {
 	c := compileYAML(t, patchYAML)
-	st := storeErro{Store: fakestorage.New(fakestorage.Indexes{}),
+	st := storeErr{Store: fakestorage.New(fakestorage.Indexes{}),
 		get: fmt.Errorf("%w: CRC do record", encoding.ErrCorrupt)}
 	m := mustNew(t, c, st)
 
@@ -908,29 +908,29 @@ func TestRotulosDeActionECategoria(t *testing.T) {
 	}
 }
 
-// dictErro falha ao registrar um campo novo — o que o fielddict real faz
+// dictErr falha ao registrar um campo novo — o que o fielddict real faz
 // quando o fdatasync do dicionário falha.
-type dictErro struct {
+type dictErr struct {
 	inner *fakestorage.Dict
-	falha string
+	fail  string
 }
 
-func (d dictErro) LookupOrCreate(name []byte) (types.FieldID, error) {
-	if string(name) == d.falha {
+func (d dictErr) LookupOrCreate(name []byte) (types.FieldID, error) {
+	if string(name) == d.fail {
 		return 0, errors.New("fielddict: fdatasync falhou")
 	}
 	return d.inner.LookupOrCreate(name)
 }
 
-func (d dictErro) TypeHint(id types.FieldID) (types.FieldType, bool) { return d.inner.TypeHint(id) }
+func (d dictErr) TypeHint(id types.FieldID) (types.FieldType, bool) { return d.inner.TypeHint(id) }
 
-func (d dictErro) SetTypeHint(id types.FieldID, t types.FieldType) error {
+func (d dictErr) SetTypeHint(id types.FieldID, t types.FieldType) error {
 	return d.inner.SetTypeHint(id, t)
 }
 
-func (d dictErro) Len() int { return d.inner.Len() }
+func (d dictErr) Len() int { return d.inner.Len() }
 
-func (d dictErro) Name(id types.FieldID) (string, bool) { return d.inner.Name(id) }
+func (d dictErr) Name(id types.FieldID) (string, bool) { return d.inner.Name(id) }
 
 // Falha ao registrar campo desconhecido vem do STORAGE, não do evento: não
 // pode ser contabilizada como SCHEMA_VALIDATION nem virar Skipped.
@@ -939,7 +939,7 @@ func TestApplyFalhaDoDicionarioEhFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := s.Compile(dictErro{inner: fakestorage.NewDict(), falha: "novo"})
+	c, err := s.Compile(dictErr{inner: fakestorage.NewDict(), fail: "novo"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1077,7 +1077,7 @@ func TestApplyFixtureRadiusCompletoDepoisPatch(t *testing.T) {
 
 // ------------------------------------------------------- teto de campos
 
-const tetoYAMLTmpl = `version: 1
+const ceilingYAMLTmpl = `version: 1
 name: t
 materialization:
   key:
@@ -1092,9 +1092,9 @@ schema:
       type: string
 `
 
-func compilaComTeto(t *testing.T, maxCols int, onMax string) *schema.Compiled {
+func compileWithCeiling(t *testing.T, maxCols int, onMax string) *schema.Compiled {
 	t.Helper()
-	s, err := schema.Parse([]byte(fmt.Sprintf(tetoYAMLTmpl, maxCols, onMax)), schema.BuiltinDefaults)
+	s, err := schema.Parse([]byte(fmt.Sprintf(ceilingYAMLTmpl, maxCols, onMax)), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1111,7 +1111,7 @@ func compilaComTeto(t *testing.T, maxCols int, onMax string) *schema.Compiled {
 // balde de "bug nosso" e PARAVA o writer, com o offset congelado, de forma
 // que o restart reproduzia o mesmo estouro para sempre.
 func TestApplyAcimaDoTetoSobIgnoreGravaOEvento(t *testing.T) {
-	c := compilaComTeto(t, 2, schema.OnMaxColsIgnore)
+	c := compileWithCeiling(t, 2, schema.OnMaxColsIgnore)
 	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	r := m.Apply([]byte(`{"id":"A","cabe":1,"naoCabe":2}`))
@@ -1131,7 +1131,7 @@ func TestApplyAcimaDoTetoSobIgnoreGravaOEvento(t *testing.T) {
 // operador como STORAGE_ERROR — "bug nosso ou dataset avariado". O teto
 // alcançado não é nenhum dos dois.
 func TestApplyAcimaDoTetoSobStopTemCategoriaPropria(t *testing.T) {
-	c := compilaComTeto(t, 2, schema.OnMaxColsStop)
+	c := compileWithCeiling(t, 2, schema.OnMaxColsStop)
 	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	r := m.Apply([]byte(`{"id":"A","cabe":1,"naoCabe":2}`))
@@ -1153,7 +1153,7 @@ func TestCategoriaDeTetoNaoEEventoRuim(t *testing.T) {
 	}
 }
 
-const tetoAninhadoYAMLTmpl = `version: 1
+const ceilingAninhadoYAMLTmpl = `version: 1
 name: t
 materialization:
   key:
@@ -1171,9 +1171,9 @@ schema:
       unknownFields: include
 `
 
-func compilaComTetoAninhado(t *testing.T, maxCols int, onMax string) *schema.Compiled {
+func compileWithCeilingAninhado(t *testing.T, maxCols int, onMax string) *schema.Compiled {
 	t.Helper()
-	s, err := schema.Parse([]byte(fmt.Sprintf(tetoAninhadoYAMLTmpl, maxCols, onMax)), schema.BuiltinDefaults)
+	s, err := schema.Parse([]byte(fmt.Sprintf(ceilingAninhadoYAMLTmpl, maxCols, onMax)), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1193,7 +1193,7 @@ func compilaComTetoAninhado(t *testing.T, maxCols int, onMax string) *schema.Com
 // descarte subindo e nada parando. O operador que escolheu `stop` recebia o
 // comportamento de quem escolheu `ignore`, sem uma linha de log dizendo isso.
 func TestTetoSobStopParaAIngestaoTambemNoCaminhoANINHADO(t *testing.T) {
-	c := compilaComTetoAninhado(t, 3, schema.OnMaxColsStop)
+	c := compileWithCeilingAninhado(t, 3, schema.OnMaxColsStop)
 	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	r := m.Apply([]byte(`{"id":"A","doc":{"cabe":1,"naoCabe":2}}`))
@@ -1207,7 +1207,7 @@ func TestTetoSobStopParaAIngestaoTambemNoCaminhoANINHADO(t *testing.T) {
 // JÁ funcionava, e ela está aqui para provar que a correção do `stop` não a
 // trocou de lado.
 func TestTetoSobIgnoreNoCaminhoANINHADOGravaOEvento(t *testing.T) {
-	c := compilaComTetoAninhado(t, 3, schema.OnMaxColsIgnore)
+	c := compileWithCeilingAninhado(t, 3, schema.OnMaxColsIgnore)
 	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	r := m.Apply([]byte(`{"id":"A","doc":{"cabe":1,"naoCabe":2}}`))

@@ -24,27 +24,27 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
-// blocoComTLS monta server.tls com o par de arquivos dado — %d fica para a
-// porta, no mesmo molde de blocoPadrao (query_test.go).
-func blocoComTLS(certPath, keyPath string) string {
+// blockWithTLS monta server.tls com o par de arquivos dado — %d fica para a
+// porta, no mesmo molde de blockPadrao (query_test.go).
+func blockWithTLS(certPath, keyPath string) string {
 	return fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
 		"  tls:\n    enabled: true\n    certificateFile: %s\n    privateKeyFile: %s\n", certPath, keyPath)
 }
 
-// geraCertificadoTLSComValidade gera um par certificado/chave autoassinado
+// generateCertTLSWithValidade gera um par certificado/chave autoassinado
 // (ECDSA P-256), em ARQUIVO, com SAN IPAddress 127.0.0.1 — necessário para um
 // handshake TLS DE VERDADE contra "https://127.0.0.1:porta" (o cliente Go
-// verifica o SAN contra o host da URL). Diferente de geraCertificadoDeTeste
+// verifica o SAN contra o host da URL). Diferente de generateCertOfTest
 // (security_test.go): aquele só precisa decodificar como PEM para exercitar
 // tls.LoadX509KeyPair na subida (B2/B3 nunca abrem handshake real); os
 // testes aqui abrem.
 //
 // validade permite simular certificado saudável, expirando em breve ou já
-// expirado — os três ramos que avisaValidadeDoCertificado (security.go)
+// expirado — os três ramos que avisaValidadeOfCert (security.go)
 // decide.
-func geraCertificadoTLSComValidade(t *testing.T, notBefore, notAfter time.Time) (certPath, keyPath string) {
+func generateCertTLSWithValidade(t *testing.T, notBefore, notAfter time.Time) (certPath, keyPath string) {
 	t.Helper()
-	chave, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func geraCertificadoTLSComValidade(t *testing.T, notBefore, notAfter time.Time) 
 		DNSNames:     []string{"localhost"},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &chave.PublicKey, chave)
+	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func geraCertificadoTLSComValidade(t *testing.T, notBefore, notAfter time.Time) 
 		t.Fatal(err)
 	}
 
-	chaveBytes, err := x509.MarshalECPrivateKey(chave)
+	keyBytes, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func geraCertificadoTLSComValidade(t *testing.T, notBefore, notAfter time.Time) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: chaveBytes}); err != nil {
+	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes}); err != nil {
 		t.Fatal(err)
 	}
 	if err := keyOut.Close(); err != nil {
@@ -95,7 +95,7 @@ func geraCertificadoTLSComValidade(t *testing.T, notBefore, notAfter time.Time) 
 	return certPath, keyPath
 }
 
-// clienteTLSDeTeste monta um *http.Client que confia SOMENTE na CA gerada
+// clienteTLSOfTest monta um *http.Client que confia SOMENTE na CA gerada
 // pelo teste — NUNCA InsecureSkipVerify: true. É a mesma doutrina que o
 // plano da Fase 11 exige de qualquer cliente do PRODUTO (B6, "proibido
 // --insecure/InsecureSkipVerify em qualquer cliente"): um x509.CertPool com
@@ -103,7 +103,7 @@ func geraCertificadoTLSComValidade(t *testing.T, notBefore, notAfter time.Time) 
 // verificação de cadeia acontece de verdade. A B6 (helper de CLI/painel real
 // com --tls-ca) segue o MESMO padrão — RootCAs a partir do PEM apontado
 // pela flag, nunca pular a verificação.
-func clienteTLSDeTeste(t *testing.T, certPath string) *http.Client {
+func clienteTLSOfTest(t *testing.T, certPath string) *http.Client {
 	t.Helper()
 	pemBytes, err := os.ReadFile(certPath)
 	if err != nil {
@@ -125,10 +125,10 @@ func clienteTLSDeTeste(t *testing.T, certPath string) *http.Client {
 // teste (nunca InsecureSkipVerify) — a mesma moldura de
 // TestQueryRespondeAMolduraCompleta (query_test.go), só que por HTTPS.
 func TestServeTLSStreamingNDJSONCompleto(t *testing.T) {
-	certPath, keyPath := geraCertificadoTLSComValidade(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
-	srv := servidorComDados(t, 4, blocoComTLS(certPath, keyPath))
+	certPath, keyPath := generateCertTLSWithValidade(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	srv := serverWithData(t, 4, blockWithTLS(certPath, keyPath))
 
-	client := clienteTLSDeTeste(t, certPath)
+	client := clienteTLSOfTest(t, certPath)
 	req, err := http.NewRequest(http.MethodPost, "https://"+srv.Endereco()+"/v1/query",
 		strings.NewReader(`{"dataset":"d","sql":"SELECT id, ip FROM d"}`))
 	if err != nil {
@@ -142,7 +142,7 @@ func TestServeTLSStreamingNDJSONCompleto(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	rows, l := resultado(t, resp)
+	rows, l := result(t, resp)
 	if len(rows) != 4 {
 		t.Fatalf("rows = %d, quer 4", len(rows))
 	}
@@ -155,8 +155,8 @@ func TestServeTLSStreamingNDJSONCompleto(t *testing.T) {
 // um cliente que só oferece TLS 1.0 ou 1.1 tem o handshake recusado antes de
 // qualquer byte de aplicação trafegar.
 func TestServeTLSRecusaVersaoAbaixoDeTLS12(t *testing.T) {
-	certPath, keyPath := geraCertificadoTLSComValidade(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
-	srv := servidorComDados(t, 1, blocoComTLS(certPath, keyPath))
+	certPath, keyPath := generateCertTLSWithValidade(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	srv := serverWithData(t, 1, blockWithTLS(certPath, keyPath))
 
 	pemBytes, err := os.ReadFile(certPath)
 	if err != nil {
@@ -168,8 +168,8 @@ func TestServeTLSRecusaVersaoAbaixoDeTLS12(t *testing.T) {
 	}
 
 	for _, versao := range []uint16{tls.VersionTLS10, tls.VersionTLS11} {
-		nome := map[uint16]string{tls.VersionTLS10: "TLS 1.0", tls.VersionTLS11: "TLS 1.1"}[versao]
-		t.Run(nome, func(t *testing.T) {
+		name := map[uint16]string{tls.VersionTLS10: "TLS 1.0", tls.VersionTLS11: "TLS 1.1"}[versao]
+		t.Run(name, func(t *testing.T) {
 			conn, err := tls.Dial("tcp", srv.Endereco(), &tls.Config{
 				RootCAs:    pool,
 				MinVersion: versao,
@@ -177,7 +177,7 @@ func TestServeTLSRecusaVersaoAbaixoDeTLS12(t *testing.T) {
 			})
 			if err == nil {
 				_ = conn.Close()
-				t.Fatalf("handshake em %s deveria ser recusado (MinVersion do servidor é TLS 1.2)", nome)
+				t.Fatalf("handshake em %s deveria ser recusado (MinVersion do servidor é TLS 1.2)", name)
 			}
 		})
 	}
@@ -190,19 +190,19 @@ func TestServeTLSRecusaVersaoAbaixoDeTLS12(t *testing.T) {
 // ErrorLog customizado, isso iria para log.Printf cru no journal (stderr),
 // nunca para o buffer estruturado que este teste inspeciona.
 func TestErrorLogDoServidorPrincipalVaiParaOLoggerEstruturado(t *testing.T) {
-	certPath, keyPath := geraCertificadoTLSComValidade(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	certPath, keyPath := generateCertTLSWithValidade(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
 
-	a := novoAmbienteCom(t, blocoComTLS(certPath, keyPath))
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, blockWithTLS(certPath, keyPath))
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	registro := &registroDoServidor{}
-	srv, err := server.Novo(a.carrega(), server.Opcoes{
-		Log: logging.New(registro, logging.FormatJSON, slog.LevelInfo),
+	record := &recordOfServer{}
+	srv, err := server.Novo(a.load(), server.Options{
+		Log: logging.New(record, logging.FormatJSON, slog.LevelInfo),
 	})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 
 	pemBytes, err := os.ReadFile(certPath)
 	if err != nil {
@@ -225,13 +225,13 @@ func TestErrorLogDoServidorPrincipalVaiParaOLoggerEstruturado(t *testing.T) {
 			_ = conn.Close()
 			t.Fatal("handshake TLS 1.0 deveria ser recusado")
 		}
-		if strings.Contains(registro.String(), "http.erro_transporte") {
+		if strings.Contains(record.String(), "http.erro_transporte") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	saida := registro.String()
+	saida := record.String()
 	if !strings.Contains(saida, "http.erro_transporte") {
 		t.Fatalf("o erro de handshake não foi roteado para o logger estruturado: %s", saida)
 	}
@@ -247,13 +247,13 @@ func TestErrorLogDoServidorPrincipalVaiParaOLoggerEstruturado(t *testing.T) {
 // mecanismo que o plano do ciclo cita para o CLI sugerir https://). A prova
 // de que "nenhuma credencial em claro é processada" (o brief) não é a
 // AUSÊNCIA de resposta — é que esta resposta nunca passa por
-// comAutenticacao/roteamento: se a requisição chegasse a ser roteada de
+// withAuth/roteamento: se a requisição chegasse a ser roteada de
 // verdade, /v1/health responderia 200 com Content-Type application/json (o
 // handler de sempre) — o que este teste prova que NÃO acontece: a resposta
 // real não tem Content-Type nenhum e carrega o texto cru do net/http.
 func TestHTTPClaroNaPortaTLSNaoAtravessaAutenticacaoNemRoteamento(t *testing.T) {
-	certPath, keyPath := geraCertificadoTLSComValidade(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
-	srv := servidorComDados(t, 1, blocoComTLS(certPath, keyPath))
+	certPath, keyPath := generateCertTLSWithValidade(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	srv := serverWithData(t, 1, blockWithTLS(certPath, keyPath))
 
 	resp, err := http.Get("http://" + srv.Endereco() + "/v1/health")
 	if err != nil {
@@ -269,7 +269,7 @@ func TestHTTPClaroNaPortaTLSNaoAtravessaAutenticacaoNemRoteamento(t *testing.T) 
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		t.Errorf("Content-Type = %q: a resposta deveria ser TEXTO CRU do net/http, nunca o JSON do protocolo "+
-			"(prova de que não passou por comAutenticacao/roteamento)", ct)
+			"(prova de que não passou por withAuth/roteamento)", ct)
 	}
 	corpo, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -286,21 +286,21 @@ func TestHTTPClaroNaPortaTLSNaoAtravessaAutenticacaoNemRoteamento(t *testing.T) 
 // e o log de subida carrega o evento de ERRO — nunca a subida falha por
 // causa da validade.
 func TestSubidaComCertificadoExpiradoNaoRecusaELogaErro(t *testing.T) {
-	certPath, keyPath := geraCertificadoTLSComValidade(t, time.Now().Add(-48*time.Hour), time.Now().Add(-time.Hour))
+	certPath, keyPath := generateCertTLSWithValidade(t, time.Now().Add(-48*time.Hour), time.Now().Add(-time.Hour))
 
-	a := novoAmbienteCom(t, blocoComTLS(certPath, keyPath))
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, blockWithTLS(certPath, keyPath))
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	registro := &registroDoServidor{}
-	srv, err := server.Novo(a.carrega(), server.Opcoes{
-		Log: logging.New(registro, logging.FormatJSON, slog.LevelInfo),
+	record := &recordOfServer{}
+	srv, err := server.Novo(a.load(), server.Options{
+		Log: logging.New(record, logging.FormatJSON, slog.LevelInfo),
 	})
 	if err != nil {
 		t.Fatalf("certificado expirado NÃO pode recusar a subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 
-	saida := registro.String()
+	saida := record.String()
 	if !strings.Contains(saida, "tls.certificado_expirado") {
 		t.Fatalf("a subida com certificado expirado não logou o evento de erro: %s", saida)
 	}

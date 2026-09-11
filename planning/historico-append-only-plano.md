@@ -126,7 +126,7 @@ antes do stale check** (`internal/materializer/materializer.go:364-390`):
 Parse(event)          ← já produz entries ORDENADAS por FieldID, sem duplicatas,
                         com as derivadas (patch.go:224), as congeladas (:231)
                         e _writtenAt injetado (:241)
-  └─ historico.Apenda(encodePatchHistorico(entries, filtro))   ← NOVO
+  └─ historico.Apenda(encodePatchHistory(entries, filtro))   ← NOVO
 stale check
 emitePrazo
 merge / encodePatch
@@ -142,7 +142,7 @@ Três razões para o ponto ser esse:
 3. `_expiresIn` ainda não foi emitido, então ele não entra no payload sem
    filtro nenhum.
 
-`encodePatchHistorico` é `encodePatch` (`internal/materializer/merge.go:177`)
+`encodePatchHistory` é `encodePatch` (`internal/materializer/merge.go:177`)
 com um filtro que pula entry cujo `CompiledField.FrozenFrom != ""`. A ordem por
 FieldID e a ausência de duplicatas se preservam sob filtro, então
 `ValidatePayload` continua satisfeito.
@@ -188,14 +188,14 @@ padrão condicional que o TTL já estabeleceu (`if s.escritas != nil`):
 
 `Put` é substituído por `Apenda(payload []byte) (types.RowID, error)`: sem
 lookup de key, sem `prev`, `rowID = nextRowID.Add(1)`, `BuildRecord` com key
-vazia e sequence 0, `segW.Append`, `applyRecord` com `hadPrevious = false`, sem
+vazia e sequence 0, `secW.Append`, `applyRecord` com `hadPrevious = false`, sem
 `prim.Insert` e **sem a fase de CLEAR** dos secundários (`store.go:1763`,
 `:1865`) — nada sai de um índice numa tabela que não atualiza linha.
 
 ### 6. Retenção — tempo e tamanho
 
-Goroutine por dataset histórico, no molde de `IniciaCompaction` /
-`IniciaExpiracao`: `Inicia`/`Para` com `WaitGroup`, medidor atômico observável,
+Goroutine por dataset histórico, no molde de `StartCompaction` /
+`StartExpiration`: `Inicia`/`Para` com `WaitGroup`, medidor atômico observável,
 cancelamento por contexto, e `Close` que cancela e **aguarda antes** do quiesce.
 Arquivo novo: `internal/storage/retention.go`.
 
@@ -222,10 +222,10 @@ aposenta o segmento selado mais antigo. As três fontes de tamanho já existem
 (`ListSegments().SizeBytes`, o mapa `s.segSize`, o espelho atômico
 `diskBytesAll`).
 
-**A retirada reusa `aposentaSegmento` (`compaction.go:492`) inteiro**, sem o
-`compactaSegmento` antes: checkpoint → rename para `.retired` → fsync do
+**A retirada reusa `aposentaSegment` (`compaction.go:492`) inteiro**, sem o
+`compactaSegment` antes: checkpoint → rename para `.retired` → fsync do
 diretório → poda dos mapas → checkpoint → fecha descritor e unlink → fsync. As
-duas janelas de crash já são reparadas por `reparaAposentados`
+duas janelas de crash já são reparadas por `repairAposentados`
 (`store_recovery.go:237`), que não sabe nem precisa saber por que o segmento
 foi aposentado. O segmento **corrente nunca** é candidato (D6).
 
@@ -288,7 +288,7 @@ com a marca de que truncou.
 
 `/v1/stats` do dataset base ganha o bloco `history`, e `/metrics` as séries
 correspondentes — as duas saídas da **mesma** leitura de snapshot, como
-`materializacaoStats` e `amostrasDeMaterializacao` já fazem
+`materializacaoStats` e `samplesOfMaterializacao` já fazem
 (`internal/server/materialization.go`):
 
 | Série | Responde |
@@ -335,7 +335,7 @@ a coluna nas **duas** tabelas sem restart.
 do modo errado, no molde de `store_recovery_test.go`.
 
 **Fase D — escrita**
-`encodePatchHistorico` com filtro de congeladas; enxerto em `Apply`; coluna
+`encodePatchHistory` com filtro de congeladas; enxerto em `Apply`; coluna
 `_raw` e a linha de evento ruim; degradação sticky; adaptador de `Checkpoint`
 para o writer Kafka e para o `ingest`. Teste que prova que um `Apenda` que
 falha **não** muda o `ApplyResult`.
@@ -343,7 +343,7 @@ falha **não** muda o `ApplyResult`.
 **Fase E — retenção**
 `internal/storage/retention.go`: `rowIDBase` persistido, busca binária da
 marca-d'água, purga por tempo, purga por tamanho, `PUNCH_HOLE`, reuso de
-`aposentaSegmento`. Testes de janela de crash usando o seam `apTrace`, no molde
+`aposentaSegment`. Testes de janela de crash usando o seam `apTrace`, no molde
 de `compaction_crash_test.go`; teste com relógio injetado (`UsaRelogio`).
 
 **Fase F — consulta e índices**

@@ -19,8 +19,8 @@ func TestVersionRespondeComSHAEData(t *testing.T) {
 	t.Cleanup(func() { buildinfo.Version, buildinfo.Commit, buildinfo.Date = vAntiga, cAntiga, dAntiga })
 
 	for _, args := range [][]string{{"--version"}, {"version"}} {
-		a := &ambiente{}
-		if code := a.roda(args...); code != cli.ExitOK {
+		a := &env{}
+		if code := a.run(args...); code != cli.ExitOK {
 			t.Fatalf("%v: exit = %d, quer %d\n%s", args, code, cli.ExitOK, a.stderr.String())
 		}
 		got := strings.TrimSpace(a.stdout.String())
@@ -33,8 +33,8 @@ func TestVersionRespondeComSHAEData(t *testing.T) {
 // O texto de uso é o único lugar em que o operador descobre que o comando
 // existe (a mesma razão de TestOUsoAnunciaOsTresComandosDeLeitura).
 func TestOUsoAnunciaOVersion(t *testing.T) {
-	a := &ambiente{}
-	if code := a.roda("--help"); code != cli.ExitOK {
+	a := &env{}
+	if code := a.run("--help"); code != cli.ExitOK {
 		t.Fatalf("--help saiu com %d", code)
 	}
 	if !strings.Contains(a.stdout.String(), "--version") {

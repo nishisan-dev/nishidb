@@ -975,7 +975,7 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 	w.reg.AtomicStore64(off, uint64(row))
 	w.reg.AtomicStore64(off+8, uint64(uint32(estado))) // anterior = ultimo atual
 
-	// Contagem e cabeça viajam na MESMA palavra: publicá-las em duas escritas
+	// Count e cabeça viajam na MESMA palavra: publicá-las em duas escritas
 	// deixaria um leitor ver a cabeça nova com a contagem velha, e ele
 	// dimensionaria a fatia com um elemento a menos que a caminhada produz.
 	novo := (uint64(uint32(estado>>32)+1) << 32) | uint64(idx+1)
@@ -1507,19 +1507,19 @@ linha de `internal/storage` tenha mudado.
 **Arquivos:**
 - Criar: `internal/storage/indices.go`
 - Modificar: `internal/storage/store.go` (campos do `Store`, `Open`, `applyRecord`,
-  os três `curSegID.Store`), `internal/storage/compaction.go`
-  (`aposentaSegmento`), `internal/storage/expiry.go`
+  os três `curSecID.Store`), `internal/storage/compaction.go`
+  (`aposentaSegment`), `internal/storage/expiry.go`
 - Testar: `internal/storage/indices_test.go`
 
 **Interfaces:**
 - Consome: todo o `segindex` da Fase A.
 - Produz (não exportado, salvo indicado):
   ```go
-  func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error
-  func (s *Store) aposAppend(novoSeg uint32) error   // substitui os curSegID.Store
-  func (s *Store) aplicaIndiceSets(row types.RowID, prev, novo []byte) error
-  func (s *Store) fechaIndices() error
-  func (s *Store) CamposIndexados() []types.FieldID  // exportado: usado pelos testes e pelo _meta
+  func (s *Store) openIndicesOfSegment(campos []types.FieldID) error
+  func (s *Store) aposAppend(novoSeg uint32) error   // substitui os curSecID.Store
+  func (s *Store) aplicaIndexSets(row types.RowID, prev, novo []byte) error
+  func (s *Store) closeIndices() error
+  func (s *Store) IndexedFields() []types.FieldID  // exportado: usado pelos testes e pelo _meta
   ```
 
 - [ ] **Passo 1: os testes que falham**
@@ -1527,9 +1527,9 @@ linha de `internal/storage` tenha mudado.
 ```go
 // TestOSegmentoCorrenteGanhaWIPPorCampoIndexado
 func TestOSegmentoCorrenteGanhaWIPPorCampoIndexado(t *testing.T) {
-	s, dir := abreStoreIndexado(t, []string{"node", "type"}) // helper novo
+	s, dir := openStoreIndexed(t, []string{"node", "type"}) // helper novo
 	defer s.Close()
-	poeLinhas(t, s, 10)
+	poeRows(t, s, 10)
 	campos, err := segindex.ListWIP(filepath.Join(dir, "data"), s.SegmentoCorrente())
 	if err != nil {
 		t.Fatal(err)
@@ -1545,10 +1545,10 @@ func TestOSegmentoCorrenteGanhaWIPPorCampoIndexado(t *testing.T) {
 // não é mais o corrente e ainda tem .widx — e o Open o descartaria, jogando
 // fora um índice inteiro por nada.
 func TestARotacaoSelaOSegmentoAnterior(t *testing.T) {
-	s, dir := abreStoreIndexadoComSegmentoPequeno(t, []string{"node"}, 4<<10)
+	s, dir := openStoreIndexedWithSegmentSmall(t, []string{"node"}, 4<<10)
 	defer s.Close()
 	primeiro := s.SegmentoCorrente()
-	poeLinhasAteRotacionar(t, s, primeiro)
+	poeRowsUntilRotacionar(t, s, primeiro)
 	if s.SegmentoCorrente() == primeiro {
 		t.Fatal("o segmento não rotacionou; o teste não exercita nada")
 	}
@@ -1565,15 +1565,15 @@ func TestARotacaoSelaOSegmentoAnterior(t *testing.T) {
 // prova que ela foi resolvida por CONSTRUÇÃO. Antes, nada removia as postings
 // de um segmento aposentado, e cada órfã alongava a cadeia de quem estava vivo.
 func TestAAposentadoriaLevaOIndiceJunto(t *testing.T) {
-	s, dir := abreStoreHistoricoIndexado(t, []string{"node"}, 4<<10)
+	s, dir := openStoreHistoryIndexed(t, []string{"node"}, 4<<10)
 	defer s.Close()
 	alvo := s.SegmentoCorrente()
-	poeLinhasAteRotacionar(t, s, alvo)
+	poeRowsUntilRotacionar(t, s, alvo)
 	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	if _, err := os.Stat(caminho); err != nil {
 		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
 	}
-	if _, err := s.RetencaoUmaPassada(t.Context(), storage.LimitesOfRetention{MaxBytes: 1}); err != nil {
+	if _, err := s.RetentionOnePass(t.Context(), storage.LimitesOfRetention{MaxBytes: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(caminho); !os.IsNotExist(err) {
@@ -1603,19 +1603,19 @@ tarefa**):
 	// e 500 VMAs num teto padrão de 65.530 não é pressão.
 	selados map[uint32]*segindex.Sealed
 	selMu   sync.RWMutex
-	// camposIndexados é o conjunto ordenado, resolvido no Open e IMUTÁVEL na
+	// fieldsIndexados é o conjunto ordenado, resolvido no Open e IMUTÁVEL na
 	// vida do Store.
-	camposIndexados []types.FieldID
+	fieldsIndexados []types.FieldID
 ```
 
-`abreIndicesDeSegmento` roda no `Open`, DEPOIS de `resolveCamposIndexados` (a
+`openIndicesOfSegment` roda no `Open`, DEPOIS de `resolveFieldsIndexados` (a
 ordem de `LookupOrCreate` continua contratual — ver o comentário de
 `store.go:898`, que não pode ser reordenado), e abre um `WIP` por campo para
-`s.curSegID.Load()`.
+`s.curSecID.Load()`.
 
 - [ ] **Passo 4: um único ponto de rotação**
 
-Os três `s.curSegID.Store(novoSeg)` (`store.go:1475`, `compaction.go:206`,
+Os três `s.curSecID.Store(novoSeg)` (`store.go:1475`, `compaction.go:206`,
 `expiry.go:117`) passam a chamar:
 
 ```go
@@ -1630,17 +1630,17 @@ Os três `s.curSegID.Store(novoSeg)` (`store.go:1475`, `compaction.go:206`,
 //
 // Chamado sob wmu, como os três Store que substitui.
 func (s *Store) aposAppend(novoSeg uint32) error {
-	anterior := s.curSegID.Swap(novoSeg)
+	anterior := s.curSecID.Swap(novoSeg)
 	if anterior == novoSeg || anterior == 0 {
 		return nil
 	}
-	if err := s.fechaWIPs(); err != nil {
+	if err := s.closeWIPs(); err != nil {
 		return err
 	}
-	if err := segindex.Seal(s.dirDeDados(), anterior); err != nil {
+	if err := segindex.Seal(s.dirOfData(), anterior); err != nil {
 		return err
 	}
-	return s.abreWIPsDoCorrente()
+	return s.openWIPsOfCurrent()
 }
 ```
 
@@ -1651,14 +1651,14 @@ da location):
 
 ```go
 	if len(s.wips) > 0 {
-		if err := s.aplicaIndiceSets(a.rowID, a.prevPayload, a.payload); err != nil {
+		if err := s.aplicaIndexSets(a.rowID, a.prevPayload, a.payload); err != nil {
 			return err
 		}
 	}
 ```
 
-`aplicaIndiceSets` percorre os campos do payload novo, e para cada
-`FieldID ∈ camposIndexados` calcula `primary.HashKey(valuekey.Append(buf[:0], v))`
+`aplicaIndexSets` percorre os campos do payload novo, e para cada
+`FieldID ∈ fieldsIndexados` calcula `primary.HashKey(valuekey.Append(buf[:0], v))`
 e chama `wip.Set`. O buffer é do `Store` e é reatribuído (`buf[:0]`, sempre
 reatribuindo o slice devolvido) — é o que mantém o gate de zero alocação.
 
@@ -1677,8 +1677,8 @@ próxima revisão de "consertar" a ausência:
 
 - [ ] **Passo 6: a aposentadoria leva o índice**
 
-Em `aposentaSegmento` (`compaction.go:492`), no passo 4, junto de
-`fechaODescritorEApaga`: fechar o `Sealed` daquele segmento (se mapeado),
+Em `aposentaSegment` (`compaction.go:492`), no passo 4, junto de
+`closeODescritorEDelete`: fechar o `Sealed` daquele segmento (se mapeado),
 removê-lo de `s.selados` e `os.Remove(segindex.SealedPath(...))`. Erro de
 remoção do índice **não** falha a aposentadoria: o `.dat` já saiu e o disco já
 voltou; fica WARN nomeado e o `Open` limpa o órfão.
@@ -1704,7 +1704,7 @@ vez de promessa — antes, nada removia as postings de um segmento
 aposentado, e cada órfã alongava a cadeia de quem ainda estava vivo.
 
 A rotação ganha um ponto único. Ela acontece dentro do Append e é invisível
-a quem chama, então as três cópias do curSegID.Store divergiriam, e a que
+a quem chama, então as três cópias do curSecID.Store divergiriam, e a que
 esquecesse de selar jogaria fora um índice inteiro sem erro e sem log.
 
 Não há fase de Clear, e o comentário diz por quê: com o índice dentro do
@@ -1726,8 +1726,8 @@ da migração e sai na tarefa que remove os dois pacotes."
 **Interfaces:**
 - Produz:
   ```go
-  func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos []types.FieldID) error
-  func (s *Store) segmentosSemIndice() ([]uint32, error)
+  func (s *Store) ConstroiIndexOfSegment(ctx context.Context, seg uint32, campos []types.FieldID) error
+  func (s *Store) segmentosWithoutIndex() ([]uint32, error)
   ```
 
 - [ ] **Passo 1: os testes que falham**
@@ -1740,8 +1740,8 @@ da migração e sai na tarefa que remove os dois pacotes."
 // inteira de janelas de crash do índice secundário.
 func TestOWIPNaoEhAdotadoAtravesDeUmRestart(t *testing.T) {
 	dir := t.TempDir()
-	s := abreStoreIndexadoEm(t, dir, []string{"node"})
-	poeLinhas(t, s, 100)
+	s := openStoreIndexedIn(t, dir, []string{"node"})
+	poeRows(t, s, 100)
 	s.Close()
 
 	// Corrompe o .widx de propósito: se ele fosse adotado, o Lookup mentiria.
@@ -1750,7 +1750,7 @@ func TestOWIPNaoEhAdotadoAtravesDeUmRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2 := abreStoreIndexadoEm(t, dir, []string{"node"})
+	s2 := openStoreIndexedIn(t, dir, []string{"node"})
 	defer s2.Close()
 	rows := drenaLookup(t, s2, "node", "n1")
 	if len(rows) == 0 {
@@ -1765,9 +1765,9 @@ func TestOWIPNaoEhAdotadoAtravesDeUmRestart(t *testing.T) {
 // lesse o payload anterior produziria um índice silenciosamente diferente.
 func TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP(t *testing.T) {
 	dir := t.TempDir()
-	s := abreStoreIndexadoComSegmentoPequeno(t, dir, []string{"node", "type"}, 8<<10)
+	s := openStoreIndexedWithSegmentSmall(t, dir, []string{"node", "type"}, 8<<10)
 	alvo := s.SegmentoCorrente()
-	poeLinhasVariadasAteRotacionar(t, s, alvo) // inclui update, tombstone e campo ausente
+	poeRowsVariadasUntilRotacionar(t, s, alvo) // inclui update, tombstone e campo ausente
 	s.Close()
 
 	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
@@ -1779,9 +1779,9 @@ func TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2 := abreStoreIndexadoEm(t, dir, []string{"node", "type"})
+	s2 := openStoreIndexedIn(t, dir, []string{"node", "type"})
 	defer s2.Close()
-	if err := s2.ConstroiIndiceDoSegmento(t.Context(), alvo, s2.CamposIndexados()); err != nil {
+	if err := s2.ConstroiIndexOfSegment(t.Context(), alvo, s2.IndexedFields()); err != nil {
 		t.Fatal(err)
 	}
 	porReconstrucao, err := os.ReadFile(caminho)
@@ -1796,7 +1796,7 @@ func TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP(t *testing.T) {
 
 - [ ] **Passo 2: rodar e ver falhar; depois implementar**
 
-`ConstroiIndiceDoSegmento` varre o segmento com o mesmo iterador de records que
+`ConstroiIndexOfSegment` varre o segmento com o mesmo iterador de records que
 o replay do tail usa (`store_recovery.go`), alimenta um `segindex.Writer` com
 `(campo, hash, rowID)` de cada record e chama `WriteSealed`. Ele **não** consulta
 `locations.idx`, **não** filtra tombstone e **não** decide liveness: o índice é
@@ -1807,7 +1807,7 @@ No `Open`, depois do replay do tail:
 
 1. `RemoveWIPs` de **todo** segmento que não é o corrente, e enfileira esses
    segmentos para reconstrução se não tiverem `.sidx`;
-2. `RemoveWIPs` do corrente e `ConstroiIndiceDoSegmento` dele **em memória** —
+2. `RemoveWIPs` do corrente e `ConstroiIndexOfSegment` dele **em memória** —
    ou seja, reabre os WIPs vazios e realimenta lendo o segmento inteiro, antes
    de o primeiro `Put` ser aceito.
 
@@ -1856,9 +1856,9 @@ mudada**. A renomeação vem só na Tarefa 11.
 **Interfaces:**
 - Produz:
   ```go
-  func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Source, error)
-  type fonteFaixa struct{ ... }      // histórico: [primeiro, primeiroDoSeguinte)
-  type fonteLocations struct{ ... }  // materializado: filtro do locations.idx
+  func (s *Store) fontesOfField(campo types.FieldID, h uint64) ([]segindex.Source, error)
+  type sourceFaixa struct{ ... }      // histórico: [primeiro, primeiroDoSeguinte)
+  type sourceLocations struct{ ... }  // materializado: filtro do locations.idx
   ```
 
 - [ ] **Passo 1: os testes que falham**
@@ -1873,7 +1873,7 @@ func TestSegmentoSemIndiceRespondePorEnumeracao(t *testing.T) {
 	dir := t.TempDir()
 	s := abreStoreHistoricoIndexadoEm(t, dir, []string{"node"}, 8<<10)
 	alvo := s.SegmentoCorrente()
-	poeLinhasAteRotacionar(t, s, alvo)
+	poeRowsUntilRotacionar(t, s, alvo)
 	s.Close()
 
 	// Simula o dataset antigo: o segmento existe, o índice não.
@@ -1882,7 +1882,7 @@ func TestSegmentoSemIndiceRespondePorEnumeracao(t *testing.T) {
 	}
 	s2 := abreStoreHistoricoIndexadoEm(t, dir, []string{"node"}, 8<<10)
 	defer s2.Close()
-	s2.ParaReconstrucao() // isola a enumeração da reconstrução
+	s2.ForRebuild() // isola a enumeração da reconstrução
 
 	rows := drenaLookup(t, s2, "node", "n1")
 	esperado := drenaFullScanFiltrado(t, s2, "node", "n1")
@@ -1914,14 +1914,14 @@ func TestOResultadoNaoMudaComOSegmentoIndexadoOuNao(t *testing.T) {
 - [ ] **Passo 2: rodar e ver falhar; implementar `indices_enum.go`**
 
 ```go
-// fonteFaixa enumera os rowIds de um segmento do HISTÓRICO. Ela é possível por
+// sourceFaixa enumera os rowIds de um segmento do HISTÓRICO. Ela é possível por
 // uma propriedade que só a tabela histórica tem: os appends são serializados
 // pelo mutex do writer e o rowId é monotônico, então os segmentos particionam
 // o espaço de rowId em faixas contíguas e ordenadas. É a mesma propriedade que
-// primeiroRowIDDoSeguinte (retention.go:380) já explora, com o mesmo pread.
-type fonteFaixa struct{ prox, fim types.RowID }
+// primeiroRowIDOfSeguinte (retention.go:380) já explora, com o mesmo pread.
+type sourceFaixa struct{ prox, fim types.RowID }
 
-// fonteLocations enumera os rowIds cuja location aponta para um segmento, no
+// sourceLocations enumera os rowIds cuja location aponta para um segmento, no
 // dataset MATERIALIZADO — onde a propriedade acima não vale, porque um update
 // traz para o segmento corrente uma linha de rowId arbitrário.
 //
@@ -1934,23 +1934,23 @@ type fonteFaixa struct{ prox, fim types.RowID }
 // dos rowIds que moram no segmento: descobrir o real exigiria a varredura que
 // ainda não aconteceu. É um limite CORRETO e frouxo, e frouxo empurra a união
 // para o merge — que é sempre certo, só mais caro.
-type fonteLocations struct{ s *Store; seg uint32; prox, fim types.RowID }
+type sourceLocations struct{ s *Store; seg uint32; prox, fim types.RowID }
 ```
 
-`fontesDoCampo` monta, em ordem crescente de segmento:
+`fontesOfField` monta, em ordem crescente de segmento:
 
 ```go
-func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Source, error) {
+func (s *Store) fontesOfField(campo types.FieldID, h uint64) ([]segindex.Source, error) {
 	refs, err := s.listaSegmentos()
 	if err != nil {
 		return nil, err
 	}
-	corrente := s.curSegID.Load()
+	corrente := s.curSecID.Load()
 	fontes := make([]segindex.Source, 0, len(refs))
 	for _, ref := range refs {
 		switch {
 		case ref.ID == corrente:
-			fontes = append(fontes, s.fonteDoWIP(campo, h))
+			fontes = append(fontes, s.sourceOfWIP(campo, h))
 		default:
 			sel, err := s.seladoDe(ref.ID) // abre sob demanda; nil quando ausente
 			if err != nil {
@@ -1980,14 +1980,14 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Source,
 
 ```go
 func (s *Store) LookupHash(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	return s.lookupIndexado(field, v)
+	return s.lookupIndexed(field, v)
 }
 func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	return s.lookupIndexado(field, v)
+	return s.lookupIndexed(field, v)
 }
 ```
 
-`lookupIndexado` valida que o campo é indexado (erro `ErrInvalidArgument` se
+`lookupIndexed` valida que o campo é indexado (erro `ErrInvalidArgument` se
 não), calcula o hash, monta as fontes, chama `segindex.Union` e embrulha no mesmo
 `hashIterator` que já existe — que é quem dá a reentrância contra o `Close` do
 dataset. **Não mexa nesse embrulho:** ele é o que faz um `Close` no meio da
@@ -2143,7 +2143,7 @@ para baixo."
 // TestIndexTrueEhAceito
 func TestIndexTrueEhAceito(t *testing.T) {
 	c := compilaOK(t, "campos:\n  node:\n    tipo: string\n    index: true\n")
-	if !c.Campo("node").Indexed {
+	if !c.Field("node").Indexed {
 		t.Error("index: true não marcou o campo como indexado")
 	}
 }
@@ -2296,20 +2296,20 @@ A prioridade continua fixa e o planner continua nunca falhando."
 // recusa seria ter a capacidade e negá-la.
 func TestAcrescentarIndiceEmDatasetPovoadoAgendaReconstrucao(t *testing.T) {
 	dir := t.TempDir()
-	s := abreStoreIndexadoEm(t, dir, nil) // sem campo indexado
-	poeLinhas(t, s, 500)
+	s := openStoreIndexedIn(t, dir, nil) // sem campo indexado
+	poeRows(t, s, 500)
 	s.Close()
 
-	s2 := abreStoreIndexadoEm(t, dir, []string{"node"}) // acrescenta agora
+	s2 := openStoreIndexedIn(t, dir, []string{"node"}) // acrescenta agora
 	defer s2.Close()
-	segs, err := s2.SegmentosPendentesDeReconstrucao()
+	segs, err := s2.SegmentosPendentesOfRebuild()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(segs) == 0 {
 		t.Fatal("acrescentar índice num dataset povoado não agendou reconstrução")
 	}
-	rodaReconstrucaoAteEsvaziar(t, s2)
+	runRebuildUntilEsvaziar(t, s2)
 	if got := drenaLookup(t, s2, "node", "n1"); len(got) == 0 {
 		t.Error("o backfill não populou o índice")
 	}
@@ -2361,13 +2361,13 @@ junto com as validações que eles destravavam."
 **Interfaces:**
 - Produz:
   ```go
-  type JanelaDeIndice struct {
-      Duracao  time.Duration // 0 = infinita
+  type WindowOfIndex struct {
+      Duration  time.Duration // 0 = infinita
       MaxBytes int64         // 0 = sem teto
   }
-  func (j JanelaDeIndice) Infinita() bool
-  func (s *Store) AplicaJanela(ctx context.Context, j JanelaDeIndice) (expulsos int, err error)
-  func (s *Store) JanelaEfetiva() time.Duration
+  func (j WindowOfIndex) Infinita() bool
+  func (s *Store) AplicaWindow(ctx context.Context, j WindowOfIndex) (expulsos int, err error)
+  func (s *Store) WindowEfetiva() time.Duration
   ```
 
 - [ ] **Passo 1: os testes de admissão de config**
@@ -2397,7 +2397,7 @@ func TestAdmissaoDaJanela(t *testing.T) {
 // TestAlargarAJanelaAgendaReconstrucao — é por isto que a reconstrução existe;
 //   sem ela alargar não faria nada e a janela seria um botão de mão única.
 // TestOTetoDeBytesVenceOPrazoDeclarado — espelha o maxBytes engolindo o
-//   expireAfterWrite na retenção, e a JanelaEfetiva é quem mostra isso.
+//   expireAfterWrite na retenção, e a WindowEfetiva é quem mostra isso.
 // TestFronteiraDaJanelaUsaORecordMaisNOVO — um segmento que ATRAVESSA a
 //   fronteira mantém o índice. Usar o mais antigo tiraria o índice de dados
 //   que a janela promete servir rápido.
@@ -2406,7 +2406,7 @@ func TestAdmissaoDaJanela(t *testing.T) {
 - [ ] **Passo 3 a 5:** rodar, implementar, rodar. A expulsão roda **dentro da
   passada de retenção**, que já é de um minuto, já é exclusiva do histórico e já
   tem em mãos a lista de segmentos e os tamanhos. A fronteira por tempo reusa o
-  `pread` de `primeiroRowIDDoSeguinte`: o record mais novo do segmento N é o
+  `pread` de `primeiroRowIDOfSeguinte`: o record mais novo do segmento N é o
   imediatamente anterior ao primeiro do N+1.
 
 - [ ] **Passo 6: commitar**
@@ -2439,10 +2439,10 @@ A expulsão roda na passada de retenção em vez de num laço próprio — ela j
 **Interfaces:**
 - Produz:
   ```go
-  func (s *Store) IniciaReconstrucao(ctx context.Context)
-  func (s *Store) ParaReconstrucao()
-  func (s *Store) ReconstrucaoAtiva() bool
-  func (s *Store) SegmentosPendentesDeReconstrucao() ([]uint32, error)
+  func (s *Store) StartRebuild(ctx context.Context)
+  func (s *Store) ForRebuild()
+  func (s *Store) RebuildActive() bool
+  func (s *Store) SegmentosPendentesOfRebuild() ([]uint32, error)
   ```
 
 - [ ] **Passo 1: os testes**
@@ -2450,7 +2450,7 @@ A expulsão roda na passada de retenção em vez de num laço próprio — ela j
 ```go
 // TestOMedidorSobeAntesDaGoroutine é a regra do §92: quem chamou tem direito de
 // ver o estado que acabou de instalar. Subir o medidor DENTRO da goroutine
-// deixa uma janela em que IniciaReconstrucao já voltou e ReconstrucaoAtiva
+// deixa uma janela em que StartRebuild já voltou e RebuildActive
 // ainda diz false.
 // TestCloseCancelaEEsperaAReconstrucao — o Close aguarda antes do quiesce, como
 //   a compaction e a retenção fazem.
@@ -2463,7 +2463,7 @@ A expulsão roda na passada de retenção em vez de num laço próprio — ela j
 ```
 
 - [ ] **Passo 2 a 4:** rodar, implementar, rodar. Molde exato de
-  `IniciaCompaction`/`IniciaRetencao`: primeira passada imediata, medidor
+  `StartCompaction`/`StartRetention`: primeira passada imediata, medidor
   atômico observável, cancelamento por contexto, `Close` cancela e **aguarda**.
   Pacing pelo mesmo orçamento de ciclo de trabalho da compaction.
 
@@ -2775,7 +2775,7 @@ anteriores.
 **3. Consistência de tipos.** `Source` é declarada na Tarefa 2 e consumida nas 5
 e 8 com a mesma assinatura. `Writer.Add(campo, h, row)` é a mesma nas 1,
 4 e 7. `SealedPath`/`WIPPath`/`ListWIP` são usados nas 4, 6, 7 e 8 com a
-forma declarada na 1 e na 3. `CamposIndexados()` é produzida na 6 e consumida na
+forma declarada na 1 e na 3. `IndexedFields()` é produzida na 6 e consumida na
 7 e na 12.
 
 **4. Ponto de atenção para quem executar.** A Tarefa 8 é a única em que a suíte

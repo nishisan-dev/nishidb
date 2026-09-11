@@ -16,19 +16,19 @@ import (
 func TestDesfechoDaAuditoriaDivergenteSaiComExitDataset(t *testing.T) {
 	var stderr bytes.Buffer
 	amb := Context{Stderr: &stderr, Ctx: context.Background()}
-	limpo := []linhaDeAuditoria{{nome: "a"}, {nome: "b"}}
+	limpo := []rowOfAudit{{name: "a"}, {name: "b"}}
 	if code := auditOutcome(limpo, ExitOK, amb); code != ExitOK {
 		t.Fatalf("sem divergência: %d", code)
 	}
-	divergente := []linhaDeAuditoria{{nome: "a"}, {nome: "b", divergentes: 2}}
+	divergente := []rowOfAudit{{name: "a"}, {name: "b", divergentes: 2}}
 	if code := auditOutcome(divergente, ExitOK, amb); code != ExitDataset {
 		t.Fatalf("com divergência: %d, quer %d", code, ExitDataset)
 	}
 	if !strings.Contains(stderr.String(), "1 contador(es) divergem") {
 		t.Fatalf("stderr: %s", stderr.String())
 	}
-	semGrupo := []linhaDeAuditoria{{nome: "a", naoInternadas: 3}}
-	if code := auditOutcome(semGrupo, ExitOK, amb); code != ExitDataset {
+	withoutGrupo := []rowOfAudit{{name: "a", naoInternadas: 3}}
+	if code := auditOutcome(withoutGrupo, ExitOK, amb); code != ExitDataset {
 		t.Fatalf("linha sem grupo internado é divergência: %d", code)
 	}
 	// Um erro de escrita da tabela vence: quem não conseguiu mostrar o
@@ -39,16 +39,16 @@ func TestDesfechoDaAuditoriaDivergenteSaiComExitDataset(t *testing.T) {
 }
 
 func TestAuditoriaDoWireEDoStoragePreenchemAMesmaLinha(t *testing.T) {
-	w := auditoriaDoWire(protocol.CounterAudit{
+	w := auditOfWire(protocol.CounterAudit{
 		Name: "x", Groups: 2, Maintained: 5, Recomputed: 4, DivergentGroups: 1, NotInterned: 0, RowsScanned: 9, DurationMs: 7,
 		Sample: []protocol.GroupDivergence{{GroupKey: "A", Maintained: 5, Recomputed: 4, RefsMaintained: 5, RefsRecomputed: 4}},
 	})
-	if w.nome != "x" || w.grupos != 2 || w.mantido != 5 || w.recalculado != 4 || w.divergentes != 1 ||
-		w.linhasVarridas != 9 || w.duracaoMs != 7 || len(w.amostra) != 1 || w.amostra[0].groupKey != "A" {
+	if w.name != "x" || w.groups != 2 || w.mantido != 5 || w.recalculado != 4 || w.divergentes != 1 ||
+		w.rowsVarridas != 9 || w.durationMs != 7 || len(w.amostra) != 1 || w.amostra[0].groupKey != "A" {
 		t.Fatalf("linha do wire = %+v", w)
 	}
 	var buf bytes.Buffer
-	writeAudit(&buf, "d", []linhaDeAuditoria{w})
+	writeAudit(&buf, "d", []rowOfAudit{w})
 	for _, trecho := range []string{"DIVERGÊNCIA", "divergências de x", "REFS RECALCULADO", "  A"} {
 		if !strings.Contains(buf.String(), trecho) {
 			t.Fatalf("tabela sem %q:\n%s", trecho, buf.String())

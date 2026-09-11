@@ -30,7 +30,7 @@ func TestReplayNaoDuplicaSlotComPrimaryAFrenteDasLocations(t *testing.T) {
 	}
 
 	locPath := filepath.Join(dir, "indexes", "locations.idx")
-	locsEmS, err := os.ReadFile(locPath)
+	locsInS, err := os.ReadFile(locPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestReplayNaoDuplicaSlotComPrimaryAFrenteDasLocations(t *testing.T) {
 	}
 	// Regride SÓ as locations: a primary conhece as keys do tail, as
 	// locations não.
-	if err := os.WriteFile(locPath, locsEmS, 0o644); err != nil {
+	if err := os.WriteFile(locPath, locsInS, 0o644); err != nil {
 		t.Fatal(err)
 	}
 

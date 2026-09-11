@@ -6,13 +6,13 @@ import (
 	"time"
 )
 
-// ErrSemProgresso é a saída do watchdog: o consumidor parou de receber com o
+// ErrWithoutProgresso é a saída do watchdog: o consumidor parou de receber com o
 // broker declarando mensagens, e quem o criou deve recriá-lo.
 //
 // É sentinela e não erro genérico porque o desfecho é diferente de qualquer
 // outra falha de ingestão: os demais erros PARAM a ingestão do dataset, e
 // este manda tentar de novo pelo mesmo caminho da subida.
-var ErrSemProgresso = errors.New("kafka: consumidor sem progresso com lag pendente")
+var ErrWithoutProgresso = errors.New("kafka: consumidor sem progresso com lag pendente")
 
 // A CONSULTA DO VIGIA MUDOU JUNTO COM A MÉTRICA, e pela mesma razão.
 //
@@ -29,21 +29,21 @@ var ErrSemProgresso = errors.New("kafka: consumidor sem progresso com lag penden
 // que o vigia sempre quis fazer, e ela não depende da cadência de checkpoint.
 // De quebra, uma requisição em vez de três.
 //
-// prazoDaConsultaDeLag limita a pergunta ao broker. Ela roda no laço do
+// prazoOfConsultaOfLag limita a pergunta ao broker. Ela roda no laço do
 // watchdog, e um admin que também travasse não pode travar o vigia junto.
-const prazoDaConsultaDeLag = 10 * time.Second
+const prazoOfConsultaOfLag = 10 * time.Second
 
 // intervaloDaVigia é de quanto em quanto tempo o watchdog olha. A janela de
 // decisão é o WatchdogTimeout; este é só o passo da amostragem, e um quarto da
 // janela dá quatro chances de ver o progresso antes de concluir que não houve.
-func watchdogInterval(janela time.Duration) time.Duration {
-	if p := janela / 4; p > time.Second {
+func watchdogInterval(window time.Duration) time.Duration {
+	if p := window / 4; p > time.Second {
 		return p
 	}
 	return time.Second
 }
 
-// vigia observa a ingestão e devolve ErrSemProgresso quando ela para de andar
+// vigia observa a ingestão e devolve ErrWithoutProgresso quando ela para de andar
 // com mensagens pendentes no broker.
 //
 // A DECISÃO É UMA CONJUNÇÃO DE TRÊS FATOS, e são três porque dois não bastam.
@@ -72,15 +72,15 @@ func watchdogInterval(janela time.Duration) time.Duration {
 // pega um item, some por um minuto e devolve a fila a zero é indistinguível
 // de um poller travado por qualquer instrumento — mas nesse caso o próprio
 // evento teria avançado, e o fato 1 não valeria.
-func (c *Consumidor) vigia(ctx context.Context, janela time.Duration) error {
-	if janela <= 0 {
+func (c *Consumidor) vigia(ctx context.Context, window time.Duration) error {
+	if window <= 0 {
 		<-ctx.Done()
 		return nil
 	}
-	t := time.NewTicker(watchdogInterval(janela))
+	t := time.NewTicker(watchdogInterval(window))
 	defer t.Stop()
 
-	v := &vigilante{janela: janela, ultimoProgresso: time.Now(), eventos: c.met.eventos.Value()}
+	v := &vigilante{window: window, ultimoProgresso: time.Now(), eventos: c.met.eventos.Value()}
 	for {
 		select {
 		case <-ctx.Done():
@@ -91,17 +91,17 @@ func (c *Consumidor) vigia(ctx context.Context, janela time.Duration) error {
 		// O lag e a fila só são consultados quando os eventos NÃO andaram:
 		// perguntar ao broker a cada tique de um consumidor saudável seria
 		// tráfego administrativo por nada.
-		if l.eventos == v.eventos && time.Since(v.ultimoProgresso) >= janela {
+		if l.eventos == v.eventos && time.Since(v.ultimoProgresso) >= window {
 			l.lagPendente, l.lagConhecido = c.lagPendente(ctx)
 			l.fila, _ = c.fila.Profundidade()
 		}
-		switch v.avalia(l, time.Now()) {
+		switch v.evaluate(l, time.Now()) {
 		case vereditoRecria:
-			return ErrSemProgresso
+			return ErrWithoutProgresso
 		case vereditoBackpressure:
 			c.log.Warn("ingestao.sem_progresso",
 				"a ingestão não avança e a fila tem itens: o gargalo é a PERSISTÊNCIA, não o Kafka; o watchdog não age",
-				"janela", janela.String(), "fila", l.fila)
+				"janela", window.String(), "fila", l.fila)
 		}
 	}
 }
@@ -119,8 +119,8 @@ type leitura struct {
 type veredito int
 
 const (
-	// vereditoSegue: há progresso, ou não há o que decidir.
-	vereditoSegue veredito = iota
+	// vereditoFollow: há progresso, ou não há o que decidir.
+	vereditoFollow veredito = iota
 	// vereditoBackpressure: parado, mas com fila — o gargalo é depois dela.
 	vereditoBackpressure
 	// vereditoRecria: parado, com lag e sem fila — o poller não entrega.
@@ -129,39 +129,39 @@ const (
 
 // vigilante guarda o estado entre duas leituras.
 type vigilante struct {
-	janela          time.Duration
+	window          time.Duration
 	ultimoProgresso time.Time
 	eventos         uint64
 }
 
-// avalia devolve o veredito de uma leitura.
+// evaluate devolve o veredito de uma leitura.
 //
 // O relógio de progresso é REINICIADO em tudo que não seja recriar, e isso é
 // deliberado: a janela mede ausência de progresso desde a última vez em que
 // houve motivo para não agir, não desde sempre. Sem esse reinício, um tópico
 // que ficou uma hora parado e depois encheu de backpressure entraria na
 // primeira leitura seguinte já com a janela vencida.
-func (v *vigilante) avalia(l leitura, agora time.Time) veredito {
+func (v *vigilante) evaluate(l leitura, agora time.Time) veredito {
 	if l.eventos != v.eventos {
 		v.eventos = l.eventos
 		v.ultimoProgresso = agora
-		return vereditoSegue
+		return vereditoFollow
 	}
-	if agora.Sub(v.ultimoProgresso) < v.janela {
-		return vereditoSegue
+	if agora.Sub(v.ultimoProgresso) < v.window {
+		return vereditoFollow
 	}
 	// Lag desconhecido: o watchdog se abstém. É a resposta certa para "não
 	// sei" — agir aqui seria recriar o consumidor por causa de um admin que
 	// não respondeu.
 	if !l.lagConhecido {
 		v.ultimoProgresso = agora
-		return vereditoSegue
+		return vereditoFollow
 	}
 	// Tópico em dia. O silêncio é o esperado, e um watchdog que disparasse
 	// aqui recriaria o consumidor toda madrugada de baixo movimento.
 	if !l.lagPendente {
 		v.ultimoProgresso = agora
-		return vereditoSegue
+		return vereditoFollow
 	}
 	// Fila com itens: o writer não está dando conta. Recriar a conexão seria
 	// ERRADO e destrutivo — abortaria trabalho em voo por um problema que não
@@ -185,8 +185,8 @@ func (v *vigilante) avalia(l leitura, agora time.Time) veredito {
 // PollRecords estava travado. Se um dia os dois travarem juntos, ok=false e o
 // watchdog se abstém, que é a resposta certa para "não sei".
 func (c *Consumidor) lagPendente(ctx context.Context) (pendente, ok bool) {
-	ctx, cancela := context.WithTimeout(ctx, prazoDaConsultaDeLag)
-	defer cancela()
+	ctx, cancel := context.WithTimeout(ctx, prazoOfConsultaOfLag)
+	defer cancel()
 	fins, err := c.adm.ListEndOffsets(ctx, c.cfg.Topic)
 	if err != nil {
 		c.met.errosKafka.Inc()
@@ -199,7 +199,7 @@ func (c *Consumidor) lagPendente(ctx context.Context) (pendente, ok bool) {
 				continue
 			}
 			viu = true
-			if o.Offset > c.met.posicaoDe(o.Partition).Load() {
+			if o.Offset > c.met.positionOf(o.Partition).Load() {
 				return true, true
 			}
 		}

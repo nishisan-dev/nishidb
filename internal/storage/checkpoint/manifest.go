@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 )
 
-// ErrNoManifest indica dataset sem manifest (cold start).
-var ErrNoManifest = errors.New("checkpoint: manifest ausente")
+// ErrInManifest indica dataset sem manifest (cold start).
+var ErrInManifest = errors.New("checkpoint: manifest ausente")
 
 // ErrCorruptManifest indica manifest ilegível (CRC, magic, truncado).
 var ErrCorruptManifest = errors.New("checkpoint: manifest corrompido")
@@ -447,13 +447,13 @@ func decode(raw []byte) (*Manifest, error) {
 	m.RowCount = r.u64()
 	m.CurrentSegment = r.u32()
 	m.DurableOffset = r.u64()
-	segCount := r.u32()
+	secCount := r.u32()
 	// Sanidade contra contagens absurdas antes de alocar (36 B/segmento).
-	if int(segCount) > len(body)/36 {
-		return nil, fmt.Errorf("%w: segmentCount %d impossível", ErrCorruptManifest, segCount)
+	if int(secCount) > len(body)/36 {
+		return nil, fmt.Errorf("%w: segmentCount %d impossível", ErrCorruptManifest, secCount)
 	}
-	m.Segments = make([]SegmentInfo, 0, segCount)
-	for i := uint32(0); i < segCount; i++ {
+	m.Segments = make([]SegmentInfo, 0, secCount)
+	for i := uint32(0); i < secCount; i++ {
 		m.Segments = append(m.Segments, SegmentInfo{
 			ID:           r.u32(),
 			SizeBytes:    int64(r.u64()),
@@ -719,11 +719,11 @@ func syncDir(dir string) error {
 	return nil
 }
 
-// Load lê e valida o manifest. Ausência devolve ErrNoManifest (cold start).
+// Load lê e valida o manifest. Ausência devolve ErrInManifest (cold start).
 func Load(path string) (*Manifest, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("%w: %s", ErrNoManifest, path)
+		return nil, fmt.Errorf("%w: %s", ErrInManifest, path)
 	}
 	if err != nil {
 		return nil, err

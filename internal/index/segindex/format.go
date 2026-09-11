@@ -112,8 +112,8 @@ const sealedSuffix = ".sidx"
 // Ele mora ao lado do .dat de propósito: a aposentadoria remove os dois no
 // mesmo passo, e é isso que faz "purgar o segmento leva o índice junto" ser
 // uma linha de código em vez de uma promessa.
-func SealedPath(dir string, seg uint32) string {
-	return filepath.Join(dir, fmt.Sprintf("segment-%08d%s", seg, sealedSuffix))
+func SealedPath(dir string, sec uint32) string {
+	return filepath.Join(dir, fmt.Sprintf("segment-%08d%s", sec, sealedSuffix))
 }
 
 // SegmentsWithSealed devolve, em ordem crescente, os segmentos que têm .sidx
@@ -135,11 +135,11 @@ func SegmentsWithSealed(dir string) ([]uint32, error) {
 			continue
 		}
 		middle := strings.TrimSuffix(strings.TrimPrefix(e.Name(), "segment-"), sealedSuffix)
-		seg, err := strconv.ParseUint(middle, 10, 32)
-		if err != nil || e.Name() != filepath.Base(SealedPath("", uint32(seg))) {
+		sec, err := strconv.ParseUint(middle, 10, 32)
+		if err != nil || e.Name() != filepath.Base(SealedPath("", uint32(sec))) {
 			return nil, fmt.Errorf("%w: %s não é um nome canônico de índice selado", ErrFormat, e.Name())
 		}
-		segs = append(segs, uint32(seg))
+		segs = append(segs, uint32(sec))
 	}
 	slices.Sort(segs)
 	return segs, nil

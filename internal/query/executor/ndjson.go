@@ -106,7 +106,7 @@ func AppendValue(dst []byte, v types.Value) []byte {
 		if v.I64 < 0 || v.I64 >= types.MillisPerDay {
 			return append(dst, "null"...)
 		}
-		return appendHoraDoDia(dst, v.I64)
+		return appendHoraOfDia(dst, v.I64)
 
 	case types.TypeIPv4:
 		if len(v.Bytes) != 4 {
@@ -183,23 +183,23 @@ func appendJSONInline(dst, b []byte) []byte {
 		// Um json vazio inlinado produziria `"attrs":,` — JSON inválido.
 		return append(dst, "null"...)
 	}
-	i := indiceControle(b)
+	i := indexControle(b)
 	if i < 0 {
 		return append(dst, b...) // caminho comum: um memmove
 	}
-	inicio := 0
+	start := 0
 	for ; i < len(b); i++ {
 		if b[i] >= 0x20 {
 			continue
 		}
-		dst = append(dst, b[inicio:i]...)
+		dst = append(dst, b[start:i]...)
 		dst = append(dst, ' ')
-		inicio = i + 1
+		start = i + 1
 	}
-	return append(dst, b[inicio:]...)
+	return append(dst, b[start:]...)
 }
 
-func indiceControle(b []byte) int {
+func indexControle(b []byte) int {
 	for i, c := range b {
 		if c < 0x20 {
 			return i
@@ -226,7 +226,7 @@ func indiceControle(b []byte) int {
 // grava esses bytes verbatim para string.
 func AppendJSONString(dst, s []byte) []byte {
 	dst = append(dst, '"')
-	inicio := 0
+	start := 0
 	for i := 0; i < len(s); {
 		c := s[i]
 		if c >= 0x20 && c != '"' && c != '\\' && c < 0x80 {
@@ -236,21 +236,21 @@ func AppendJSONString(dst, s []byte) []byte {
 		if c >= 0x80 {
 			r, tam := utf8.DecodeRune(s[i:])
 			if r == utf8.RuneError && tam == 1 {
-				dst = append(dst, s[inicio:i]...)
+				dst = append(dst, s[start:i]...)
 				dst = append(dst, escapeFFFD...)
 				i++
-				inicio = i
+				start = i
 				continue
 			}
 			i += tam
 			continue
 		}
-		dst = append(dst, s[inicio:i]...)
+		dst = append(dst, s[start:i]...)
 		dst = appendEscape(dst, c)
 		i++
-		inicio = i
+		start = i
 	}
-	dst = append(dst, s[inicio:]...)
+	dst = append(dst, s[start:]...)
 	return append(dst, '"')
 }
 
@@ -261,7 +261,7 @@ func AppendJSONString(dst, s []byte) []byte {
 // mutável) só para economizar um corpo de função. Indexar a string não aloca.
 func appendJSONStringS(dst []byte, s string) []byte {
 	dst = append(dst, '"')
-	inicio := 0
+	start := 0
 	for i := 0; i < len(s); {
 		c := s[i]
 		if c >= 0x20 && c != '"' && c != '\\' && c < 0x80 {
@@ -271,21 +271,21 @@ func appendJSONStringS(dst []byte, s string) []byte {
 		if c >= 0x80 {
 			r, tam := utf8.DecodeRuneInString(s[i:])
 			if r == utf8.RuneError && tam == 1 {
-				dst = append(dst, s[inicio:i]...)
+				dst = append(dst, s[start:i]...)
 				dst = append(dst, escapeFFFD...)
 				i++
-				inicio = i
+				start = i
 				continue
 			}
 			i += tam
 			continue
 		}
-		dst = append(dst, s[inicio:i]...)
+		dst = append(dst, s[start:i]...)
 		dst = appendEscape(dst, c)
 		i++
-		inicio = i
+		start = i
 	}
-	dst = append(dst, s[inicio:]...)
+	dst = append(dst, s[start:]...)
 	return append(dst, '"')
 }
 
@@ -327,7 +327,7 @@ func appendEscape(dst []byte, c byte) []byte {
 func appendTimestamp(dst []byte, millis int64) []byte {
 	t := time.UnixMilli(millis).UTC()
 	ano, mes, dia := t.Date()
-	h, min, seg := t.Clock()
+	h, min, sec := t.Clock()
 	// Go usa resto truncado: (-1) % 1000 == -1. Sem o ajuste, o millis
 	// negativo produziria fração negativa e um timestamp malformado.
 	frac := millis % 1000
@@ -346,17 +346,17 @@ func appendTimestamp(dst []byte, millis int64) []byte {
 	dst = append(dst, ':')
 	dst = append2(dst, min)
 	dst = append(dst, ':')
-	dst = append2(dst, seg)
+	dst = append2(dst, sec)
 	dst = append(dst, '.')
 	dst = append3(dst, int(frac))
 	return append(dst, 'Z', '"')
 }
 
-// appendHoraDoDia escreve "hh:mm:ss.sss" — sempre 3 dígitos de fração e SEM
+// appendHoraOfDia escreve "hh:mm:ss.sss" — sempre 3 dígitos de fração e SEM
 // 'Z': não há instante aqui, e não há fuso a anunciar. Anunciar um faria a
 // hora do dia parecer um instante UTC, que é exatamente a confusão que o tipo
 // separado existe para evitar.
-func appendHoraDoDia(dst []byte, millis int64) []byte {
+func appendHoraOfDia(dst []byte, millis int64) []byte {
 	dst = append(dst, '"')
 	dst = append2(dst, int(millis/3600_000))
 	dst = append(dst, ':')

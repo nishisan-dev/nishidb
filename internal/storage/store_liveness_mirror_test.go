@@ -26,20 +26,20 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 )
 
-// bytesDoRecord é o oráculo. O tamanho que o applyRecord soma ao espelho é o
+// bytesOfRecord é o oráculo. O tamanho que o applyRecord soma ao espelho é o
 // mesmo que o BuildRecord grava no segmento, e essa conta é fixa (§10.1).
-func bytesDoRecord(key string, payload []byte) uint64 {
+func bytesOfRecord(key string, payload []byte) uint64 {
 	return uint64(encoding.RecordHeaderSize + len(key) + len(payload))
 }
 
-// somaDosTallies devolve Σ segTally.liveBytes sob o mutex do writer — o mapa
+// somaOfTallies devolve Σ secTally.liveBytes sob o mutex do writer — o mapa
 // é writer-only e ler mapa Go sem sincronizar é fatal error do runtime, não
 // corrida benigna.
-func somaDosTallies(s *Store) uint64 {
+func somaOfTallies(s *Store) uint64 {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	var total uint64
-	for _, t := range s.segTally {
+	for _, t := range s.secTally {
 		total += t.liveBytes
 	}
 	return total
@@ -51,12 +51,12 @@ func somaDosTallies(s *Store) uint64 {
 // com valor errado" de "o espelho furou por baixo": num uint64, subtrair
 // demais não dá negativo, dá 1,8e19 — e o garbage_bytes, que o servidor
 // calcula como storage - live também em uint64, sai desse mesmo tamanho.
-func exigeEspelhoIgualAosTallies(t *testing.T, s *Store, momento string) {
+func exigeEspelhoIgualAosTallies(t *testing.T, s *Store, moment string) {
 	t.Helper()
 	espelho := s.Stats().LiveBytesUpperBound
-	if soma := somaDosTallies(s); espelho != soma {
+	if soma := somaOfTallies(s); espelho != soma {
 		t.Fatalf("%s: o Stats publica LiveBytesUpperBound=%d, mas a soma dos tallies vale %d — "+
-			"o espelho deixou de ser cópia dos mapas e a métrica passou a mentir", momento, espelho, soma)
+			"o espelho deixou de ser cópia dos mapas e a métrica passou a mentir", moment, espelho, soma)
 	}
 }
 
@@ -69,16 +69,16 @@ func exigeEspelhoIgualAosTallies(t *testing.T, s *Store, momento string) {
 func TestEspelhoDeLivenessSomaCadaPutSemCheckpoint(t *testing.T) {
 	s := openStore(t, Options{})
 	const n = 20
-	var esperado uint64
+	var expected uint64
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("esp-%03d", i)
 		p := statusPayload(t, s, k, "Start", int64(i))
 		mustPut(t, s, k, int64(i), p, nil)
-		esperado += bytesDoRecord(k, p)
+		expected += bytesOfRecord(k, p)
 	}
-	if got := s.Stats().LiveBytesUpperBound; got != esperado {
+	if got := s.Stats().LiveBytesUpperBound; got != expected {
 		t.Fatalf("LiveBytesUpperBound = %d após %d Puts; o certo é a soma exata dos records, %d",
-			got, n, esperado)
+			got, n, expected)
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após os Puts")
 }
@@ -98,22 +98,22 @@ func TestUpdateSemCheckpointTiraDoEspelhoORecordAnterior(t *testing.T) {
 	}
 	// Reescrita das MESMAS n rows: o dataset continua com n rows vivas, e o
 	// espelho tem de descrever só os records novos.
-	var esperado uint64
+	var expected uint64
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("upd-%03d", i)
 		prev := mustGetAud(t, s, k)
 		p := statusPayload(t, s, k, "Interrupted", int64(i))
 		mustPut(t, s, k, int64(n+i), p, &prev)
-		esperado += bytesDoRecord(k, p)
+		expected += bytesOfRecord(k, p)
 	}
-	if got := s.Stats().LiveBytesUpperBound; got != esperado {
+	if got := s.Stats().LiveBytesUpperBound; got != expected {
 		t.Fatalf("LiveBytesUpperBound = %d após %d updates; o certo é só a soma dos records NOVOS, %d — "+
-			"a diferença é o record anterior que não saiu do agregado", got, n, esperado)
+			"a diferença é o record anterior que não saiu do agregado", got, n, expected)
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após os updates")
 }
 
-// zeraTallyDoSegmento monta, à mão e de forma COERENTE, a precondição que o
+// zeraTallyOfSegment monta, à mão e de forma COERENTE, a precondição que o
 // clamp do applyRecord existe para tratar: o tally do segmento abaixo do
 // record que a location ainda nomeia. Não dá para chegar nela pelo contrato
 // público — o godoc do Put exige que o prev SEJA o record corrente da key, e
@@ -121,13 +121,13 @@ func TestUpdateSemCheckpointTiraDoEspelhoORecordAnterior(t *testing.T) {
 //
 // "Coerente" é o ponto: tira do espelho exatamente o que tira do tally, para
 // que a asserção do fim meça o applyRecord e não a montagem.
-func zeraTallyDoSegmento(t *testing.T, s *Store, seg uint32) {
+func zeraTallyOfSegment(t *testing.T, s *Store, sec uint32) {
 	t.Helper()
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	tally := s.segTally[seg]
+	tally := s.secTally[sec]
 	if tally == nil {
-		t.Fatalf("segmento %d não tem tally: a montagem do teste não descreve o estado real", seg)
+		t.Fatalf("segmento %d não tem tally: a montagem do teste não descreve o estado real", sec)
 	}
 	removido := tally.liveBytes
 	tally.liveBytes = 0
@@ -150,32 +150,32 @@ func TestEspelhoDescontaABaixaClampadaENaoOOldLenCru(t *testing.T) {
 	// novo em segmentos diferentes.
 	s := openStore(t, Options{SegmentSize: 400})
 	const n = 12
-	porSegmento := make(map[uint32]uint64)
+	bySegment := make(map[uint32]uint64)
 	var total uint64
-	var alvo string
-	var alvoSeg uint32
+	var target string
+	var targetSec uint32
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("clm-%03d", i)
 		p := statusPayload(t, s, k, "Start", int64(i))
 		mustPut(t, s, k, int64(i), p, nil)
 		// O segmento em que o record caiu é o corrente DEPOIS do Put: a
 		// rotação acontece dentro do Append, antes da escrita.
-		seg := s.Stats().CurrentSegmentID
-		porSegmento[seg] += bytesDoRecord(k, p)
-		total += bytesDoRecord(k, p)
+		sec := s.Stats().CurrentSegmentID
+		bySegment[sec] += bytesOfRecord(k, p)
+		total += bytesOfRecord(k, p)
 		if i == 0 {
-			alvo, alvoSeg = k, seg
+			target, targetSec = k, sec
 		}
 	}
-	if len(porSegmento) < 2 {
-		t.Fatalf("o teste precisa de mais de um segmento; obtido %d", len(porSegmento))
+	if len(bySegment) < 2 {
+		t.Fatalf("o teste precisa de mais de um segmento; obtido %d", len(bySegment))
 	}
-	zeraTallyDoSegmento(t, s, alvoSeg)
+	zeraTallyOfSegment(t, s, targetSec)
 
-	prev := mustGetAud(t, s, alvo)
-	novo := statusPayload(t, s, alvo, "Stop", 999)
-	mustPut(t, s, alvo, 999, novo, &prev)
-	if sec := s.Stats().CurrentSegmentID; sec == alvoSeg {
+	prev := mustGetAud(t, s, target)
+	nw := statusPayload(t, s, target, "Stop", 999)
+	mustPut(t, s, target, 999, nw, &prev)
+	if sec := s.Stats().CurrentSegmentID; sec == targetSec {
 		t.Fatalf("o record novo caiu no segmento %d do record antigo: a montagem não exercita o clamp", sec)
 	}
 
@@ -183,16 +183,16 @@ func TestEspelhoDescontaABaixaClampadaENaoOOldLenCru(t *testing.T) {
 	// novo entra inteiro. Descontar o oldLen cru daria este total MENOS o
 	// tamanho do record antigo — e, quando o tally de um segmento pequeno é
 	// o único que resta, o wrap do uint64.
-	esperado := total - porSegmento[alvoSeg] + bytesDoRecord(alvo, novo)
-	if got := s.Stats().LiveBytesUpperBound; got != esperado {
+	expected := total - bySegment[targetSec] + bytesOfRecord(target, nw)
+	if got := s.Stats().LiveBytesUpperBound; got != expected {
 		t.Fatalf("LiveBytesUpperBound = %d após o update sobre tally zerado; o certo é %d — "+
-			"a diferença é o oldLen cru descontado no lugar da baixa clampada", got, esperado)
+			"a diferença é o oldLen cru descontado no lugar da baixa clampada", got, expected)
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após o update com tally zerado")
 }
 
 // TestRecoverySemeiaOEspelhoQueOStatsPublica fecha a janela que sustentava o
-// "ninguém observa o intervalo": a recovery semeia o segTally com os
+// "ninguém observa o intervalo": a recovery semeia o secTally com os
 // liveBytes do manifest e, se não semear também o espelho, o replay do tail
 // desconta uma baixa CLAMPADA contra o tally semeado de um agregado que vale
 // zero. Isso é underflow de uint64 no código de PRODUÇÃO — medido no fim do
@@ -223,13 +223,13 @@ func TestRecoverySemeiaOEspelhoQueOStatsPublica(t *testing.T) {
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	var esperado uint64
+	var expected uint64
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("rec-%03d", i)
 		prev := mustGetAud(t, s, k)
 		p := statusPayload(t, s, k, "Ok", int64(i))
 		mustPut(t, s, k, int64(n+i), p, &prev)
-		esperado += bytesDoRecord(k, p)
+		expected += bytesOfRecord(k, p)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -242,8 +242,8 @@ func TestRecoverySemeiaOEspelhoQueOStatsPublica(t *testing.T) {
 			"o replay do tail descontou a baixa de um agregado sem a base do manifest, "+
 			"e o que segurava o /v1/stats era só a recarga do Checkpoint do Open", d)
 	}
-	if got := s2.Stats().LiveBytesUpperBound; got != esperado {
-		t.Fatalf("LiveBytesUpperBound = %d após a recovery; o certo é a soma dos records do tail, %d", got, esperado)
+	if got := s2.Stats().LiveBytesUpperBound; got != expected {
+		t.Fatalf("LiveBytesUpperBound = %d após a recovery; o certo é a soma dos records do tail, %d", got, expected)
 	}
 	exigeEspelhoIgualAosTallies(t, s2, "após a recovery")
 }
@@ -266,7 +266,7 @@ func TestConferenciaDeEspelhosAcusaCadaEspelhoDivergente(t *testing.T) {
 		name    string
 		corrupt func(*Store)
 	}{
-		{"segCount", func(s *Store) { s.segCount.Add(1) }},
+		{"secCount", func(s *Store) { s.secCount.Add(1) }},
 		{"liveBytesAll", func(s *Store) { s.liveBytesAll.Add(4096) }},
 		{"diskBytesAll", func(s *Store) { s.diskBytesAll.Add(4096) }},
 	} {
@@ -283,17 +283,17 @@ func TestConferenciaDeEspelhosAcusaCadaEspelhoDivergente(t *testing.T) {
 			if err := s.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint de base: %v", err)
 			}
-			antes := s.EspelhosDivergentesForTest()
-			if antes != 0 {
-				t.Fatalf("o dataset já nasceu com %d divergência(s): a montagem não isola o que o teste planta", antes)
+			before := s.EspelhosDivergentesForTest()
+			if before != 0 {
+				t.Fatalf("o dataset já nasceu com %d divergência(s): a montagem não isola o que o teste planta", before)
 			}
-			s.CorrompeEspelhoParaTeste(c.corrupt)
+			s.CorruptEspelhoForTest(c.corrupt)
 			if err := s.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint: %v", err)
 			}
-			if got := s.EspelhosDivergentesForTest(); got != antes+1 {
+			if got := s.EspelhosDivergentesForTest(); got != before+1 {
 				t.Errorf("divergências = %d, queria %d: o checkpoint não acusou o espelho %s fora do mapa, "+
-					"e um detector que ninguém prova disparando lê-se como proteção sem proteger", got, antes+1, c.name)
+					"e um detector que ninguém prova disparando lê-se como proteção sem proteger", got, before+1, c.name)
 			}
 		})
 	}
@@ -310,7 +310,7 @@ func TestConferenciaDeEspelhosAcusaCadaEspelhoDivergente(t *testing.T) {
 //
 // O oráculo é a INVARIANTE (espelho é cópia do mapa), não uma faixa. Comparar
 // o vivo contra o espelho de DISCO não serviria: neste instante o disco vale
-// zero por decisão de produção documentada no próprio recoverFrom — o segSize
+// zero por decisão de produção documentada no próprio recoverFrom — o secSize
 // não é semeado ali, porque o Checkpoint do Open o repovoa pelo ListSegments
 // — e uma faixa (0, disco] reprovaria o código correto.
 func TestEspelhosSaemDaRecoveryJaSemeados(t *testing.T) {
@@ -338,20 +338,20 @@ func TestEspelhosSaemDaRecoveryJaSemeados(t *testing.T) {
 	}
 
 	var (
-		chamou              bool
-		espSegs, mapaSegs   uint32
-		espVivo, mapaVivo   uint64
-		espDisco, mapaDisco int64
+		chamou            bool
+		espSegs, mapaSegs uint32
+		espVivo, mapaVivo uint64
+		espDisk, mapaDisk int64
 	)
 	reabre := opts
 	reabre.traceRecovery = func(s *Store) {
 		chamou = true
-		espSegs, espVivo, espDisco = s.segCount.Load(), s.liveBytesAll.Load(), s.diskBytesAll.Load()
+		espSegs, espVivo, espDisk = s.secCount.Load(), s.liveBytesAll.Load(), s.diskBytesAll.Load()
 		// Os mapas são writer-only e ler mapa Go sem sincronizar é fatal
 		// error do runtime. Aqui não há writer concorrente — o Store nem saiu
 		// do Open —, mas o seam respeita o contrato em vez de depender disso.
 		s.wmu.Lock()
-		mapaSegs, mapaVivo, mapaDisco = s.agregadosDoTally()
+		mapaSegs, mapaVivo, mapaDisk = s.agregadosOfTally()
 		s.wmu.Unlock()
 	}
 	s2 := audOpen(t, reabre)
@@ -370,10 +370,10 @@ func TestEspelhosSaemDaRecoveryJaSemeados(t *testing.T) {
 			espVivo, mapaVivo)
 	}
 	if espSegs != mapaSegs {
-		t.Errorf("segCount = %d ao fim da recovery e o tally tem %d segmento(s): o espelho não foi semeado", espSegs, mapaSegs)
+		t.Errorf("secCount = %d ao fim da recovery e o tally tem %d segmento(s): o espelho não foi semeado", espSegs, mapaSegs)
 	}
-	if espDisco != mapaDisco {
-		t.Errorf("diskBytesAll = %d ao fim da recovery e o segSize soma %d: os dois têm de sair daqui iguais, "+
-			"cada espelho é cópia fiel do SEU mapa", espDisco, mapaDisco)
+	if espDisk != mapaDisk {
+		t.Errorf("diskBytesAll = %d ao fim da recovery e o secSize soma %d: os dois têm de sair daqui iguais, "+
+			"cada espelho é cópia fiel do SEU mapa", espDisk, mapaDisk)
 	}
 }

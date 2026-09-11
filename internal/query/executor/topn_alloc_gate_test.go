@@ -34,20 +34,20 @@ import (
 // Se falhar com números próximos mas diferentes, o buffer voltou a ser alocado
 // por aceitação.
 func TestTopNReaproveitaOBufferDaEntradaDespejada(t *testing.T) {
-	c := compilaSchemaTopN(t)
-	chaves := []binder.BoundOrderKey{chaveNome(t, c, false, false), chaveN(t, c, false)}
+	c := compileSchemaTopN(t)
+	chaves := []binder.BoundOrderKey{keyName(t, c, false, false), keyN(t, c, false)}
 
-	varre := func(linhas int) func() {
-		corpus := make([]linhaTopN, 0, linhas)
-		for i := 0; i < linhas; i++ {
-			corpus = append(corpus, linhaTopN{
+	varre := func(rows int) func() {
+		corpus := make([]rowTopN, 0, rows)
+		for i := 0; i < rows; i++ {
+			corpus = append(corpus, rowTopN{
 				id:      fmt.Sprintf("k%06d", i),
-				nome:    fmt.Sprintf("g%06d", linhas-i),
-				temNome: true,
+				name:    fmt.Sprintf("g%06d", rows-i),
+				hasName: true,
 				n:       int64(i % 7),
 			})
 		}
-		st := semeiaTopN(t, c, corpus)
+		st := seedTopN(t, c, corpus)
 		bq := bqTopN(t, c, chaves, 32, 0)
 		return func() {
 			it, err := executor.Open(context.Background(), bq, planner.FullScan(),

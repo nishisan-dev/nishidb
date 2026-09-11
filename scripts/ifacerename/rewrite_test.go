@@ -286,12 +286,12 @@ type Cursor interface {
 }
 `,
 	})
-	antes := readFile(t, dir, "p/p.go")
+	before := readFile(t, dir, "p/p.go")
 	_, err := Apply(dir, []Entry{{Pkg: "p", Iface: "Cursor", Method: "Avanca", New: "Fecha"}}, false)
 	if err == nil || !strings.Contains(err.Error(), "já tem Fecha") {
 		t.Fatalf("esperava recusa por colisão dentro da interface, veio %v", err)
 	}
-	if readFile(t, dir, "p/p.go") != antes {
+	if readFile(t, dir, "p/p.go") != before {
 		t.Error("escreveu apesar da recusa")
 	}
 }

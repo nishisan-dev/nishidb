@@ -66,7 +66,7 @@ end note
 
 note right of srv
   Os dois listeners compartilham a mesma
-  FUNÇÃO de definição de rota (montaMux),
+  FUNÇÃO de definição de rota (buildMux),
   chamada uma vez por listener — nunca
   duas listas que poderiam divergir.
   A matriz do §77 decide se o servidor

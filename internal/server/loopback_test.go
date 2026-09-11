@@ -20,7 +20,7 @@ import (
 // o operador sente é a conexão recusada, não um método Go.
 func TestLoopbackDesligadoNaoAbrePorta(t *testing.T) {
 	loopbackPorta := portaLivre(t)
-	srv := servidorComDados(t, 1, blocoPadrao)
+	srv := serverWithData(t, 1, blockPadrao)
 
 	if srv.EnderecoLoopback() != "" {
 		t.Fatalf("EnderecoLoopback() = %q, quer vazio com server.loopback desligado", srv.EnderecoLoopback())
@@ -37,10 +37,10 @@ func TestLoopbackDesligadoNaoAbrePorta(t *testing.T) {
 // bindar. Aqui pelo caminho de subida REAL (server.Novo com YAML de
 // verdade), não só a função pura (enderecoLoopback, security_internal_test.go).
 func TestLoopbackHabilitadoSemPortaRecusaASubidaDoServidor(t *testing.T) {
-	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n  loopback:\n    enabled: true\n")
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n  loopback:\n    enabled: true\n")
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	_, err := server.Novo(a.carrega(), server.Opcoes{})
+	_, err := server.Novo(a.load(), server.Options{})
 	if err == nil {
 		t.Fatal("quer recusa: server.loopback.enabled: true sem server.loopback.port declarado")
 	}
@@ -55,21 +55,21 @@ func TestLoopbackHabilitadoSemPortaRecusaASubidaDoServidor(t *testing.T) {
 // credencial. Os DOIS simultâneos, no MESMO processo, mesma rota
 // (/v1/health), provando que é a MESMA definição servida por dois caminhos.
 func TestLoopbackRespondeSemCredencialComPrincipalAutenticadoSimultaneamente(t *testing.T) {
-	certPath, keyPath := geraCertificadoTLSComValidade(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	certPath, keyPath := generateCertTLSWithValidade(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
 	const variavel = "NISHIDB_TESTE_LOOPBACK_SIMULTANEO_LEITOR"
-	const senha = "senha-bem-forte-de-teste"
-	t.Setenv(variavel, senha)
+	const password = "senha-bem-forte-de-teste"
+	t.Setenv(variavel, password)
 	loopbackPorta := portaLivre(t)
 
-	bloco := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
+	block := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
 		"  tls:\n    enabled: true\n    certificateFile: %s\n    privateKeyFile: %s\n"+
 		"  authentication:\n    enabled: true\n    users:\n"+
 		"      - username: leitor\n        passwordEnv: %s\n        role: READ\n"+
 		"  loopback:\n    enabled: true\n    port: %d\n",
 		certPath, keyPath, variavel, loopbackPorta)
 
-	srv := servidorComDados(t, 1, bloco)
-	client := clienteTLSDeTeste(t, certPath)
+	srv := serverWithData(t, 1, block)
+	client := clienteTLSOfTest(t, certPath)
 
 	t.Run("principal sem credencial exige autenticacao", func(t *testing.T) {
 		resp, err := client.Get("https://" + srv.Endereco() + "/v1/health")
@@ -87,7 +87,7 @@ func TestLoopbackRespondeSemCredencialComPrincipalAutenticadoSimultaneamente(t *
 		if err != nil {
 			t.Fatal(err)
 		}
-		req.SetBasicAuth("leitor", senha)
+		req.SetBasicAuth("leitor", password)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("GET https com credencial: %v", err)
@@ -104,11 +104,11 @@ func TestLoopbackRespondeSemCredencialComPrincipalAutenticadoSimultaneamente(t *
 		}
 		// Client com Timeout, e não http.Get cru: se uma regressão futura
 		// deixar o listener ACEITO mas sem ninguém servindo (New bindou,
-		// Roda não subiu o http.Server), a conexão fica aberta esperando
+		// Run não subiu o http.Server), a conexão fica aberta esperando
 		// resposta que nunca chega — sem teto aqui, o teste travaria a
 		// suíte inteira em vez de falhar rápido e nomeado.
-		clienteComTeto := &http.Client{Timeout: 5 * time.Second}
-		resp, err := clienteComTeto.Get("http://" + srv.EnderecoLoopback() + "/v1/health")
+		clienteWithCeiling := &http.Client{Timeout: 5 * time.Second}
+		resp, err := clienteWithCeiling.Get("http://" + srv.EnderecoLoopback() + "/v1/health")
 		if err != nil {
 			t.Fatalf("GET http (sem TLS, sem credencial) no loopback: %v", err)
 		}
@@ -128,8 +128,8 @@ func TestLoopbackRespondeSemCredencialComPrincipalAutenticadoSimultaneamente(t *
 // neste listener).
 func TestLoopbackRecusaRotaAdminMasRotaReadContinuaAnonima(t *testing.T) {
 	loopbackPorta := portaLivre(t)
-	bloco := blocoPadrao + fmt.Sprintf("  loopback:\n    enabled: true\n    port: %d\n", loopbackPorta)
-	srv := servidorComDados(t, 1, bloco)
+	block := blockPadrao + fmt.Sprintf("  loopback:\n    enabled: true\n    port: %d\n", loopbackPorta)
+	srv := serverWithData(t, 1, block)
 
 	if srv.EnderecoLoopback() == "" {
 		t.Fatal("EnderecoLoopback() vazio com server.loopback.enabled: true")
@@ -170,36 +170,36 @@ func TestLoopbackRecusaRotaAdminMasRotaReadContinuaAnonima(t *testing.T) {
 }
 
 // Ciclo de vida conjunto: os DOIS listeners sobem com o principal e caem
-// juntos no shutdown gracioso — nenhum accept loop sobrevive ao Roda
-// retornar. Roda sob -race de propósito (dois Serve concorrentes com o
+// juntos no shutdown gracioso — nenhum accept loop sobrevive ao Run
+// retornar. Run sob -race de propósito (dois Serve concorrentes com o
 // Shutdown que os encerra).
 func TestShutdownFechaListenerPrincipalELoopbackSemVazarGoroutine(t *testing.T) {
 	loopbackPorta := portaLivre(t)
-	bloco := blocoPadrao + fmt.Sprintf("  loopback:\n    enabled: true\n    port: %d\n", loopbackPorta)
+	block := blockPadrao + fmt.Sprintf("  loopback:\n    enabled: true\n    port: %d\n", loopbackPorta)
 
-	a := novoAmbienteCom(t, bloco)
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, block)
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
 
-	ctx, cancela := context.WithCancel(context.Background())
-	fim := make(chan error, 1)
-	go func() { fim <- srv.Roda(ctx, "") }()
+	ctx, cancel := context.WithCancel(context.Background())
+	end := make(chan error, 1)
+	go func() { end <- srv.Run(ctx, "") }()
 
 	enderecoPrincipal := srv.Endereco()
 	loopbackAddress := srv.EnderecoLoopback()
 	if loopbackAddress == "" {
 		t.Fatal("EnderecoLoopback() vazio com server.loopback.enabled: true")
 	}
-	esperaListenerAceitar(t, enderecoPrincipal)
-	esperaListenerAceitar(t, loopbackAddress)
+	waitListenerAceitar(t, enderecoPrincipal)
+	waitListenerAceitar(t, loopbackAddress)
 
-	cancela()
-	if err := <-fim; err != nil {
-		t.Fatalf("Roda: %v", err)
+	cancel()
+	if err := <-end; err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 
 	if conn, err := net.Dial("tcp", enderecoPrincipal); err == nil {
@@ -212,11 +212,11 @@ func TestShutdownFechaListenerPrincipalELoopbackSemVazarGoroutine(t *testing.T) 
 	}
 }
 
-// esperaListenerAceitar espera por FATO ("já aceita conexão"), não por
-// sleep: os dois Serve sobem em goroutines separadas depois de Roda
+// waitListenerAceitar espera por FATO ("já aceita conexão"), não por
+// sleep: os dois Serve sobem em goroutines separadas depois de Run
 // retornar o controle ao chamador, e um sleep fixo trocaria um teste
 // determinístico por uma aposta de agendador.
-func esperaListenerAceitar(t *testing.T, endereco string) {
+func waitListenerAceitar(t *testing.T, endereco string) {
 	t.Helper()
 	prazo := time.Now().Add(5 * time.Second)
 	for time.Now().Before(prazo) {
@@ -235,34 +235,34 @@ func esperaListenerAceitar(t *testing.T, endereco string) {
 //
 // Não é redundante com o teste do plano exposto: enquanto o método vivia no
 // padrão de registro, POST /metrics dava padrão VAZIO no mux, o que faz
-// papelDaRota devolver existe=false — e o wrapper do loopback devolvia a
+// roleOfRota devolver existe=false — e o wrapper do loopback devolvia a
 // requisição ao mux, que respondia o 405 de texto puro. Depois da mudança o
-// padrão casa, papelDaRota devolve READ, e a recusa passa a vir do handler. Os
+// padrão casa, roleOfRota devolve READ, e a recusa passa a vir do handler. Os
 // dois caminhos são diferentes por dentro e precisam sair iguais por fora.
 func TestMetricsComMetodoErradoNoPlanoLoopbackTambemSaiComCorpoErro(t *testing.T) {
 	loopbackPorta := portaLivre(t)
-	bloco := blocoPadrao + fmt.Sprintf("  loopback:\n    enabled: true\n    port: %d\n", loopbackPorta)
-	srv := servidorComDados(t, 1, bloco)
+	block := blockPadrao + fmt.Sprintf("  loopback:\n    enabled: true\n    port: %d\n", loopbackPorta)
+	srv := serverWithData(t, 1, block)
 
-	clienteComTeto := &http.Client{Timeout: 5 * time.Second}
-	for _, caminho := range []string{"/metrics", "/v1/health"} {
-		resp, err := clienteComTeto.Post("http://"+srv.EnderecoLoopback()+caminho,
+	clienteWithCeiling := &http.Client{Timeout: 5 * time.Second}
+	for _, path := range []string{"/metrics", "/v1/health"} {
+		resp, err := clienteWithCeiling.Post("http://"+srv.EnderecoLoopback()+path,
 			"application/json", strings.NewReader("{}"))
 		if err != nil {
-			t.Fatalf("POST %s no loopback: %v", caminho, err)
+			t.Fatalf("POST %s no loopback: %v", path, err)
 		}
 		if resp.StatusCode != http.StatusMethodNotAllowed {
 			fecha(t, resp)
-			t.Fatalf("POST %s no loopback = %d, quer 405", caminho, resp.StatusCode)
+			t.Fatalf("POST %s no loopback = %d, quer 405", path, resp.StatusCode)
 		}
 		var corpo protocol.ErrorBody
 		if err := json.NewDecoder(resp.Body).Decode(&corpo); err != nil {
 			fecha(t, resp)
-			t.Fatalf("POST %s no loopback: corpo não é ErrorBody (o 405 de texto puro do mux?): %v", caminho, err)
+			t.Fatalf("POST %s no loopback: corpo não é ErrorBody (o 405 de texto puro do mux?): %v", path, err)
 		}
 		fecha(t, resp)
 		if corpo.Error.Code != protocol.CodeMethod {
-			t.Errorf("POST %s no loopback: código = %q, quer %q", caminho, corpo.Error.Code, protocol.CodeMethod)
+			t.Errorf("POST %s no loopback: código = %q, quer %q", path, corpo.Error.Code, protocol.CodeMethod)
 		}
 	}
 }

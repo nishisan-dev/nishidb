@@ -19,22 +19,22 @@ import (
 
 const dataset = "servicos"
 
-// consumidorFalso é o dublê de Consumido: devolve o Instantaneo que o teste
+// consumidorFake é o dublê de Consumido: devolve o Instantaneo que o teste
 // montou, sem broker nenhum. Conta as chamadas, que é o observável de "uma ida
 // por consulta".
-type consumidorFalso struct {
+type consumidorFake struct {
 	inst     kafka.Instantaneo
 	chamadas int
 }
 
-func (c *consumidorFalso) Instantaneo(context.Context) kafka.Instantaneo {
+func (c *consumidorFake) Instantaneo(context.Context) kafka.Instantaneo {
 	c.chamadas++
 	return c.inst
 }
 
 // declarada é a identidade do fluxo que os testes usam.
 func declarada() metakafka.Declarada {
-	return metakafka.DoYAML(&schema.KafkaSpec{
+	return metakafka.OfYAML(&schema.KafkaSpec{
 		Enabled:          true,
 		Topic:            "service-view",
 		BootstrapServers: []string{"kafka02:9092", "kafka01:9092"},
@@ -42,9 +42,9 @@ func declarada() metakafka.Declarada {
 	})
 }
 
-// motorComKafka registra o dataset de mentira e a `_meta.kafka` sobre a fonte
+// engineWithKafka registra o dataset de mentira e a `_meta.kafka` sobre a fonte
 // dada — a mesma costura do Registra, sem servidor.
-func motorComKafka(t *testing.T, f metakafka.Fonte) *query.Engine {
+func engineWithKafka(t *testing.T, f metakafka.Source) *query.Engine {
 	t.Helper()
 	spec, err := schema.Parse([]byte("version: 1\nname: "+dataset+"\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
 	if err != nil {
@@ -64,27 +64,27 @@ func motorComKafka(t *testing.T, f metakafka.Fonte) *query.Engine {
 	return eng
 }
 
-// fonteCom monta a Fonte com o dublê e os closures que o teste quiser.
-func fonteCom(c metakafka.Consumido) metakafka.Fonte {
-	f := metakafka.Fonte{Declarada: declarada()}
+// sourceWith monta a Source com o dublê e os closures que o teste quiser.
+func sourceWith(c metakafka.Consumido) metakafka.Source {
+	f := metakafka.Source{Declarada: declarada()}
 	if c != nil {
 		f.Consumidor = func() metakafka.Consumido { return c }
 	}
 	return f
 }
 
-type linha map[string]string
+type row map[string]string
 
-func consulta(t *testing.T, eng *query.Engine, sql string) []linha {
+func consulta(t *testing.T, eng *query.Engine, sql string) []row {
 	t.Helper()
 	it, err := eng.Execute(context.Background(), dataset, sql, nil)
 	if err != nil {
 		t.Fatalf("query %q: %v", sql, err)
 	}
 	defer func() { _ = it.Close() }()
-	var out []linha
+	var out []row
 	for it.Next() {
-		l := make(linha, it.Row().Len())
+		l := make(row, it.Row().Len())
 		for _, c := range it.Row().Cols() {
 			l[c.Name] = render(c)
 		}
@@ -117,7 +117,7 @@ func render(c executor.ColView) string {
 	}
 }
 
-func coluna(rows []linha, col string) string {
+func column(rows []row, col string) string {
 	out := make([]string, 0, len(rows))
 	for _, l := range rows {
 		out = append(out, l[col])
@@ -125,31 +125,31 @@ func coluna(rows []linha, col string) string {
 	return strings.Join(out, ",")
 }
 
-// instantaneoCom monta um retrato com as partições dadas, todas com fim de log
+// instantaneoWith monta um retrato com as partições dadas, todas com fim de log
 // válido e o carimbo agora.
-func instantaneoCom(parts ...kafka.PosicaoDaParticao) kafka.Instantaneo {
+func instantaneoWith(parts ...kafka.PositionOfPartition) kafka.Instantaneo {
 	return kafka.Instantaneo{
-		Particoes:           parts,
-		MarcaEm:             time.Unix(1_757_000_000, 0),
-		FilaRegistros:       3,
-		FilaBytes:           4096,
-		UltimoLote:          time.Unix(1_757_000_001, 0),
-		Desfecho:            kafka.Desfecho{Eventos: 100, Aplicados: 97, Stale: 2, Descartados: 1, Falhas: 0},
-		ParticoesAtribuidas: int64(len(parts)),
-		ParticoesDoTopico:   int64(len(parts)),
+		Partitions:           parts,
+		MarkIn:               time.Unix(1_757_000_000, 0),
+		FilaRegistros:        3,
+		FilaBytes:            4096,
+		UltimoLote:           time.Unix(1_757_000_001, 0),
+		Desfecho:             kafka.Desfecho{Eventos: 100, Aplicados: 97, Stale: 2, Descartados: 1, Falhas: 0},
+		PartitionsAtribuidas: int64(len(parts)),
+		PartitionsOfTopic:    int64(len(parts)),
 	}
 }
 
-func pos(p int32, aplicado, fim int64) kafka.PosicaoDaParticao {
-	atraso := fim - aplicado
+func pos(p int32, aplicado, end int64) kafka.PositionOfPartition {
+	atraso := end - aplicado
 	if atraso < 0 {
 		atraso = 0
 	}
-	return kafka.PosicaoDaParticao{Particao: p, Aplicado: aplicado, FimDoLog: fim, Atraso: atraso, TemFim: true}
+	return kafka.PositionOfPartition{Partition: p, Aplicado: aplicado, EndOfLog: end, Atraso: atraso, HasEnd: true}
 }
 
-// duraveisCom devolve o closure do tri-estado com os offsets dados.
-func duraveisCom(offs map[int32]int64) func() (checkpoint.SourceOffsets, bool, error) {
+// duraveisWith devolve o closure do tri-estado com os offsets dados.
+func duraveisWith(offs map[int32]int64) func() (checkpoint.SourceOffsets, bool, error) {
 	return func() (checkpoint.SourceOffsets, bool, error) {
 		return checkpoint.SourceOffsets{Offsets: offs}, true, nil
 	}
@@ -164,13 +164,13 @@ func inteiro(t *testing.T, s string) int64 {
 	return n
 }
 
-func inteiroTexto(n int64) string { return strconv.FormatInt(n, 10) }
+func inteiroText(n int64) string { return strconv.FormatInt(n, 10) }
 
 func juntar(cols []string) string { return strings.Join(cols, ", ") }
 
 func contem(s, sub string) bool { return strings.Contains(s, sub) }
 
-// snapshotDeEpoca monta um types.Snapshot com uma época que a fonte não abriu.
-func snapshotDeEpoca(epoca uint64, limite types.RowID) types.Snapshot {
-	return types.Snapshot{Epoch: epoca, LimitRowID: limite}
+// snapshotOfEpoca monta um types.Snapshot com uma época que a fonte não abriu.
+func snapshotOfEpoca(epoca uint64, limit types.RowID) types.Snapshot {
+	return types.Snapshot{Epoch: epoca, LimitRowID: limit}
 }

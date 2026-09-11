@@ -21,7 +21,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
-const specSemKafka = `version: 1
+const specWithoutKafka = `version: 1
 name: %s
 materialization:
   key:
@@ -32,10 +32,10 @@ schema:
       type: string
 `
 
-// specComKafka aponta para um broker que NÃO existe. É deliberado: o teste
+// specWithKafka aponta para um broker que NÃO existe. É deliberado: o teste
 // exercita o caminho em que a ingestão não consegue subir, e o contrato do
 // §51 é que as consultas subam assim mesmo.
-const specComKafka = `version: 1
+const specWithKafka = `version: 1
 name: %s
 source:
   type: kafka
@@ -55,35 +55,35 @@ schema:
       type: string
 `
 
-type ambiente struct {
+type env struct {
 	t       *testing.T
 	dir     string
 	cfgPath string
 	cfg     *config.Config
 }
 
-func novoAmbiente(t *testing.T) *ambiente {
+func newEnv(t *testing.T) *env {
 	t.Helper()
-	return novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
+	return newEnvWith(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
 }
 
-// novoAmbienteCom monta o ambiente com o bloco `server` que o teste quiser.
+// newEnvWith monta o ambiente com o bloco `server` que o teste quiser.
 // O %d recebe uma porta livre.
-func novoAmbienteCom(t *testing.T, blocoServer string) *ambiente {
+func newEnvWith(t *testing.T, blockServer string) *env {
 	t.Helper()
-	return novoAmbienteComStorage(t, blocoServer, "")
+	return newEnvWithStorage(t, blockServer, "")
 }
 
-// novoAmbienteComStorage acrescenta linhas ao bloco `storage:` do nishidb.yaml.
+// newEnvWithStorage acrescenta linhas ao bloco `storage:` do nishidb.yaml.
 // Existe porque há asserção que precisa de MAIS DE UM segmento em disco: com um
 // só, toda conta que percorre segmentos é indistinguível de uma que lê apenas o
 // corrente, e o mutante que divide pela contagem sobrevive por ser identidade.
-func novoAmbienteComStorage(t *testing.T, blocoServer, storageExtra string) *ambiente {
+func newEnvWithStorage(t *testing.T, blockServer, storageExtra string) *env {
 	t.Helper()
 	dir := t.TempDir()
-	dados := filepath.Join(dir, "dados")
+	data := filepath.Join(dir, "dados")
 	datasets := filepath.Join(dir, "datasets")
-	for _, d := range []string{dados, datasets} {
+	for _, d := range []string{data, datasets} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -91,23 +91,23 @@ func novoAmbienteComStorage(t *testing.T, blocoServer, storageExtra string) *amb
 	cfgPath := filepath.Join(dir, "nishidb.yaml")
 	// Porta livre escolhida pelo teste: o config recusa `port: 0` de
 	// propósito (zero não é "sem valor"), então quem escolhe é quem testa.
-	corpo := "version: 1\nstorage:\n  path: " + dados + "\n" + storageExtra +
+	corpo := "version: 1\nstorage:\n  path: " + data + "\n" + storageExtra +
 		"datasets:\n  directory: " + datasets +
-		fmt.Sprintf(blocoServer, portaLivre(t))
+		fmt.Sprintf(blockServer, portaLivre(t))
 	if err := os.WriteFile(cfgPath, []byte(corpo), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return &ambiente{t: t, dir: dir, cfgPath: cfgPath}
+	return &env{t: t, dir: dir, cfgPath: cfgPath}
 }
 
-func (a *ambiente) escreveDataset(nome, yml string) {
+func (a *env) writeDataset(name, yml string) {
 	a.t.Helper()
-	if err := os.WriteFile(filepath.Join(a.dir, "datasets", nome+".yaml"), []byte(yml), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(a.dir, "datasets", name+".yaml"), []byte(yml), 0o644); err != nil {
 		a.t.Fatal(err)
 	}
 }
 
-func (a *ambiente) carrega() *config.Config {
+func (a *env) load() *config.Config {
 	a.t.Helper()
 	c, err := config.Load(a.cfgPath)
 	if err != nil {
@@ -121,25 +121,25 @@ func (a *ambiente) carrega() *config.Config {
 // ingestão NÃO pode subir continua consultável, e o problema aparece no health
 // em vez de derrubar o processo.
 func TestIngestaoQueNaoSobeNaoDerrubaAsConsultas(t *testing.T) {
-	a := novoAmbiente(t)
-	a.escreveDataset("bom", strings.ReplaceAll(specSemKafka, "%s", "bom"))
-	a.escreveDataset("quebrado", preenche(specComKafka, "quebrado", "true"))
+	a := newEnv(t)
+	a.writeDataset("bom", strings.ReplaceAll(specWithoutKafka, "%s", "bom"))
+	a.writeDataset("quebrado", preenche(specWithKafka, "quebrado", "true"))
 
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("Novo: %v", err)
 	}
 
-	ctx, cancela := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancela()
-	fim := make(chan error, 1)
-	go func() { fim <- srv.Roda(ctx, "") }()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	end := make(chan error, 1)
+	go func() { end <- srv.Run(ctx, "") }()
 
-	esperaHealth(t, srv, func(h protocol.Health) bool {
+	waitHealth(t, srv, func(h protocol.Health) bool {
 		return h.Datasets["quebrado"] == protocol.StateDown
 	})
 
-	h := leHealth(t, srv)
+	h := readHealth(t, srv)
 	if h.Datasets["bom"] != protocol.StateDisabled {
 		t.Errorf("dataset sem Kafka = %q, quer %q", h.Datasets["bom"], protocol.StateDisabled)
 	}
@@ -149,42 +149,42 @@ func TestIngestaoQueNaoSobeNaoDerrubaAsConsultas(t *testing.T) {
 	if h.Details["quebrado"] == "" {
 		t.Error("o health não nomeia o motivo; num processo com vários datasets, DOWN sozinho não ajuda")
 	}
-	cancela()
-	<-fim
+	cancel()
+	<-end
 }
 
 // D15 — descrever o consumer não é ligá-lo.
 func TestEnabledFalseNaoSobeConsumer(t *testing.T) {
-	a := novoAmbiente(t)
-	a.escreveDataset("inerte", preenche(specComKafka, "inerte", "false"))
+	a := newEnv(t)
+	a.writeDataset("inerte", preenche(specWithKafka, "inerte", "false"))
 
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("Novo: %v", err)
 	}
-	ctx, cancela := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancela()
-	fim := make(chan error, 1)
-	go func() { fim <- srv.Roda(ctx, "") }()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	end := make(chan error, 1)
+	go func() { end <- srv.Run(ctx, "") }()
 
 	// Se o consumer tivesse subido contra 127.0.0.1:1, o dataset apareceria
 	// como DOWN em poucos segundos.
 	time.Sleep(2 * time.Second)
-	h := leHealth(t, srv)
+	h := readHealth(t, srv)
 	if h.Datasets["inerte"] != protocol.StateDisabled {
 		t.Errorf("dataset = %q, quer DISABLED: enabled:false não pode subir consumer", h.Datasets["inerte"])
 	}
 	if h.Status != protocol.StateUp {
 		t.Errorf("status = %q, quer UP", h.Status)
 	}
-	cancela()
-	<-fim
+	cancel()
+	<-end
 }
 
 // D4 — a colisão de groupId é validação de CONJUNTO e tem de matar a subida,
 // não virar estado parcial silencioso.
 func TestGroupIdDuplicadoRecusaASubida(t *testing.T) {
-	a := novoAmbiente(t)
+	a := newEnv(t)
 	// Os dois com o mesmo tópico e o mesmo group.
 	yml := `version: 1
 name: %NOME%
@@ -204,10 +204,10 @@ schema:
     id:
       type: string
 `
-	a.escreveDataset("um", strings.ReplaceAll(yml, "%NOME%", "um"))
-	a.escreveDataset("dois", strings.ReplaceAll(yml, "%NOME%", "dois"))
+	a.writeDataset("um", strings.ReplaceAll(yml, "%NOME%", "um"))
+	a.writeDataset("dois", strings.ReplaceAll(yml, "%NOME%", "dois"))
 
-	_, err := server.Novo(a.carrega(), server.Opcoes{})
+	_, err := server.Novo(a.load(), server.Options{})
 	if err == nil {
 		t.Fatal("quer recusa: dois datasets no mesmo group dividiriam as partições")
 	}
@@ -218,27 +218,27 @@ schema:
 
 // §92/§93: o scrape tem de trazer os nomes literais da spec.
 func TestMetricsExpoeOsNomesDoSpec92(t *testing.T) {
-	a := novoAmbiente(t)
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnv(t)
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancela := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancela()
-	fim := make(chan error, 1)
-	go func() { fim <- srv.Roda(ctx, "") }()
-	defer func() { cancela(); <-fim }()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	end := make(chan error, 1)
+	go func() { end <- srv.Run(ctx, "") }()
+	defer func() { cancel(); <-end }()
 
-	corpo := pega(t, srv, "/metrics")
-	for _, nome := range []string{
+	corpo := fetch(t, srv, "/metrics")
+	for _, name := range []string{
 		"nishidb_go_heap_bytes",
 		"nishidb_checkpoint_duration_seconds",
 		"nishidb_checkpoint_last_success_timestamp",
 	} {
-		if !strings.Contains(corpo, nome) {
-			t.Errorf("métrica %s ausente do scrape", nome)
+		if !strings.Contains(corpo, name) {
+			t.Errorf("métrica %s ausente do scrape", name)
 		}
 	}
 	if !strings.Contains(corpo, `dataset="d"`) {
@@ -248,41 +248,41 @@ func TestMetricsExpoeOsNomesDoSpec92(t *testing.T) {
 
 // §94: a chave "kafka" é obrigatória, mesmo sem nenhum dataset consumindo.
 func TestHealthTemAChaveKafka(t *testing.T) {
-	a := novoAmbiente(t)
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnv(t)
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancela := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancela()
-	fim := make(chan error, 1)
-	go func() { fim <- srv.Roda(ctx, "") }()
-	defer func() { cancela(); <-fim }()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	end := make(chan error, 1)
+	go func() { end <- srv.Run(ctx, "") }()
+	defer func() { cancel(); <-end }()
 
 	var bruto map[string]any
-	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/health")), &bruto); err != nil {
+	if err := json.Unmarshal([]byte(fetch(t, srv, "/v1/health")), &bruto); err != nil {
 		t.Fatal(err)
 	}
-	for _, chave := range []string{"status", "kafka", "storage", "datasets"} {
-		if _, ok := bruto[chave]; !ok {
-			t.Errorf("chave %q ausente do health do §94", chave)
+	for _, key := range []string{"status", "kafka", "storage", "datasets"} {
+		if _, ok := bruto[key]; !ok {
+			t.Errorf("chave %q ausente do health do §94", key)
 		}
 	}
 }
 
-func preenche(tmpl, nome, enabled string) string {
-	s := strings.Replace(tmpl, "%s", nome, 1)
+func preenche(tmpl, name, enabled string) string {
+	s := strings.Replace(tmpl, "%s", name, 1)
 	s = strings.Replace(s, "%s", enabled, 1)
-	return strings.ReplaceAll(s, "%s", nome)
+	return strings.ReplaceAll(s, "%s", name)
 }
 
-func pega(t *testing.T, srv *server.Servidor, caminho string) string {
+func fetch(t *testing.T, srv *server.Server, path string) string {
 	t.Helper()
-	resp, err := http.Get("http://" + srv.Endereco() + caminho)
+	resp, err := http.Get("http://" + srv.Endereco() + path)
 	if err != nil {
-		t.Fatalf("GET %s: %v", caminho, err)
+		t.Fatalf("GET %s: %v", path, err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -296,27 +296,27 @@ func pega(t *testing.T, srv *server.Servidor, caminho string) string {
 	return string(b)
 }
 
-func leHealth(t *testing.T, srv *server.Servidor) protocol.Health {
+func readHealth(t *testing.T, srv *server.Server) protocol.Health {
 	t.Helper()
 	var h protocol.Health
-	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/health")), &h); err != nil {
+	if err := json.Unmarshal([]byte(fetch(t, srv, "/v1/health")), &h); err != nil {
 		t.Fatalf("health: %v", err)
 	}
 	return h
 }
 
-// esperaHealth espera por CONDIÇÃO, e não por sleep: dormir esconde tanto a
+// waitHealth espera por CONDIÇÃO, e não por sleep: dormir esconde tanto a
 // lentidão quanto a ausência de progresso.
-func esperaHealth(t *testing.T, srv *server.Servidor, ok func(protocol.Health) bool) {
+func waitHealth(t *testing.T, srv *server.Server, ok func(protocol.Health) bool) {
 	t.Helper()
 	prazo := time.Now().Add(15 * time.Second)
 	for time.Now().Before(prazo) {
-		if ok(leHealth(t, srv)) {
+		if ok(readHealth(t, srv)) {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("condição de health não foi atingida a tempo: %+v", leHealth(t, srv))
+	t.Fatalf("condição de health não foi atingida a tempo: %+v", readHealth(t, srv))
 }
 
 // portaLivre reserva uma porta pedindo :0 ao sistema e devolvendo-a em
@@ -339,10 +339,10 @@ func portaLivre(t *testing.T) int {
 // é o oposto de aceitar-e-ignorar — que é o defeito que a issue #1 denuncia.
 // Ausente é outra coisa: rodar `nishidb server` já é o ato de ligar.
 func TestServerEnabledFalseRecusaASubida(t *testing.T) {
-	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n  enabled: false\n")
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n  enabled: false\n")
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	_, err := server.Novo(a.carrega(), server.Opcoes{})
+	_, err := server.Novo(a.load(), server.Options{})
 	if err == nil {
 		t.Fatal("quer recusa com server.enabled: false")
 	}
@@ -352,30 +352,30 @@ func TestServerEnabledFalseRecusaASubida(t *testing.T) {
 }
 
 func TestServerSemBlocoEnabledSobe(t *testing.T) {
-	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("sem a chave o servidor deveria subir: %v", err)
 	}
-	if err := srv.Fecha(); err != nil {
+	if err := srv.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// sobeCapturandoLog monta o servidor com um logger próprio e devolve o que ele
+// risesCapturandoLog monta o servidor com um logger próprio e devolve o que ele
 // escreveu na subida.
-func sobeCapturandoLog(t *testing.T, a *ambiente) string {
+func risesCapturandoLog(t *testing.T, a *env) string {
 	t.Helper()
 	var buf bytes.Buffer
-	srv, err := server.Novo(a.carrega(), server.Opcoes{
+	srv, err := server.Novo(a.load(), server.Options{
 		Log: logging.New(&buf, logging.FormatJSON, slog.LevelInfo),
 	})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	if err := srv.Fecha(); err != nil {
+	if err := srv.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return buf.String()
@@ -391,10 +391,10 @@ func sobeCapturandoLog(t *testing.T, a *ambiente) string {
 // security_test.go). Este teste continua sobre a célula "decisão já
 // tomada pelo operador"; a célula da seção ausente tem teste próprio.
 func TestBindForaDoLoopbackAvisa(t *testing.T) {
-	a := novoAmbienteCom(t, "\nserver:\n  bind: 0.0.0.0\n  port: %d\n  authentication:\n    enabled: false\n")
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, "\nserver:\n  bind: 0.0.0.0\n  port: %d\n  authentication:\n    enabled: false\n")
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	saida := sobeCapturandoLog(t, a)
+	saida := risesCapturandoLog(t, a)
 	if !strings.Contains(saida, "bind.exposto") {
 		t.Fatalf("subida com bind aberto não avisou: %s", saida)
 	}
@@ -405,10 +405,10 @@ func TestBindForaDoLoopbackAvisa(t *testing.T) {
 
 // Aviso que aparece sempre é ruído, e ruído treina o operador a ignorar.
 func TestBindEmLoopbackNaoAvisa(t *testing.T) {
-	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	if saida := sobeCapturandoLog(t, a); strings.Contains(saida, "bind.exposto") {
+	if saida := risesCapturandoLog(t, a); strings.Contains(saida, "bind.exposto") {
 		t.Fatalf("bind em loopback não deveria avisar: %s", saida)
 	}
 }
@@ -423,10 +423,10 @@ func TestBindEmLoopbackNaoAvisa(t *testing.T) {
 // vazio), não sobre uma lista de substrings que a próxima linha de log
 // nova esqueceria de atualizar.
 func TestBindEmLoopbackSemNadaDeSegurancaDeclaradoNaoLogaNada(t *testing.T) {
-	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	if saida := sobeCapturandoLog(t, a); saida != "" {
+	if saida := risesCapturandoLog(t, a); saida != "" {
 		t.Fatalf("subida do piloto (loopback, sem segurança declarada) logou algo: %s", saida)
 	}
 }
@@ -441,11 +441,11 @@ func TestBindEmLoopbackSemNadaDeSegurancaDeclaradoNaoLogaNada(t *testing.T) {
 // contrapositivo — que a chave COM leitor não avisa mais — é a segunda metade
 // deste teste.
 func TestChaveDeRuntimeIgnoradaApareceNaSubida(t *testing.T) {
-	a := novoAmbienteCom(t,
+	a := newEnvWith(t,
 		"\nserver:\n  bind: 127.0.0.1\n  port: %d\nruntime:\n  managedMemoryTarget: 1GiB\n")
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	saida := sobeCapturandoLog(t, a)
+	saida := risesCapturandoLog(t, a)
 	if !strings.Contains(saida, "runtime.managedMemoryTarget") {
 		t.Fatalf("a chave sem implementação não foi nomeada: %s", saida)
 	}
@@ -457,28 +457,28 @@ func TestChaveDeRuntimeIgnoradaApareceNaSubida(t *testing.T) {
 // ligá-la passaria — o operador deixaria de receber o aviso E continuaria sem
 // teto, que é estritamente pior do que o estado anterior.
 func TestChaveDeRuntimeComLeitorNaoEhMaisNomeadaNaSubida(t *testing.T) {
-	a := novoAmbienteCom(t,
+	a := newEnvWith(t,
 		"\nserver:\n  bind: 127.0.0.1\n  port: %d\nruntime:\n  memoryTarget: 1GiB\n"+
 			"  query:\n    maxBufferPerQuery: 4MiB\n")
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	saida := sobeCapturandoLog(t, a)
-	for _, chave := range []string{"runtime.memoryTarget", "runtime.query.maxBufferPerQuery"} {
-		if strings.Contains(saida, chave) {
-			t.Errorf("a subida ainda avisa que %s não tem efeito, e ela tem: %s", chave, saida)
+	saida := risesCapturandoLog(t, a)
+	for _, key := range []string{"runtime.memoryTarget", "runtime.query.maxBufferPerQuery"} {
+		if strings.Contains(saida, key) {
+			t.Errorf("a subida ainda avisa que %s não tem efeito, e ela tem: %s", key, saida)
 		}
 	}
 }
 
 // storage.durability (débito 50) é aceita e ignorada — só existe o
-// SyncEveryPut interno, que o CLI nunca liga. Nomeá-la na subida é a mesma
+// SyncEveryPut interno, que o CLI nunca liga. Mencioná-la na subida é a mesma
 // doutrina do débito 15: chave que mente sem aviso é pior que chave ausente.
 func TestStorageDurabilityIgnoradaApareceNaSubida(t *testing.T) {
-	a := novoAmbienteComStorage(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n",
+	a := newEnvWithStorage(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n",
 		"  durability:\n    mode: sync\n    interval: 100ms\n")
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	saida := sobeCapturandoLog(t, a)
+	saida := risesCapturandoLog(t, a)
 	if !strings.Contains(saida, "storage.durability") {
 		t.Fatalf("a chave sem implementação não foi nomeada: %s", saida)
 	}
@@ -493,7 +493,7 @@ func TestStorageDurabilityIgnoradaApareceNaSubida(t *testing.T) {
 // perder o SetIndent, ganhar um omitempty. Nada disso aparece quando o teste
 // decodifica de volta para a própria struct que produziu a saída.
 func TestOCorpoDoHealthNaoMudouComAMudancaDePacote(t *testing.T) {
-	srv := servidorComDados(t, 1, blocoPadrao)
+	srv := serverWithData(t, 1, blockPadrao)
 
 	quer := "{\n" +
 		"  \"status\": \"UP\",\n" +
@@ -503,7 +503,7 @@ func TestOCorpoDoHealthNaoMudouComAMudancaDePacote(t *testing.T) {
 		"    \"d\": \"DISABLED\"\n" +
 		"  }\n" +
 		"}\n"
-	if got := pega(t, srv, "/v1/health"); got != quer {
+	if got := fetch(t, srv, "/v1/health"); got != quer {
 		t.Errorf("corpo do /v1/health mudou:\n--- got ---\n%s\n--- quer ---\n%s", got, quer)
 	}
 }

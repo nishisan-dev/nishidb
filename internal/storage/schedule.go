@@ -48,14 +48,14 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 	if s.schedule == nil {
 		return nil
 	}
-	querido := s.infoDaAgenda()
+	querido := s.infoOfAgenda()
 	var atual *checkpoint.ScheduleInfo
 	if m != nil {
 		atual = m.Schedule
 	}
-	limite := types.RowID(s.nextRowID.Load())
-	semArquivos := s.schedule.NeedsRebuild(limite)
-	if atual != nil && *atual == *querido && !semArquivos {
+	limit := types.RowID(s.nextRowID.Load())
+	withoutArquivos := s.schedule.NeedsRebuild(limit)
+	if atual != nil && *atual == *querido && !withoutArquivos {
 		return nil
 	}
 
@@ -63,7 +63,7 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 	switch {
 	case atual == nil:
 		motivo = "o dataset não tinha agenda de vencimentos"
-	case semArquivos:
+	case withoutArquivos:
 		motivo = "os arquivos da agenda não descrevem as linhas do dataset"
 	default:
 		motivo = fmt.Sprintf("os parâmetros mudaram (duração de fundo %s → %s, geometria %d/%d → %d/%d)",
@@ -72,8 +72,8 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 			atual.BlockShift, atual.Levels, querido.BlockShift, querido.Levels)
 	}
 
-	inicio := time.Now()
-	if err := s.schedule.Rebuild(limite, s.vencimentoDe); err != nil {
+	start := time.Now()
+	if err := s.schedule.Rebuild(limit, s.vencimentoOf); err != nil {
 		return fmt.Errorf("storage: construir a agenda de vencimentos de %s: %w", s.opts.Dir, err)
 	}
 	s.scheduleBuilt = true
@@ -83,7 +83,7 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 	// medido a linha seria só ruído.
 	s.opts.Log.Info("agenda.construida",
 		"a agenda de vencimentos foi construída a partir dos índices de escrita e prazo, sem ler records",
-		"motivo", motivo, "linhas", uint64(limite), "duracao", time.Since(inicio).String())
+		"motivo", motivo, "linhas", uint64(limit), "duracao", time.Since(start).String())
 	return nil
 }
 
@@ -97,7 +97,7 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 // até elas foi quebrado, que é o que a descida percorre.
 //
 // O plano previa comparar contra uma árvore reconstruída numa região de
-// rascunho. Comparar contra vencimentoDe é mais forte e não aloca a segunda
+// rascunho. Comparar contra vencimentoOf é mais forte e não aloca a segunda
 // árvore: a função pura é a definição do que a agenda deveria conter, e uma
 // reconstrução para rascunho provaria apenas que dois caminhos de código
 // concordam entre si.
@@ -116,9 +116,9 @@ func (s *Store) AuditaAgenda() error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 
-	limite := types.RowID(s.nextRowID.Load())
-	for id := types.RowID(0); id < limite; id++ {
-		agendado, querido := s.schedule.Get(id), s.vencimentoDe(id)
+	limit := types.RowID(s.nextRowID.Load())
+	for id := types.RowID(0); id < limit; id++ {
+		agendado, querido := s.schedule.Get(id), s.vencimentoOf(id)
 		if agendado == querido {
 			continue
 		}

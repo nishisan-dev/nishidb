@@ -6,24 +6,24 @@ import (
 )
 
 // TestHistogramaContagens confere os quatro totais que o relatório final
-// abre: lido, com campo, sem_campo e inválido — cada Registra incrementa
+// abre: lido, com campo, sem_campo e inválido — cada Register incrementa
 // exatamente um balde de desfecho, mais o total lido.
 func TestHistogramaContagens(t *testing.T) {
-	h := NovoHistograma()
-	h.Registra(ExtraidoOK, 100)
-	h.Registra(ExtraidoOK, 200)
-	h.Registra(ExtraidoSemCampo, 0)
-	h.Registra(ExtraidoInvalido, 0)
-	h.Registra(ExtraidoInvalido, 0)
+	h := NewHistograma()
+	h.Register(ExtraidoOK, 100)
+	h.Register(ExtraidoOK, 200)
+	h.Register(ExtraidoWithoutField, 0)
+	h.Register(ExtraidoInvalido, 0)
+	h.Register(ExtraidoInvalido, 0)
 
 	if h.TotalLido() != 5 {
 		t.Errorf("TotalLido = %d, quer 5", h.TotalLido())
 	}
-	if h.ComCampo() != 2 {
-		t.Errorf("ComCampo = %d, quer 2", h.ComCampo())
+	if h.WithField() != 2 {
+		t.Errorf("WithField = %d, quer 2", h.WithField())
 	}
-	if h.SemCampo() != 1 {
-		t.Errorf("SemCampo = %d, quer 1", h.SemCampo())
+	if h.WithoutField() != 1 {
+		t.Errorf("WithoutField = %d, quer 1", h.WithoutField())
 	}
 	if h.Invalidos() != 2 {
 		t.Errorf("Invalidos = %d, quer 2", h.Invalidos())
@@ -33,10 +33,10 @@ func TestHistogramaContagens(t *testing.T) {
 // TestHistogramaBuckets confere as cinco faixas do brief, incluindo as
 // fronteiras exatas (256, 512, 768, 1024 caem no balde "≤", não no seguinte).
 func TestHistogramaBuckets(t *testing.T) {
-	h := NovoHistograma()
+	h := NewHistograma()
 	comprimentos := []int{1, 256, 257, 512, 513, 768, 769, 1024, 1025, 1099}
 	for _, c := range comprimentos {
-		h.Registra(ExtraidoOK, c)
+		h.Register(ExtraidoOK, c)
 	}
 
 	buckets := h.Buckets()
@@ -44,7 +44,7 @@ func TestHistogramaBuckets(t *testing.T) {
 		t.Fatalf("len(Buckets()) = %d, quer 5", len(buckets))
 	}
 
-	querContagem := map[string]int64{
+	querCount := map[string]int64{
 		"≤256":  2, // 1, 256
 		"≤512":  2, // 257, 512
 		"≤768":  2, // 513, 768
@@ -52,17 +52,17 @@ func TestHistogramaBuckets(t *testing.T) {
 		">1024": 2, // 1025, 1099
 	}
 	for _, b := range buckets {
-		q, ok := querContagem[b.Rotulo]
+		q, ok := querCount[b.Rotulo]
 		if !ok {
 			t.Fatalf("rótulo inesperado %q", b.Rotulo)
 		}
-		if b.Contagem != q {
-			t.Errorf("bucket %q: contagem = %d, quer %d", b.Rotulo, b.Contagem, q)
+		if b.Count != q {
+			t.Errorf("bucket %q: contagem = %d, quer %d", b.Rotulo, b.Count, q)
 		}
-		delete(querContagem, b.Rotulo)
+		delete(querCount, b.Rotulo)
 	}
-	if len(querContagem) != 0 {
-		t.Errorf("rótulos não vistos: %v", querContagem)
+	if len(querCount) != 0 {
+		t.Errorf("rótulos não vistos: %v", querCount)
 	}
 }
 
@@ -70,16 +70,16 @@ func TestHistogramaBuckets(t *testing.T) {
 // bucket é sobre o total COM CAMPO, não sobre o total lido — mensagens
 // sem_campo/inválidas não têm comprimento a distribuir.
 func TestHistogramaBucketsPercentualSobreComCampo(t *testing.T) {
-	h := NovoHistograma()
-	h.Registra(ExtraidoOK, 100)
-	h.Registra(ExtraidoOK, 100)
-	h.Registra(ExtraidoSemCampo, 0)
-	h.Registra(ExtraidoInvalido, 0)
+	h := NewHistograma()
+	h.Register(ExtraidoOK, 100)
+	h.Register(ExtraidoOK, 100)
+	h.Register(ExtraidoWithoutField, 0)
+	h.Register(ExtraidoInvalido, 0)
 
 	for _, b := range h.Buckets() {
 		if b.Rotulo == "≤256" {
-			if b.Contagem != 2 {
-				t.Fatalf("contagem do balde ≤256 = %d, quer 2", b.Contagem)
+			if b.Count != 2 {
+				t.Fatalf("contagem do balde ≤256 = %d, quer 2", b.Count)
 			}
 			if b.Percentual != 100.0 {
 				t.Errorf("percentual do balde ≤256 = %.2f, quer 100.00 (2 de 2 COM CAMPO, não 2 de 4 lidos)", b.Percentual)
@@ -89,9 +89,9 @@ func TestHistogramaBucketsPercentualSobreComCampo(t *testing.T) {
 }
 
 func TestHistogramaBucketsVazioNaoQuebra(t *testing.T) {
-	h := NovoHistograma()
+	h := NewHistograma()
 	for _, b := range h.Buckets() {
-		if b.Contagem != 0 || b.Percentual != 0 {
+		if b.Count != 0 || b.Percentual != 0 {
 			t.Errorf("bucket %q de histograma vazio = %+v, quer zerado", b.Rotulo, b)
 		}
 	}
@@ -101,9 +101,9 @@ func TestHistogramaBucketsVazioNaoQuebra(t *testing.T) {
 // o percentil de posto mais próximo (nearest-rank) seja verificável à mão:
 // 10 valores ordenados 1..10, p50 é o 5º valor (posto = ceil(0.5*10) = 5).
 func TestHistogramaPercentisExatos(t *testing.T) {
-	h := NovoHistograma()
+	h := NewHistograma()
 	for i := 1; i <= 10; i++ {
-		h.Registra(ExtraidoOK, i*10) // 10, 20, ..., 100
+		h.Register(ExtraidoOK, i*10) // 10, 20, ..., 100
 	}
 
 	casos := []struct {
@@ -130,12 +130,12 @@ func TestHistogramaPercentisExatos(t *testing.T) {
 // não valores distintos: cardinalidade baixa com muita repetição é
 // precisamente o cenário do §92 (map[int]int reaproveitado por ser pequeno).
 func TestHistogramaPercentisComRepeticao(t *testing.T) {
-	h := NovoHistograma()
+	h := NewHistograma()
 	for i := 0; i < 90; i++ {
-		h.Registra(ExtraidoOK, 100)
+		h.Register(ExtraidoOK, 100)
 	}
 	for i := 0; i < 10; i++ {
-		h.Registra(ExtraidoOK, 2000)
+		h.Register(ExtraidoOK, 2000)
 	}
 	// posto do p90 = ceil(0.9*100) = 90 -> exatamente o limite entre as duas
 	// massas: a 90ª ocorrência ainda é 100.
@@ -151,8 +151,8 @@ func TestHistogramaPercentisComRepeticao(t *testing.T) {
 // com uma única mensagem registrada, todo percentil — e o máximo — só pode
 // ser esse único comprimento, qualquer que seja p.
 func TestHistogramaPercentisComUmUnicoElemento(t *testing.T) {
-	h := NovoHistograma()
-	h.Registra(ExtraidoOK, 777)
+	h := NewHistograma()
+	h.Register(ExtraidoOK, 777)
 
 	for _, p := range []float64{1, 50, 95, 99, 100} {
 		if got := h.Percentil(p); got != 777 {
@@ -169,9 +169,9 @@ func TestHistogramaPercentisComUmUnicoElemento(t *testing.T) {
 // entre duas massas, mas de TODAS as mensagens no mesmo comprimento — o caso
 // degenerado em que não há "distribuição" nenhuma para distinguir percentis.
 func TestHistogramaPercentisComTodosOsComprimentosIdenticos(t *testing.T) {
-	h := NovoHistograma()
+	h := NewHistograma()
 	for i := 0; i < 500; i++ {
-		h.Registra(ExtraidoOK, 300)
+		h.Register(ExtraidoOK, 300)
 	}
 
 	for _, p := range []float64{1, 50, 95, 99, 100} {
@@ -185,7 +185,7 @@ func TestHistogramaPercentisComTodosOsComprimentosIdenticos(t *testing.T) {
 }
 
 func TestHistogramaPercentilVazioDevolveZero(t *testing.T) {
-	h := NovoHistograma()
+	h := NewHistograma()
 	if got := h.Percentil(50); got != 0 {
 		t.Errorf("Percentil(50) de histograma vazio = %d, quer 0", got)
 	}
@@ -198,9 +198,9 @@ func TestHistogramaPercentilVazioDevolveZero(t *testing.T) {
 // REPETIÇÃO honrada quando o mesmo comprimento aparece em mais de uma
 // mensagem — "os N maiores" é sobre mensagens, não sobre valores distintos.
 func TestHistogramaTopN(t *testing.T) {
-	h := NovoHistograma()
+	h := NewHistograma()
 	for _, c := range []int{10, 1099, 20, 1099, 1074, 30} {
-		h.Registra(ExtraidoOK, c)
+		h.Register(ExtraidoOK, c)
 	}
 
 	got := h.TopN(4)
@@ -211,9 +211,9 @@ func TestHistogramaTopN(t *testing.T) {
 }
 
 func TestHistogramaTopNMaiorQueOTotalDevolveTudo(t *testing.T) {
-	h := NovoHistograma()
-	h.Registra(ExtraidoOK, 5)
-	h.Registra(ExtraidoOK, 10)
+	h := NewHistograma()
+	h.Register(ExtraidoOK, 5)
+	h.Register(ExtraidoOK, 10)
 
 	got := h.TopN(10)
 	quer := []int{10, 5}
@@ -223,7 +223,7 @@ func TestHistogramaTopNMaiorQueOTotalDevolveTudo(t *testing.T) {
 }
 
 func TestHistogramaTopNVazioDevolveVazio(t *testing.T) {
-	h := NovoHistograma()
+	h := NewHistograma()
 	if got := h.TopN(10); len(got) != 0 {
 		t.Errorf("TopN(10) de histograma vazio = %v, quer vazio", got)
 	}

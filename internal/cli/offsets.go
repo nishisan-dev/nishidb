@@ -54,8 +54,8 @@ func runOffsets(args []string, amb Context) int {
 		return ExitUsageError
 	}
 	acoes := 0
-	for _, ligada := range []bool{*mostrar, *reiniciar != "", *definir != ""} {
-		if ligada {
+	for _, on := range []bool{*mostrar, *reiniciar != "", *definir != ""} {
+		if on {
 			acoes++
 		}
 	}
@@ -104,11 +104,11 @@ func runOffsets(args []string, amb Context) int {
 	}
 	defer st.Close()
 
-	atual, existe, errLeitura := st.SourceOffsets()
+	atual, exists, errLeitura := st.SourceOffsets()
 
 	switch {
 	case *mostrar:
-		return printOffsets(amb, *dataset, st.RowCount(), atual, existe, errLeitura)
+		return printOffsets(amb, *dataset, st.RowCount(), atual, exists, errLeitura)
 
 	case *reiniciar != "":
 		if *reiniciar != schema.AutoOffsetResetEarliest && *reiniciar != schema.AutoOffsetResetLatest {
@@ -126,11 +126,11 @@ func runOffsets(args []string, amb Context) int {
 		// dataset estará "sem posição", e o autoOffsetReset governa. O
 		// RowCount deixa de bloquear porque a decisão foi tomada aqui, de
 		// forma explícita e registrada.
-		nova := checkpoint.SourceOffsets{
+		nw := checkpoint.SourceOffsets{
 			Source:  specOrigin(spec),
 			Offsets: map[int32]int64{},
 		}
-		if err := grava(st, nova); err != nil {
+		if err := grava(st, nw); err != nil {
 			fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
 			return errorCode(err)
 		}
@@ -180,7 +180,7 @@ func grava(st *storage.Store, o checkpoint.SourceOffsets) error {
 }
 
 func printOffsets(amb Context, dataset string, rows uint64,
-	o checkpoint.SourceOffsets, existe bool, errLeitura error,
+	o checkpoint.SourceOffsets, exists bool, errLeitura error,
 ) int {
 	fmt.Fprintf(amb.Stdout, "dataset: %s\nrows: %d\n", dataset, rows)
 	switch {
@@ -191,7 +191,7 @@ func printOffsets(amb Context, dataset string, rows uint64,
 				"a ingestão NÃO sobe neste estado: use --reset ou --set para decidir explicitamente")
 		}
 		return ExitDataset
-	case !existe:
+	case !exists:
 		fmt.Fprintln(amb.Stdout, "posição: ausente")
 		if rows > 0 {
 			fmt.Fprintln(amb.Stdout,
@@ -217,27 +217,27 @@ func printOffsets(amb Context, dataset string, rows uint64,
 // parseOffsets lê "0:100,1:250".
 func parseOffsets(s string) (map[int32]int64, error) {
 	out := map[int32]int64{}
-	for _, par := range strings.Split(s, ",") {
-		par = strings.TrimSpace(par)
-		if par == "" {
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
 			continue
 		}
-		p, o, ok := strings.Cut(par, ":")
+		p, o, ok := strings.Cut(pair, ":")
 		if !ok {
-			return nil, fmt.Errorf("--set %q inválido (esperado particao:offset)", par)
+			return nil, fmt.Errorf("--set %q inválido (esperado particao:offset)", pair)
 		}
-		particao, err := strconv.ParseInt(strings.TrimSpace(p), 10, 32)
-		if err != nil || particao < 0 {
-			return nil, fmt.Errorf("--set %q: partição inválida", par)
+		partition, err := strconv.ParseInt(strings.TrimSpace(p), 10, 32)
+		if err != nil || partition < 0 {
+			return nil, fmt.Errorf("--set %q: partição inválida", pair)
 		}
 		offset, err := strconv.ParseInt(strings.TrimSpace(o), 10, 64)
 		if err != nil || offset < 0 {
-			return nil, fmt.Errorf("--set %q: offset inválido (>= 0)", par)
+			return nil, fmt.Errorf("--set %q: offset inválido (>= 0)", pair)
 		}
-		if _, dup := out[int32(particao)]; dup {
-			return nil, fmt.Errorf("--set: partição %d repetida", particao)
+		if _, dup := out[int32(partition)]; dup {
+			return nil, fmt.Errorf("--set: partição %d repetida", partition)
 		}
-		out[int32(particao)] = offset
+		out[int32(partition)] = offset
 	}
 	if len(out) == 0 {
 		return nil, errors.New("--set vazio")

@@ -12,16 +12,16 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// leCampo devolve o valor materializado de uma coluna pelo NOME.
+// readField devolve o valor materializado de uma coluna pelo NOME.
 //
 // Lê do payload gravado, e não das entries do decode, porque é o payload que
 // a consulta enxerga: um carimbo certo nas entries e errado no record seria
 // invisível para um teste que olhasse só o buffer.
-func leCampo(t *testing.T, c *schema.Compiled, st *fakestorage.Store, key, campo string) (types.Value, bool) {
+func readField(t *testing.T, c *schema.Compiled, st *fakestorage.Store, key, field string) (types.Value, bool) {
 	t.Helper()
-	cf, ok := c.FieldByName([]byte(campo))
+	cf, ok := c.FieldByName([]byte(field))
 	if !ok {
-		t.Fatalf("coluna %q não existe no schema compilado", campo)
+		t.Fatalf("coluna %q não existe no schema compilado", field)
 	}
 	rec, _, presente, err := st.GetByKey(st.OpenSnapshot(), []byte(key), nil)
 	if err != nil {
@@ -52,10 +52,10 @@ func leCampo(t *testing.T, c *schema.Compiled, st *fakestorage.Store, key, campo
 // que a linha vence. Carimbar no decode adiantaria o vencimento sem que nada
 // reclamasse, e o sintoma em produção seria entidade sumindo antes da hora.
 //
-// O teste separa as duas metades no tempo de propósito: entre o Decodifica e o
+// O teste separa as duas metades no tempo de propósito: entre o Decode e o
 // Aplica o relógio salta uma hora. Só o carimbo do lado certo sobrevive a isso.
 func TestOCarimboDeEscritaEhODaAplicacaoNaoODoDecode(t *testing.T) {
-	c, st := compiladoComExpire(t, congeladaYAMLComTTL)
+	c, st := compiladoWithExpire(t, congeladaYAMLWithTTL)
 	m := mustNew(t, c, st)
 
 	decode := time.UnixMilli(1_700_000_000_000)
@@ -64,9 +64,9 @@ func TestOCarimboDeEscritaEhODaAplicacaoNaoODoDecode(t *testing.T) {
 	m.UsaRelogio(func() time.Time { return agora })
 
 	var d Decodificado
-	m.Decodifica(&d, []byte(`{"id":"a","sev":5}`))
-	if d.erro != nil {
-		t.Fatal(d.erro)
+	m.Decode(&d, []byte(`{"id":"a","sev":5}`))
+	if d.err != nil {
+		t.Fatal(d.err)
 	}
 	agora = aplica // o evento esperou na fila
 	if r := m.Aplica(&d); r.Err != nil {
@@ -76,14 +76,14 @@ func TestOCarimboDeEscritaEhODaAplicacaoNaoODoDecode(t *testing.T) {
 	// As duas colunas de relógio: o campo de sistema e a congelada @writeTime.
 	// A segunda importa tanto quanto a primeira e é mais fácil de esquecer —
 	// ela sai do mesmo `agora` e por outro caminho (capturaCongeladas).
-	for _, campo := range []string{schema.WriteInstantFieldName, "criadoEm"} {
-		v, ok := leCampo(t, c, st, "a", campo)
+	for _, field := range []string{schema.WriteInstantFieldName, "criadoEm"} {
+		v, ok := readField(t, c, st, "a", field)
 		if !ok {
-			t.Fatalf("%s não foi materializada", campo)
+			t.Fatalf("%s não foi materializada", field)
 		}
 		if v.I64 != aplica.UnixMilli() {
 			t.Errorf("%s = %d (%s), quero %d (%s): o carimbo é o do Aplica",
-				campo, v.I64, time.UnixMilli(v.I64).UTC(),
+				field, v.I64, time.UnixMilli(v.I64).UTC(),
 				aplica.UnixMilli(), aplica.UTC())
 		}
 	}
@@ -93,11 +93,11 @@ func TestOCarimboDeEscritaEhODaAplicacaoNaoODoDecode(t *testing.T) {
 //
 // O par deste teste é TestOInstanteEhOMesmoParaOEventoInteiro, que cobra
 // exatamente uma leitura por Apply: os dois juntos dizem onde a única leitura
-// mora. Sem este, alguém devolveria o `m.agora()` ao Decodifica "para o Parse
+// mora. Sem este, alguém devolveria o `m.agora()` ao Decode "para o Parse
 // não receber zero" e o carimbo do Aplica passaria a sobrescrever um valor já
 // plausível — a regressão voltaria com a suíte verde.
 func TestODecodeNaoLeORelogio(t *testing.T) {
-	c, st := compiladoComExpire(t, yamlComExpire)
+	c, st := compiladoWithExpire(t, yamlWithExpire)
 	m := mustNew(t, c, st)
 	leituras := 0
 	m.UsaRelogio(func() time.Time {
@@ -106,9 +106,9 @@ func TestODecodeNaoLeORelogio(t *testing.T) {
 	})
 
 	var d Decodificado
-	m.Decodifica(&d, []byte(`{"id":"A","severidade":3}`))
-	if d.erro != nil {
-		t.Fatal(d.erro)
+	m.Decode(&d, []byte(`{"id":"A","severidade":3}`))
+	if d.err != nil {
+		t.Fatal(d.err)
 	}
 	if leituras != 0 {
 		t.Fatalf("o decode leu o relógio %d vezes; tem de ser 0", leituras)
@@ -132,14 +132,14 @@ func TestODecodeNaoLeORelogio(t *testing.T) {
 // O teste decodifica três eventos sem aplicar nenhum. Se o contador estiver do
 // lado errado, ele já vale 3 antes de qualquer linha existir.
 func TestOContadorDeEventosSoAndaNaAplicacao(t *testing.T) {
-	c, st := compiladoComExpire(t, yamlComExpire)
+	c, st := compiladoWithExpire(t, yamlWithExpire)
 	m := mustNew(t, c, st)
 
 	decs := make([]Decodificado, 3)
 	for i := range decs {
-		m.Decodifica(&decs[i], []byte(`{"id":"A","severidade":3}`))
-		if decs[i].erro != nil {
-			t.Fatal(decs[i].erro)
+		m.Decode(&decs[i], []byte(`{"id":"A","severidade":3}`))
+		if decs[i].err != nil {
+			t.Fatal(decs[i].err)
 		}
 	}
 	if n := m.Metrics().EventsTotal; n != 0 {
@@ -162,14 +162,14 @@ func TestOContadorDeEventosSoAndaNaAplicacao(t *testing.T) {
 // DISTINTOS antes de aplicar qualquer um e cobra que o primeiro ainda descreva
 // o primeiro evento — sem isto, a esteira aplicaria N cópias do último decode.
 func TestDoisDecodificadosNaoSeAtrapalham(t *testing.T) {
-	c, st := compiladoComExpire(t, yamlComExpire)
+	c, st := compiladoWithExpire(t, yamlWithExpire)
 	m := mustNew(t, c, st)
 
 	var a, b Decodificado
-	m.Decodifica(&a, []byte(`{"id":"A","severidade":1}`))
-	m.Decodifica(&b, []byte(`{"id":"B","severidade":2}`))
-	if a.erro != nil || b.erro != nil {
-		t.Fatalf("decode: %v / %v", a.erro, b.erro)
+	m.Decode(&a, []byte(`{"id":"A","severidade":1}`))
+	m.Decode(&b, []byte(`{"id":"B","severidade":2}`))
+	if a.err != nil || b.err != nil {
+		t.Fatalf("decode: %v / %v", a.err, b.err)
 	}
 	if string(a.key) != "A" || string(b.key) != "B" {
 		t.Fatalf("keys = %q / %q, quero A / B", a.key, b.key)
@@ -182,7 +182,7 @@ func TestDoisDecodificadosNaoSeAtrapalham(t *testing.T) {
 		t.Fatalf("Aplica(b) = %v (%v)", r.Action, r.Err)
 	}
 	for key, quero := range map[string]int64{"A": 1, "B": 2} {
-		v, ok := leCampo(t, c, st, key, "severidade")
+		v, ok := readField(t, c, st, key, "severidade")
 		if !ok {
 			t.Fatalf("%s: severidade ausente", key)
 		}
@@ -204,27 +204,27 @@ func TestDoisDecodificadosNaoSeAtrapalham(t *testing.T) {
 // documento do pai, e o `data` dos três parsers. O teste cobra as cinco,
 // porque uma sobrevivente segura o mesmo lote que as outras cinco juntas.
 func TestOSlotNaoSeguraOBufferDoEventoDepoisDeAplicar(t *testing.T) {
-	c, st := compiladoComExpire(t, descobreYAML)
+	c, st := compiladoWithExpire(t, descobreYAML)
 	_ = st
 	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	var d Decodificado
-	m.Decodifica(&d, []byte(`{"id":"A","doc":{"a":1,"b":"x"}}`))
+	m.Decode(&d, []byte(`{"id":"A","doc":{"a":1,"b":"x"}}`))
 	if r := m.Aplica(&d); r.Err != nil {
 		t.Fatalf("Aplica: %v", r.Err)
 	}
-	// Antes do Libera, o slot segura o evento — é o estado normal em voo.
-	if d.evento == nil {
+	// Antes do Release, o slot segura o evento — é o estado normal em voo.
+	if d.event == nil {
 		t.Fatal("o teste não alcançou o estado que ele mede: o evento já estava solto")
 	}
 
-	d.Libera()
+	d.Release()
 
-	if d.evento != nil {
+	if d.event != nil {
 		t.Error("evento continua preso ao slot")
 	}
 	for i := range d.pais {
-		if d.pais[i].valor != nil || d.pais[i].campo != nil {
+		if d.pais[i].value != nil || d.pais[i].field != nil {
 			t.Errorf("pais[%d] continua apontando para o documento do evento", i)
 		}
 	}
@@ -248,25 +248,25 @@ func TestOSlotNaoSeguraOBufferDoEventoDepoisDeAplicar(t *testing.T) {
 // passou a ver zero, AFIRMARIA que a memória foi devolvida. Métrica mentindo é
 // pior que memória presa: tira de quem opera a chance de descobrir.
 func TestEncolherSoltaAKeyJuntoComOArena(t *testing.T) {
-	c, _ := compiladoComExpire(t, descobreYAML)
+	c, _ := compiladoWithExpire(t, descobreYAML)
 	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	var d Decodificado
-	m.Decodifica(&d, []byte(`{"id":"A","doc":{"a":1}}`))
+	m.Decode(&d, []byte(`{"id":"A","doc":{"a":1}}`))
 	if r := m.Aplica(&d); r.Err != nil {
 		t.Fatalf("Aplica: %v", r.Err)
 	}
 	if len(d.key) == 0 {
 		t.Fatal("o teste não alcançou o estado que ele mede: a key está vazia")
 	}
-	// Na ordem da produção: o anel chama Libera e depois Encolhe, e as duas
+	// Na ordem da produção: o anel chama Release e depois Shrink, e as duas
 	// juntas é que devolvem o slot vazio. Chamar só uma delas mediria metade.
-	d.Libera()
-	if !d.Encolhe(1) { // limiar 1: encolhe sempre
-		t.Fatal("Encolhe não encolheu com limiar 1")
+	d.Release()
+	if !d.Shrink(1) { // limiar 1: encolhe sempre
+		t.Fatal("Shrink não encolheu com limiar 1")
 	}
 	if d.key != nil {
-		t.Error("key continua apontando para o arena que o Encolhe diz ter soltado")
+		t.Error("key continua apontando para o arena que o Shrink diz ter soltado")
 	}
 	if d.arena != nil {
 		t.Error("arena continua apontado")

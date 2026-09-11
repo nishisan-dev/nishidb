@@ -13,10 +13,10 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
-// specComPoliticas descreve um dataset que usa as três políticas de escrita
+// specWithPoliticas descreve um dataset que usa as três políticas de escrita
 // que o merge conhece, mais as regras de TTL — é o conjunto inteiro do que
 // este bloco de métricas existe para publicar.
-func specComPoliticas() *schema.DatasetSpec {
+func specWithPoliticas() *schema.DatasetSpec {
 	return &schema.DatasetSpec{
 		Name: "d",
 		Materialization: schema.MaterializationSpec{
@@ -36,9 +36,9 @@ func TestMaterializacaoStatsTraduzOSnapshot(t *testing.T) {
 		Acumuladas:            9,
 		Saturadas:             1,
 		RegrasCasadas:         []int64{4, 2},
-		SemRegra:              3,
+		WithoutRegra:          3,
 	}
-	got := materializationStats(specComPoliticas(), snap)
+	got := materializationStats(specWithPoliticas(), snap)
 
 	if got.FrozenCaptured != 7 || got.FrozenPreserved != 5 {
 		t.Errorf("congeladas = %+v", got)
@@ -47,7 +47,7 @@ func TestMaterializacaoStatsTraduzOSnapshot(t *testing.T) {
 		t.Errorf("soma = %+v", got)
 	}
 	if got.TTLUnmatched != 3 {
-		t.Errorf("semRegra = %d", got.TTLUnmatched)
+		t.Errorf("withoutRegra = %d", got.TTLUnmatched)
 	}
 	if len(got.TTLRules) != 2 {
 		t.Fatalf("%d regras publicadas, quero 2", len(got.TTLRules))
@@ -96,19 +96,19 @@ func TestAmostrasDeMaterializacaoPublicamAsSeries(t *testing.T) {
 		Acumuladas:            9,
 		Saturadas:             1,
 		RegrasCasadas:         []int64{4, 2},
-		SemRegra:              3,
+		WithoutRegra:          3,
 	}
-	amostras := amostrasDeMaterializacao("d", specComPoliticas(), snap)
+	samples := samplesOfMaterializacao("d", specWithPoliticas(), snap)
 
 	valores := map[string]float64{}
-	for _, a := range amostras {
-		chave := a.Name
+	for _, a := range samples {
+		key := a.Name
 		for _, l := range a.Labels {
 			if l.Name == "rule" {
-				chave += "{rule=" + l.Value + "}"
+				key += "{rule=" + l.Value + "}"
 			}
 		}
-		valores[chave] = a.Value
+		valores[key] = a.Value
 	}
 	quer := map[string]float64{
 		metrics.MetFrozenCaptured:              7,
@@ -119,9 +119,9 @@ func TestAmostrasDeMaterializacaoPublicamAsSeries(t *testing.T) {
 		metrics.MetTTLRuleMatched + "{rule=1}": 2,
 		metrics.MetTTLUnmatched:                3,
 	}
-	for nome, v := range quer {
-		if got, ok := valores[nome]; !ok || got != v {
-			t.Errorf("%s = %v (presente=%v), quero %v", nome, got, ok, v)
+	for name, v := range quer {
+		if got, ok := valores[name]; !ok || got != v {
+			t.Errorf("%s = %v (presente=%v), quero %v", name, got, ok, v)
 		}
 	}
 }
@@ -139,12 +139,12 @@ func TestSnapshotExpiradoSaiComCodigoProprioENaoComoInterno(t *testing.T) {
 	// pelo it.Err() depois de o storage o devolver na leitura de uma row.
 	err := fmt.Errorf("executor: leitura da row 42: %w", storage.ErrExpiredSnapshot)
 
-	if got := codigoDeErroDeQuery(err); got != protocol.CodeSnapshotExpired {
-		t.Errorf("codigoDeErroDeQuery = %q, quero %q", got, protocol.CodeSnapshotExpired)
+	if got := codigoOfErrOfQuery(err); got != protocol.CodeSnapshotExpired {
+		t.Errorf("codigoOfErrOfQuery = %q, quero %q", got, protocol.CodeSnapshotExpired)
 	}
 	// A contraprova: um erro qualquer continua caindo em INTERNAL. Sem ela, um
 	// mapeamento que devolvesse SNAPSHOT_TOO_OLD para tudo passaria acima.
-	if got := codigoDeErroDeQuery(errors.New("qualquer outra coisa")); got != protocol.CodeInternal {
-		t.Errorf("codigoDeErroDeQuery de um erro genérico = %q, quero %q", got, protocol.CodeInternal)
+	if got := codigoOfErrOfQuery(errors.New("qualquer outra coisa")); got != protocol.CodeInternal {
+		t.Errorf("codigoOfErrOfQuery de um erro genérico = %q, quero %q", got, protocol.CodeInternal)
 	}
 }

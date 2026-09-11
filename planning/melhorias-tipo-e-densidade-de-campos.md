@@ -198,9 +198,9 @@ razão, não.
 2. **`CountIncompatibleValue`** já recebe o `*CompiledField` — incrementa o
    segundo contador ali, sem mudança de assinatura.
 3. **`occurrences`** incrementa em toda materialização bem-sucedida de coluna
-   derivada, em `extraiDerivadas`/`descobreAninhados`
+   derivada, em `extractDerived`/`descobreAninhados`
    ([internal/materializer/extract.go](internal/materializer/extract.go)).
-4. **Exposição** em `_meta.fields`: duas colunas `int64` na `especDaTabela` e
+4. **Exposição** em `_meta.fields`: duas colunas `int64` na `especOfTable` e
    dois `vals` em `record()`
    ([internal/query/meta/source.go](internal/query/meta/source.go)). Os valores
    são ordenados por FieldID antes do `AppendField` — a ordem já é resolvida lá.

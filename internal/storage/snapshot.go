@@ -10,7 +10,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// registroDeSnapshots guarda QUANTAS consultas vivem em cada época.
+// recordOfSnapshots guarda QUANTAS consultas vivem em cada época.
 //
 // É contagem por época, e não um handle por consulta, porque a única pergunta
 // que o writer faz é "qual a época mais antiga que ainda tem leitor?" — e ela
@@ -22,9 +22,9 @@ import (
 // ou aposMu. O writer entra aqui com o wmu na mão (é ele quem publica a época),
 // e o leitor entra sem lock nenhum — inverter isso seria wmu→snapMu de um lado
 // e snapMu→wmu do outro.
-type registroDeSnapshots struct {
+type recordOfSnapshots struct {
 	mu sync.Mutex
-	// porEpoca conta os snapshots ABERTOS em cada época e guarda o menor
+	// byEpoca conta os snapshots ABERTOS em cada época e guarda o menor
 	// instante entre eles. Uma época só sai do mapa quando o último leitor
 	// dela fecha.
 	//
@@ -33,86 +33,86 @@ type registroDeSnapshots struct {
 	// QUANDO ele acha que é — e é o segundo que a compaction consulta antes de
 	// aplicar a expiração oportunista. Dois snapshots da mesma época podem ter
 	// instantes distintos, porque o relógio anda sem que ninguém publique.
-	porEpoca map[uint64]epocaViva
-	// menor espelha a menor chave viva de porEpoca, para que o caminho quente
+	byEpoca map[uint64]epocaViva
+	// menor espelha a menor chave viva de byEpoca, para que o caminho quente
 	// do writer a leia sem tomar o mutex. NoReader quando o mapa está vazio.
 	menor atomic.Uint64
-	// menorInstante espelha o instante do snapshot mais antigo, em epoch
+	// menorInstant espelha o instante do snapshot mais antigo, em epoch
 	// millis, e vale ZERO quando não há leitor. Zero é um sentinela seguro
 	// aqui — nenhum dataset ingere em 1970 —, e é o que faz a compaction
 	// voltar ao relógio corrente sozinha quando a última consulta fecha.
-	menorInstante atomic.Int64
+	menorInstant atomic.Int64
 	// menorBase espelha o piso do snapshot mais antigo — o rowId a partir do
 	// qual ele ainda enxerga linhas. A purga do histórico não pode passar
 	// dele: ela não só move a marca-d'água, ela APAGA os segmentos cobertos, e
 	// um leitor com o piso congelado sobre um segmento removido passaria de
-	// "não vê a linha" para "erra ao lê-la". SemPiso quando não há leitor.
+	// "não vê a linha" para "erra ao lê-la". WithoutPiso quando não há leitor.
 	menorBase atomic.Uint64
-	// epocaMinimaValida é a fronteira da invalidação: snapshot com época ABAIXO
+	// epocaMinimaValidate é a fronteira da invalidação: snapshot com época ABAIXO
 	// dela teve as suas versões descartadas pelo teto de memória e não pode
 	// mais ser servido. Só avança, e só sob a pressão do teto.
-	epocaMinimaValida atomic.Uint64
+	epocaMinimaValidate atomic.Uint64
 }
 
-// SemPiso é o valor de menorBase sem consulta aberta: nada a segurar, e a
+// WithoutPiso é o valor de menorBase sem consulta aberta: nada a segurar, e a
 // retenção avança até onde o prazo mandar.
-const SemPiso = uint64(math.MaxUint64)
+const WithoutPiso = uint64(math.MaxUint64)
 
 // epocaViva é a contagem de leitores de uma época, o instante do mais antigo e
 // o menor piso entre eles.
 type epocaViva struct {
-	n        int
-	instante time.Time
-	base     types.RowID
+	n       int
+	instant time.Time
+	base    types.RowID
 }
 
-func novoRegistroDeSnapshots() *registroDeSnapshots {
-	r := &registroDeSnapshots{porEpoca: make(map[uint64]epocaViva)}
+func newRecordOfSnapshots() *recordOfSnapshots {
+	r := &recordOfSnapshots{byEpoca: make(map[uint64]epocaViva)}
 	r.menor.Store(versions.NoReader)
-	r.menorBase.Store(SemPiso)
+	r.menorBase.Store(WithoutPiso)
 	return r
 }
 
-// abre registra mais um leitor na época e devolve a menor época viva.
-func (r *registroDeSnapshots) abre(epoca uint64, instante time.Time, base types.RowID) {
+// open registra mais um leitor na época e devolve a menor época viva.
+func (r *recordOfSnapshots) open(epoca uint64, instant time.Time, base types.RowID) {
 	r.mu.Lock()
-	v := r.porEpoca[epoca]
-	if v.n == 0 || instante.Before(v.instante) {
-		v.instante = instante
+	v := r.byEpoca[epoca]
+	if v.n == 0 || instant.Before(v.instant) {
+		v.instant = instant
 	}
 	if v.n == 0 || base < v.base {
 		v.base = base
 	}
 	v.n++
-	r.porEpoca[epoca] = v
+	r.byEpoca[epoca] = v
 	r.recalculaLocked()
 	r.mu.Unlock()
 }
 
-// fecha retira um leitor da época. Fechar uma época sem leitor é no-op: o
+// close retira um leitor da época. Fechar uma época sem leitor é no-op: o
 // snapshot é um VALOR, e nada impede o chamador de copiá-lo — o que não pode é
 // um Fecha a mais derrubar a contagem de quem ainda está lendo.
-func (r *registroDeSnapshots) fecha(epoca uint64) {
+func (r *recordOfSnapshots) close(epoca uint64) {
 	r.mu.Lock()
-	if v := r.porEpoca[epoca]; v.n > 1 {
+	if v := r.byEpoca[epoca]; v.n > 1 {
 		v.n--
-		r.porEpoca[epoca] = v
+		r.byEpoca[epoca] = v
 	} else if v.n == 1 {
-		delete(r.porEpoca, epoca)
+		delete(r.byEpoca, epoca)
 	}
 	r.recalculaLocked()
 	r.mu.Unlock()
 }
 
-func (r *registroDeSnapshots) recalculaLocked() {
+func (r *recordOfSnapshots) recalculaLocked() {
 	menor := versions.NoReader
-	menorBase := SemPiso
+	menorBase := WithoutPiso
 	var menorMs int64
-	for e, v := range r.porEpoca {
+	for e, v := range r.byEpoca {
 		if e < menor {
 			menor = e
 		}
-		if ms := v.instante.UnixMilli(); menorMs == 0 || ms < menorMs {
+		if ms := v.instant.UnixMilli(); menorMs == 0 || ms < menorMs {
 			menorMs = ms
 		}
 		if uint64(v.base) < menorBase {
@@ -120,16 +120,16 @@ func (r *registroDeSnapshots) recalculaLocked() {
 		}
 	}
 	r.menor.Store(menor)
-	r.menorInstante.Store(menorMs)
+	r.menorInstant.Store(menorMs)
 	r.menorBase.Store(menorBase)
 }
 
-// invalidaAte marca como não-servíveis todos os snapshots de época abaixo de
+// invalidaUntil marca como não-servíveis todos os snapshots de época abaixo de
 // `epoca`. Monotônico: a fronteira nunca desce.
-func (r *registroDeSnapshots) invalidaAte(epoca uint64) {
+func (r *recordOfSnapshots) invalidaUntil(epoca uint64) {
 	for {
-		atual := r.epocaMinimaValida.Load()
-		if epoca <= atual || r.epocaMinimaValida.CompareAndSwap(atual, epoca) {
+		atual := r.epocaMinimaValidate.Load()
+		if epoca <= atual || r.epocaMinimaValidate.CompareAndSwap(atual, epoca) {
 			return
 		}
 	}
@@ -138,22 +138,22 @@ func (r *registroDeSnapshots) invalidaAte(epoca uint64) {
 // esquece retira a época inteira da contagem de vivos — todos os leitores dela
 // de uma vez. É o que a invalidação por teto faz: os snapshots continuam
 // existindo do lado do dono, mas deixam de segurar versão nenhuma.
-func (r *registroDeSnapshots) esquece(epoca uint64) {
+func (r *recordOfSnapshots) esquece(epoca uint64) {
 	r.mu.Lock()
-	delete(r.porEpoca, epoca)
+	delete(r.byEpoca, epoca)
 	r.recalculaLocked()
 	r.mu.Unlock()
 }
 
-// valido responde se um snapshot ainda pode ser servido.
-func (r *registroDeSnapshots) valido(epoca uint64) bool {
-	return epoca >= r.epocaMinimaValida.Load()
+// valid responde se um snapshot ainda pode ser servido.
+func (r *recordOfSnapshots) valid(epoca uint64) bool {
+	return epoca >= r.epocaMinimaValidate.Load()
 }
 
-// instanteMaisAntigoVivo devolve o relógio do snapshot mais antigo aberto, e
+// instantMaisAntigoVivo devolve o relógio do snapshot mais antigo aberto, e
 // ok=false quando não há consulta nenhuma.
-func (r *registroDeSnapshots) instanteMaisAntigoVivo() (time.Time, bool) {
-	ms := r.menorInstante.Load()
+func (r *recordOfSnapshots) instantMaisAntigoVivo() (time.Time, bool) {
+	ms := r.menorInstant.Load()
 	if ms == 0 {
 		return time.Time{}, false
 	}
@@ -161,7 +161,7 @@ func (r *registroDeSnapshots) instanteMaisAntigoVivo() (time.Time, bool) {
 }
 
 // menorEpocaViva devolve versions.NoReader quando nenhuma consulta está aberta.
-func (r *registroDeSnapshots) menorEpocaViva() uint64 { return r.menor.Load() }
+func (r *recordOfSnapshots) menorEpocaViva() uint64 { return r.menor.Load() }
 
 // OpenSnapshot fixa o universo da consulta: a versão, o relógio, o teto e o
 // piso.
@@ -178,7 +178,7 @@ func (s *Store) OpenSnapshot() types.Snapshot {
 		LimitRowID: types.RowID(s.nextRowID.Load()),
 		BaseRowID:  types.RowID(s.rowIDBase.Load()),
 	}
-	s.snaps.abre(snap.Epoch, snap.Instant, snap.BaseRowID)
+	s.snaps.open(snap.Epoch, snap.Instant, snap.BaseRowID)
 	return snap
 }
 
@@ -190,7 +190,7 @@ func (s *Store) OpenSnapshot() types.Snapshot {
 // viva. Um coletor periódico só acrescentaria latência entre a última consulta
 // fechar e a memória voltar.
 func (s *Store) CloseSnapshot(snap types.Snapshot) {
-	s.snaps.fecha(snap.Epoch)
+	s.snaps.close(snap.Epoch)
 	s.podaVersoes()
 }
 
@@ -227,7 +227,7 @@ func (s *Store) VersoesRetidas() int { return s.vers.Entries() }
 // BytesRetidos é o heap estimado do journal de versões. Ver VersoesRetidas.
 func (s *Store) BytesRetidos() int64 { return s.vers.Bytes() }
 
-// relogioDaExpiracaoOportunista é o instante contra o qual a compaction decide
+// relogioOfExpirationOportunista é o instante contra o qual a compaction decide
 // se troca o payload de uma linha vencida por uma lápide.
 //
 // É o do snapshot mais ANTIGO vivo, e não o corrente, por uma razão que o
@@ -241,17 +241,17 @@ func (s *Store) BytesRetidos() int64 { return s.vers.Bytes() }
 // recupera sozinha o alcance total assim que o último leitor fecha. O que se
 // paga por uma consulta longa é a expiração oportunista ficar mais conservadora
 // enquanto ela dura; o coletor continua pegando o resto.
-func (s *Store) relogioDaExpiracaoOportunista() time.Time {
-	if t, ok := s.snaps.instanteMaisAntigoVivo(); ok {
+func (s *Store) relogioOfExpirationOportunista() time.Time {
+	if t, ok := s.snaps.instantMaisAntigoVivo(); ok {
 		return t
 	}
 	return s.now()
 }
 
-// pisoDaRetencao é o teto até onde a purga do histórico pode avançar a
-// marca-d'água: o piso do snapshot mais antigo vivo, ou SemPiso quando não há
+// pisoOfRetention é o teto até onde a purga do histórico pode avançar a
+// marca-d'água: o piso do snapshot mais antigo vivo, ou WithoutPiso quando não há
 // consulta nenhuma.
-func (s *Store) pisoDaRetencao() uint64 { return s.snaps.menorBase.Load() }
+func (s *Store) pisoOfRetention() uint64 { return s.snaps.menorBase.Load() }
 
 // snapshotMaxBytesPadrao é o teto de heap do journal de versões quando o
 // dataset não declara um.
@@ -276,11 +276,11 @@ const snapshotMaxBytesPadrao = 64 << 20
 // Close do dono que o retira. Fechá-lo aqui faria o Fecha do dono derrubar a
 // contagem de um leitor que já não existe.
 func (s *Store) invalidaOMaisAntigoSeEstourou() {
-	teto := s.opts.SnapshotMaxBytes
-	if teto <= 0 {
-		teto = snapshotMaxBytesPadrao
+	ceiling := s.opts.SnapshotMaxBytes
+	if ceiling <= 0 {
+		ceiling = snapshotMaxBytesPadrao
 	}
-	for s.vers.Bytes() > teto {
+	for s.vers.Bytes() > ceiling {
 		menor := s.snaps.menorEpocaViva()
 		if menor == versions.NoReader {
 			// Journal acima do teto sem leitor nenhum: não há consulta a
@@ -291,10 +291,10 @@ func (s *Store) invalidaOMaisAntigoSeEstourou() {
 		}
 		// A fronteira sobe para DEPOIS da vítima: tudo que ela via, e só ela,
 		// deixa de ser servível.
-		s.snaps.invalidaAte(menor + 1)
+		s.snaps.invalidaUntil(menor + 1)
 		s.snaps.esquece(menor)
 		s.snapsExpirados.Add(1)
-		if antes := s.vers.Entries(); s.vers.Prune(s.snaps.menorEpocaViva()) == 0 && antes == s.vers.Entries() {
+		if before := s.vers.Entries(); s.vers.Prune(s.snaps.menorEpocaViva()) == 0 && before == s.vers.Entries() {
 			// Nada saiu: insistir seria laço infinito. Acontece quando o
 			// journal está cheio de versões que o PRÓPRIO leitor seguinte
 			// ainda alcança, e aí o teto já não tem o que devolver.
@@ -303,15 +303,15 @@ func (s *Store) invalidaOMaisAntigoSeEstourou() {
 	}
 }
 
-// IdadeDoSnapshotMaisAntigo é há quanto tempo a consulta mais antiga está
+// IDadeOfSnapshotMaisAntigo é há quanto tempo a consulta mais antiga está
 // segurando o passado deste dataset, e zero quando não há nenhuma.
 //
 // É medida contra o relógio DO STORE, e não contra time.Now, porque é o mesmo
 // relógio que decidiu o instante do snapshot — misturar os dois faria a série
 // mentir em qualquer teste com relógio controlado, e mentir por um valor que
 // parece plausível.
-func (s *Store) IdadeDoSnapshotMaisAntigo() time.Duration {
-	t, ok := s.snaps.instanteMaisAntigoVivo()
+func (s *Store) IDadeOfSnapshotMaisAntigo() time.Duration {
+	t, ok := s.snaps.instantMaisAntigoVivo()
 	if !ok {
 		return 0
 	}

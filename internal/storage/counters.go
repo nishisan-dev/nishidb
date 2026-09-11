@@ -15,18 +15,18 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// diretorioDosContadores é o subdiretório de indexes/ onde cada contador tem
+// diretorioOfCounters é o subdiretório de indexes/ onde cada contador tem
 // o seu, pelo nome declarado.
-const diretorioDosContadores = "contadores"
+const diretorioOfCounters = "contadores"
 
-// pendenciaDeContador é um contador que a abertura decidiu RECONSTRUIR: a
+// pendenciaOfCounter é um contador que a abertura decidiu RECONSTRUIR: a
 // varredura roda depois do ramo de recovery, e o motivo vai para o log.
-type pendenciaDeContador struct {
+type pendenciaOfCounter struct {
 	c      *counter.Counter
 	motivo string
 }
 
-// abreContadores compila as definições pelo callback, abre os arquivos de cada
+// openCounters compila as definições pelo callback, abre os arquivos de cada
 // contador e decide, contador a contador, entre adotar e reconstruir.
 //
 // Roda DEPOIS de _writtenAt, _expiresIn e os campos indexados estarem no
@@ -53,7 +53,7 @@ type pendenciaDeContador struct {
 // callback é RECUSADO. Abrir sem as definições deixaria o vetor parado
 // enquanto o Put anda, e a divergência só apareceria na auditoria — é a guarda
 // que pega o chamador de storage.Open que esqueceu de ligar os contadores.
-func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir string, minRows uint64) error {
+func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string, minRows uint64) error {
 	var declarados []checkpoint.CounterInfo
 	if m != nil {
 		declarados = m.Counters
@@ -83,10 +83,10 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 		// corrente a contar num log append-only.
 		return fmt.Errorf("%w: ModoHistorico não aceita counters: a tabela histórica não tem estado corrente a contar", ErrInvalidArgument)
 	}
-	dir := filepath.Join(idxDir, diretorioDosContadores)
-	porNome := make(map[string]checkpoint.CounterInfo, len(declarados))
+	dir := filepath.Join(idxDir, diretorioOfCounters)
+	byName := make(map[string]checkpoint.CounterInfo, len(declarados))
 	for _, info := range declarados {
-		porNome[info.Name] = info
+		byName[info.Name] = info
 	}
 	vistos := make(map[string]struct{}, len(defs))
 	for _, def := range defs {
@@ -94,8 +94,8 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 			return fmt.Errorf("%w: contador %q declarado duas vezes", ErrInvalidArgument, def.Name)
 		}
 		vistos[def.Name] = struct{}{}
-		info, tinha := porNome[def.Name]
-		delete(porNome, def.Name)
+		info, tinha := byName[def.Name]
+		delete(byName, def.Name)
 
 		recria, motivo := false, ""
 		switch {
@@ -105,13 +105,13 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 			recria, motivo = true, "o dataset não tinha este contador"
 		case !mesmaDefinicao(info, def):
 			recria, motivo = true, fmt.Sprintf("os parâmetros mudaram (groupBy %v → %v, where %q → %q)",
-				info.Columns, colunasDe(def), info.Where, def.Where)
+				info.Columns, columnsOf(def), info.Where, def.Where)
 		}
 		c, err := counter.Open(filepath.Join(dir, def.Name), def, minRows, recria)
 		if err != nil {
 			return fmt.Errorf("storage: abrir o contador %q de %s: %w", def.Name, opts.Dir, err)
 		}
-		s.contadores = append(s.contadores, c)
+		s.counters = append(s.counters, c)
 		if !recria && m != nil && ((c.Born() && m.NextRowID > 0) || !c.Covers(types.RowID(m.NextRowID))) {
 			// O manifest declara os parâmetros, não a existência dos arquivos —
 			// a mesma pergunta que a agenda faz com NeedsRebuild.
@@ -124,14 +124,14 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 			return fmt.Errorf("%w: contador %q tem %d grupos em uso e maxGroups %d; o teto só pode diminuir até os grupos em uso (ou reconstrua o contador)",
 				ErrInvalidArgument, def.Name, est.Groups, def.MaxGroups)
 		}
-		nome := def.Name
+		name := def.Name
 		c.OnRefuse(func() {
 			s.opts.Log.Warn("contador.teto",
 				"um grupo novo foi recusado pelo teto de maxGroups; a linha entrou, mas não é contada até o contador ser reconstruído com teto maior",
-				"contador", nome, "maxGroups", def.MaxGroups)
+				"contador", name, "maxGroups", def.MaxGroups)
 		})
 		if recria {
-			s.contadoresARecriar = append(s.contadoresARecriar, pendenciaDeContador{c: c, motivo: motivo})
+			s.countersARecriar = append(s.countersARecriar, pendenciaOfCounter{c: c, motivo: motivo})
 			continue
 		}
 		if err := c.Fold(); err != nil {
@@ -140,13 +140,13 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 		if orfas := c.Stats().Orphans; orfas > 0 {
 			s.opts.Log.Warn("contador.orfas",
 				"entradas do vetor apontavam para grupos aposentados ou inexistentes e foram zeradas; não é esperado fora de uma janela de crash",
-				"contador", nome, "orfas", orfas)
+				"contador", name, "orfas", orfas)
 		}
 	}
 	// Sobras do manifest: contadores que o YAML já não declara.
-	sobras := make([]string, 0, len(porNome))
-	for nome := range porNome {
-		sobras = append(sobras, nome)
+	sobras := make([]string, 0, len(byName))
+	for name := range byName {
+		sobras = append(sobras, name)
 	}
 	slices.Sort(sobras)
 	for _, name := range sobras {
@@ -163,10 +163,10 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 // mesmaDefinicao compara os parâmetros que decidem o conteúdo: nome, colunas
 // (na ordem) e where.
 func mesmaDefinicao(info checkpoint.CounterInfo, def counter.Definition) bool {
-	return info.Name == def.Name && info.Where == def.Where && slices.Equal(info.Columns, colunasDe(def))
+	return info.Name == def.Name && info.Where == def.Where && slices.Equal(info.Columns, columnsOf(def))
 }
 
-func colunasDe(def counter.Definition) []uint16 {
+func columnsOf(def counter.Definition) []uint16 {
 	out := make([]uint16, len(def.Columns))
 	for i, c := range def.Columns {
 		out[i] = uint16(c)
@@ -174,122 +174,122 @@ func colunasDe(def counter.Definition) []uint16 {
 	return out
 }
 
-// infoDosContadores é a seção do manifest, na ordem em que os contadores
+// infoOfCounters é a seção do manifest, na ordem em que os contadores
 // foram declarados.
-func (s *Store) infoDosContadores() []checkpoint.CounterInfo {
-	if len(s.contadores) == 0 {
+func (s *Store) infoOfCounters() []checkpoint.CounterInfo {
+	if len(s.counters) == 0 {
 		return nil
 	}
-	out := make([]checkpoint.CounterInfo, 0, len(s.contadores))
-	for _, c := range s.contadores {
+	out := make([]checkpoint.CounterInfo, 0, len(s.counters))
+	for _, c := range s.counters {
 		def := c.Def()
-		out = append(out, checkpoint.CounterInfo{Name: def.Name, Columns: colunasDe(def), Where: def.Where})
+		out = append(out, checkpoint.CounterInfo{Name: def.Name, Columns: columnsOf(def), Where: def.Where})
 	}
 	return out
 }
 
-// reconstroiContadoresPendentes varre as linhas vivas para cada contador que
+// reconstroiCountersPendentes varre as linhas vivas para cada contador que
 // a abertura decidiu reconstruir. Roda DEPOIS do ramo de recovery: as
 // locations já estão publicadas, e o que o replay já transicionou no contador
 // recém-nascido é idempotente com a varredura (o delta é contra a entrada
 // corrente do vetor).
-func (s *Store) reconstroiContadoresPendentes() error {
-	for _, p := range s.contadoresARecriar {
-		inicio := time.Now()
-		linhas, err := s.varreLinhasVivasNoContador(context.Background(), p.c, false)
+func (s *Store) reconstroiCountersPendentes() error {
+	for _, p := range s.countersARecriar {
+		start := time.Now()
+		rows, err := s.varreRowsVivasInCounter(context.Background(), p.c, false)
 		if err != nil {
 			return fmt.Errorf("storage: construir o contador %q de %s: %w", p.c.Def().Name, s.opts.Dir, err)
 		}
 		if err := p.c.RemoveOld(); err != nil {
 			return err
 		}
-		s.contadoresConstruidos++
+		s.countersConstruidos++
 		// O log nomeia o custo pela mesma razão do da agenda: é a única coisa
 		// que o operador precisa decidir — segundos numa subida são aceitáveis,
 		// minutos num dataset grande mudam a janela de manutenção.
 		s.opts.Log.Info("contador.construido",
 			"o contador foi construído varrendo as linhas vivas do dataset",
-			"contador", p.c.Def().Name, "motivo", p.motivo, "linhas", linhas,
-			"grupos", p.c.Stats().Groups, "duracao", time.Since(inicio).String())
+			"contador", p.c.Def().Name, "motivo", p.motivo, "linhas", rows,
+			"grupos", p.c.Stats().Groups, "duracao", time.Since(start).String())
 	}
-	s.contadoresARecriar = nil
+	s.countersARecriar = nil
 	return nil
 }
 
-// varreLinhasVivasNoContador transiciona, no contador, toda linha com
+// varreRowsVivasInCounter transiciona, no contador, toda linha com
 // location e sem lápide, lendo o record de cada uma. sobAposMu diz se a
 // leitura precisa da proteção contra a aposentadoria de segmento — na
-// abertura não há concorrência; em operação (ReconstroiContadores) o writer
+// abertura não há concorrência; em operação (ReconstroiCounters) o writer
 // já segura o wmu e a leitura do par (location, bytes) entra no aposMu, que é
 // o lock mais interno.
-func (s *Store) varreLinhasVivasNoContador(ctx context.Context, c *counter.Counter, sobAposMu bool) (uint64, error) {
-	limite := types.RowID(s.nextRowID.Load())
+func (s *Store) varreRowsVivasInCounter(ctx context.Context, c *counter.Counter, sobAposMu bool) (uint64, error) {
+	limit := types.RowID(s.nextRowID.Load())
 	var buf []byte
-	var linhas uint64
-	for id := types.RowID(0); id < limite; id++ {
-		if id&passoDoContexto == 0 {
+	var rows uint64
+	for id := types.RowID(0); id < limit; id++ {
+		if id&passoOfContexto == 0 {
 			if err := ctx.Err(); err != nil {
-				return linhas, err
+				return rows, err
 			}
 		}
 		packed, ok := s.locs.Get(id)
 		if !ok {
 			continue
 		}
-		seg, off, flags := rowindex.Unpack(packed)
+		sec, off, flags := rowindex.Unpack(packed)
 		if flags&types.FlagTombstone != 0 {
 			continue
 		}
 		if sobAposMu {
 			s.aposMu.RLock()
 		}
-		rec, b, err := s.segR.ReadRecord(seg, off, buf)
+		rec, b, err := s.secR.ReadRecord(sec, off, buf)
 		if sobAposMu {
 			s.aposMu.RUnlock()
 		}
 		buf = b
 		if err != nil {
-			return linhas, fmt.Errorf("ler a linha %d em (%d, %d): %w", id, seg, off, err)
+			return rows, fmt.Errorf("ler a linha %d em (%d, %d): %w", id, sec, off, err)
 		}
 		if rec.RowID != id {
-			return linhas, fmt.Errorf("%w: a location da linha %d aponta para o record da linha %d", ErrDatasetCorrupt, id, rec.RowID)
+			return rows, fmt.Errorf("%w: a location da linha %d aponta para o record da linha %d", ErrDatasetCorrupt, id, rec.RowID)
 		}
 		if err := c.Transition(id, rec.Payload, false); err != nil {
-			return linhas, err
+			return rows, err
 		}
-		linhas++
+		rows++
 	}
-	return linhas, nil
+	return rows, nil
 }
 
-// Contadores devolve os contadores abertos, na ordem declarada. A slice é do
+// Counters devolve os contadores abertos, na ordem declarada. A slice é do
 // Store: quem chama não a altera.
-func (s *Store) Contadores() []*counter.Counter { return s.contadores }
+func (s *Store) Counters() []*counter.Counter { return s.counters }
 
-// EstatisticasDeContadores é o retrato de todos os contadores, para as
+// EstatisticasOfCounters é o retrato de todos os contadores, para as
 // métricas e o /v1/stats — a MESMA chamada nos dois.
-func (s *Store) EstatisticasDeContadores() []counter.Stats {
-	out := make([]counter.Stats, 0, len(s.contadores))
-	for _, c := range s.contadores {
+func (s *Store) EstatisticasOfCounters() []counter.Stats {
+	out := make([]counter.Stats, 0, len(s.counters))
+	for _, c := range s.counters {
 		out = append(out, c.Stats())
 	}
 	return out
 }
 
-// passoDoContexto é a cadência (em linhas, potência de dois menos um usada
+// passoOfContexto é a cadência (em linhas, potência de dois menos um usada
 // como máscara) com que as varreduras longas olham o contexto e a validade do
 // snapshot. Mil linhas são microssegundos; olhar por linha custaria mais que
 // a própria leitura.
-const passoDoContexto = 1023
+const passoOfContexto = 1023
 
-// recalculoDeContador é o que a varredura da auditoria acumula por contador.
-type recalculoDeContador struct {
+// recalculoOfCounter é o que a varredura da auditoria acumula por contador.
+type recalculoOfCounter struct {
 	totais, refs  []int64
 	naoInternadas uint64
 	deriv         *counter.Deriver
 }
 
-// AuditaContadores recalcula cada contador por varredura e compara com o
+// AuditaCounters recalcula cada contador por varredura e compara com o
 // mantido, SEM segurar o writer pela varredura.
 //
 // # A definição
@@ -320,34 +320,34 @@ type recalculoDeContador struct {
 // antigo é invalidado — pode ser este — e a resposta é ErrExpiredSnapshot,
 // nunca um relatório: uma divergência inventada por versão perdida mandaria o
 // operador reconstruir um contador certo.
-func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) {
+func (s *Store) AuditaCounters(ctx context.Context) ([]counter.Report, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
 	}
 	defer s.sai()
-	if len(s.contadores) == 0 {
+	if len(s.counters) == 0 {
 		return nil, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	inicio := time.Now()
+	start := time.Now()
 
 	s.wmu.Lock()
 	snap := s.OpenSnapshot()
-	if s.audAntesDaCopia != nil {
-		s.audAntesDaCopia()
+	if s.audBeforeOfCopy != nil {
+		s.audBeforeOfCopy()
 	}
-	congelados := make([]counter.AuditSnapshot, len(s.contadores))
-	for i, c := range s.contadores {
+	congelados := make([]counter.AuditSnapshot, len(s.counters))
+	for i, c := range s.counters {
 		congelados[i] = c.AuditSnapshot()
 	}
 	s.wmu.Unlock()
 	defer s.CloseSnapshot(snap)
 
-	recalc := make([]recalculoDeContador, len(s.contadores))
-	for i, c := range s.contadores {
-		recalc[i] = recalculoDeContador{
+	recalc := make([]recalculoOfCounter, len(s.counters))
+	for i, c := range s.counters {
+		recalc[i] = recalculoOfCounter{
 			totais: make([]int64, congelados[i].Limit),
 			refs:   make([]int64, congelados[i].Limit),
 			deriv:  c.NewDeriver(),
@@ -355,9 +355,9 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) 
 	}
 
 	var buf []byte
-	var linhas uint64
+	var rows uint64
 	for id := snap.BaseRowID; id < snap.LimitRowID; id++ {
-		if id&passoDoContexto == 0 {
+		if id&passoOfContexto == 0 {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
@@ -365,7 +365,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) 
 		// A validade vem ANTES de consultar o journal: um snapshot invalidado
 		// já pode ter tido as versões dele podadas, e o journal responderia
 		// "location corrente" para uma linha que mudou depois de T0.
-		if !s.snaps.valido(snap.Epoch) {
+		if !s.snaps.valid(snap.Epoch) {
 			return nil, ErrExpiredSnapshot
 		}
 		var packed uint64
@@ -378,30 +378,30 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) 
 				continue
 			}
 		}
-		seg, off, flags := rowindex.Unpack(packed)
+		sec, off, flags := rowindex.Unpack(packed)
 		if flags&types.FlagTombstone != 0 {
 			continue
 		}
 		s.aposMu.RLock()
-		rec, b, err := s.segR.ReadRecord(seg, off, buf)
+		rec, b, err := s.secR.ReadRecord(sec, off, buf)
 		s.aposMu.RUnlock()
 		buf = b
 		if err != nil {
-			return nil, fmt.Errorf("storage: auditoria dos contadores: ler a linha %d em (%d, %d): %w", id, seg, off, err)
+			return nil, fmt.Errorf("storage: auditoria dos contadores: ler a linha %d em (%d, %d): %w", id, sec, off, err)
 		}
 		if rec.RowID != id {
 			return nil, fmt.Errorf("%w: a location da linha %d aponta para o record da linha %d", ErrDatasetCorrupt, id, rec.RowID)
 		}
-		linhas++
-		for i, c := range s.contadores {
-			chave, cond, tem, err := recalc[i].deriv.Derive(rec.Payload)
+		rows++
+		for i, c := range s.counters {
+			key, cond, has, err := recalc[i].deriv.Derive(rec.Payload)
 			if err != nil {
 				return nil, fmt.Errorf("storage: auditoria do contador %q na linha %d: %w", c.Def().Name, id, err)
 			}
-			if !tem {
+			if !has {
 				continue
 			}
-			g, ok := c.ByKey(chave)
+			g, ok := c.ByKey(key)
 			if !ok || g >= congelados[i].Limit {
 				// Grupo internado DEPOIS de T0 (a linha era de outro grupo em
 				// T0 e o journal já devolveu a versão T0, então isto só
@@ -418,20 +418,20 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) 
 			s.audTrace(id)
 		}
 	}
-	if !s.snaps.valido(snap.Epoch) {
+	if !s.snaps.valid(snap.Epoch) {
 		return nil, ErrExpiredSnapshot
 	}
 
-	duracao := time.Since(inicio)
-	out := make([]counter.Report, 0, len(s.contadores))
-	for i, c := range s.contadores {
+	duration := time.Since(start)
+	out := make([]counter.Report, 0, len(s.counters))
+	for i, c := range s.counters {
 		cg, rc := congelados[i], recalc[i]
 		r := counter.Report{
 			Name:        c.Def().Name,
 			Groups:      c.Stats().Groups,
 			NotInterned: rc.naoInternadas,
-			RowsScanned: linhas,
-			Duration:    duracao,
+			RowsScanned: rows,
+			Duration:    duration,
 		}
 		for g := uint32(1); g < cg.Limit; g++ {
 			m, mr := cg.Totals[g], cg.Refs[g]
@@ -445,9 +445,9 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) 
 			}
 			r.DivergentGroups++
 			if len(r.Sample) < counter.SampleCeiling {
-				_, texto, _, _, _ := c.Group(g)
+				_, text, _, _, _ := c.Group(g)
 				r.Sample = append(r.Sample, counter.Divergence{
-					ID: g, Text: string(texto),
+					ID: g, Text: string(text),
 					Maintained: m, Recomputed: q,
 					RefsMaintained: mr, RefsRecomputed: qr,
 				})
@@ -475,17 +475,17 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) 
 	return out, nil
 }
 
-// ReconstroiContadores zera cada contador e o refaz varrendo as linhas vivas,
+// ReconstroiCounters zera cada contador e o refaz varrendo as linhas vivas,
 // SOB o wmu: a ingestão para pela varredura inteira. É o remédio para uma
 // deriva que a auditoria apontou — explícito, caro e raro —, e o custo é
 // dito no godoc e na documentação em vez de escondido atrás de um caminho
 // "sem lock" que deixaria o contador inconsistente enquanto o Put anda.
-func (s *Store) ReconstroiContadores(ctx context.Context) ([]counter.Rebuild, error) {
+func (s *Store) ReconstroiCounters(ctx context.Context) ([]counter.Rebuild, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
 	}
 	defer s.sai()
-	if len(s.contadores) == 0 {
+	if len(s.counters) == 0 {
 		return nil, nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -496,39 +496,39 @@ func (s *Store) ReconstroiContadores(ctx context.Context) ([]counter.Rebuild, er
 	if s.stickyErr != nil {
 		return nil, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
-	out := make([]counter.Rebuild, 0, len(s.contadores))
-	for _, c := range s.contadores {
-		inicio := time.Now()
+	out := make([]counter.Rebuild, 0, len(s.counters))
+	for _, c := range s.counters {
+		start := time.Now()
 		if err := c.Clear(); err != nil {
 			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Name, err)
 		}
-		linhas, err := s.varreLinhasVivasNoContador(ctx, c, true)
+		rows, err := s.varreRowsVivasInCounter(ctx, c, true)
 		if err != nil {
 			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Name, err)
 		}
 		out = append(out, counter.Rebuild{
-			Name: c.Def().Name, Rows: linhas, Groups: c.Stats().Groups, Duration: time.Since(inicio),
+			Name: c.Def().Name, Rows: rows, Groups: c.Stats().Groups, Duration: time.Since(start),
 		})
 		s.opts.Log.Info("contador.reconstruido",
 			"o contador foi reconstruído em operação, varrendo as linhas vivas sob o lock do writer",
-			"contador", c.Def().Name, "linhas", linhas, "grupos", c.Stats().Groups, "duracao", time.Since(inicio).String())
+			"contador", c.Def().Name, "linhas", rows, "grupos", c.Stats().Groups, "duracao", time.Since(start).String())
 	}
 	return out, nil
 }
 
-// CadenciaDaAposentadoria é o intervalo entre passadas do laço de
+// CadenciaOfRetirement é o intervalo entre passadas do laço de
 // aposentadoria de grupos. Um minuto, como o teto de espera do coletor de
 // expiração: o prazo de visibilidade é de dias, e a passada é uma varredura
 // linear de milhares de grupos — não de milhões de linhas. Exportada para o
 // log de subida do servidor nomear a cadência.
-const CadenciaDaAposentadoria = time.Minute
+const CadenciaOfRetirement = time.Minute
 
-// AposentadoriaDeGruposAtiva reporta se o laço está de pé.
-func (s *Store) AposentadoriaDeGruposAtiva() bool { return s.apGrupAtiva.Load() }
+// RetirementOfGroupsActive reporta se o laço está de pé.
+func (s *Store) RetirementOfGroupsActive() bool { return s.apGrupActive.Load() }
 
-// temContadorComRetencao diz se algum contador declara retainEmptyGroups.
-func (s *Store) temContadorComRetencao() bool {
-	for _, c := range s.contadores {
+// hasCounterWithRetention diz se algum contador declara retainEmptyGroups.
+func (s *Store) hasCounterWithRetention() bool {
+	for _, c := range s.counters {
 		if c.Def().RetainEmptyGroups > 0 {
 			return true
 		}
@@ -536,9 +536,9 @@ func (s *Store) temContadorComRetencao() bool {
 	return false
 }
 
-// AposentaGruposVazios roda UMA passada de aposentadoria em todos os
+// AposentaGroupsVazios roda UMA passada de aposentadoria em todos os
 // contadores, sob o wmu. Devolve quantos grupos saíram.
-func (s *Store) AposentaGruposVazios() (int, error) {
+func (s *Store) AposentaGroupsVazios() (int, error) {
 	if err := s.entra(); err != nil {
 		return 0, err
 	}
@@ -549,7 +549,7 @@ func (s *Store) AposentaGruposVazios() (int, error) {
 		return 0, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
 	total := 0
-	for _, c := range s.contadores {
+	for _, c := range s.counters {
 		n, err := c.RetireEmptyGroups(s.now())
 		total += n
 		if err != nil {
@@ -559,44 +559,44 @@ func (s *Store) AposentaGruposVazios() (int, error) {
 	return total, nil
 }
 
-// IniciaAposentadoriaDeGrupos sobe o laço que aposenta grupos vazios. Sem
+// StartRetirementOfGroups sobe o laço que aposenta grupos vazios. Sem
 // contador com retainEmptyGroups não há goroutine: o dataset não paga uma
 // thread para não fazer nada.
-func (s *Store) IniciaAposentadoriaDeGrupos(ctx context.Context) {
-	if !s.temContadorComRetencao() {
+func (s *Store) StartRetirementOfGroups(ctx context.Context) {
+	if !s.hasCounterWithRetention() {
 		return
 	}
 	s.apGrupMu.Lock()
 	defer s.apGrupMu.Unlock()
-	if s.apGrupCancela != nil {
+	if s.apGrupCancel != nil {
 		return
 	}
-	ctx, cancela := context.WithCancel(ctx)
-	s.apGrupCancela = cancela
-	s.apGrupAtiva.Store(true)
-	s.apGrupEmVoo.Add(1)
+	ctx, cancel := context.WithCancel(ctx)
+	s.apGrupCancel = cancel
+	s.apGrupActive.Store(true)
+	s.apGrupInVoo.Add(1)
 	go func() {
-		defer s.apGrupEmVoo.Done()
-		defer s.apGrupAtiva.Store(false)
-		s.rodaAposentadoria(ctx)
+		defer s.apGrupInVoo.Done()
+		defer s.apGrupActive.Store(false)
+		s.runRetirement(ctx)
 	}()
 }
 
-// ParaAposentadoriaDeGrupos cancela e AGUARDA a passada em voo, pela mesma
-// razão do ParaExpiracao: a passada escreve no dicionário do contador, que o
+// ForRetirementOfGroups cancela e AGUARDA a passada em voo, pela mesma
+// razão do ForExpiration: a passada escreve no dicionário do contador, que o
 // Close fecha.
-func (s *Store) ParaAposentadoriaDeGrupos() {
+func (s *Store) ForRetirementOfGroups() {
 	s.apGrupMu.Lock()
 	defer s.apGrupMu.Unlock()
-	if s.apGrupCancela != nil {
-		s.apGrupCancela()
-		s.apGrupCancela = nil
+	if s.apGrupCancel != nil {
+		s.apGrupCancel()
+		s.apGrupCancel = nil
 	}
-	s.apGrupEmVoo.Wait()
+	s.apGrupInVoo.Wait()
 }
 
-func (s *Store) rodaAposentadoria(ctx context.Context) {
-	t := time.NewTicker(CadenciaDaAposentadoria)
+func (s *Store) runRetirement(ctx context.Context) {
+	t := time.NewTicker(CadenciaOfRetirement)
 	defer t.Stop()
 	for {
 		select {
@@ -604,7 +604,7 @@ func (s *Store) rodaAposentadoria(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		n, err := s.AposentaGruposVazios()
+		n, err := s.AposentaGroupsVazios()
 		if err != nil {
 			// Erro aqui é do writer (sticky) ou do store fechando; insistir
 			// só produz log em laço.
@@ -621,8 +621,8 @@ func (s *Store) rodaAposentadoria(ctx context.Context) {
 	}
 }
 
-// descreveContadores rende as definições numa linha, para o log de subida.
-func descreveContadores(cs []*counter.Counter) string {
+// descreveCounters rende as definições numa linha, para o log de subida.
+func descreveCounters(cs []*counter.Counter) string {
 	var sb strings.Builder
 	for i, c := range cs {
 		if i > 0 {

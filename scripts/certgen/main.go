@@ -33,24 +33,24 @@ import (
 
 func main() {
 	cert := flag.String("cert", "", "caminho do certificado a escrever (PEM)")
-	chave := flag.String("key", "", "caminho da chave privada a escrever (PEM, 0600)")
+	key := flag.String("key", "", "caminho da chave privada a escrever (PEM, 0600)")
 	validade := flag.Duration("validade", 2*time.Hour, "por quanto tempo o certificado vale")
 	flag.Parse()
 
-	if *cert == "" || *chave == "" {
+	if *cert == "" || *key == "" {
 		fmt.Fprintln(os.Stderr, "certgen: -cert e -key são obrigatórios")
 		os.Exit(2)
 	}
-	if err := gera(*cert, *chave, *validade); err != nil {
+	if err := generate(*cert, *key, *validade); err != nil {
 		fmt.Fprintln(os.Stderr, "certgen:", err)
 		os.Exit(1)
 	}
 }
 
-// gera escreve o par e devolve erro em vez de sair, para que o teste o exercite
+// generate escreve o par e devolve erro em vez de sair, para que o teste o exercite
 // sem subprocesso.
-func gera(caminhoCert, caminhoChave string, validade time.Duration) error {
-	chave, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+func generate(pathCert, pathKey string, validade time.Duration) error {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("gerando a chave: %w", err)
 	}
@@ -76,30 +76,30 @@ func gera(caminhoCert, caminhoChave string, validade time.Duration) error {
 		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 	}
 
-	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &chave.PublicKey, chave)
+	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &key.PublicKey, key)
 	if err != nil {
 		return fmt.Errorf("criando o certificado: %w", err)
 	}
 
-	if err := escrevePEM(caminhoCert, 0o644, &pem.Block{Type: "CERTIFICATE", Bytes: der}); err != nil {
+	if err := writePEM(pathCert, 0o644, &pem.Block{Type: "CERTIFICATE", Bytes: der}); err != nil {
 		return err
 	}
 
-	bytesChave, err := x509.MarshalECPrivateKey(chave)
+	bytesKey, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		return fmt.Errorf("serializando a chave: %w", err)
 	}
-	return escrevePEM(caminhoChave, 0o600, &pem.Block{Type: "EC PRIVATE KEY", Bytes: bytesChave})
+	return writePEM(pathKey, 0o600, &pem.Block{Type: "EC PRIVATE KEY", Bytes: bytesKey})
 }
 
-func escrevePEM(caminho string, modo os.FileMode, bloco *pem.Block) error {
-	arquivo, err := os.OpenFile(caminho, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, modo)
+func writePEM(path string, modo os.FileMode, block *pem.Block) error {
+	arquivo, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, modo)
 	if err != nil {
-		return fmt.Errorf("abrindo %s: %w", caminho, err)
+		return fmt.Errorf("abrindo %s: %w", path, err)
 	}
-	if err := pem.Encode(arquivo, bloco); err != nil {
+	if err := pem.Encode(arquivo, block); err != nil {
 		_ = arquivo.Close()
-		return fmt.Errorf("escrevendo %s: %w", caminho, err)
+		return fmt.Errorf("escrevendo %s: %w", path, err)
 	}
 	return arquivo.Close()
 }

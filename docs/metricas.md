@@ -243,11 +243,11 @@ qualquer falha inventaria uma categoria que ninguém exercitou.
 **Duas séries caíam aqui sem que isso fosse o desenho, e foram corrigidas**
 (issue [#47](https://github.com/nishisan-dev/nishidb/issues/47)):
 `nishidb_query_long_rejected_total` e `nishidb_query_budget_rejected_total`
-são declaradas SEM label, mas a série só era criada dentro de `recusaLonga()`
-e `recusaPorOrcamento()` — isto é, na primeira recusa. As duas são exatamente
+são declaradas SEM label, mas a série só era criada dentro de `rejectLonga()`
+e `rejectByBudget()` — isto é, na primeira recusa. As duas são exatamente
 as que alarmam, e enquanto não existiam, `absent()` não distinguia "nunca
 recusou" de "o alvo caiu". Hoje nascem com zero na construção de
-`metricasDeQuery`, como o `desistiu.Set(0)` do watchdog sempre fez, e
+`metricsOfQuery`, como o `desistiu.Set(0)` do watchdog sempre fez, e
 `TestSeriesDeRecusaDeQueryNascemComZero` trava isso raspando o `/metrics` de
 um servidor recém-subido — perguntar ao registry não serviria, porque lá a
 família existe desde sempre; quem não existia era a série.

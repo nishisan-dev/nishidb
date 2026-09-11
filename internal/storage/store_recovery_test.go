@@ -371,9 +371,9 @@ func TestTalliesSobrevivemAoRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seg := m.Segments[0]
-	if seg.TotalRecords != 5 || seg.LiveRecords != 3 {
-		t.Fatalf("tallies pós-restart: %+v", seg)
+	sec := m.Segments[0]
+	if sec.TotalRecords != 5 || sec.LiveRecords != 3 {
+		t.Fatalf("tallies pós-restart: %+v", sec)
 	}
 }
 

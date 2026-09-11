@@ -26,7 +26,7 @@ type BoundCondition struct {
 // forneça.
 func BindCondition(e parser.Expr, sc *schema.Compiled) (*BoundCondition, error) {
 	if e == nil || sc == nil {
-		return nil, errNoPos("bind de condição sem expressão ou schema")
+		return nil, errInPos("bind de condição sem expressão ou schema")
 	}
 	b := &binder{sc: sc, refusesParams: true, referenced: map[types.FieldID]struct{}{}}
 	expr, err := b.expr(e)

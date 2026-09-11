@@ -17,23 +17,23 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// errSegmentoEhOCorrente marca a recusa da guarda de segmento corrente do
-// constroiIndiceDoSegmento, por baixo do ErrInvalidArgument que o chamador
+// errSegmentEhOCurrent marca a recusa da guarda de segmento corrente do
+// constroiIndexOfSegment, por baixo do ErrInvalidArgument que o chamador
 // externo enxerga. A sentinela existe porque o laço de fundo precisa separar
 // esta recusa do ErrInvalidArgument genuíno (campo não indexado, que é bug do
 // chamador e TEM de parar o laço): a fila é uma fotografia, e o .dat do
-// segmento novo nasce antes de o aposAppend trocar o curSegID — o segmento
+// segmento novo nasce antes de o aposAppend trocar o curSecID — o segmento
 // pode ser listado como pendente e JÁ ser o corrente quando o laço o alcança.
-var errSegmentoEhOCorrente = errors.New("o segmento é o corrente")
+var errSegmentEhOCurrent = errors.New("o segmento é o corrente")
 
-// IniciaReconstrucao sobe a goroutine que consome a fila de reconstrução por
+// StartRebuild sobe a goroutine que consome a fila de reconstrução por
 // conta própria (§2.4). É ela que fecha o débito 22: até aqui o mecanismo
 // existia e a fila era derivada corretamente, mas NADA a drenava — o operador
 // declarava `index: true` num dataset povoado, os segmentos entravam na fila e
 // o campo continuava enumerando indefinidamente, que é o mesmo desfecho de
 // antes por outro motivo.
 //
-// Molde de IniciaCompaction e IniciaRetencao: primeira passada imediata,
+// Molde de StartCompaction e StartRetention: primeira passada imediata,
 // medidor atômico observável, cancelamento por contexto, e o Close cancela e
 // AGUARDA antes do quiesce.
 //
@@ -41,24 +41,24 @@ var errSegmentoEhOCorrente = errors.New("o segmento é o corrente")
 // expulsão responderem "este segmento deve ter índice?" por contas diferentes, a
 // que responde "sim" reconstrói o que a outra acabou de apagar — para sempre, a
 // até 512 MiB de leitura por volta. Quem chama pelo servidor tira as duas do
-// mesmo `janelaDoDataset`, e é por isso que ela entra pela assinatura em vez de
+// mesmo `windowOfDataset`, e é por isso que ela entra pela assinatura em vez de
 // ficar guardada no Store: o compilador cobra o que um comentário não cobraria.
 //
 // Chamar duas vezes não sobe duas goroutines. Duas passadas concorrentes
 // varreriam o mesmo segmento e publicariam o mesmo arquivo duas vezes; pior, a
-// segunda partida sobrescreveria o recCancela, e o ParaReconstrucao do Close
+// segunda partida sobrescreveria o recCancel, e o ForRebuild do Close
 // ficaria esperando para sempre pela primeira.
 //
 // Dataset SEM campo indexado não sobe goroutine: não há fila, e a passada seria
-// um readdir por minuto para responder sempre a mesma coisa. Janela finita sobre
+// um readdir por minuto para responder sempre a mesma coisa. Window finita sobre
 // um dataset materializado é ERRO de quem monta os limites (a janela é política
 // exclusiva do histórico), e recusar aqui — com o ERROR nomeado — é o que impede
 // o laço de virar uma enxurrada de log de uma passada que nunca pode dar certo.
-func (s *Store) IniciaReconstrucao(ctx context.Context, j JanelaDeIndice) {
-	if len(s.camposIndexados) == 0 {
+func (s *Store) StartRebuild(ctx context.Context, j WindowOfIndex) {
+	if len(s.fieldsIndexados) == 0 {
 		return
 	}
-	if err := s.exigeJanelaAplicavel(j); err != nil {
+	if err := s.exigeWindowAplicavel(j); err != nil {
 		s.opts.Log.Error("reconstrucao.janela_recusada",
 			"a janela de indexação não vale para este dataset e a reconstrução NÃO subiu; os segmentos pendentes "+
 				"continuam respondendo por enumeração",
@@ -67,49 +67,49 @@ func (s *Store) IniciaReconstrucao(ctx context.Context, j JanelaDeIndice) {
 	}
 	s.recMu.Lock()
 	defer s.recMu.Unlock()
-	if s.recCancela != nil {
+	if s.recCancel != nil {
 		return
 	}
-	ctx, cancela := context.WithCancel(ctx)
-	s.recCancela = cancela
+	ctx, cancel := context.WithCancel(ctx)
+	s.recCancel = cancel
 	// O medidor sobe AQUI, e não dentro da goroutine, pela regra do §92: quem
 	// chamou tem direito de ver o estado que acabou de instalar, e uma leitura
 	// entre a chamada e o primeiro escalonamento não pode responder que a
 	// reconstrução não subiu.
-	s.recAtiva.Store(true)
-	s.recEmVoo.Add(1)
+	s.recActive.Store(true)
+	s.recInVoo.Add(1)
 	go func() {
-		defer s.recEmVoo.Done()
+		defer s.recInVoo.Done()
 		// Declarado DEPOIS do Done e por isso executado ANTES dele: o
-		// ParaReconstrucao devolve o controle já com o medidor em 0, e não com
+		// ForRebuild devolve o controle já com o medidor em 0, e não com
 		// uma janela em que a goroutine acabou e a série ainda diz 1.
-		defer s.recAtiva.Store(false)
-		s.rodaReconstrucao(ctx, j)
+		defer s.recActive.Store(false)
+		s.runRebuild(ctx, j)
 	}()
 }
 
-// ParaReconstrucao cancela a goroutine e ESPERA por ela. As duas coisas, e nesta
+// ForRebuild cancela a goroutine e ESPERA por ela. As duas coisas, e nesta
 // ordem: o cancelamento sozinho devolveria o controle com uma varredura ainda
-// lendo pelo s.segR, que o Close fecha inteiro logo em seguida — os.ErrClosed no
+// lendo pelo s.secR, que o Close fecha inteiro logo em seguida — os.ErrClosed no
 // meio de uma leitura de 512 MiB.
 //
 // É idempotente e pode ser chamada sem nunca ter havido reconstrução — é o que
 // permite ao Close chamá-la sem perguntar se o dataset tem campo indexado.
-func (s *Store) ParaReconstrucao() {
+func (s *Store) ForRebuild() {
 	s.recMu.Lock()
-	cancela := s.recCancela
-	s.recCancela = nil
+	cancel := s.recCancel
+	s.recCancel = nil
 	s.recMu.Unlock()
-	if cancela != nil {
-		cancela()
+	if cancel != nil {
+		cancel()
 	}
-	s.recEmVoo.Wait()
+	s.recInVoo.Wait()
 }
 
-// ReconstrucaoAtiva reporta se a goroutine da §2.4 está de pé.
-func (s *Store) ReconstrucaoAtiva() bool { return s.recAtiva.Load() }
+// RebuildActive reporta se a goroutine da §2.4 está de pé.
+func (s *Store) RebuildActive() bool { return s.recActive.Load() }
 
-// rodaReconstrucao é o laço perpétuo: uma passada, um cochilo, outra passada.
+// runRebuild é o laço perpétuo: uma passada, um cochilo, outra passada.
 //
 // A primeira passada é IMEDIATA. Um dataset que acabou de ganhar `index: true`
 // num campo já povoado tem a fila cheia no instante da subida, e fazê-lo esperar
@@ -128,7 +128,7 @@ func (s *Store) ReconstrucaoAtiva() bool { return s.recAtiva.Load() }
 // (que desce junto) — o log fala com quem já foi lê-lo. Cancelamento e dataset
 // fechado NÃO são falha: são o Close, e anunciá-los como parada faria todo
 // encerramento normal emitir um ERROR.
-func (s *Store) rodaReconstrucao(ctx context.Context, j JanelaDeIndice) {
+func (s *Store) runRebuild(ctx context.Context, j WindowOfIndex) {
 	t := time.NewTimer(0)
 	defer t.Stop()
 	for {
@@ -137,7 +137,7 @@ func (s *Store) rodaReconstrucao(ctx context.Context, j JanelaDeIndice) {
 			return
 		case <-t.C:
 		}
-		feitos, err := s.passadaDeReconstrucao(ctx, j)
+		feitos, err := s.passOfRebuild(ctx, j)
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, ErrDatasetClosed) {
 				return
@@ -157,20 +157,20 @@ func (s *Store) rodaReconstrucao(ctx context.Context, j JanelaDeIndice) {
 	}
 }
 
-// passadaDeReconstrucao reconstrói, em ordem, o índice dos segmentos pendentes
+// passOfRebuild reconstrói, em ordem, o índice dos segmentos pendentes
 // de UMA consulta à fila. Devolve quantos segmentos foram varridos.
 //
 // A fila é fotografada no começo e não é relida durante a passada, como a
 // eleição da compaction: o que ela não alcançar, a próxima alcança.
 //
-// UMA PASSADA POR VEZ, pelo recPassadaMu — e ele é tomado ANTES do
-// retPassadaMu (que a pendência toma lá dentro) e antes do entra() de cada
-// segmento. A ordem de locks fica recPassadaMu → retPassadaMu → vida → wmu →
+// UMA PASSADA POR VEZ, pelo recPassMu — e ele é tomado ANTES do
+// retPassMu (que a pendência toma lá dentro) e antes do entra() de cada
+// segmento. A ordem de locks fica recPassMu → retPassMu → vida → wmu →
 // aposMu, e nenhum dos internos volta a tomar os externos.
-func (s *Store) passadaDeReconstrucao(ctx context.Context, j JanelaDeIndice) (int, error) {
-	s.recPassadaMu.Lock()
-	defer s.recPassadaMu.Unlock()
-	pendentes, err := s.SegmentosPendentesDeReconstrucao(j)
+func (s *Store) passOfRebuild(ctx context.Context, j WindowOfIndex) (int, error) {
+	s.recPassMu.Lock()
+	defer s.recPassMu.Unlock()
+	pendentes, err := s.SegmentosPendentesOfRebuild(j)
 	if err != nil {
 		return 0, err
 	}
@@ -184,23 +184,23 @@ func (s *Store) passadaDeReconstrucao(ctx context.Context, j JanelaDeIndice) (in
 // recebe: entre a fotografia e a varredura, a retenção pode ter aposentado um
 // dos segmentos.
 //
-// O chamador segura o recPassadaMu, e é ele que dá o happens-before do
+// O chamador segura o recPassMu, e é ele que dá o happens-before do
 // recPontoFixo: o mapa é tocado só daqui, e duas passadas nunca se sobrepõem.
 func (s *Store) reconstroiOsPendentes(ctx context.Context, pendentes []uint32) (int, error) {
 	s.podaOsPontosFixos(pendentes)
 	var feitos int
-	for _, seg := range pendentes {
+	for _, sec := range pendentes {
 		if err := ctx.Err(); err != nil {
 			return feitos, err
 		}
-		fixo, err := s.noPontoFixo(seg)
+		fixo, err := s.inPontoFixo(sec)
 		if err != nil {
 			return feitos, err
 		}
 		if fixo {
 			continue
 		}
-		publicou, err := s.reconstroiUmSegmento(ctx, seg)
+		publicou, err := s.reconstroiUmSegment(ctx, sec)
 		if err != nil {
 			if segmentLeftDataset(err) {
 				// A retenção ou a compaction aposentou o segmento entre a
@@ -212,9 +212,9 @@ func (s *Store) reconstroiOsPendentes(ctx context.Context, pendentes []uint32) (
 				// ele, e ele já não aparece na fila da próxima passada.
 				continue
 			}
-			if errors.Is(err, errSegmentoEhOCorrente) {
+			if errors.Is(err, errSegmentEhOCurrent) {
 				// A corrida SIMÉTRICA da de cima: o .dat do segmento novo nasce
-				// dentro do Append, ANTES de o aposAppend trocar o curSegID, então
+				// dentro do Append, ANTES de o aposAppend trocar o curSecID, então
 				// a fotografia da fila pode listá-lo enquanto o Load ainda devolve
 				// o anterior — e quando o laço o alcança, ele JÁ é o corrente. O
 				// desfecho certo é pular: a própria rotação o sela quando ele
@@ -223,7 +223,7 @@ func (s *Store) reconstroiOsPendentes(ctx context.Context, pendentes []uint32) (
 				// resolve sozinha.
 				continue
 			}
-			return feitos, fmt.Errorf("reconstruir o índice do segmento %d: %w", seg, err)
+			return feitos, fmt.Errorf("reconstruir o índice do segmento %d: %w", sec, err)
 		}
 		feitos++
 		// O contador sobe por segmento que PUBLICOU índice, e não por segmento
@@ -245,37 +245,37 @@ func (s *Store) reconstroiOsPendentes(ctx context.Context, pendentes []uint32) (
 		if publicou {
 			s.recFeitas.Add(1)
 		}
-		if err := s.anotaOPontoFixo(seg); err != nil {
+		if err := s.anotaOPontoFixo(sec); err != nil {
 			return feitos, err
 		}
 	}
 	return feitos, nil
 }
 
-// reconstroiUmSegmento é a reconstrução de UM segmento sob o lock de vida.
+// reconstroiUmSegment é a reconstrução de UM segmento sob o lock de vida.
 //
 // O entra() é por SEGMENTO, e não por passada: segurá-lo pela passada inteira
 // faria o Close esperar por todos os segmentos pendentes em vez de por um. Ele é
 // a segunda linha de defesa, e não a primeira — quem garante que nenhuma
-// varredura está em voo quando o Close fecha o segR é o ParaReconstrucao, que
+// varredura está em voo quando o Close fecha o secR é o ForRebuild, que
 // cancela e AGUARDA antes do quiesce. Este bracket cobre a passada chamada na
 // mão (é assim que o teste alcança o dataset já fechado) e devolve
 // ErrDatasetClosed em vez de os.ErrClosed vindo de dentro de um pread.
 //
 // Os campos pedidos são o conjunto indexado INTEIRO, e não só os que faltam, e a
-// cobertura resultante é a mesma: o coberturaDaReconstrucao une o pedido com o
+// cobertura resultante é a mesma: o coberturaOfRebuild une o pedido com o
 // que o arquivo já tem e continua declarado, e essa união é o próprio conjunto
 // declarado. Pedir só os que faltam seria mais uma leitura da tabela de seções
 // para chegar ao mesmo arquivo — e teria um buraco: um segmento pendente APENAS
 // por ter a seção de um campo que deixou de ser indexado tem conjunto faltante
-// VAZIO, e ConstroiIndiceDoSegmento com lista vazia não faz nada. Ele ficaria
+// VAZIO, e ConstroiIndexOfSegment com lista vazia não faz nada. Ele ficaria
 // pendente para sempre, com a seção morta em disco, que é o outro lado da §2.6.
-func (s *Store) reconstroiUmSegmento(ctx context.Context, seg uint32) (bool, error) {
+func (s *Store) reconstroiUmSegment(ctx context.Context, sec uint32) (bool, error) {
 	if err := s.entra(); err != nil {
 		return false, err
 	}
 	defer s.sai()
-	return s.constroiIndiceDoSegmento(ctx, seg, s.camposIndexados)
+	return s.constroiIndexOfSegment(ctx, sec, s.fieldsIndexados)
 }
 
 // oSegmentoSaiuDoDataset separa a corrida BENIGNA — o segmento aposentado entre
@@ -283,7 +283,7 @@ func (s *Store) reconstroiUmSegmento(ctx context.Context, seg uint32) (bool, err
 //
 // São os dois desfechos que a aposentadoria produz em quem está lendo: ENOENT
 // quando o descritor ainda não estava aberto (o unlink já aconteceu) e
-// os.ErrClosed quando o fechaODescritorEApaga fechou o fd cacheado no meio da
+// os.ErrClosed quando o closeODescritorEDelete fechou o fd cacheado no meio da
 // varredura. A barreira daquele fechamento é o aposMu, e esta passada NÃO o toma
 // pela varredura inteira de propósito: segurá-lo por até 512 MiB de leitura
 // travaria toda consulta atrás do escritor pendente da aposentadoria, que é
@@ -297,7 +297,7 @@ func segmentLeftDataset(err error) bool {
 	return errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrClosed)
 }
 
-// noPontoFixo responde se reconstruir este segmento produziria exatamente o
+// inPontoFixo responde se reconstruir este segmento produziria exatamente o
 // arquivo que já está lá — isto é, se a passada anterior já fez tudo que havia
 // para fazer e ele continua na fila por ser ela um superconjunto.
 //
@@ -312,12 +312,12 @@ func segmentLeftDataset(err error) bool {
 // bytes — são "sem seção nenhuma", pela mesma lista que a fila usa
 // (indiceIlegivel); ter duas listas diferentes daria um segmento que a fila
 // julga refazível e a memória julga fatal.
-func (s *Store) noPontoFixo(seg uint32) (bool, error) {
-	anotado, tem := s.recPontoFixo[seg]
-	if !tem {
+func (s *Store) inPontoFixo(sec uint32) (bool, error) {
+	anotado, has := s.recPontoFixo[sec]
+	if !has {
 		return false, nil
 	}
-	atual, err := s.secoesDoSelado(seg)
+	atual, err := s.secoesOfSealed(sec)
 	if err != nil {
 		return false, err
 	}
@@ -329,15 +329,15 @@ func (s *Store) noPontoFixo(seg uint32) (bool, error) {
 // Só o segmento que continua PENDENTE precisa da anotação — quem ficou completo
 // sai da fila sozinho —, mas anotar os dois custa uma entrada que a poda da
 // passada seguinte remove, e é menos código do que a distinção.
-func (s *Store) anotaOPontoFixo(seg uint32) error {
-	atual, err := s.secoesDoSelado(seg)
+func (s *Store) anotaOPontoFixo(sec uint32) error {
+	atual, err := s.secoesOfSealed(sec)
 	if err != nil {
 		return err
 	}
 	if s.recPontoFixo == nil {
 		s.recPontoFixo = make(map[uint32][]types.FieldID, 1)
 	}
-	s.recPontoFixo[seg] = atual
+	s.recPontoFixo[sec] = atual
 	return nil
 }
 
@@ -350,27 +350,27 @@ func (s *Store) anotaOPontoFixo(seg uint32) error {
 // A busca é binária porque a fila sai ordenada por ID do ListSegments, e essa
 // ordem é contratual.
 func (s *Store) podaOsPontosFixos(pendentes []uint32) {
-	for seg := range s.recPontoFixo {
-		if _, achou := slices.BinarySearch(pendentes, seg); !achou {
-			delete(s.recPontoFixo, seg)
+	for sec := range s.recPontoFixo {
+		if _, achou := slices.BinarySearch(pendentes, sec); !achou {
+			delete(s.recPontoFixo, sec)
 		}
 	}
 }
 
-// secoesDoSelado devolve os campos com seção no .sidx do segmento, com os três
+// secoesOfSealed devolve os campos com seção no .sidx do segmento, com os três
 // estados não-anômalos colapsados em "nenhuma seção".
-func (s *Store) secoesDoSelado(seg uint32) ([]types.FieldID, error) {
-	campos, err := segindex.SealedFields(segindex.SealedPath(s.dirDeDados(), seg))
+func (s *Store) secoesOfSealed(sec uint32) ([]types.FieldID, error) {
+	fields, err := segindex.SealedFields(segindex.SealedPath(s.dirOfData(), sec))
 	switch {
 	case unreadableIndex(err):
 		return nil, nil
 	case err != nil:
 		return nil, err
 	}
-	return campos, nil
+	return fields, nil
 }
 
-// ConstroiIndiceDoSegmento deriva o índice SELADO de um segmento a partir dos
+// ConstroiIndexOfSegment deriva o índice SELADO de um segmento a partir dos
 // records dele, e o publica pelo mesmo .tmp + fsync + rename da selagem.
 //
 // Ela é o mecanismo da §2.4, e só ele: o laço de fundo, o pacing contra o
@@ -403,7 +403,7 @@ func (s *Store) secoesDoSelado(seg uint32) ([]types.FieldID, error) {
 // `campos` são os campos PENDENTES daquele segmento, e podem ser um subconjunto
 // do conjunto indexado — é a §2.6, que precisa acrescentar um campo ao schema de
 // um dataset povoado. O arquivo publicado cobre a UNIÃO deles com o que o .sidx
-// atual já cobria e continua declarado (coberturaDaReconstrucao), e a união é
+// atual já cobria e continua declarado (coberturaOfRebuild), e a união é
 // obrigatória: o arquivo é imutável, "acrescentar seção" é reescrevê-lo inteiro,
 // e reescrevê-lo só com o campo pedido apagaria as seções que já estavam lá.
 //
@@ -417,22 +417,22 @@ func (s *Store) secoesDoSelado(seg uint32) ([]types.FieldID, error) {
 // golden prova. Com a igualdade provada, uma corrida no nome final é neutra em
 // conteúdo: quem renomear por último grava os mesmos bytes.
 //
-// O QUE O CHAMADOR PRECISA GARANTIR, e é concreto: esta função lê pelo s.segR, e
-// a aposentadoria fecha o descritor por segR.CloseSegment, que exige que
+// O QUE O CHAMADOR PRECISA GARANTIR, e é concreto: esta função lê pelo s.secR, e
+// a aposentadoria fecha o descritor por secR.CloseSegment, que exige que
 // nenhuma leitura esteja em voo — barreira que no Store é o aposMu. O Close fecha
-// o segR inteiro. Quem chama do laço é a passadaDeReconstrucao, e ela resolve os
-// dois: contra o Close, o ParaReconstrucao cancela e AGUARDA antes do quiesce;
+// o secR inteiro. Quem chama do laço é a passOfRebuild, e ela resolve os
+// dois: contra o Close, o ForRebuild cancela e AGUARDA antes do quiesce;
 // contra a aposentadoria de UM segmento, ela classifica o os.ErrClosed/ENOENT
 // como corrida benigna e segue para o próximo (oSegmentoSaiuDoDataset) em vez de
 // tomar o aposMu por uma varredura inteira, o que travaria toda consulta atrás do
 // escritor pendente. Varredura interrompida não publica índice parcial: o erro
 // sobe antes do Escreve.
-func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos []types.FieldID) error {
-	_, err := s.constroiIndiceDoSegmento(ctx, seg, campos)
+func (s *Store) ConstroiIndexOfSegment(ctx context.Context, sec uint32, fields []types.FieldID) error {
+	_, err := s.constroiIndexOfSegment(ctx, sec, fields)
 	return err
 }
 
-// constroiIndiceDoSegmento é o corpo, e devolve TAMBÉM se um arquivo de índice
+// constroiIndexOfSegment é o corpo, e devolve TAMBÉM se um arquivo de índice
 // foi de fato publicado.
 //
 // O booleano existe por causa da série nishidb_index_reconstrucoes_total, que
@@ -447,8 +447,8 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 // outra coisa. `feitos` conta segmentos VARRIDOS, que é o custo da passada e o
 // que os testes da §2.4 afirmam; publicar é o resultado. Um segmento visitado que
 // não publica é trabalho legítimo com produto vazio, não falha.
-func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos []types.FieldID) (bool, error) {
-	if len(campos) == 0 {
+func (s *Store) constroiIndexOfSegment(ctx context.Context, sec uint32, fields []types.FieldID) (bool, error) {
+	if len(fields) == 0 {
 		return false, nil
 	}
 	// A recusa que sobrou é a que continua verdadeira: campo FORA do conjunto
@@ -461,24 +461,24 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 	// "tem .sidx?", e um .sidx imutável e parcial faria o segmento contar como
 	// PRONTO com campos que ninguém indexou — falso negativo petrificado, sem
 	// erro e sem log. Só depois de o teste de pendência passar a olhar SEÇÃO POR
-	// CAMPO (SegmentosPendentesDeReconstrucao) um arquivo incompleto deixou de
+	// CAMPO (SegmentosPendentesOfRebuild) um arquivo incompleto deixou de
 	// poder se declarar completo, e só então pedir "reconstrua o campo que
 	// falta" virou pergunta legítima.
-	for _, campo := range campos {
-		if !slices.Contains(s.camposIndexados, campo) {
+	for _, field := range fields {
+		if !slices.Contains(s.fieldsIndexados, field) {
 			return false, fmt.Errorf("%w: reconstrução do segmento %d pedida para o campo %d, que o dataset não indexa (indexados: %v); "+
 				"a seção existiria sem ninguém para alimentá-la",
-				ErrInvalidArgument, seg, campo, s.camposIndexados)
+				ErrInvalidArgument, sec, field, s.fieldsIndexados)
 		}
 	}
 	// O segmento CORRENTE é recusado, e a guarda não é defensiva: o .sidx é
 	// IMUTÁVEL, e gravá-lo para um segmento que ainda recebe records
 	// petrificaria um índice sem tudo que vier depois. Falso negativo
 	// permanente, que é exatamente o desfecho que esta tarefa existe para
-	// eliminar. O índice do corrente é o WIP, e ele se reconstrói na abertura.
-	if corrente := s.curSegID.Load(); seg == corrente {
+	// eliminar. O índice do current é o WIP, e ele se reconstrói na abertura.
+	if current := s.curSecID.Load(); sec == current {
 		return false, fmt.Errorf("%w: o segmento %d é o corrente; o índice dele é o WIP, não um .sidx imutável: %w",
-			ErrInvalidArgument, seg, errSegmentoEhOCorrente)
+			ErrInvalidArgument, sec, errSegmentEhOCurrent)
 	}
 	// O tamanho é medido ANTES da varredura, por stat DIRETO no arquivo — e as
 	// duas escolhas são a diferença entre pegar corrupção e matar o laço numa
@@ -487,27 +487,27 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 	// podia aposentar o segmento entre a varredura completa e a listagem — e a
 	// ausência era devolvida como ErrDatasetCorrupt, que nenhum classificador
 	// benigno reconhece —, e o segmento PRÉ-SWAP (listado como pendente antes
-	// de o curSegID trocar) podia crescer entre a varredura e a medida. Com a
+	// de o curSecID trocar) podia crescer entre a varredura e a medida. Com a
 	// medida anterior os dois viram desfechos benignos: o aposentado falha o
 	// stat com ENOENT, que é a corrida que o laço já tolera; e o que cresceu dá
 	// fimValido >= tamanho, que não é corrupção — o .sidx que ele viesse a
 	// publicar é o resíduo que a §2.4 aceita, reescrito pela selagem da própria
 	// rotação.
-	info, err := os.Stat(segment.Path(s.dirDeDados(), seg))
+	info, err := os.Stat(segment.Path(s.dirOfData(), sec))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return false, fmt.Errorf("o segmento %d saiu do dataset antes da reconstrução: %w", seg, os.ErrNotExist)
+			return false, fmt.Errorf("o segmento %d saiu do dataset antes da reconstrução: %w", sec, os.ErrNotExist)
 		}
 		return false, err
 	}
-	tamanho := info.Size()
-	caminho := segindex.SealedPath(s.dirDeDados(), seg)
-	cobertura, err := s.coberturaDaReconstrucao(caminho, campos)
+	size := info.Size()
+	path := segindex.SealedPath(s.dirOfData(), sec)
+	cobertura, err := s.coberturaOfRebuild(path, fields)
 	if err != nil {
 		return false, err
 	}
 	e := segindex.NewWriter()
-	fimValido, err := s.varreOsRecordsDoSegmento(ctx, seg, cobertura,
+	endValid, err := s.varreOsRecordsOfSegment(ctx, sec, cobertura,
 		func(field types.FieldID, h uint64, row types.RowID) error {
 			e.Add(field, h, row)
 			return nil
@@ -525,11 +525,11 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 	// servindo-as. Falso negativo permanente. `<` e não `!=`: fimValido acima
 	// do tamanho medido é o segmento pré-swap que cresceu durante a varredura,
 	// e isso é a corrida benigna acima, não corrupção.
-	if fimValido < tamanho {
+	if endValid < size {
 		return false, fmt.Errorf(
 			"%w: a varredura de reconstrução do segmento %d parou em %d de %d bytes; "+
 				"um .sidx desta varredura declararia completo um índice sem as rows posteriores à corrupção",
-			ErrDatasetCorrupt, seg, fimValido, tamanho)
+			ErrDatasetCorrupt, sec, endValid, size)
 	}
 	if e.IsEmpty() {
 		// Nenhuma posting sob a cobertura inteira: o índice CORRETO deste
@@ -541,9 +541,9 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 		// certo; deixá-lo seria manter em disco um arquivo que ninguém consulta
 		// e que o IndexBytes conta, que é o mesmo modo de falha que o .widx
 		// órfão obrigou a fechar.
-		return false, s.removeSeladoObsoleto(seg, caminho)
+		return false, s.removeSealedObsoleto(sec, path)
 	}
-	if err := e.WriteSealed(caminho, seg); err != nil {
+	if err := e.WriteSealed(path, sec); err != nil {
 		return false, err
 	}
 	// A evição vem DEPOIS do rename, e sem ela a reconstrução seria trabalho
@@ -553,17 +553,17 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 	// sem a seção do campo novo, portanto ENUMERANDO — até a próxima abertura
 	// do dataset, e ainda prenderia o inode substituído.
 	//
-	// Ela usa o mecanismo que já existe, e não um segundo: o Fecha do Selado
+	// Ela usa o mecanismo que já existe, e não um segundo: o Fecha do Sealed
 	// impede leitores novos e adia o munmap até a última Fonte em voo sair
 	// (contagem de vidas). É a mesma barreira da aposentadoria de segmento, pelo
 	// mesmo selMu — e é ela que torna a reescrita segura contra uma varredura em
 	// voo. A varredura que sobrevive lê o arquivo ANTIGO até terminar, o que é
 	// correto: índice é superconjunto de candidatos, e o executor revalida (§44).
-	s.esqueceSelado(seg)
+	s.esqueceSealed(sec)
 	return true, nil
 }
 
-// coberturaDaReconstrucao decide quais campos o arquivo novo vai cobrir: os
+// coberturaOfRebuild decide quais campos o arquivo novo vai cobrir: os
 // pedidos MAIS os que o .sidx atual já cobre e continuam declarados.
 //
 // A união não é generosidade, é a consequência de o arquivo ser IMUTÁVEL.
@@ -585,30 +585,30 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 //
 // Um .sidx ausente ou ilegível não impede nada: não há o que preservar, e a
 // cobertura é o que o chamador pediu. A lista de ilegíveis é a MESMA do
-// segmentoPendente, e tem de continuar sendo: um arquivo que a fila julga
+// segmentPendente, e tem de continuar sendo: um arquivo que a fila julga
 // refazível e a cobertura julga fatal produziria um segmento eternamente
 // pendente cuja reconstrução sempre falha. Erro fora dela sobe — EIO é falha de
 // infra, e reescrever o índice por cima dela seria decidir sobre um arquivo que
 // ninguém conseguiu ler (§101).
-func (s *Store) coberturaDaReconstrucao(caminho string, campos []types.FieldID) ([]types.FieldID, error) {
-	cobertura := slices.Clone(campos)
-	existentes, err := segindex.SealedFields(caminho)
+func (s *Store) coberturaOfRebuild(path string, fields []types.FieldID) ([]types.FieldID, error) {
+	cobertura := slices.Clone(fields)
+	existentes, err := segindex.SealedFields(path)
 	switch {
 	case unreadableIndex(err):
 		existentes = nil
 	case err != nil:
 		return nil, err
 	}
-	for _, campo := range existentes {
+	for _, field := range existentes {
 		// O filtro pelo conjunto declarado é o que faz a §2.6 valer nos DOIS
 		// sentidos: a seção de um campo que deixou de ser indexado não entra na
 		// cobertura, e por isso a reescrita a apaga. É a única forma de remover
 		// seção de um arquivo imutável, e é a mesma operação da selagem.
-		if slices.Contains(s.camposIndexados, campo) && !slices.Contains(cobertura, campo) {
-			cobertura = append(cobertura, campo)
+		if slices.Contains(s.fieldsIndexados, field) && !slices.Contains(cobertura, field) {
+			cobertura = append(cobertura, field)
 		}
 	}
-	// Ordenada e sem repetição: é o que o varreOsRecordsDoSegmento espera e o
+	// Ordenada e sem repetição: é o que o varreOsRecordsOfSegment espera e o
 	// que torna o arquivo produzido independente da ORDEM em que o chamador
 	// listou os campos pendentes — sem isso, dois chamadores com o mesmo
 	// conjunto poderiam produzir arquivos diferentes e o golden da §6.3 passaria
@@ -617,20 +617,20 @@ func (s *Store) coberturaDaReconstrucao(caminho string, campos []types.FieldID) 
 	return slices.Compact(cobertura), nil
 }
 
-// removeSeladoObsoleto tira do caminho um .sidx que a reconstrução acabou de
+// removeSealedObsoleto tira do caminho um .sidx que a reconstrução acabou de
 // declarar sem conteúdo. Ausência do arquivo não é anomalia: é o estado normal
 // de um segmento sem posting nenhuma. A ordem unlink-antes-de-esquecer é do
-// removeSidxDoDisco, e o godoc de lá explica a corrida que a inversa abria —
+// removeSidxOfDisk, e o godoc de lá explica a corrida que a inversa abria —
 // a justificativa antiga desta função para a ordem inversa (o inode preso)
 // estava errada: o munmap espera as vidas nos dois desenhos.
-func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
-	if _, err := s.removeSidxDoDisco(seg); err != nil {
-		return fmt.Errorf("storage: remover o índice obsoleto %s: %w", caminho, err)
+func (s *Store) removeSealedObsoleto(sec uint32, path string) error {
+	if _, err := s.removeSidxOfDisk(sec); err != nil {
+		return fmt.Errorf("storage: remover o índice obsoleto %s: %w", path, err)
 	}
 	return nil
 }
 
-// SegmentosPendentesDeReconstrucao devolve, em ordem crescente, os segmentos
+// SegmentosPendentesOfRebuild devolve, em ordem crescente, os segmentos
 // cujo índice selado não descreve o conjunto indexado do dataset.
 //
 // A fila é DERIVADA do disco a cada chamada, e não uma lista persistida, pela
@@ -668,7 +668,7 @@ func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
 // sem campo declarado não há reconstrução que os reescreva. Eles não respondem
 // nada (o Lookup recusa campo não indexado antes de chegar ao arquivo) e saem de
 // disco quando a compaction ou a retenção aposenta o segmento, pelo
-// removeIndiceDoSegmento. Uma varredura de limpeza na abertura seria a
+// removeIndexOfSegment. Uma varredura de limpeza na abertura seria a
 // alternativa, e ela é pior: apagaria o índice inteiro de um dataset aberto por
 // qualquer caminho que simplesmente não declare os campos.
 //
@@ -695,7 +695,7 @@ func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
 // uma linha:
 //
 //   - A resposta é um instantâneo, e o segmento recém-rotacionado aparece nela
-//     por uma janela. O aposAppend troca o curSegID ANTES de selar o anterior
+//     por uma janela. O aposAppend troca o curSecID ANTES de selar o anterior
 //     (indices.go), então entre as duas coisas o anterior tem dado e ainda não
 //     tem .sidx. A corrida no nome FINAL é neutra — a igualdade byte a byte é
 //     provada pelo golden —, e a do temporário deixou de existir porque ele passou
@@ -703,9 +703,9 @@ func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
 //     exclusão mútua. Com nome fixo, os dois caminhos escreviam no mesmo arquivo
 //     e o .sidx saía rasgado.
 //   - Um leitor que abra o .sidx ANTES da reescrita e o publique no cache DEPOIS
-//     da evição que a reescrita faz (ConstroiIndiceDoSegmento) ficaria com o
+//     da evição que a reescrita faz (ConstroiIndexOfSegment) ficaria com o
 //     mapeamento velho até a próxima abertura do dataset. Quem fecha isso é a
-//     geração do cache de selados (selGeracao): o mapeamento aberto antes de uma
+//     geração do cache de selados (selGeneration): o mapeamento aberto antes de uma
 //     evição é descartado em vez de publicado. Ela nasceu junto com o laço, que é
 //     o chamador de fundo que tornou a janela alcançável.
 //
@@ -730,12 +730,12 @@ func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
 // montar o laço não tem como esquecê-la — o compilador cobra o que um
 // comentário não cobraria.
 //
-// A conta de "dentro da janela" é a MESMA da expulsão (janelaDeSegmentos), e
+// A conta de "dentro da janela" é a MESMA da expulsão (windowOfSegmentos), e
 // tem de ser: se as duas respondessem por contas diferentes, a que responde
 // "sim" reconstruiria o que a outra acabou de apagar. É a doutrina de nunca ter
 // a mesma coisa em dois lugares, aplicada a uma decisão.
 //
-// Janela INFINITA — o default, e o que todo dataset materializado tem por
+// Window INFINITA — o default, e o que todo dataset materializado tem por
 // construção — não filtra nada, e o comportamento é exatamente o de antes de a
 // janela existir.
 //
@@ -748,27 +748,27 @@ func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
 // inteiro desta função existe para explicar por que dois já seriam um moinho.
 //
 // A publicação é em ATÔMICO, e o scrape só os lê. A alternativa — uma coleta que
-// chamasse esta função — pediria o retPassadaMu de fora da cadeia
+// chamasse esta função — pediria o retPassMu de fora da cadeia
 // vida → wmu → aposMu, sobre a qual ele fica; a inversão só apareceria sob carga,
 // que é exatamente quando o /metrics precisa responder.
 //
-// ELA TOMA O retPassadaMu, e não é para serializar duas pendências: é para
+// ELA TOMA O retPassMu, e não é para serializar duas pendências: é para
 // serializar contra a EXPULSÃO. As duas leem o mesmo disco, e uma pendência que
 // caia no MEIO de uma expulsão vê parte dos .sidx já removidos — estimador
 // menor, mais segmentos admitidos — e agenda a reconstrução exatamente do que
 // está sendo apagado. Isolado isso é desperdício; combinado com o estimador
 // baseado no maior arquivo, é o moinho por outro gatilho. É também o que protege
-// o tamanhoExpulso, que a expulsão escreve e esta função lê.
-func (s *Store) SegmentosPendentesDeReconstrucao(j JanelaDeIndice) ([]uint32, error) {
-	if err := s.exigeJanelaAplicavel(j); err != nil {
+// o sizeExpulso, que a expulsão escreve e esta função lê.
+func (s *Store) SegmentosPendentesOfRebuild(j WindowOfIndex) ([]uint32, error) {
+	if err := s.exigeWindowAplicavel(j); err != nil {
 		return nil, err
 	}
-	s.retPassadaMu.Lock()
-	defer s.retPassadaMu.Unlock()
-	if len(s.camposIndexados) == 0 {
+	s.retPassMu.Lock()
+	defer s.retPassMu.Unlock()
+	if len(s.fieldsIndexados) == 0 {
 		return nil, nil
 	}
-	dir := s.dirDeDados()
+	dir := s.dirOfData()
 	refs, err := segment.ListSegments(dir)
 	if err != nil {
 		return nil, err
@@ -777,55 +777,55 @@ func (s *Store) SegmentosPendentesDeReconstrucao(j JanelaDeIndice) ([]uint32, er
 	// de um conjunto vazio é o que impede a janela infinita de esvaziar a fila.
 	var dentro map[uint32]struct{}
 	if !j.Infinita() {
-		estado, err := s.janelaDeSegmentos(j, refs)
+		state, err := s.windowOfSegmentos(j, refs)
 		if err != nil {
 			return nil, err
 		}
-		dentro = estado.dentro
+		dentro = state.dentro
 	}
-	corrente := s.curSegID.Load()
+	current := s.curSecID.Load()
 	var (
 		pendentes []uint32
-		estados   EstadosDeSegmento
+		states    StatesOfSegment
 	)
 	for _, ref := range refs {
-		if ref.ID == corrente {
-			estados.Corrente++
+		if ref.ID == current {
+			states.Current++
 			continue
 		}
 		if dentro != nil {
 			if _, ok := dentro[ref.ID]; !ok {
-				estados.Fora++
+				states.Fora++
 				continue
 			}
 		}
-		pendente, err := s.segmentoPendente(dir, ref.ID)
+		pendente, err := s.segmentPendente(dir, ref.ID)
 		if err != nil {
 			return nil, err
 		}
 		if pendente {
 			pendentes = append(pendentes, ref.ID)
-			estados.Pendente++
+			states.Pendente++
 			continue
 		}
-		estados.Selado++
+		states.Sealed++
 	}
 	// A publicação vem depois do laço COMPLETO, e por isso não acontece nos
 	// retornos de erro acima: uma passada que morreu no meio descreve um dataset
 	// pela metade, e publicá-la faria a fila parecer ter encolhido quando o que
 	// encolheu foi a varredura. O retrato anterior fica, que é o que um medidor
 	// deve fazer quando a medição falhou.
-	s.publicaEstadosDeSegmento(estados)
+	s.publicaStatesOfSegment(states)
 	return pendentes, nil // ListSegments já devolve ordenado por ID
 }
 
-// segmentoPendente responde se o .sidx do segmento descreve exatamente o
+// segmentPendente responde se o .sidx do segmento descreve exatamente o
 // conjunto indexado do dataset.
 //
 // Os dois conjuntos são comparados com slices.Equal porque os DOIS são
 // crescentes por contrato: a tabela de seções é validada como ordenada na
-// abertura (segindex.readSectionTable) e o s.camposIndexados sai ordenado do
-// resolveCamposIndexados. Ordenar aqui de novo seria esconder uma quebra dessas
+// abertura (segindex.readSectionTable) e o s.fieldsIndexados sai ordenado do
+// resolveFieldsIndexados. Ordenar aqui de novo seria esconder uma quebra dessas
 // duas garantias em vez de deixá-la aparecer.
 //
 // Arquivo ILEGÍVEL conta como pendente, e não como erro: um .sidx que este
@@ -834,15 +834,15 @@ func (s *Store) SegmentosPendentesDeReconstrucao(j JanelaDeIndice) ([]uint32, er
 // lista sobe intacto — EIO ao abrir o índice é falha de infra, e chamá-la de
 // "reconstrua" mandaria o laço varrer 512 MiB por um disco doente (§101, três
 // baldes).
-func (s *Store) segmentoPendente(dir string, seg uint32) (bool, error) {
-	campos, err := segindex.SealedFields(segindex.SealedPath(dir, seg))
+func (s *Store) segmentPendente(dir string, sec uint32) (bool, error) {
+	fields, err := segindex.SealedFields(segindex.SealedPath(dir, sec))
 	switch {
 	case unreadableIndex(err):
 		return true, nil
 	case err != nil:
 		return false, err
 	}
-	return !slices.Equal(campos, s.camposIndexados), nil
+	return !slices.Equal(fields, s.fieldsIndexados), nil
 }
 
 // indiceIlegivel separa "este .sidx não serve, refaça" de "o disco falhou,
@@ -871,7 +871,7 @@ func unreadableIndex(err error) bool {
 		errors.Is(err, mmap.ErrEmptyFile)
 }
 
-// reconstroiOIndiceDoCorrente realimenta os WIPs recém-abertos lendo o próprio
+// reconstroiOIndexOfCurrent realimenta os WIPs recém-abertos lendo o próprio
 // segmento corrente.
 //
 // É a segunda metade da §2.5, e sem ela a primeira é um defeito: depois de todo
@@ -890,9 +890,9 @@ func unreadableIndex(err error) bool {
 // Índice é dado derivado: a recuperação mais barata que está correta é derivá-lo
 // de novo.
 //
-// Roda dentro do Open, depois do abreWIPsDoCorrente e ANTES de o primeiro Put ser
+// Roda dentro do Open, depois do openWIPsOfCurrent e ANTES de o primeiro Put ser
 // aceito. Não há ctx porque não há quem cancele: a abertura ou termina ou falha.
-func (s *Store) reconstroiOIndiceDoCorrente() error {
+func (s *Store) reconstroiOIndexOfCurrent() error {
 	if len(s.wips) == 0 {
 		return nil
 	}
@@ -901,16 +901,16 @@ func (s *Store) reconstroiOIndiceDoCorrente() error {
 	// além do fim válido, e o WIP é mutável e continua sendo alimentado. A
 	// guarda de varredura incompleta é do caminho SELADO, onde o arquivo
 	// publicado seria imutável.
-	_, err := s.varreOsRecordsDoSegmento(context.Background(), s.curSegID.Load(), s.camposIndexados,
-		func(campo types.FieldID, h uint64, row types.RowID) error {
+	_, err := s.varreOsRecordsOfSegment(context.Background(), s.curSecID.Load(), s.fieldsIndexados,
+		func(field types.FieldID, h uint64, row types.RowID) error {
 			// O mapa não pode errar: ele foi construído a partir DESTE mesmo
-			// s.camposIndexados, no abreWIPsDoCorrente, algumas linhas acima.
-			return s.wips[campo].Set(h, row)
+			// s.fieldsIndexados, no openWIPsOfCurrent, algumas linhas acima.
+			return s.wips[field].Set(h, row)
 		})
 	return err
 }
 
-// varreOsRecordsDoSegmento percorre os records do segmento e emite, para cada
+// varreOsRecordsOfSegment percorre os records do segmento e emite, para cada
 // campo indexado presente no payload de cada record, a tripla que o índice
 // guarda: (campo, hash da chave canônica, rowID).
 //
@@ -931,22 +931,22 @@ func (s *Store) reconstroiOIndiceDoCorrente() error {
 // qual dos dois casos está.
 //
 // A pertinência do campo sai de `campos`, que é sempre um SUBCONJUNTO do que a
-// ingestão indexa (s.camposIndexados): o WIP do corrente usa o conjunto inteiro e
-// a reconstrução usa a cobertura decidida pelo coberturaDaReconstrucao. É essa
+// ingestão indexa (s.fieldsIndexados): o WIP do corrente usa o conjunto inteiro e
+// a reconstrução usa a cobertura decidida pelo coberturaOfRebuild. É essa
 // contenção que faz a alimentação incremental e a reconstruída coincidirem campo
 // a campo — um campo FORA do conjunto indexado ganharia seção que a ingestão não
-// alimenta, e é por isso que ConstroiIndiceDoSegmento o recusa antes de chegar
+// alimenta, e é por isso que ConstroiIndexOfSegment o recusa antes de chegar
 // aqui. slices.Contains sobre um conjunto ordenado de punhado de campos é mais
 // barato que o mapa que o substituiria.
 //
 // A chave canônica é montada com valuekey.Append sobre um buffer LOCAL, e não
-// sobre o s.chaveIndiceBuf do caminho de escrita: aquele é reutilizado sob o wmu,
+// sobre o s.keyIndexBuf do caminho de escrita: aquele é reutilizado sob o wmu,
 // e esta varredura roda fora dele.
-func (s *Store) varreOsRecordsDoSegmento(
+func (s *Store) varreOsRecordsOfSegment(
 	ctx context.Context,
-	seg uint32,
-	campos []types.FieldID,
-	emite func(campo types.FieldID, h uint64, row types.RowID) error,
+	sec uint32,
+	fields []types.FieldID,
+	emite func(field types.FieldID, h uint64, row types.RowID) error,
 ) (int64, error) {
 	// O contador sobe na ENTRADA, e conta a varredura pedida — não a concluída.
 	// É o que ele precisa medir: a leitura de até 512 MiB é paga assim que
@@ -955,30 +955,30 @@ func (s *Store) varreOsRecordsDoSegmento(
 	// perguntando, que é o mesmo argumento dos contadores da compaction.
 	s.varreduras.Add(1)
 	var (
-		chave  []byte
-		leitor encoding.FieldReader
+		key    []byte
+		reader encoding.FieldReader
 	)
-	fimValido, err := s.segR.ScanFrom(seg, int64(segment.HeaderSize), func(_ uint32, rec types.Record) error {
+	endValid, err := s.secR.ScanFrom(sec, int64(segment.HeaderSize), func(_ uint32, rec types.Record) error {
 		// O cancelamento é conferido por RECORD, e não por segmento: um
 		// segmento de 512 MiB é a unidade que se quer poder abandonar no meio,
 		// e conferir só na entrada tornaria o ctx decorativo.
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		leitor.Reset(rec.Payload)
+		reader.Reset(rec.Payload)
 		for {
-			id, v, ok := leitor.Next()
+			id, v, ok := reader.Next()
 			if !ok {
-				return leitor.Err()
+				return reader.Err()
 			}
-			if !slices.Contains(campos, id) {
+			if !slices.Contains(fields, id) {
 				continue
 			}
-			k, err := valuekey.Append(chave[:0], v)
+			k, err := valuekey.Append(key[:0], v)
 			if err != nil {
 				return err
 			}
-			chave = k
+			key = k
 			// primary.HashKey é a MESMA função da ingestão, e a escolha não é
 			// gosto: ela nunca devolve 0 nem 1, e 0 é o sentinela de slot vazio
 			// do WIP. Trocá-la aqui daria um arquivo bem formado e um conjunto
@@ -988,5 +988,5 @@ func (s *Store) varreOsRecordsDoSegmento(
 			}
 		}
 	})
-	return fimValido, err
+	return endValid, err
 }

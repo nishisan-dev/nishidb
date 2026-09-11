@@ -15,7 +15,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-func col(nome string, v types.Value) ColView { return ColView{Name: nome, Val: v} }
+func col(name string, v types.Value) ColView { return ColView{Name: name, Val: v} }
 
 func str(s string) types.Value { return types.Value{Type: types.TypeString, Bytes: []byte(s)} }
 func i64(v int64) types.Value  { return types.Value{Type: types.TypeInt64, I64: v} }
@@ -24,13 +24,13 @@ func f64(f float64) types.Value {
 }
 func ts(ms int64) types.Value { return types.Value{Type: types.TypeTimestamp, I64: ms} }
 
-func linhaDe(cols ...ColView) []byte { return AppendRow(nil, Row{cols: cols}) }
+func rowOf(cols ...ColView) []byte { return AppendRow(nil, Row{cols: cols}) }
 
-// umaLinhaSo é a invariante UNIVERSAL do encoder: o framing do protocolo
+// oneRowOnly é a invariante UNIVERSAL do encoder: o framing do protocolo
 // inteiro depende dela. Um '\n' a mais dentro de um valor faz o cliente ler
 // duas linhas inválidas no lugar de uma — e o stream inteiro dessincroniza a
 // partir dali.
-func umaLinhaSo(t *testing.T, out []byte) {
+func oneRowOnly(t *testing.T, out []byte) {
 	t.Helper()
 	if n := bytes.Count(out, []byte{'\n'}); n != 1 {
 		t.Errorf("%d quebras de linha em %q, want exatamente 1", n, out)
@@ -42,7 +42,7 @@ func umaLinhaSo(t *testing.T, out []byte) {
 
 // O golden: uma row com todos os tipos, byte a byte.
 func TestGoldenLinha(t *testing.T) {
-	out := linhaDe(
+	out := rowOf(
 		col("id", str("ABC")),
 		col("status", str("Stop")),
 		col("ip", types.Value{Type: types.TypeIPv4, Bytes: []byte{177, 1, 2, 3}}),
@@ -66,7 +66,7 @@ func TestGoldenLinha(t *testing.T) {
 	if string(out) != want {
 		t.Errorf("linha:\n got %s\nwant %s", out, want)
 	}
-	umaLinhaSo(t, out)
+	oneRowOnly(t, out)
 	if !json.Valid(out[:len(out)-1]) {
 		t.Error("a linha não é JSON válido")
 	}
@@ -161,9 +161,9 @@ func TestFormatacaoPorTipo(t *testing.T) {
 // original chega até aqui.
 func TestJSONPrettyNaoQuebraOFraming(t *testing.T) {
 	pretty := []byte("{\"a\": 1,\n\t\"b\": [2,\r\n3]}")
-	out := linhaDe(col("attrs", types.Value{Type: types.TypeJSON, Bytes: pretty}))
+	out := rowOf(col("attrs", types.Value{Type: types.TypeJSON, Bytes: pretty}))
 
-	umaLinhaSo(t, out)
+	oneRowOnly(t, out)
 	if !json.Valid(out[:len(out)-1]) {
 		t.Errorf("a sanitização quebrou a validade: %s", out)
 	}
@@ -184,8 +184,8 @@ func TestJSONPrettyNaoQuebraOFraming(t *testing.T) {
 // validar), o framing sobrevive: a falha degrada para "uma linha estranha",
 // nunca para "o stream dessincronizou".
 func TestJSONInvalidoNaoQuebraOFraming(t *testing.T) {
-	out := linhaDe(col("attrs", types.Value{Type: types.TypeJSON, Bytes: []byte("{lixo\n\n{{")}))
-	umaLinhaSo(t, out)
+	out := rowOf(col("attrs", types.Value{Type: types.TypeJSON, Bytes: []byte("{lixo\n\n{{")}))
+	oneRowOnly(t, out)
 }
 
 func TestEscapingDeString(t *testing.T) {
@@ -230,19 +230,19 @@ func TestEscapingDeString(t *testing.T) {
 // A string materializada CONTÉM o control char cru (o tokenizer decodifica
 // \n para o byte literal), então o escaping é o que segura o framing.
 func TestStringComQuebraDeLinhaNaoQuebraOFraming(t *testing.T) {
-	out := linhaDe(col("txt", str("linha1\nlinha2")))
-	umaLinhaSo(t, out)
+	out := rowOf(col("txt", str("linha1\nlinha2")))
+	oneRowOnly(t, out)
 }
 
 // O dispatch é por Val.Type (tipo FÍSICO), nunca por ColView.Type (tipo
 // DECLARADO). Num campo auto sem tipo fixado o declarado é TypeNull e o físico
 // varia por row — formatar pelo declarado emitiria null para todo valor.
 func TestFormatacaoIgnoraOTipoDeclarado(t *testing.T) {
-	out := linhaDe(ColView{Name: "a", Type: types.TypeNull, Val: str("abc")})
+	out := rowOf(ColView{Name: "a", Type: types.TypeNull, Val: str("abc")})
 	if !bytes.Contains(out, []byte(`"a":"abc"`)) {
 		t.Errorf("declarado TypeNull com valor string: %s", out)
 	}
-	out = linhaDe(ColView{Name: "a", Type: types.TypeString, Val: i64(7)})
+	out = rowOf(ColView{Name: "a", Type: types.TypeString, Val: i64(7)})
 	if !bytes.Contains(out, []byte(`"a":7`)) {
 		t.Errorf("declarado string com valor int64: %s", out)
 	}
@@ -252,7 +252,7 @@ func TestFormatacaoIgnoraOTipoDeclarado(t *testing.T) {
 // valor e decodifica cada linha num único passe, sem bookkeeping de chave
 // faltando. As duas representações do estado nulo são aceitas.
 func TestNullExplicito(t *testing.T) {
-	out := linhaDe(
+	out := rowOf(
 		ColView{Name: "a", Null: true, Val: str("lixo da row anterior")},
 		ColView{Name: "b", Val: types.Value{}},
 		col("c", str("x")),
@@ -264,7 +264,7 @@ func TestNullExplicito(t *testing.T) {
 
 func TestNomeDeColunaEscapado(t *testing.T) {
 	// Alias, campo quoted com hífen, nome com aspas e nome com UTF-8 inválido.
-	out := linhaDe(
+	out := rowOf(
 		col("Acct-Status-Type", str("Stop")),
 		col(`a"b`, str("x")),
 		col("a\xffb", str("y")),
@@ -289,8 +289,8 @@ func TestTimestampRoundTrip(t *testing.T) {
 	casos := []int64{0, -1, 1, 1700000000123, 253402300799999, -62135596800000}
 	for _, ms := range casos {
 		out := AppendValue(nil, ts(ms))
-		semAspas := out[1 : len(out)-1]
-		got, err := typeparse.RFC3339Millis(semAspas)
+		withoutAspas := out[1 : len(out)-1]
+		got, err := typeparse.RFC3339Millis(withoutAspas)
 		if err != nil {
 			t.Errorf("millis %d: saída %s não volta pelo parser: %v", ms, out, err)
 			continue
@@ -361,11 +361,11 @@ func TestNdjsonSemFmtNemEncodingJSON(t *testing.T) {
 			t.Fatal(err)
 		}
 		src := string(b)
-		fim := strings.Index(src, "\n)")
-		if fim < 0 {
+		end := strings.Index(src, "\n)")
+		if end < 0 {
 			t.Fatalf("%s: bloco de imports não encontrado", arquivo)
 		}
-		imports := src[:fim]
+		imports := src[:end]
 		for _, proibido := range []string{`"fmt"`, `"encoding/json"`, `"reflect"`} {
 			if strings.Contains(imports, proibido) {
 				t.Errorf("%s importa %s no caminho quente", arquivo, proibido)

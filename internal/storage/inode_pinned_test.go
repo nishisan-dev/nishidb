@@ -13,7 +13,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// fdsApagadosEm devolve os caminhos que ESTE processo mantém abertos e que já
+// fdsApagadosIn devolve os caminhos que ESTE processo mantém abertos e que já
 // foram removidos do diretório — os inodes presos.
 //
 // O oráculo é /proc/self/fd, e não statfs, por duas razões. A primeira é
@@ -25,7 +25,7 @@ import (
 //
 // O que ele mede é a CAUSA (fd aberto sobre inode sem nome), e a causa é o que
 // prende os blocos: o unlink do POSIX tira o nome, nunca o inode.
-func fdsApagadosEm(t *testing.T, dir string) []string {
+func fdsApagadosIn(t *testing.T, dir string) []string {
 	t.Helper()
 	entradas, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
@@ -37,14 +37,14 @@ func fdsApagadosEm(t *testing.T, dir string) []string {
 	}
 	var presos []string
 	for _, e := range entradas {
-		alvo, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
 		if err != nil {
 			// O fd do próprio ReadDir some no meio da varredura: não é falha.
 			continue
 		}
-		caminho, apagado := strings.CutSuffix(alvo, " (deleted)")
-		if apagado && strings.HasPrefix(caminho, dir) {
-			presos = append(presos, caminho)
+		path, apagado := strings.CutSuffix(target, " (deleted)")
+		if apagado && strings.HasPrefix(path, dir) {
+			presos = append(presos, path)
 		}
 	}
 	return presos
@@ -54,7 +54,7 @@ func fdsApagadosEm(t *testing.T, dir string) []string {
 // caracterização que este arquivo trazia antes: onde ele exigia um inode preso
 // por segmento aposentado, agora se exige nenhum.
 //
-// O que mudou: aposentaSegmento passou a FECHAR o descritor cacheado antes do
+// O que mudou: aposentaSegment passou a FECHAR o descritor cacheado antes do
 // unlink. O unlink do POSIX remove o nome e nunca o inode, e o cache de fds do
 // segment.Reader não tem despejo — sem o fechamento, os blocos de todo segmento
 // aposentado seguiam alocados enquanto o processo vivesse, e a compaction
@@ -66,7 +66,7 @@ func fdsApagadosEm(t *testing.T, dir string) []string {
 func TestSegmentoAposentadoDevolveOsBlocosAoFilesystem(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 40, 30)
+	corpusOfSegmentosSelados(t, s, 40, 30)
 
 	res, err := s.CompactaUmaVez(context.Background(), 0.5)
 	if err != nil {
@@ -76,7 +76,7 @@ func TestSegmentoAposentadoDevolveOsBlocosAoFilesystem(t *testing.T) {
 		t.Fatal("nenhum segmento aposentado: sem aposentadoria a asserção abaixo passaria por vacuidade")
 	}
 
-	if presos := fdsApagadosEm(t, dir); len(presos) != 0 {
+	if presos := fdsApagadosIn(t, dir); len(presos) != 0 {
 		t.Errorf("%d inode(s) preso(s) depois de %d aposentadoria(s): %v",
 			len(presos), res.SegmentosAposentados, presos)
 	}
@@ -98,7 +98,7 @@ func TestSegmentoAposentadoDevolveOsBlocosAoFilesystem(t *testing.T) {
 func TestCorpusContinuaLegivelDepoisDaAposentadoria(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
 	const keys, rodadas = 40, 30
-	corpusDeSegmentosSelados(t, s, keys, rodadas)
+	corpusOfSegmentosSelados(t, s, keys, rodadas)
 
 	res, err := s.CompactaUmaVez(context.Background(), 0.5)
 	if err != nil {
@@ -114,7 +114,7 @@ func TestCorpusContinuaLegivelDepoisDaAposentadoria(t *testing.T) {
 // uma relação de ACONTECE-DEPOIS, não um tempo de espera.
 //
 // Por que não dá para provar isto com uma corrida natural. Quando o segmento é
-// aposentado, a varredura do compactaSegmento já republicou tudo o que estava
+// aposentado, a varredura do compactaSegment já republicou tudo o que estava
 // vivo — é essa varredura que dá autoridade para afirmar que nenhuma location
 // aponta para dentro do arquivo. Então um leitor que CHEGA depois nunca lê o
 // segmento que vai sumir. A janela real é outra e é estreita: o leitor resolve
@@ -126,44 +126,44 @@ func TestCorpusContinuaLegivelDepoisDaAposentadoria(t *testing.T) {
 //
 // O que este teste faz, então, é ocupar a barreira do lado do leitor e exigir
 // que a aposentadoria só termine DEPOIS de ela ser liberada. Remover o
-// aposMu.Lock do fechaODescritorEApaga faz a compaction terminar enquanto o
+// aposMu.Lock do closeODescritorEDelete faz a compaction terminar enquanto o
 // leitor ainda está dentro, e a comparação de instantes reprova.
 //
 // A asserção é de ordem entre dois instantes registrados, e não "esperou N
 // milissegundos": uma máquina lenta só aumenta a folga, nunca inverte a ordem.
 func TestAposentadoriaEsperaALeituraEmVoo(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 40, 30)
+	corpusOfSegmentosSelados(t, s, 40, 30)
 
 	// Ocupa a barreira como um leitor que resolveu a location e ainda não leu
 	// os bytes. É exatamente o estado que o par (Get, Read) produz.
 	s.aposMu.RLock()
 
 	var (
-		liberouEm  time.Time
-		terminouEm time.Time
-		res        ResultadoCompactacao
+		liberouIn  time.Time
+		terminouIn time.Time
+		res        ResultCompactacao
 		errComp    error
-		fim        = make(chan struct{})
+		end        = make(chan struct{})
 	)
 	go func() {
-		defer close(fim)
+		defer close(end)
 		res, errComp = s.CompactaUmaVez(context.Background(), 0.5)
-		terminouEm = time.Now()
+		terminouIn = time.Now()
 	}()
 
 	// Dá à compaction tempo de chegar até a seção crítica. Se a barreira não
 	// existir, ela atravessa e termina aqui dentro.
 	select {
-	case <-fim:
+	case <-end:
 		s.aposMu.RUnlock()
-		t.Fatal("a compaction terminou com um leitor DENTRO da barreira: o fechaODescritorEApaga fechou o descritor debaixo de uma leitura em voo")
+		t.Fatal("a compaction terminou com um leitor DENTRO da barreira: o closeODescritorEDelete fechou o descritor debaixo de uma leitura em voo")
 	case <-time.After(300 * time.Millisecond):
 	}
 
-	liberouEm = time.Now()
+	liberouIn = time.Now()
 	s.aposMu.RUnlock()
-	<-fim
+	<-end
 
 	if errComp != nil {
 		t.Fatalf("CompactaUmaVez: %v", errComp)
@@ -171,8 +171,8 @@ func TestAposentadoriaEsperaALeituraEmVoo(t *testing.T) {
 	if res.SegmentosAposentados == 0 {
 		t.Fatal("nenhum segmento aposentado: a barreira não foi exercitada")
 	}
-	if !terminouEm.After(liberouEm) {
-		t.Errorf("a aposentadoria terminou em %v, ANTES de o leitor liberar a barreira em %v", terminouEm, liberouEm)
+	if !terminouIn.After(liberouIn) {
+		t.Errorf("a aposentadoria terminou em %v, ANTES de o leitor liberar a barreira em %v", terminouIn, liberouIn)
 	}
 }
 
@@ -189,13 +189,13 @@ func TestAposentadoriaEsperaALeituraEmVoo(t *testing.T) {
 func TestLeituraConcorrenteSobreviveAUmaCompactionInteira(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
 	const keys, rodadas = 40, 30
-	corpusDeSegmentosSelados(t, s, keys, rodadas)
+	corpusOfSegmentosSelados(t, s, keys, rodadas)
 
 	ids := make([]types.RowID, 0, keys)
 	for i := 0; i < keys; i++ {
-		rec, _, ok, err := s.GetByKey(s.presente(), []byte(chaveDoCorpus(i)), nil)
+		rec, _, ok, err := s.GetByKey(s.presente(), []byte(keyOfCorpus(i)), nil)
 		if err != nil || !ok {
-			t.Fatalf("GetByKey(%s): ok=%v err=%v", chaveDoCorpus(i), ok, err)
+			t.Fatalf("GetByKey(%s): ok=%v err=%v", keyOfCorpus(i), ok, err)
 		}
 		ids = append(ids, rec.RowID)
 	}
@@ -264,8 +264,8 @@ func BenchmarkGetByRowID(b *testing.B) {
 	const keys = 512
 	ids := make([]types.RowID, keys)
 	for i := 0; i < keys; i++ {
-		k := chaveDoCorpus(i)
-		id, _ := mustPut(b, s, k, sequenceDoCorpus(0, i), payloadDoCorpus(b, s, k, 0), nil)
+		k := keyOfCorpus(i)
+		id, _ := mustPut(b, s, k, sequenceOfCorpus(0, i), payloadOfCorpus(b, s, k, 0), nil)
 		ids[i] = id
 	}
 	if err := s.Checkpoint(); err != nil {

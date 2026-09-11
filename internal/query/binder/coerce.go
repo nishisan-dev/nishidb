@@ -24,10 +24,10 @@ type CompareKind uint8
 
 const (
 	CompareUnset CompareKind = iota
-	// CompareInt: os dois lados são int64 cru em Value.I64 (int64, timestamp,
+	// CompareInt os dois lados são int64 cru em Value.I64 (int64, timestamp,
 	// boolean).
 	CompareInt
-	// CompareFloatBits: os dois lados são math.Float64bits em Value.I64
+	// CompareFloatBits os dois lados são math.Float64bits em Value.I64
 	// (coluna double).
 	//
 	// O executor converte os DOIS lados com math.Float64frombits ANTES de
@@ -37,10 +37,10 @@ const (
 	// ordens coincidem, e é por isso que o erro sobrevive a um teste
 	// descuidado.
 	CompareFloatBits
-	// CompareIntAsFloat: ESQUERDA (payload) é int64 cru, DIREITA (literal) é
+	// CompareIntAsFloat ESQUERDA (payload) é int64 cru, DIREITA (literal) é
 	// Float64bits. Único caso: coluna int64 comparada a literal float.
 	CompareIntAsFloat
-	// CompareBytes: bytes.Compare/Equal sobre Value.Bytes.
+	// CompareBytes bytes.Compare/Equal sobre Value.Bytes.
 	CompareBytes
 )
 

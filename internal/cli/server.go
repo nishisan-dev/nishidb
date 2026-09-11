@@ -51,7 +51,7 @@ func runServer(args []string, amb Context) int {
 		return ExitUsageError
 	}
 
-	srv, err := server.Novo(cfg, server.Opcoes{Log: log})
+	srv, err := server.Novo(cfg, server.Options{Log: log})
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
 		return errorCode(err)
@@ -59,7 +59,7 @@ func runServer(args []string, amb Context) int {
 
 	// Roda bloqueia até o contexto ser cancelado pelo sinal. O encerramento é
 	// gracioso: drena a ingestão, checkpointa e devolve o flock.
-	if err := srv.Roda(amb.Ctx, *pprofAddr); err != nil {
+	if err := srv.Run(amb.Ctx, *pprofAddr); err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
 		return errorCode(err)
 	}
@@ -69,8 +69,8 @@ func runServer(args []string, amb Context) int {
 	// inspeção — senão o único sinal seria o /v1/health, que ninguém lê depois
 	// que o processo já morreu.
 	if pausas := srv.Pausas(); len(pausas) > 0 {
-		for nome, motivo := range pausas {
-			fmt.Fprintf(amb.Stderr, "server: dataset %q com ingestão parada: %v\n", nome, motivo)
+		for name, motivo := range pausas {
+			fmt.Fprintf(amb.Stderr, "server: dataset %q com ingestão parada: %v\n", name, motivo)
 		}
 		return ExitPolicyStopped
 	}

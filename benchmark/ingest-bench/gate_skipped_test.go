@@ -122,18 +122,18 @@ func TestResumoDeGatesSeparaVioladoDeNaoAvaliado(t *testing.T) {
 	// se confundir com aprovação ou com violação.
 	rotulos := map[string]string{}
 	for _, g := range gates {
-		rotulos[g.Name] = rotuloDoGate(g)
+		rotulos[g.Name] = rotuloOfGate(g)
 	}
-	esperado := map[string]string{
+	expected := map[string]string{
 		"duro_ok":           "PASS",
 		"duro_violado":      "FAIL",
 		"duro_nao_avaliado": "SEM-AVAL",
 		"soft_violado":      "WARN",
 		"soft_nao_avaliado": "SKIP",
 	}
-	for nome, want := range esperado {
-		if rotulos[nome] != want {
-			t.Errorf("rótulo de %s = %q, want %q", nome, rotulos[nome], want)
+	for name, want := range expected {
+		if rotulos[name] != want {
+			t.Errorf("rótulo de %s = %q, want %q", name, rotulos[name], want)
 		}
 	}
 }

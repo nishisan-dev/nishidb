@@ -526,7 +526,7 @@ mantiver o inode aberto, os blocos seguem alocados. E o cache de descritores do
 para ler o segmento ficaria aberto pela vida do processo. Por isso a
 aposentadoria **fecha o descritor** (`Reader.CloseSegment`) antes do unlink.
 Antes disso, a compaction devolvia disco ao *listing* do diretório e nada ao
-dispositivo, e os três instrumentos do projeto — `dirBytes`, `discoDosSegmentos`
+dispositivo, e os três instrumentos do projeto — `dirBytes`, `diskOfSegmentos`
 e o `Stats.StorageBytes` — somam o listing e não viam a diferença (débito 78, e
 a errata do [aceite do M4](aceite-m4.md)).
 
@@ -1126,12 +1126,12 @@ opcional (`server.loopback`, default desligado), serve o MESMO conjunto de
 rotas sem TLS nem autenticação, só em `127.0.0.1`: é o que mantém painel,
 script de atualização e cron locais funcionando sem credencial mesmo com o
 listener principal fechado a cadeado. Os dois listeners compartilham a
-mesma FUNÇÃO de definição de rota (`Servidor.buildMux`,
+mesma FUNÇÃO de definição de rota (`Server.buildMux`,
 `internal/server/auth.go`), chamada uma vez por listener — nunca
 duas listas que poderiam divergir.
 
 **A matriz de recusa do §77** decide se o servidor sobe, olhando bind, TLS e
-autenticação juntos (`avaliaExposicaoEAutenticacao`,
+autenticação juntos (`evaluateExposicaoEAuth`,
 `internal/server/security.go`):
 
 | bind | `authentication` | TLS | resultado |
@@ -1152,7 +1152,7 @@ denuncia, só que na chave mais cara do arquivo.
 anônimas também no plano PRINCIPAL, não só no loopback.** Isso vale na
 célula 3 da matriz (bind exposto, `enabled: false` explícito) e, do mesmo
 jeito, na config DEFAULT (bind loopback, `server.authentication` nem
-declarado): `AuthenticationEnabled()` falsa faz `comAutenticacao`
+declarado): `AuthenticationEnabled()` falsa faz `withAuth`
 (`internal/server/auth.go`) devolver o mux CRU como passthrough
 puro, sem checar papel nenhum — `POST /v1/compact` e `POST /v1/checkpoint`
 respondem sem credencial no MESMO listener que serve `/v1/query`. É
@@ -1168,7 +1168,7 @@ guardado com `subtle.ConstantTimeCompare` — os dois lados sempre 32 bytes,
 para que a comparação em tempo constante não vaze o comprimento da senha
 certa pela diferença de tamanho de slice. Usuário inexistente compara contra
 um digest fantasma fixo (`credencialFantasma`), e a resposta de falha é
-**uma função só** (`recusaAutenticacao`) para os três casos — header
+**uma função só** (`rejectAuth`) para os três casos — header
 malformado, usuário inexistente, senha errada —, sempre com a MESMA
 mensagem e os MESMOS headers: o 401 é byte-idêntico entre "não existe" e
 "senha errada", provado por comparação de `Header()` completo, não só de
@@ -1177,12 +1177,12 @@ duas chaves nomeadas.
 **Sem lockout, com atraso fixo.** Não há contador por IP nem por usuário —
 isso abriria a porta para auto-DoS contra um username conhecido. Em vez
 disso, toda falha de autenticação paga o MESMO atraso fixo (~100ms,
-`atrasoDeFalha`), antes de qualquer escrita de resposta, o que mitiga o
+`atrasoOfFail`), antes de qualquer escrita de resposta, o que mitiga o
 timing attack de enumeração sem criar um estado que um atacante possa usar
 para trancar a conta de outra pessoa. O rate-limit por IP fica registrado
 como débito (ver `debitos.md`).
 
-**Papéis: READ e ADMIN, com ADMIN ⊇ READ** (`papelAutorizado`,
+**Papéis: READ e ADMIN, com ADMIN ⊇ READ** (`roleAuthorized`,
 `internal/server/auth.go`) — um usuário ADMIN alcança toda rota READ;
 um usuário READ nunca alcança rota ADMIN. O enum é fechado desde o parse
 (`config.RoleRead`/`config.RoleAdmin`) e comparado por string EXATA: `role:
@@ -1190,7 +1190,7 @@ read` ou `role: Read` no YAML são recusados na subida, não normalizados.
 
 **O registro de rota é fail-closed por construção.** `roteador.registra` é a
 ÚNICA função que grava o papel exigido junto com o handler
-(`rt.papeis[padrao]`); o middleware (`comAutenticacao`) consulta essa mesma
+(`rt.papeis[padrao]`); o middleware (`withAuth`) consulta essa mesma
 tabela para decidir 403. Uma rota que casasse no mux SEM ter passado por
 `registra` — por exemplo, um `rt.mux.HandleFunc` chamado direto por engano —
 não fica acessível sem checagem: é tratada como BUG DE REGISTRO e recusada
@@ -1203,15 +1203,15 @@ log.
 **O plano loopback é READ-only por construção, não por convenção.** O
 segundo listener não tem middleware de autenticação, mas uma rota cujo papel
 registrado é ADMIN responde 403 nele também (`muxLoopback`,
-`recusaLoopbackAdmin`) — nunca anônima. A razão é o host do piloto ter
+`rejectLoopbackAdmin`) — nunca anônima. A razão é o host do piloto ter
 múltiplos usuários locais: `compact`/`checkpoint` anônimos por qualquer um
 deles seria stall de ingestão sem privilégio nenhum de por meio. Rotas READ
 continuam servidas sem credencial no loopback, intocadas.
 
 Essa garantia é EXCLUSIVA do plano loopback, e não se estende ao principal:
 com autenticação desligada (célula 3/config default, seção acima), o
-principal não tem `muxLoopback` nem `recusaLoopbackAdmin` no meio —
-`comAutenticacao` é puro passthrough, e as rotas ADMIN respondem anônimas
+principal não tem `muxLoopback` nem `rejectLoopbackAdmin` no meio —
+`withAuth` é puro passthrough, e as rotas ADMIN respondem anônimas
 ali também. O loopback é fail-closed por construção porque o piloto tem
 mais de um usuário local no HOST; o principal sem autenticação segue a
 regra oposta — o operador desligou a checagem inteira, não só o TLS —, e é
@@ -1259,11 +1259,11 @@ funciona mesmo com `storage.compaction.enabled: false` (é o caso de uso do
 modo manual); quando uma passada — do laço automático OU de outra chamada
 manual — já está em voo, a rota devolve **409** (`COMPACTION_BUSY`) em vez de
 enfileirar, porque as duas disputam o MESMO single-flight do `Store`
-(`compPassadaMu`/`compPassadaEmVoo`, `internal/storage/store.go`).
+(`compPassMu`/`compPassInVoo`, `internal/storage/store.go`).
 
 O corpo de ambas aceita `{"dataset": "..."}` opcional; ausente significa
 TODOS os datasets, na ordem determinística da subida. **O contrato de falha
-parcial** (`processaDatasets`/`ErroParcial`,
+parcial** (`processaDatasets`/`ErrParcial`,
 `internal/server/mutations.go`) é stop-no-primeiro-erro, mas a resposta de
 erro nomeia o dataset que falhou E os nomes dos que já tinham sido
 processados com sucesso ANTES dele — o efeito colateral (checkpoint gravado,
@@ -2045,7 +2045,7 @@ trabalho — o número seria enorme, normal e constante, e o gauge deixaria de
 responder *"o laço está avançando?"*, que é a única pergunta que uma migração
 faz.
 
-`nishidb_index_crc_falhas_total` é **degrau, não taxa**: o `garanteSelado` publica
+`nishidb_index_crc_falhas_total` é **degrau, não taxa**: o `garanteSealed` publica
 no cache o mapeamento reprovado — publicar mantém o `sync.Once` do crc cumprido, e
 recusar obrigaria toda consulta a remapear e revarrer o arquivo podre inteiro —,
 então cada arquivo soma uma vez por processo. Um alerta por `rate()` sobre ela dá
@@ -2230,7 +2230,7 @@ milhares de grupos é exatamente a consulta do caso de uso. Os totais são lidos
 no presente; o que o snapshot congela é o conjunto de grupos. A lista dos
 contadores sai pelo mesmo caminho: `_meta.counters` é uma tabela virtual
 registrada sob o dataset — uma linha por contador, com a definição (`name`,
-`groupBy`, `condition`) e o retrato vivo de `EstatisticasDeContadores`
+`groupBy`, `condition`) e o retrato vivo de `EstatisticasOfCounters`
 (`rows`, `total`, `groups`, `maxGroups`, `retired`, `refused`, `orphans`,
 `bytes`, `auditDivergent`, `auditAt`, os dois últimos NULL até a primeira
 auditoria).

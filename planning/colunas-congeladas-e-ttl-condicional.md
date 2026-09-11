@@ -101,7 +101,7 @@ type patchEntry struct {
 `Compile` — a mesma disciplina que `DerivedColumns` já segue, porque o materializer a
 consulta por evento e não pode varrer o mapa.
 
-Em `PatchBuffer.Parse`, uma **terceira passada**, depois de `extraiDerivadas()` e antes
+Em `PatchBuffer.Parse`, uma **terceira passada**, depois de `extractDerived()` e antes
 da ordenação ([patch.go:208](../internal/materializer/patch.go:208)): para cada coluna
 congelada declarada, procura a entry da origem entre as já montadas e emite
 
@@ -371,7 +371,7 @@ acompanham: [cli.go:243](../internal/cli/cli.go:243),
 [offsets.go:93](../internal/cli/offsets.go:93),
 [server.go:332](../internal/server/server.go:332).
 
-`montaLapide` ([expiry.go:161](../internal/storage/expiry.go:161)) **não** preserva
+`buildLapide` ([expiry.go:161](../internal/storage/expiry.go:161)) **não** preserva
 o `_expiresIn`. A lápide não precisa de prazo, e não preservá-lo devolve os bytes. A
 entrada em `prazos.idx` permanece com o valor antigo, o que é inofensivo: a linha já
 está tombstonada e `Expira` é idempotente. Ver §2.9 para a consequência operacional.
@@ -401,7 +401,7 @@ Uma linha tombstonada mantém `_writtenAt` (a lápide o preserva de propósito) 
 com a entrada antiga em `prazos.idx`, então `prazoVencido` segue devolvendo true. O
 coletor a reexamina a cada passada e chama `Expira`, que **toma o `wmu`**, vê a flag e
 devolve false. Com prazos de dias isso é ruído; com prazos de minutos, é disputa
-contínua pelo lock de escrita com a ingestão, e o freio de `MaxPorPassada` não protege —
+contínua pelo lock de escrita com a ingestão, e o freio de `MaxPerSweep` não protege —
 ele conta expirações efetivas, não chamadas.
 
 **Mitigação, e ela entra no plano:** o coletor consulta a flag de tombstone em `locs`
@@ -451,7 +451,7 @@ Contadores por dataset, ao lado dos que a expiração já publica (`expiradas`,
 | Contador | Onde incrementa | Responde |
 |---|---|---|
 | `ttl.regra[i].casou` | Na avaliação, na ingestão | Qual regra está pegando o quê |
-| `ttl.semRegra` | Idem | Quantas escritas não casaram com nada |
+| `ttl.withoutRegra` | Idem | Quantas escritas não casaram com nada |
 | `congelada.capturada` | Na terceira passada do patch | Se a captura está de fato acontecendo |
 | `congelada.preservada` | No ramo congelado do merge | Se o congelamento está segurando |
 

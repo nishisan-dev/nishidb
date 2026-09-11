@@ -20,8 +20,8 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 )
 
-// TabelaMetaKafka é o nome da tabela sob o `_meta`.
-const TabelaMetaKafka = "kafka"
+// TableMetaKafka é o nome da tabela sob o `_meta`.
+const TableMetaKafka = "kafka"
 
 // Declarada é a identidade do fluxo COMO O YAML A ESCREVE, e vale sem
 // consumidor nenhum: é ela que faz `SELECT * FROM _meta.kafka` responder num
@@ -42,9 +42,9 @@ type Declarada struct {
 	Bootstrap string
 }
 
-// DoYAML monta a Declarada a partir do bloco do dataset. nil é aceito e vale
+// OfYAML monta a Declarada a partir do bloco do dataset. nil é aceito e vale
 // "não declara Kafka" — que é uma resposta, não um erro.
-func DoYAML(k *schema.KafkaSpec) Declarada {
+func OfYAML(k *schema.KafkaSpec) Declarada {
 	if k == nil {
 		return Declarada{}
 	}
@@ -65,7 +65,7 @@ type Consumido interface {
 	Instantaneo(ctx context.Context) kafka.Instantaneo
 }
 
-// Fonte é o que a tabela precisa do dataset, e é toda ela RESOLVIDA NA HORA.
+// Source é o que a tabela precisa do dataset, e é toda ela RESOLVIDA NA HORA.
 //
 // NENHUM campo guarda o consumidor. O registro acontece na abertura do
 // dataset, ANTES de a ingestão subir — ali o ponteiro é nil —, e ele ainda
@@ -77,7 +77,7 @@ type Consumido interface {
 // Todo closure é opcional. Nil não é erro: é ausência, e ausência vira NULL na
 // linha. É o que faz o `nishidb query --config` — sem servidor, sem
 // consumidor, sem watchdog — responder com o que existe, sem inventar.
-type Fonte struct {
+type Source struct {
 	Declarada Declarada
 
 	// Consumidor devolve o consumidor de AGORA, ou nil. Chamado UMA vez por
@@ -94,7 +94,7 @@ type Fonte struct {
 	// MESMA função que o /v1/health e o /v1/stats usam — não uma segunda
 	// classificação que descreveria a mesma realidade com outra palavra.
 	// State vazio vira NULL.
-	Estado func() (estado, detalhe string)
+	State func() (estado, detalhe string)
 
 	// Vigia devolve as duas séries do watchdog, lidas dos MESMOS handles que
 	// alimentam nishidb_kafka_watchdog_trips e _desistiu. ok=false enquanto
@@ -104,13 +104,13 @@ type Fonte struct {
 }
 
 // DeclaredState é o que o YAML SOZINHO prova sobre o estado, e é usado
-// APENAS quando Fonte.State é nil.
+// APENAS quando Source.State é nil.
 //
 // Sem bloco Kafka, ou com `enabled: false`, o veredito é DISABLED e não
 // depende de processo nenhum. Com `enabled: true` e sem classificador, a
 // resposta é "" (→ NULL): um processo que não observa a ingestão não pode
 // dizer nem UP nem DOWN, e DEGRADED ("ainda subindo") seria mentira.
-func DeclaredState(d Declarada) (estado, detalhe string) {
+func DeclaredState(d Declarada) (state, detalhe string) {
 	if !d.Declarado || !d.Habilitado {
 		return protocol.StateDisabled, ""
 	}
@@ -122,14 +122,14 @@ func DeclaredState(d Declarada) (estado, detalhe string) {
 // Chamado por todo caminho que registra um dataset BASE — servidor e CLI —,
 // SEMPRE, inclusive num dataset que não declara Kafka: "esta tabela não tem
 // fonte" é uma resposta, e `SELECT *` nunca pode ser erro.
-func Register(eng *query.Engine, dataset string, f Fonte) error {
+func Register(eng *query.Engine, dataset string, f Source) error {
 	sc, store, err := Table(f)
 	if err != nil {
 		return err
 	}
-	return eng.RegisterVirtual(dataset, meta.Namespace, TabelaMetaKafka, sc, store)
+	return eng.RegisterVirtual(dataset, meta.Namespace, TableMetaKafka, sc, store)
 }
 
-func columnError(nome string) error {
-	return fmt.Errorf("metakafka: coluna %q sem FieldID no schema sintético", nome)
+func columnError(name string) error {
+	return fmt.Errorf("metakafka: coluna %q sem FieldID no schema sintético", name)
 }

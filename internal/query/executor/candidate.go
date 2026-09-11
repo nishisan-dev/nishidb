@@ -78,19 +78,19 @@ func (s *keySource) advance(buf []byte) (types.Record, []byte, bool, bool, error
 
 func (s *keySource) close() error { return nil }
 
-// fonteDoPlano traduz o plano na fonte de candidatos. Nenhuma leitura de dado
+// sourceOfPlano traduz o plano na fonte de candidatos. Nenhuma leitura de dado
 // acontece aqui além de abrir iteradores.
-func fonteDoPlano(plan planner.Plan, st Store, m *Metrics, snap types.Snapshot) (rowSource, error) {
+func sourceOfPlano(plan planner.Plan, st Store, m *Metrics, snap types.Snapshot) (rowSource, error) {
 	switch p := plan.(type) {
 	case *planner.FullScanPlan:
-		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.SourceFullScan })
+		countSource(m, func(m *Metrics) *atomic.Int64 { return &m.SourceFullScan })
 		return &candidateSource{it: st.ScanLive(snap), st: st, snap: snap}, nil
 
 	case *planner.PointLookupPlan:
 		if len(p.Key.Bytes) == 0 {
 			return nil, fmt.Errorf("%w: PointLookupPlan com key sem bytes", ErrInvalidPlan)
 		}
-		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.PointLookups })
+		countSource(m, func(m *Metrics) *atomic.Int64 { return &m.PointLookups })
 		return &keySource{st: st, snap: snap, key: p.Key.Bytes}, nil
 
 	case *planner.IndexScanPlan:
@@ -98,23 +98,23 @@ func fonteDoPlano(plan planner.Plan, st Store, m *Metrics, snap types.Snapshot) 
 		if err != nil {
 			return nil, fmt.Errorf("executor: abrir índice de %q: %w", p.Field.Name, err)
 		}
-		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
+		countSource(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
 		return &candidateSource{it: it, st: st, snap: snap}, nil
 
 	case *planner.IndexIntersectPlan:
-		its, err := abreTermos(p.Terms, st)
+		its, err := openTermos(p.Terms, st)
 		if err != nil {
 			return nil, err
 		}
-		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
+		countSource(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
 		return &candidateSource{it: &intersectIter{its: its, cur: make([]types.RowID, len(its))}, st: st, snap: snap}, nil
 
 	case *planner.IndexUnionPlan:
-		its, err := abreTermos(p.Terms, st)
+		its, err := openTermos(p.Terms, st)
 		if err != nil {
 			return nil, err
 		}
-		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
+		countSource(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
 		return &candidateSource{snap: snap, it: &unionIter{its: its, cur: make([]types.RowID, len(its)),
 			vivo: make([]bool, len(its))}, st: st}, nil
 
@@ -123,10 +123,10 @@ func fonteDoPlano(plan planner.Plan, st Store, m *Metrics, snap types.Snapshot) 
 	}
 }
 
-// abreTermos abre um iterador por termo. Falha no termo i FECHA os i-1 já
+// openTermos abre um iterador por termo. Falha no termo i FECHA os i-1 já
 // abertos: vazar iterador de índice num caminho de erro é o tipo de coisa que
 // só aparece como file descriptor esgotado em produção.
-func abreTermos(terms []planner.IndexTerm, st Store) ([]types.RowIDIterator, error) {
+func openTermos(terms []planner.IndexTerm, st Store) ([]types.RowIDIterator, error) {
 	its := make([]types.RowIDIterator, 0, len(terms))
 	for _, t := range terms {
 		it, err := st.Lookup(t.Field.ID, t.Val)
@@ -141,10 +141,10 @@ func abreTermos(terms []planner.IndexTerm, st Store) ([]types.RowIDIterator, err
 	return its, nil
 }
 
-// contaFonte incrementa um contador de abertura de fonte. Recebe a FUNÇÃO que
+// countSource incrementa um contador de abertura de fonte. Recebe a FUNÇÃO que
 // escolhe o campo, e não o ponteiro do campo: `conta(m, &m.X)` avalia `&m.X`
 // no chamador e explode com m nil — e Metrics é opcional por contrato.
-func contaFonte(m *Metrics, escolhe func(*Metrics) *atomic.Int64) {
+func countSource(m *Metrics, escolhe func(*Metrics) *atomic.Int64) {
 	if m != nil {
 		escolhe(m).Add(1)
 	}
@@ -172,7 +172,7 @@ func (i *intersectIter) Next() bool {
 	// seguintes, avança todos para além do id já emitido — os dois casos são a
 	// mesma operação.
 	for k := range i.its {
-		if !i.avanca(k) {
+		if !i.advance(k) {
 			return false
 		}
 	}
@@ -186,7 +186,7 @@ func (i *intersectIter) Next() bool {
 		coincidem := true
 		for k := range i.its {
 			for i.cur[k] < max {
-				if !i.avanca(k) {
+				if !i.advance(k) {
 					return false
 				}
 			}
@@ -203,9 +203,9 @@ func (i *intersectIter) Next() bool {
 	}
 }
 
-// avanca puxa o próximo id do iterador k; esgotamento ou erro terminam a
+// advance puxa o próximo id do iterador k; esgotamento ou erro terminam a
 // interseção inteira (não há mais como coincidir).
-func (i *intersectIter) avanca(k int) bool {
+func (i *intersectIter) advance(k int) bool {
 	if !i.its[k].Next() {
 		i.err = i.its[k].Err()
 		i.done = true

@@ -23,8 +23,8 @@ import (
 func validateHistoryNames(specs map[string]*schema.DatasetSpec) error {
 	derivados := map[string]string{}
 	nomes := make([]string, 0, len(specs))
-	for nome := range specs {
-		nomes = append(nomes, nome)
+	for name := range specs {
+		nomes = append(nomes, name)
 	}
 	// Ordem alfabética para que a mensagem de um conjunto com dois defeitos
 	// seja sempre a mesma — o laço de um mapa não tem ordem.
@@ -49,7 +49,7 @@ func validateHistoryNames(specs map[string]*schema.DatasetSpec) error {
 	return nil
 }
 
-// abreHistorico abre e registra a tabela irmã do dataset base.
+// openHistory abre e registra a tabela irmã do dataset base.
 //
 // A ORDEM aqui é o contrato inteiro da feature, e cada passo depende do
 // anterior:
@@ -65,26 +65,26 @@ func validateHistoryNames(specs map[string]*schema.DatasetSpec) error {
 //     em lexer, parser, binder, protocolo ou driver;
 //  5. o materializer do base ganha o escritor, e só então o primeiro evento
 //     pode chegar.
-func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, error) {
+func (s *Server) openHistory(base *dataset, log *logging.Logger) (*dataset, error) {
 	h := base.spec.History
 	if h == nil {
 		return nil, nil
 	}
 	specIrma := base.spec.DeriveHistory()
-	segmento := s.cfg.SegmentSize()
+	segment := s.cfg.SegmentSize()
 	if h.SegmentSize > 0 {
-		segmento = h.SegmentSize
+		segment = h.SegmentSize
 	}
 	// A conferência do teto contra o segmento EFETIVO: quem omitiu
 	// `history.segmentSize` herdou o global, que a spec não conhecia no load.
-	if err := h.ValidateAgainstSegment(segmento); err != nil {
+	if err := h.ValidateAgainstSegment(segment); err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", base.nome, err)
 	}
 
 	st, err := storage.Open(storage.Options{
 		Dir:                   s.cfg.DatasetRootDir(specIrma.Name),
 		Dataset:               specIrma.Name,
-		SegmentSize:           segmento,
+		SegmentSize:           segment,
 		Mode:                  storage.HistoryMode,
 		SharedDictionary:      base.st.FieldDict(),
 		IndexedFieldsByName:   schema.IndexedFieldNames(specIrma),
@@ -114,7 +114,7 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 		}
 		raw = f
 	}
-	base.mat.LigaHistorico(st, raw)
+	base.mat.TurnonHistory(st, raw)
 
 	log.Info("historico.aberto",
 		"a tabela histórica está de pé",
@@ -126,7 +126,7 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 	// recusada quando estar errada tem consequência, e aqui não tem: recusar
 	// transformaria redundância em queda de serviço.
 	//
-	// Sai daqui, e não do ligaRetencao, porque é aqui que os DOIS nomes existem:
+	// Sai daqui, e não do turnonRetention, porque é aqui que os DOIS nomes existem:
 	// quem lê o aviso precisa do dataset BASE para achar o YAML em que a chave
 	// foi escrita, e lá só há a tabela irmã.
 	if h.WindowExceedsRetention() {
@@ -147,35 +147,35 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 	}, nil
 }
 
-// ligaRetencao sobe o motor de retenção das tabelas históricas.
+// turnonRetention sobe o motor de retenção das tabelas históricas.
 //
 // Depois do HTTP e antes da ingestão, na ordem do §51 aplicada a mais um
 // consumidor de disco — e pela mesma razão da compaction: é o consumer que
 // faz a tabela crescer, e ligar a retenção depois dele abriria uma janela em
 // que o teto de tamanho não vale.
-func (s *Servidor) ligaRetencao(ctx context.Context) {
-	var comRetencao []string
+func (s *Server) turnonRetention(ctx context.Context) {
+	var withRetention []string
 	for _, d := range s.datasets {
 		if !d.ehHistorico || d.spec.History == nil {
 			continue
 		}
 		h := d.spec.History
-		d.st.IniciaRetencao(ctx, storage.LimitesDeRetencao{
+		d.st.StartRetention(ctx, storage.LimitesOfRetention{
 			ExpireAfterWrite: h.ExpireAfterWrite,
 			MaxBytes:         h.MaxBytes,
-			Janela:           janelaDoDataset(d),
+			Window:           windowOfDataset(d),
 		})
-		comRetencao = append(comRetencao, d.nome)
+		withRetention = append(withRetention, d.nome)
 	}
-	if len(comRetencao) == 0 {
+	if len(withRetention) == 0 {
 		return
 	}
-	sort.Strings(comRetencao)
+	sort.Strings(withRetention)
 	s.log.Info("retencao.ligada",
-		"o motor de retenção das tabelas históricas está de pé", "tabelas", comRetencao)
+		"o motor de retenção das tabelas históricas está de pé", "tabelas", withRetention)
 }
 
-// ligaReconstrucao sobe o laço que consome a fila de reconstrução do índice por
+// turnonRebuild sobe o laço que consome a fila de reconstrução do índice por
 // segmento (§2.4), e é ele que faz `index: true` num dataset já povoado
 // significar alguma coisa: sem ele os segmentos entram na fila e ninguém a
 // drena, então o campo continua enumerando indefinidamente.
@@ -190,23 +190,23 @@ func (s *Servidor) ligaRetencao(ctx context.Context) {
 // seguem: primeiro quem DEVOLVE disco, depois quem o consome. Uma reconstrução
 // que subisse antes gastaria varredura em segmentos que a primeira passada de
 // retenção vai aposentar em seguida.
-func (s *Servidor) ligaReconstrucao(ctx context.Context) {
-	var comReconstrucao []string
+func (s *Server) turnonRebuild(ctx context.Context) {
+	var withRebuild []string
 	for _, d := range s.datasets {
-		d.st.IniciaReconstrucao(ctx, janelaDoDataset(d))
-		if d.st.ReconstrucaoAtiva() {
-			comReconstrucao = append(comReconstrucao, d.nome)
+		d.st.StartRebuild(ctx, windowOfDataset(d))
+		if d.st.RebuildActive() {
+			withRebuild = append(withRebuild, d.nome)
 		}
 	}
-	if len(comReconstrucao) == 0 {
+	if len(withRebuild) == 0 {
 		return
 	}
-	sort.Strings(comReconstrucao)
+	sort.Strings(withRebuild)
 	s.log.Info("reconstrucao.ligada",
-		"o laço de reconstrução do índice por segmento está de pé", "datasets", comReconstrucao)
+		"o laço de reconstrução do índice por segmento está de pé", "datasets", withRebuild)
 }
 
-// janelaDoDataset devolve a janela de indexação que vale para um dataset, e ela
+// windowOfDataset devolve a janela de indexação que vale para um dataset, e ela
 // é UMA função porque os DOIS consumidores da janela — a expulsão, dentro da
 // retenção, e o laço de reconstrução — têm de responder pela MESMA conta.
 //
@@ -219,53 +219,53 @@ func (s *Servidor) ligaReconstrucao(ctx context.Context) {
 // `history` de um base descreve a tabela IRMÃ, e traduzi-lo aqui daria uma janela
 // finita para um store materializado — que o storage recusa, com razão, porque lá
 // a linha vive no segmento corrente independente da idade dela.
-func janelaDoDataset(d *dataset) storage.JanelaDeIndice {
+func windowOfDataset(d *dataset) storage.WindowOfIndex {
 	if !d.ehHistorico {
-		return storage.JanelaDeIndice{}
+		return storage.WindowOfIndex{}
 	}
-	return janelaDaSpec(d.spec.History)
+	return windowOfSpec(d.spec.History)
 }
 
-// janelaDaSpec traduz o bloco `history.index` na política que o storage
+// windowOfSpec traduz o bloco `history.index` na política que o storage
 // aplica. Bloco ausente vira a janela INFINITA — indexa tudo que a retenção
 // mantém —, que é o default e o comportamento de sempre.
 //
 // A tradução mora aqui, e não no schema, porque o schema não pode importar o
 // storage: quem lê o YAML é a camada de cima. É a mesma fronteira que faz os
 // campos indexados viajarem por NOME até o Open.
-func janelaDaSpec(h *schema.HistorySpec) storage.JanelaDeIndice {
+func windowOfSpec(h *schema.HistorySpec) storage.WindowOfIndex {
 	if h == nil || h.Window == nil {
-		return storage.JanelaDeIndice{}
+		return storage.WindowOfIndex{}
 	}
-	return storage.JanelaDeIndice{
-		Duracao:  h.Window.Duration,
+	return storage.WindowOfIndex{
+		Duration: h.Window.Duration,
 		MaxBytes: h.Window.MaxBytes,
 	}
 }
 
-// historicoStats monta o bloco `history` do /v1/stats.
+// historyStats monta o bloco `history` do /v1/stats.
 //
 // Ele é preenchido no dataset BASE, e não na irmã: quem declarou `history:`
 // num YAML quer saber o que aquele bloco está fazendo, e a irmã já aparece na
 // lista com os próprios números de storage e query como qualquer outro
 // dataset.
-func historicoStats(base *dataset) *protocol.HistoryStats {
+func historyStats(base *dataset) *protocol.HistoryStats {
 	if base.irma == nil || base.spec.History == nil {
 		return nil
 	}
 	h := base.spec.History
 	snap := base.mat.Metrics()
-	e := base.irma.st.EstatisticasDeRetencao()
+	e := base.irma.st.EstatisticasOfRetention()
 	out := &protocol.HistoryStats{
 		Table:           base.irma.nome,
-		Rows:            snap.HistoricoLinhas,
-		Dropped:         snap.HistoricoDescartadas,
-		Degraded:        snap.HistoricoDegradado,
+		Rows:            snap.HistoryRows,
+		Dropped:         snap.HistoryDescartadas,
+		Degraded:        snap.HistoryDegradado,
 		DataBytes:       e.DataBytes,
 		IndexBytes:      e.IndexBytes,
-		OldestWrittenAt: e.InstanteMaisAntigo,
-		PurgedByTTL:     e.PurgadosPorTTL,
-		PurgedBySize:    e.PurgadosPorTamanho,
+		OldestWrittenAt: e.InstantMaisAntigo,
+		PurgedByTTL:     e.PurgadosByTTL,
+		PurgedBySize:    e.PurgadosBySize,
 		MaxBytes:        h.MaxBytes,
 	}
 	if h.ExpireAfterWrite > 0 {
@@ -274,14 +274,14 @@ func historicoStats(base *dataset) *protocol.HistoryStats {
 	// A cobertura efetiva sai SEMPRE que há índice, e o `window` declarado só
 	// quando existe: sem a janela declarada a comparação é contra o infinito, e
 	// ecoar um "0" ali faria o painel parecer dizer que a janela é nula.
-	out.EffectiveIndexWindow = e.JanelaEfetiva.Seconds()
+	out.EffectiveIndexWindow = e.WindowEfetiva.Seconds()
 	if h.Window != nil && h.Window.Duration > 0 {
 		out.IndexWindow = h.Window.Duration.String()
 	}
 	return out
 }
 
-// amostrasDeHistorico publica as mesmas contagens no /metrics.
+// samplesOfHistory publica as mesmas contagens no /metrics.
 //
 // Saem da MESMA leitura de snapshot que alimenta o /v1/stats, pela razão que
 // o metrics_dataset.go já registra: dois contadores para o mesmo fato
@@ -300,26 +300,26 @@ func historicoStats(base *dataset) *protocol.HistoryStats {
 // nishidb_history_index_bytes viaja no TEXTO — é ali que se diz que a purga
 // devolve estes bytes desde que o índice passou a ser por segmento —, e uma
 // ajuda que nunca é emitida é prosa que ninguém lê.
-func amostrasDeHistorico(base *dataset) []metrics.Sample {
+func samplesOfHistory(base *dataset) []metrics.Sample {
 	if base.irma == nil || base.spec.History == nil {
 		return nil
 	}
 	snap := base.mat.Metrics()
-	e := base.irma.st.EstatisticasDeRetencao()
+	e := base.irma.st.EstatisticasOfRetention()
 	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: base.nome}}
 	// O formato de exposição só tem número, e Go não converte bool para
 	// float: os 0/1 se escrevem aqui, uma vez, em vez de dentro do literal.
 	var degradado, rodando float64
-	if snap.HistoricoDegradado {
+	if snap.HistoryDegradado {
 		degradado = 1
 	}
-	if base.irma.st.RetencaoAtiva() {
+	if base.irma.st.RetentionActive() {
 		rodando = 1
 	}
 	return []metrics.Sample{
-		{Family: metrics.MetHistoryRows, Name: metrics.MetHistoryRows, Type: metrics.TypeCounter, Value: float64(snap.HistoricoLinhas),
+		{Family: metrics.MetHistoryRows, Name: metrics.MetHistoryRows, Type: metrics.TypeCounter, Value: float64(snap.HistoryRows),
 			Help: "Linhas gravadas na tabela histórica.", Labels: rotulo},
-		{Family: metrics.MetHistoryDropped, Name: metrics.MetHistoryDropped, Type: metrics.TypeCounter, Value: float64(snap.HistoricoDescartadas),
+		{Family: metrics.MetHistoryDropped, Name: metrics.MetHistoryDropped, Type: metrics.TypeCounter, Value: float64(snap.HistoryDescartadas),
 			Help: "Eventos que não viraram linha na tabela histórica.", Labels: rotulo},
 		{Family: metrics.MetHistoryDegraded, Name: metrics.MetHistoryDegraded, Type: metrics.TypeGauge, Value: degradado,
 			Help: "1 quando a tabela histórica parou de receber (modo falho sticky).", Labels: rotulo},
@@ -327,14 +327,14 @@ func amostrasDeHistorico(base *dataset) []metrics.Sample {
 			Help: "Bytes dos segmentos da tabela histórica — o que o maxBytes governa.", Labels: rotulo},
 		{Family: metrics.MetHistoryIndexBytes, Name: metrics.MetHistoryIndexBytes, Type: metrics.TypeGauge, Value: float64(e.IndexBytes),
 			Help: "Blocos alocados pelos índices da tabela histórica; a purga também os devolve, porque o .sidx sai no mesmo passo que remove o .dat. O número é da tabela IRMÃ, publicado no rótulo do dataset BASE; a parcela por segmento dele é nishidb_index_bytes{dataset=\"X_history\"}, que sai em OUTRO rótulo. Em {dataset=\"X\"} aquela série descreve o índice do PRÓPRIO base, que não é parcela deste número: subtrair as duas no mesmo rótulo não cancela nada.", Labels: rotulo},
-		{Family: metrics.MetHistoryOldestWrittenAt, Name: metrics.MetHistoryOldestWrittenAt, Type: metrics.TypeGauge, Value: float64(e.InstanteMaisAntigo),
+		{Family: metrics.MetHistoryOldestWrittenAt, Name: metrics.MetHistoryOldestWrittenAt, Type: metrics.TypeGauge, Value: float64(e.InstantMaisAntigo),
 			Help: "Instante da linha mais antiga ainda visível, em millis. Mostra o maxBytes engolindo o prazo declarado.", Labels: rotulo},
-		{Family: metrics.MetHistoryIndexWindow, Name: metrics.MetHistoryIndexWindow, Type: metrics.TypeGauge, Value: e.JanelaEfetiva.Seconds(),
+		{Family: metrics.MetHistoryIndexWindow, Name: metrics.MetHistoryIndexWindow, Type: metrics.TypeGauge, Value: e.WindowEfetiva.Seconds(),
 			Help: "Intervalo realmente coberto pelos segmentos indexados. Compare com history.index.window: menor significa que o teto do índice assumiu o comando.", Labels: rotulo},
-		{Family: metrics.MetHistoryPurged, Name: metrics.MetHistoryPurged, Type: metrics.TypeCounter, Value: float64(e.PurgadosPorTTL),
+		{Family: metrics.MetHistoryPurged, Name: metrics.MetHistoryPurged, Type: metrics.TypeCounter, Value: float64(e.PurgadosByTTL),
 			Help:   "Segmentos aposentados pela retenção da tabela histórica.",
 			Labels: append(append([]metrics.Label{}, rotulo...), metrics.Label{Name: "reason", Value: "ttl"})},
-		{Family: metrics.MetHistoryPurged, Name: metrics.MetHistoryPurged, Type: metrics.TypeCounter, Value: float64(e.PurgadosPorTamanho),
+		{Family: metrics.MetHistoryPurged, Name: metrics.MetHistoryPurged, Type: metrics.TypeCounter, Value: float64(e.PurgadosBySize),
 			Labels: append(append([]metrics.Label{}, rotulo...), metrics.Label{Name: "reason", Value: "size"})},
 		{Family: metrics.MetHistoryRetentionRunning, Name: metrics.MetHistoryRetentionRunning, Type: metrics.TypeGauge, Value: rodando,
 			Help: "1 quando o motor de retenção está de pé. Ele para de vez na primeira falha.", Labels: rotulo},

@@ -65,12 +65,12 @@ func TestTetoDoValorIndexavelNaFronteira(t *testing.T) {
 	// só com "70000 falha" ficaria verde com o limite em qualquer lugar.
 	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 
-	noLimite := strings.Repeat("v", types.MaxIndexedValueBytes)
-	if _, _, err := s.Put([]byte("limite"), 1, 0, statusPayload(t, s, "limite", noLimite, 1), nil); err != nil {
+	inLimit := strings.Repeat("v", types.MaxIndexedValueBytes)
+	if _, _, err := s.Put([]byte("limite"), 1, 0, statusPayload(t, s, "limite", inLimit, 1), nil); err != nil {
 		t.Fatalf("valor de exatamente %d bytes deveria ser aceito: %v", types.MaxIndexedValueBytes, err)
 	}
 	// E fica de fato indexado: aceitar sem indexar seria falso negativo.
-	it, err := s.Lookup(fldStatus, strVal(noLimite))
+	it, err := s.Lookup(fldStatus, strVal(inLimit))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,8 +117,8 @@ func TestEncolhimentoDeUmByteJaEhFatal(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	tamanho := fileSizeAud(t, audSegPath(dir, 1))
-	if err := os.Truncate(audSegPath(dir, 1), tamanho-1); err != nil {
+	size := fileSizeAud(t, audSecPath(dir, 1))
+	if err := os.Truncate(audSecPath(dir, 1), size-1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -150,8 +150,8 @@ func TestEncolhimentoDeSegmentoSeladoEhFatal(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	tamanho := fileSizeAud(t, audSegPath(dir, 1))
-	if err := os.Truncate(audSegPath(dir, 1), tamanho-64); err != nil {
+	size := fileSizeAud(t, audSecPath(dir, 1))
+	if err := os.Truncate(audSecPath(dir, 1), size-64); err != nil {
 		t.Fatal(err)
 	}
 
@@ -196,13 +196,13 @@ func TestCamposIndexadosDevolveEmOrdemCrescente(t *testing.T) {
 	// X1: o doc promete ordem crescente e a fonte é um map, cuja iteração é
 	// aleatória por construção.
 	s := openStore(t, Options{IndexedFields: []types.FieldID{fldCounter, fldStatus, fldID}})
-	got := s.CamposIndexados()
+	got := s.FieldsIndexados()
 	if len(got) != 3 {
 		t.Fatalf("esperado 3 campos, obtido %v", got)
 	}
 	for i := 1; i < len(got); i++ {
 		if got[i-1] >= got[i] {
-			t.Fatalf("CamposIndexados deveria vir em ordem crescente: %v", got)
+			t.Fatalf("FieldsIndexados deveria vir em ordem crescente: %v", got)
 		}
 	}
 }

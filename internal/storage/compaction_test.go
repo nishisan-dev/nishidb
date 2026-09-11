@@ -27,72 +27,72 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// localizacaoDaRow devolve o (seg, off) que a location da row nomeia AGORA.
+// localizacaoOfRow devolve o (seg, off) que a location da row nomeia AGORA.
 // É a mesma leitura que decide liveness no §55 — "a location ainda aponta
 // para este record" —, e o teste a faz pelo Get do rowindex, que já resolve
 // overlay, lote em aplicação e mmap. Reimplementá-la sobre o mmap deixaria o
 // teste cego justamente para o commit point que ainda está no overlay.
-func localizacaoDaRow(t *testing.T, s *Store, rowID types.RowID) (uint32, uint32) {
+func localizacaoOfRow(t *testing.T, s *Store, rowID types.RowID) (uint32, uint32) {
 	t.Helper()
 	packed, ok := s.locs.Get(rowID)
 	if !ok {
 		t.Fatalf("row %d sem location", rowID)
 	}
-	seg, off, _ := rowindex.Unpack(packed)
-	return seg, off
+	sec, off, _ := rowindex.Unpack(packed)
+	return sec, off
 }
 
-// recordEm lê o record físico gravado em (seg, off) pelo MESMO Reader que a
-// varredura do §54 usará: o copy-forward não inventa um segundo caminho de
+// recordIn lê o record físico gravado em (seg, off) pelo MESMO Reader que a
+// varredura do §54 usará: o cpy-forward não inventa um segundo caminho de
 // leitura, e o teste também não.
-func recordEm(t *testing.T, s *Store, seg, off uint32) types.Record {
+func recordIn(t *testing.T, s *Store, sec, off uint32) types.Record {
 	t.Helper()
-	rec, _, err := s.segR.ReadRecord(seg, off, nil)
+	rec, _, err := s.secR.ReadRecord(sec, off, nil)
 	if err != nil {
-		t.Fatalf("ReadRecord(%d, %d): %v", seg, off, err)
+		t.Fatalf("ReadRecord(%d, %d): %v", sec, off, err)
 	}
 	return rec
 }
 
-// tallyDoSegmento lê (liveRecords, liveBytes) de um segmento sob o mutex do
-// writer, pelo mesmo motivo do somaDosTallies: segTally é writer-only e ler
+// tallyOfSegment lê (liveRecords, liveBytes) de um segmento sob o mutex do
+// writer, pelo mesmo motivo do somaOfTallies: secTally é writer-only e ler
 // mapa Go sem sincronizar é fatal error do runtime, não corrida benigna.
-func tallyDoSegmento(s *Store, seg uint32) (liveRecords, liveBytes uint64) {
+func tallyOfSegment(s *Store, sec uint32) (liveRecords, liveBytes uint64) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	t := s.segTally[seg]
+	t := s.secTally[sec]
 	if t == nil {
 		return 0, 0
 	}
 	return t.liveRecords, t.liveBytes
 }
 
-// tamanhoConhecidoDoSegmento lê o segSize sob o mesmo lock e pelo mesmo motivo
-// do tallyDoSegmento — o mapa é writer-only. É o DENOMINADOR da eleição do
+// sizeConhecidoOfSegment lê o secSize sob o mesmo lock e pelo mesmo motivo
+// do tallyOfSegment — o mapa é writer-only. É o DENOMINADOR da eleição do
 // §53, e ele merece leitor próprio porque não anda no mesmo relógio do tally:
-// o tally ganha entrada no applyRecord, o segSize só se move em checkpoint.
-func tamanhoConhecidoDoSegmento(s *Store, seg uint32) (int64, bool) {
+// o tally ganha entrada no applyRecord, o secSize só se move em checkpoint.
+func sizeConhecidoOfSegment(s *Store, sec uint32) (int64, bool) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	tam, ok := s.segSize[seg]
+	tam, ok := s.secSize[sec]
 	return tam, ok
 }
 
-// rotacionaAlemDe apenda até o segmento corrente deixar de ser `seg`, e
+// rotacionaAlemOf apenda até o segmento corrente deixar de ser `seg`, e
 // devolve quantos records isso custou. Existe porque o §53 D6 nunca elege o
 // segmento corrente como candidato — compactar o segmento em que se está
 // apendando é copiar dentro de si mesmo —, então o record de origem de um
 // teste honesto tem de estar num segmento já SELADO.
-func rotacionaAlemDe(t *testing.T, s *Store, seg uint32) {
+func rotacionaAlemOf(t *testing.T, s *Store, sec uint32) {
 	t.Helper()
 	for i := 0; i < 200; i++ {
-		if s.Stats().CurrentSegmentID != seg {
+		if s.Stats().CurrentSegmentID != sec {
 			return
 		}
 		k := fmt.Sprintf("cf-enche-%03d", i)
 		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
 	}
-	t.Fatalf("o segmento %d continua corrente após 200 records: a montagem não sela o segmento de origem", seg)
+	t.Fatalf("o segmento %d continua corrente após 200 records: a montagem não sela o segmento de origem", sec)
 }
 
 // TestCopyForwardNaoRessuscitaPayloadAntigoSobUpdateConcorrente é o teste que
@@ -111,16 +111,16 @@ func TestCopyForwardNaoRessuscitaPayloadAntigoSobUpdateConcorrente(t *testing.T)
 	const key = "cf-corrida"
 	antigo := statusPayload(t, s, key, "antigo", 1)
 	rowID, _ := mustPut(t, s, key, 1, antigo, nil)
-	origSeg, origOff := localizacaoDaRow(t, s, rowID)
+	origSec, origOff := localizacaoOfRow(t, s, rowID)
 	// O record é lido ANTES do update, como a varredura do §54 o leria: ela
 	// varre o arquivo, não o índice, e não tem como saber que a row migrou.
-	rec := recordEm(t, s, origSeg, origOff)
+	rec := recordIn(t, s, origSec, origOff)
 
 	prev := mustGetAud(t, s, key)
-	novo := statusPayload(t, s, key, "novo", 2)
-	mustPut(t, s, key, 2, novo, &prev)
+	nw := statusPayload(t, s, key, "novo", 2)
+	mustPut(t, s, key, 2, nw, &prev)
 
-	copiado, n, err := s.reapendaSeVivo(origSeg, origOff, rec)
+	copiado, n, err := s.reapendaSeVivo(origSec, origOff, rec)
 	if err != nil {
 		t.Fatalf("reapendaSeVivo: %v", err)
 	}
@@ -130,10 +130,10 @@ func TestCopyForwardNaoRessuscitaPayloadAntigoSobUpdateConcorrente(t *testing.T)
 	if n != 0 {
 		t.Errorf("bytes copiados = %d na recusa, queria 0 — a Task 5 soma este número para decidir o progresso da varredura", n)
 	}
-	if seg, off := localizacaoDaRow(t, s, rowID); seg == origSeg && off == origOff {
-		t.Fatalf("a location voltou a nomear a origem (%d, %d): a cópia republicou por cima do update", origSeg, origOff)
+	if sec, off := localizacaoOfRow(t, s, rowID); sec == origSec && off == origOff {
+		t.Fatalf("a location voltou a nomear a origem (%d, %d): a cópia republicou por cima do update", origSec, origOff)
 	}
-	if got := mustGetAud(t, s, key); !bytes.Equal(got.Payload, novo) || got.Sequence != 2 {
+	if got := mustGetAud(t, s, key); !bytes.Equal(got.Payload, nw) || got.Sequence != 2 {
 		t.Errorf("o dataset voltou no tempo: seq=%d, payload igual ao antigo=%v",
 			got.Sequence, bytes.Equal(got.Payload, antigo))
 	}
@@ -143,7 +143,7 @@ func TestCopyForwardNaoRessuscitaPayloadAntigoSobUpdateConcorrente(t *testing.T)
 // sem o qual um reapendaSeVivo que recusasse SEMPRE passaria no teste da
 // corrida e a compaction nunca esvaziaria segmento nenhum.
 //
-// As duas asserções de contabilidade são o ponto: o copy-forward MOVE bytes
+// As duas asserções de contabilidade são o ponto: o cpy-forward MOVE bytes
 // vivos de um segmento para outro, então o agregado do Stats não pode mudar,
 // e o segmento de origem tem de perder exatamente o record copiado — é essa
 // baixa que faz o candidato caminhar para o tally zerado do §53. Um
@@ -156,27 +156,27 @@ func TestCopyForwardRepublicaALocationSemInflarALiveness(t *testing.T) {
 	const key = "cf-alvo"
 	payload := statusPayload(t, s, key, "Start", 1)
 	rowID, _ := mustPut(t, s, key, 1, payload, nil)
-	origSeg, origOff := localizacaoDaRow(t, s, rowID)
-	rotacionaAlemDe(t, s, origSeg)
+	origSec, origOff := localizacaoOfRow(t, s, rowID)
+	rotacionaAlemOf(t, s, origSec)
 
-	recsAntes, bytesAntes := tallyDoSegmento(s, origSeg)
-	vivoAntes := s.Stats().LiveBytesUpperBound
-	rec := recordEm(t, s, origSeg, origOff)
+	recsBefore, bytesBefore := tallyOfSegment(s, origSec)
+	vivoBefore := s.Stats().LiveBytesUpperBound
+	rec := recordIn(t, s, origSec, origOff)
 
-	copiado, n, err := s.reapendaSeVivo(origSeg, origOff, rec)
+	copiado, n, err := s.reapendaSeVivo(origSec, origOff, rec)
 	if err != nil {
 		t.Fatalf("reapendaSeVivo: %v", err)
 	}
 	if !copiado {
 		t.Fatal("a location ainda nomeava o record e a cópia foi recusada: nenhum segmento chegaria ao tally zerado")
 	}
-	if want := bytesDoRecord(key, payload); uint64(n) != want {
+	if want := bytesOfRecord(key, payload); uint64(n) != want {
 		t.Errorf("bytes copiados = %d, queria %d (header+key+payload)", n, want)
 	}
 
-	seg, off := localizacaoDaRow(t, s, rowID)
-	if seg == origSeg && off == origOff {
-		t.Fatalf("a location continua nomeando (%d, %d): o segmento de origem nunca ficaria elegível à aposentadoria", seg, off)
+	sec, off := localizacaoOfRow(t, s, rowID)
+	if sec == origSec && off == origOff {
+		t.Fatalf("a location continua nomeando (%d, %d): o segmento de origem nunca ficaria elegível à aposentadoria", sec, off)
 	}
 	got := mustGetAud(t, s, key)
 	if got.RowID != rowID || got.Sequence != 1 || !bytes.Equal(got.Payload, payload) {
@@ -184,25 +184,25 @@ func TestCopyForwardRepublicaALocationSemInflarALiveness(t *testing.T) {
 			got.RowID, got.Sequence, bytes.Equal(got.Payload, payload))
 	}
 
-	if vivoDepois := s.Stats().LiveBytesUpperBound; vivoDepois != vivoAntes {
-		t.Errorf("LiveBytesUpperBound = %d após o copy-forward, era %d — mover um record vivo de segmento não cria nem destrói liveness",
-			vivoDepois, vivoAntes)
+	if vivoDepois := s.Stats().LiveBytesUpperBound; vivoDepois != vivoBefore {
+		t.Errorf("LiveBytesUpperBound = %d após o cpy-forward, era %d — mover um record vivo de segmento não cria nem destrói liveness",
+			vivoDepois, vivoBefore)
 	}
-	recsDepois, bytesDepois := tallyDoSegmento(s, origSeg)
-	if recsDepois != recsAntes-1 || bytesDepois != bytesAntes-uint64(n) {
+	recsDepois, bytesDepois := tallyOfSegment(s, origSec)
+	if recsDepois != recsBefore-1 || bytesDepois != bytesBefore-uint64(n) {
 		t.Errorf("tally da origem = (%d records, %d bytes), queria (%d, %d) — a baixa do record copiado não foi descontada",
-			recsDepois, bytesDepois, recsAntes-1, bytesAntes-uint64(n))
+			recsDepois, bytesDepois, recsBefore-1, bytesBefore-uint64(n))
 	}
-	exigeEspelhoIgualAosTallies(t, s, "após o copy-forward")
+	exigeEspelhoIgualAosTallies(t, s, "após o cpy-forward")
 
 	// O detector da Fase A′ roda no início do checkpoint e é a aferição de
-	// produção do invariante dos espelhos: se o copy-forward mexesse nos mapas
+	// produção do invariante dos espelhos: se o cpy-forward mexesse nos mapas
 	// por fora deles, o WARN sairia a cada compaction.
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 	if div := s.EspelhosDivergentesForTest(); div != 0 {
-		t.Errorf("o checkpoint achou os espelhos divergentes %d vez(es) após o copy-forward", div)
+		t.Errorf("o checkpoint achou os espelhos divergentes %d vez(es) após o cpy-forward", div)
 	}
 }
 
@@ -228,7 +228,7 @@ func TestCopyForwardConcorrenteComOWriterNuncaRegrideOValor(t *testing.T) {
 	s := openStore(t, Options{})
 	const n = 32
 	keys := make([]string, n)
-	origSeg := make([]uint32, n)
+	origSec := make([]uint32, n)
 	origOff := make([]uint32, n)
 	recs := make([]types.Record, n)
 	novos := make([][]byte, n)
@@ -236,16 +236,16 @@ func TestCopyForwardConcorrenteComOWriterNuncaRegrideOValor(t *testing.T) {
 		keys[i] = fmt.Sprintf("cf-conc-%03d", i)
 		antigo := statusPayload(t, s, keys[i], "antigo", int64(i))
 		rowID, _ := mustPut(t, s, keys[i], 1, antigo, nil)
-		origSeg[i], origOff[i] = localizacaoDaRow(t, s, rowID)
-		recs[i] = recordEm(t, s, origSeg[i], origOff[i])
+		origSec[i], origOff[i] = localizacaoOfRow(t, s, rowID)
+		recs[i] = recordIn(t, s, origSec[i], origOff[i])
 		// Os payloads do update nascem ANTES das goroutines: statusPayload
 		// cria entradas no dicionário, e criar entrada é escrita — deixá-la
-		// para dentro da corrida testaria o dicionário, não o copy-forward.
+		// para dentro da corrida testaria o dicionário, não o cpy-forward.
 		novos[i] = statusPayload(t, s, keys[i], "novo", int64(i))
 	}
 
 	var wg sync.WaitGroup
-	var errPut, errCopia error
+	var errPut, errCopy error
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
@@ -259,15 +259,15 @@ func TestCopyForwardConcorrenteComOWriterNuncaRegrideOValor(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := range keys {
-			if _, _, err := s.reapendaSeVivo(origSeg[i], origOff[i], recs[i]); err != nil {
-				errCopia = fmt.Errorf("reapendaSeVivo(%q): %w", keys[i], err)
+			if _, _, err := s.reapendaSeVivo(origSec[i], origOff[i], recs[i]); err != nil {
+				errCopy = fmt.Errorf("reapendaSeVivo(%q): %w", keys[i], err)
 				return
 			}
 		}
 	}()
 	wg.Wait()
-	if errPut != nil || errCopia != nil {
-		t.Fatalf("ingestão: %v; compaction: %v", errPut, errCopia)
+	if errPut != nil || errCopy != nil {
+		t.Fatalf("ingestão: %v; compaction: %v", errPut, errCopy)
 	}
 
 	for i := range keys {
@@ -280,18 +280,18 @@ func TestCopyForwardConcorrenteComOWriterNuncaRegrideOValor(t *testing.T) {
 	exigeEspelhoIgualAosTallies(t, s, "após a corrida entre ingestão e compaction")
 }
 
-// flagForaDoTombstone é um bit de flag que o RECORD carrega e a LOCATION não.
-// Ele existe porque as duas fontes de flags do copy-forward só divergem aí: o
+// flagForaOfTombstone é um bit de flag que o RECORD carrega e a LOCATION não.
+// Ele existe porque as duas fontes de flags do cpy-forward só divergem aí: o
 // Put não valida o byte de flags e o grava inteiro no segmento, enquanto o
 // applyRecord empacota apenas `a.flags&types.FlagTombstone` na location
 // (o passo de publicação do applyRecord — por símbolo, não por linha: a
 // referência numérica anterior já apontava para outro lugar). Sem esse bit, escolher a location ou o record dá exatamente
 // o mesmo resultado e nenhuma asserção consegue separar as duas fontes.
-const flagForaDoTombstone uint8 = 0x02
+const flagForaOfTombstone uint8 = 0x02
 
-// flagsDaLocation devolve o byte de flags que a location publica para a row —
+// flagsOfLocation devolve o byte de flags que a location publica para a row —
 // a mesma leitura que o §44 faz para decidir visibilidade.
-func flagsDaLocation(t *testing.T, s *Store, rowID types.RowID) uint8 {
+func flagsOfLocation(t *testing.T, s *Store, rowID types.RowID) uint8 {
 	t.Helper()
 	packed, ok := s.locs.Get(rowID)
 	if !ok {
@@ -308,7 +308,7 @@ func flagsDaLocation(t *testing.T, s *Store, rowID types.RowID) uint8 {
 // decisão, é acidente esperando a próxima leitura distraída.
 //
 // O oráculo é o byte de flags do record no destino. A origem carrega
-// flagForaDoTombstone, a location carrega 0, e a cópia tem de sair com 0: a
+// flagForaOfTombstone, a location carrega 0, e a cópia tem de sair com 0: a
 // compaction é o único caminho de escrita que não recebe flags de um
 // chamador, e ela não reescreve no segmento um bit que nenhuma location
 // sustenta. O preço da escolha está aqui à vista — bits fora do
@@ -318,34 +318,34 @@ func TestCopyForwardGravaAsFlagsDaLocationENaoAsDoRecord(t *testing.T) {
 	s := openStore(t, Options{SegmentSize: 400})
 	const key = "cf-flags"
 	payload := statusPayload(t, s, key, "Start", 1)
-	rowID, _, err := s.Put([]byte(key), 1, flagForaDoTombstone, payload, nil)
+	rowID, _, err := s.Put([]byte(key), 1, flagForaOfTombstone, payload, nil)
 	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	origSeg, origOff := localizacaoDaRow(t, s, rowID)
-	rec := recordEm(t, s, origSeg, origOff)
+	origSec, origOff := localizacaoOfRow(t, s, rowID)
+	rec := recordIn(t, s, origSec, origOff)
 	// As duas guardas de montagem: sem a divergência entre record e location
 	// o teste passaria a verde por acidente, e um teste que não distingue as
 	// duas fontes é pior que teste nenhum — ele DECLARA a cobertura.
-	if rec.Flags != flagForaDoTombstone {
-		t.Fatalf("montagem: o record de origem gravou flags %#x, queria %#x", rec.Flags, flagForaDoTombstone)
+	if rec.Flags != flagForaOfTombstone {
+		t.Fatalf("montagem: o record de origem gravou flags %#x, queria %#x", rec.Flags, flagForaOfTombstone)
 	}
-	if f := flagsDaLocation(t, s, rowID); f != 0 {
+	if f := flagsOfLocation(t, s, rowID); f != 0 {
 		t.Fatalf("montagem: a location guardou flags %#x, queria 0", f)
 	}
-	rotacionaAlemDe(t, s, origSeg)
+	rotacionaAlemOf(t, s, origSec)
 
-	copiado, _, err := s.reapendaSeVivo(origSeg, origOff, rec)
+	copiado, _, err := s.reapendaSeVivo(origSec, origOff, rec)
 	if err != nil {
 		t.Fatalf("reapendaSeVivo: %v", err)
 	}
 	if !copiado {
 		t.Fatal("a location ainda nomeava o record e a cópia foi recusada")
 	}
-	novoSeg, novoOff := localizacaoDaRow(t, s, rowID)
-	if copia := recordEm(t, s, novoSeg, novoOff); copia.Flags != 0 {
+	newSec, newOff := localizacaoOfRow(t, s, rowID)
+	if cpy := recordIn(t, s, newSec, newOff); cpy.Flags != 0 {
 		t.Errorf("flags do record copiado = %#x, queria %#x — a cópia veio do record, não da location, e a compaction passou a publicar no segmento um bit que o índice nunca validou",
-			copia.Flags, 0)
+			cpy.Flags, 0)
 	}
 }
 
@@ -359,7 +359,7 @@ func TestCopyForwardGravaAsFlagsDaLocationENaoAsDoRecord(t *testing.T) {
 // O estrago dessa otimização não aparece aqui e sim na Task 6: a location da
 // row tombstonada continuaria nomeando o segmento aposentado, e o Open
 // seguinte acharia location apontando para arquivo que não existe mais —
-// ErrDatasetCorrupt, dataset que não abre. Liveness para o copy-forward é "a
+// ErrDatasetCorrupt, dataset que não abre. Liveness para o cpy-forward é "a
 // location nomeia este record" (§55), nunca "a row é visível".
 //
 // As duas asserções finais são o outro lado: copiar o tombstone não pode
@@ -373,37 +373,37 @@ func TestCopyForwardCopiaORecordTombstonadoSemRessuscitarARow(t *testing.T) {
 	if _, _, err := s.Put([]byte(key), 2, types.FlagTombstone, morto, &prev); err != nil {
 		t.Fatalf("Put do tombstone: %v", err)
 	}
-	tumSeg, tumOff := localizacaoDaRow(t, s, rowID)
-	rec := recordEm(t, s, tumSeg, tumOff)
-	rotacionaAlemDe(t, s, tumSeg)
+	tumSec, tumOff := localizacaoOfRow(t, s, rowID)
+	rec := recordIn(t, s, tumSec, tumOff)
+	rotacionaAlemOf(t, s, tumSec)
 
-	copiado, n, err := s.reapendaSeVivo(tumSeg, tumOff, rec)
+	copiado, n, err := s.reapendaSeVivo(tumSec, tumOff, rec)
 	if err != nil {
 		t.Fatalf("reapendaSeVivo: %v", err)
 	}
 	if !copiado {
 		t.Fatal("a row tombstonada NÃO foi copiada: a location seguiria nomeando o segmento que a aposentadoria remove, e o Open seguinte declararia o dataset corrompido")
 	}
-	if want := bytesDoRecord(key, morto); uint64(n) != want {
+	if want := bytesOfRecord(key, morto); uint64(n) != want {
 		t.Errorf("bytes copiados = %d, queria %d — a Task 5 soma este número para medir o progresso da varredura", n, want)
 	}
-	novoSeg, novoOff := localizacaoDaRow(t, s, rowID)
-	if novoSeg == tumSeg && novoOff == tumOff {
-		t.Fatalf("a location continua em (%d, %d): o segmento de origem nunca ficaria elegível à aposentadoria", tumSeg, tumOff)
+	newSec, newOff := localizacaoOfRow(t, s, rowID)
+	if newSec == tumSec && newOff == tumOff {
+		t.Fatalf("a location continua em (%d, %d): o segmento de origem nunca ficaria elegível à aposentadoria", tumSec, tumOff)
 	}
 	if _, _, ok, err := s.GetByKey(s.presente(), []byte(key), nil); err != nil || ok {
 		t.Fatalf("a cópia ressuscitou a row: GetByKey ok=%v, err=%v", ok, err)
 	}
-	if f := flagsDaLocation(t, s, rowID); f&types.FlagTombstone == 0 {
+	if f := flagsOfLocation(t, s, rowID); f&types.FlagTombstone == 0 {
 		t.Errorf("a location republicada perdeu o FlagTombstone (flags=%#x): a row voltaria a ser visível", f)
 	}
-	if copia := recordEm(t, s, novoSeg, novoOff); copia.Flags&types.FlagTombstone == 0 {
-		t.Errorf("o record copiado perdeu o FlagTombstone (flags=%#x): o replay da recovery republicaria a row VIVA", copia.Flags)
+	if cpy := recordIn(t, s, newSec, newOff); cpy.Flags&types.FlagTombstone == 0 {
+		t.Errorf("o record copiado perdeu o FlagTombstone (flags=%#x): o replay da recovery republicaria a row VIVA", cpy.Flags)
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após copiar um record tombstonado")
 }
 
-// apendaResiduoSemLocation grava no segmento corrente um record cuja location
+// apendaResiduoWithoutLocation grava no segmento corrente um record cuja location
 // NUNCA foi publicada — o resíduo da janela de crash do §10.2, e a única
 // precondição do ramo `!had` do reapendaSeVivo.
 //
@@ -411,8 +411,8 @@ func TestCopyForwardCopiaORecordTombstonadoSemRessuscitarARow(t *testing.T) {
 // seção crítica, e é justamente por isso que o resíduo só nasce de um
 // processo que morre no meio. O append direto é a forma honesta de plantar
 // um estado que o produto não alcança sem morrer — mesma doutrina do
-// CorrompeEspelhoParaTeste, que também escreve sob o wmu.
-func apendaResiduoSemLocation(t *testing.T, s *Store, rowID types.RowID, key string, payload []byte) (uint32, uint32) {
+// CorruptEspelhoForTest, que também escreve sob o wmu.
+func apendaResiduoWithoutLocation(t *testing.T, s *Store, rowID types.RowID, key string, payload []byte) (uint32, uint32) {
 	t.Helper()
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
@@ -420,12 +420,12 @@ func apendaResiduoSemLocation(t *testing.T, s *Store, rowID types.RowID, key str
 	if err != nil {
 		t.Fatalf("BuildRecord: %v", err)
 	}
-	seg, off, err := s.segW.Append(buf)
+	sec, off, err := s.secW.Append(buf)
 	if err != nil {
 		t.Fatalf("Append do resíduo: %v", err)
 	}
-	s.curSegID.Store(seg)
-	return seg, off
+	s.curSecID.Store(sec)
+	return sec, off
 }
 
 // TestCopyForwardRecusaResiduoSemLocationEmVezDeRessuscitarOEstado cobre o
@@ -449,10 +449,10 @@ func TestCopyForwardRecusaResiduoSemLocationEmVezDeRessuscitarOEstado(t *testing
 	// rowID bem à frente do contador: nenhuma location foi escrita para ele,
 	// e nenhum Put deste teste chega perto de alcançá-lo.
 	rowID := types.RowID(s.nextRowID.Load() + 1000)
-	seg, off := apendaResiduoSemLocation(t, s, rowID, key, payload)
-	rec := recordEm(t, s, seg, off)
+	sec, off := apendaResiduoWithoutLocation(t, s, rowID, key, payload)
+	rec := recordIn(t, s, sec, off)
 
-	copiado, n, err := s.reapendaSeVivo(seg, off, rec)
+	copiado, n, err := s.reapendaSeVivo(sec, off, rec)
 	if err != nil {
 		t.Fatalf("reapendaSeVivo: %v", err)
 	}
@@ -478,8 +478,8 @@ func TestCopyForwardRecusaComOWriterEmModoFalho(t *testing.T) {
 	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	const key = "cf-sticky"
 	rowID, _ := mustPut(t, s, key, 1, statusPayload(t, s, key, "Start", 1), nil)
-	origSeg, origOff := localizacaoDaRow(t, s, rowID)
-	rec := recordEm(t, s, origSeg, origOff)
+	origSec, origOff := localizacaoOfRow(t, s, rowID)
+	rec := recordIn(t, s, origSec, origOff)
 
 	// Falha na fase de Set do índice: erro DEPOIS do Append e antes da
 	// publicação da location, que é exatamente onde não há rollback parcial e o
@@ -490,7 +490,7 @@ func TestCopyForwardRecusaComOWriterEmModoFalho(t *testing.T) {
 	}
 	s.SetSetErrHookForTest(nil)
 
-	copiado, n, err := s.reapendaSeVivo(origSeg, origOff, rec)
+	copiado, n, err := s.reapendaSeVivo(origSec, origOff, rec)
 	if !errors.Is(err, ErrWriterFailed) {
 		t.Fatalf("reapendaSeVivo com writer morto = %v, queria ErrWriterFailed", err)
 	}
@@ -512,13 +512,13 @@ func TestCopyForwardRecusaDepoisDoClose(t *testing.T) {
 	s := openStore(t, Options{})
 	const key = "cf-fechado"
 	rowID, _ := mustPut(t, s, key, 1, statusPayload(t, s, key, "Start", 1), nil)
-	origSeg, origOff := localizacaoDaRow(t, s, rowID)
-	rec := recordEm(t, s, origSeg, origOff)
+	origSec, origOff := localizacaoOfRow(t, s, rowID)
+	rec := recordIn(t, s, origSec, origOff)
 
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	copiado, n, err := s.reapendaSeVivo(origSeg, origOff, rec)
+	copiado, n, err := s.reapendaSeVivo(origSec, origOff, rec)
 	if !errors.Is(err, ErrDatasetClosed) {
 		t.Fatalf("reapendaSeVivo após o Close = %v, queria ErrDatasetClosed", err)
 	}
@@ -527,23 +527,23 @@ func TestCopyForwardRecusaDepoisDoClose(t *testing.T) {
 	}
 }
 
-// copiaDaLocationCorrente copia a row a partir da location que ela nomeia
+// copyOfLocationCurrent copia a row a partir da location que ela nomeia
 // AGORA, devolvendo o buffer de leitura para a próxima chamada. Repetir a
 // cópia sobre a mesma row é o que aproxima o teste da varredura real: cada
 // record copiado passa pelo mesmo BuildRecord, e é aí que o buffer do writer
 // ou é reutilizado ou não é.
-func copiaDaLocationCorrente(t *testing.T, s *Store, rowID types.RowID, buf []byte) []byte {
+func copyOfLocationCurrent(t *testing.T, s *Store, rowID types.RowID, buf []byte) []byte {
 	t.Helper()
 	packed, ok := s.locs.Get(rowID)
 	if !ok {
 		t.Fatalf("row %d sem location", rowID)
 	}
-	seg, off, _ := rowindex.Unpack(packed)
-	rec, out, err := s.segR.ReadRecord(seg, off, buf)
+	sec, off, _ := rowindex.Unpack(packed)
+	rec, out, err := s.secR.ReadRecord(sec, off, buf)
 	if err != nil {
-		t.Fatalf("ReadRecord(%d, %d): %v", seg, off, err)
+		t.Fatalf("ReadRecord(%d, %d): %v", sec, off, err)
 	}
-	copiado, _, err := s.reapendaSeVivo(seg, off, rec)
+	copiado, _, err := s.reapendaSeVivo(sec, off, rec)
 	if err != nil {
 		t.Fatalf("reapendaSeVivo: %v", err)
 	}
@@ -573,42 +573,42 @@ func copiaDaLocationCorrente(t *testing.T, s *Store, rowID types.RowID, buf []by
 // compactBuf, e cobrá-la seria exigir um buffer que nunca nasce.
 func TestCopyForwardReusaOBufferDoWriterEmVezDeAlocarPorRecord(t *testing.T) {
 	const (
-		copias  = 16
-		tamanho = 64 << 10
+		copias = 16
+		size   = 64 << 10
 	)
 	// Segmento folgado: rotacionar no meio da medição abriria arquivo novo e
-	// mediria o alocador do segment, não o buffer do copy-forward.
+	// mediria o alocador do segment, não o buffer do cpy-forward.
 	s := openStore(t, Options{SegmentSize: 64 << 20})
 	const key = "cf-buffer"
-	payload := statusPayload(t, s, key, strings.Repeat("x", tamanho), 1)
+	payload := statusPayload(t, s, key, strings.Repeat("x", size), 1)
 	rowID, _ := mustPut(t, s, key, 1, payload, nil)
-	leitura := copiaDaLocationCorrente(t, s, rowID, nil)
+	leitura := copyOfLocationCurrent(t, s, rowID, nil)
 
-	var antes, depois runtime.MemStats
-	runtime.ReadMemStats(&antes)
+	var before, depois runtime.MemStats
+	runtime.ReadMemStats(&before)
 	for i := 0; i < copias; i++ {
-		leitura = copiaDaLocationCorrente(t, s, rowID, leitura)
+		leitura = copyOfLocationCurrent(t, s, rowID, leitura)
 	}
 	runtime.ReadMemStats(&depois)
 
-	gasto := depois.TotalAlloc - antes.TotalAlloc
-	teto := bytesDoRecord(key, payload)
-	if gasto > teto {
+	gasto := depois.TotalAlloc - before.TotalAlloc
+	ceiling := bytesOfRecord(key, payload)
+	if gasto > ceiling {
 		t.Errorf("copiar %d records alocou %d bytes; o teto é %d (um record) — o buffer do writer deixou de ser reutilizado e a compaction voltou a alocar por record copiado (§54)",
-			copias, gasto, teto)
+			copias, gasto, ceiling)
 	}
 }
 
-// payloadDaJanela é o payload das rodadas da janela: grande de propósito.
+// payloadOfWindow é o payload das rodadas da janela: grande de propósito.
 // O tamanho não é capricho — ele é o que ALARGA a seção crítica do Put
 // (validação, BuildRecord, CRC e o write do Append acontecem todos com o wmu
 // na mão), e é dentro dessa janela alargada que a leitura de location feita
 // fora do lock precisa cair para o defeito aparecer. Com payload miúdo a
 // seção crítica do Put dura menos que o caminho da goroutine de compaction
 // até o Get, e o defeito passa despercebido em 199 de 200 rodadas — medido.
-func payloadDaJanela(t *testing.T, s *Store, key, marca string, r int) []byte {
+func payloadOfWindow(t *testing.T, s *Store, key, mark string, r int) []byte {
 	t.Helper()
-	return statusPayload(t, s, key, strings.Repeat(marca, 16<<10), int64(r))
+	return statusPayload(t, s, key, strings.Repeat(mark, 16<<10), int64(r))
 }
 
 // TestCopyForwardPerdeParaOUpdateQueEntraNaJanelaDaVerificacao põe a
@@ -646,47 +646,47 @@ func TestCopyForwardPerdeParaOUpdateQueEntraNaJanelaDaVerificacao(t *testing.T) 
 	const rodadas = 64
 	for r := 0; r < rodadas; r++ {
 		key := fmt.Sprintf("cf-janela-%03d", r)
-		antigo := payloadDaJanela(t, s, key, "a", r)
+		antigo := payloadOfWindow(t, s, key, "a", r)
 		rowID, _ := mustPut(t, s, key, 1, antigo, nil)
-		origSeg, origOff := localizacaoDaRow(t, s, rowID)
+		origSec, origOff := localizacaoOfRow(t, s, rowID)
 		// O record sai do arquivo ANTES da largada, como a varredura o leria:
 		// ela varre o arquivo, não o índice, e não sabe que a row vai migrar.
-		rec := recordEm(t, s, origSeg, origOff)
-		novo := payloadDaJanela(t, s, key, "n", r)
+		rec := recordIn(t, s, origSec, origOff)
+		nw := payloadOfWindow(t, s, key, "n", r)
 
-		emVoo := make(chan struct{})
+		inVoo := make(chan struct{})
 		var wg sync.WaitGroup
-		var errPut, errCopia error
+		var errPut, errCopy error
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			close(emVoo)
-			_, _, errPut = s.Put([]byte(key), 2, 0, novo, nil)
+			close(inVoo)
+			_, _, errPut = s.Put([]byte(key), 2, 0, nw, nil)
 		}()
 		go func() {
 			defer wg.Done()
-			<-emVoo
+			<-inVoo
 			// Um Gosched: com as duas goroutines no mesmo P, é ele que dá a
 			// vez à ingestão para que ela já esteja DENTRO da seção crítica
 			// quando a cópia for ler a location.
 			runtime.Gosched()
-			_, _, errCopia = s.reapendaSeVivo(origSeg, origOff, rec)
+			_, _, errCopy = s.reapendaSeVivo(origSec, origOff, rec)
 		}()
 		wg.Wait()
-		if errPut != nil || errCopia != nil {
-			t.Fatalf("rodada %d: ingestão: %v; compaction: %v", r, errPut, errCopia)
+		if errPut != nil || errCopy != nil {
+			t.Fatalf("rodada %d: ingestão: %v; compaction: %v", r, errPut, errCopy)
 		}
 
 		got := mustGetAud(t, s, key)
-		if got.Sequence != 2 || !bytes.Equal(got.Payload, novo) {
+		if got.Sequence != 2 || !bytes.Equal(got.Payload, nw) {
 			t.Fatalf("rodada %d (%s): o valor corrente é seq=%d com o payload do update=%v — a cópia do record ANTIGO foi publicada DEPOIS do update e o dataset voltou no tempo, sem erro e com o CRC batendo",
-				r, key, got.Sequence, bytes.Equal(got.Payload, novo))
+				r, key, got.Sequence, bytes.Equal(got.Payload, nw))
 		}
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após as rodadas da janela")
 }
 
-// compactionParadaNoWmu bloqueia até a goroutine do copy-forward estar parada
+// compactionParadaInWmu bloqueia até a goroutine do cpy-forward estar parada
 // no s.wmu.Lock() de dentro do reapendaSeVivo, e devolve false se ela não
 // chegar lá dentro do prazo.
 //
@@ -695,27 +695,27 @@ func TestCopyForwardPerdeParaOUpdateQueEntraNaJanelaDaVerificacao(t *testing.T) 
 // aposta em quanto tempo o escalonador leva. Um sleep transformaria o oráculo
 // determinístico de volta em probabilístico, que é exatamente o defeito que a
 // revisão apontou no teste concorrente.
-func compactionParadaNoWmu(prazo time.Duration) bool {
-	return paradaNoWmuEm("reapendaSeVivo", prazo)
+func compactionParadaInWmu(prazo time.Duration) bool {
+	return paradaInWmuIn("reapendaSeVivo", prazo)
 }
 
-// paradaNoWmuEm é o instrumento por trás do helper acima, com a marca da
+// paradaInWmuIn é o instrumento por trás do helper acima, com a marca da
 // função escolhida por quem chama: a barreira da Task 7 precisa do mesmo fato
 // ("já está esperando o lock") sobre a SELEÇÃO de candidatos, e duplicar a
 // leitura de stack faria as duas divergirem no primeiro ajuste.
-func paradaNoWmuEm(marca string, prazo time.Duration) bool {
+func paradaInWmuIn(mark string, prazo time.Duration) bool {
 	buf := make([]byte, 1<<20)
-	limite := time.Now().Add(prazo)
+	limit := time.Now().Add(prazo)
 	for {
 		n := runtime.Stack(buf, true)
 		for _, g := range strings.Split(string(buf[:n]), "\n\ngoroutine ") {
 			// As duas marcas na MESMA goroutine: parada no Lock, e parada
 			// nele por dentro da função que interessa.
-			if strings.Contains(g, marca) && strings.Contains(g, "sync.(*Mutex).Lock") {
+			if strings.Contains(g, mark) && strings.Contains(g, "sync.(*Mutex).Lock") {
 				return true
 			}
 		}
-		if time.Now().After(limite) {
+		if time.Now().After(limit) {
 			return false
 		}
 		runtime.Gosched()
@@ -737,11 +737,11 @@ func publicaUpdateSobOWmu(t *testing.T, s *Store, rowID types.RowID, key string,
 	if err != nil {
 		t.Fatalf("BuildRecord do update: %v", err)
 	}
-	seg, off, err := s.segW.Append(buf)
+	sec, off, err := s.secW.Append(buf)
 	if err != nil {
 		t.Fatalf("Append do update: %v", err)
 	}
-	s.curSegID.Store(seg)
+	s.curSecID.Store(sec)
 	if err := s.applyRecord(recordApply{
 		rowID:       rowID,
 		key:         []byte(key),
@@ -749,7 +749,7 @@ func publicaUpdateSobOWmu(t *testing.T, s *Store, rowID types.RowID, key string,
 		payload:     payload,
 		prevPayload: prevPayload,
 		hadPrevious: true,
-		seg:         seg,
+		sec:         sec,
 		off:         off,
 		recLen:      len(buf),
 	}); err != nil {
@@ -783,60 +783,60 @@ func TestCopyForwardLeALocationDEPOISDeEntrarNaSecaoCritica(t *testing.T) {
 	const key = "cf-barreira"
 	antigo := statusPayload(t, s, key, "antigo", 1)
 	rowID, _ := mustPut(t, s, key, 1, antigo, nil)
-	origSeg, origOff := localizacaoDaRow(t, s, rowID)
-	rec := recordEm(t, s, origSeg, origOff)
-	novo := statusPayload(t, s, key, "novo", 2)
+	origSec, origOff := localizacaoOfRow(t, s, rowID)
+	rec := recordIn(t, s, origSec, origOff)
+	nw := statusPayload(t, s, key, "novo", 2)
 
 	s.wmu.Lock()
 	var wg sync.WaitGroup
 	var copiado bool
-	var errCopia error
+	var errCopy error
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		copiado, _, errCopia = s.reapendaSeVivo(origSeg, origOff, rec)
+		copiado, _, errCopy = s.reapendaSeVivo(origSec, origOff, rec)
 	}()
-	if !compactionParadaNoWmu(5 * time.Second) {
+	if !compactionParadaInWmu(5 * time.Second) {
 		s.wmu.Unlock()
 		wg.Wait()
 		t.Fatal("a compaction não chegou a esperar o wmu em 5s: a montagem não abre a janela que o teste mede")
 	}
-	publicaUpdateSobOWmu(t, s, rowID, key, 2, antigo, novo)
+	publicaUpdateSobOWmu(t, s, rowID, key, 2, antigo, nw)
 	s.wmu.Unlock()
 	wg.Wait()
 
-	if errCopia != nil {
-		t.Fatalf("reapendaSeVivo: %v", errCopia)
+	if errCopy != nil {
+		t.Fatalf("reapendaSeVivo: %v", errCopy)
 	}
 	if copiado {
 		t.Error("a cópia foi ACEITA depois de um update que entrou enquanto ela esperava o lock: a liveness foi decidida com uma location lida fora da seção crítica")
 	}
-	if seg, off := localizacaoDaRow(t, s, rowID); seg == origSeg && off == origOff {
-		t.Errorf("a location voltou a nomear a origem (%d, %d): a cópia republicou por cima do update", origSeg, origOff)
+	if sec, off := localizacaoOfRow(t, s, rowID); sec == origSec && off == origOff {
+		t.Errorf("a location voltou a nomear a origem (%d, %d): a cópia republicou por cima do update", origSec, origOff)
 	}
-	if got := mustGetAud(t, s, key); got.Sequence != 2 || !bytes.Equal(got.Payload, novo) {
+	if got := mustGetAud(t, s, key); got.Sequence != 2 || !bytes.Equal(got.Payload, nw) {
 		t.Errorf("o dataset voltou no tempo: seq=%d, payload igual ao do update=%v",
-			got.Sequence, bytes.Equal(got.Payload, novo))
+			got.Sequence, bytes.Equal(got.Payload, nw))
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após a janela fechada pela seção crítica")
 }
 
-// segmentoCorrenteDoWriter lê onde o writer está de fato apendando. É a
-// VERDADE contra a qual o espelho curSegID se confere — perguntar ao Stats
+// segmentCurrentOfWriter lê onde o writer está de fato apendando. É a
+// VERDADE contra a qual o espelho curSecID se confere — perguntar ao Stats
 // seria perguntar ao próprio espelho.
-func segmentoCorrenteDoWriter(s *Store) uint32 {
+func segmentCurrentOfWriter(s *Store) uint32 {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	seg, _ := s.segW.Current()
-	return seg
+	sec, _ := s.secW.Current()
+	return sec
 }
 
 // TestCopyForwardQueRotacionaAtualizaOSegmentoCorrentePublicado fecha a única
 // linha do reapendaSeVivo que nenhum teste alcançava: o
-// `s.curSegID.Store(novoSeg)` que segue o Append.
+// `s.curSecID.Store(novoSeg)` que segue o Append.
 //
 // Apagá-la deixava a suíte inteira verde, e o estrago não é cosmético. O
-// curSegID é o espelho que `Stats().CurrentSegmentID` publica, e dele saem o
+// curSecID é o espelho que `Stats().CurrentSegmentID` publica, e dele saem o
 // `/v1/stats`, o `/metrics` e os comandos operacionais do §96. Diferente dos
 // espelhos de liveness, ele NÃO é recarregado pela reconciliação do checkpoint
 // nem conferido pelo conferaEspelhos: uma vez atrasado, fica atrasado. Num
@@ -854,43 +854,43 @@ func TestCopyForwardQueRotacionaAtualizaOSegmentoCorrentePublicado(t *testing.T)
 	payload := statusPayload(t, s, key, "Start", 1)
 	rowID, _ := mustPut(t, s, key, 1, payload, nil)
 
-	inicial := segmentoCorrenteDoWriter(s)
+	inicial := segmentCurrentOfWriter(s)
 	// Copiar a row para frente repetidamente enche o segmento corrente até o
 	// Append rotacionar. Cada volta relê a location, porque a cópia anterior
 	// fez a antiga deixar de nomear o record.
 	var rotacionou bool
 	for i := 0; i < 200 && !rotacionou; i++ {
-		seg, off := localizacaoDaRow(t, s, rowID)
-		rec := recordEm(t, s, seg, off)
-		copiado, _, err := s.reapendaSeVivo(seg, off, rec)
+		sec, off := localizacaoOfRow(t, s, rowID)
+		rec := recordIn(t, s, sec, off)
+		copiado, _, err := s.reapendaSeVivo(sec, off, rec)
 		if err != nil {
 			t.Fatalf("reapendaSeVivo na volta %d: %v", i, err)
 		}
 		if !copiado {
 			t.Fatalf("a cópia foi recusada na volta %d com a location recém-lida", i)
 		}
-		rotacionou = segmentoCorrenteDoWriter(s) != inicial
+		rotacionou = segmentCurrentOfWriter(s) != inicial
 	}
 	if !rotacionou {
-		t.Fatal("o copy-forward não rotacionou em 200 cópias: o teste não chegou a exercitar o espelho")
+		t.Fatal("o cpy-forward não rotacionou em 200 cópias: o teste não chegou a exercitar o espelho")
 	}
 
-	correnteDeFato := segmentoCorrenteDoWriter(s)
-	if got := s.Stats().CurrentSegmentID; got != correnteDeFato {
-		t.Errorf("CurrentSegmentID = %d e o writer está no %d: o copy-forward rotacionou e o espelho ficou para trás", got, correnteDeFato)
+	currentOfFato := segmentCurrentOfWriter(s)
+	if got := s.Stats().CurrentSegmentID; got != currentOfFato {
+		t.Errorf("CurrentSegmentID = %d e o writer está no %d: o cpy-forward rotacionou e o espelho ficou para trás", got, currentOfFato)
 	}
 	// A mentira não cicatriza. O checkpoint recarrega os espelhos de liveness
-	// e NÃO o curSegID; sem esta segunda asserção alguém poderia supor que o
+	// e NÃO o curSecID; sem esta segunda asserção alguém poderia supor que o
 	// próximo checkpoint conserta, e operar em cima disso.
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if got := s.Stats().CurrentSegmentID; got != correnteDeFato {
-		t.Errorf("CurrentSegmentID = %d depois do checkpoint e o writer está no %d: este espelho não é reconciliado", got, correnteDeFato)
+	if got := s.Stats().CurrentSegmentID; got != currentOfFato {
+		t.Errorf("CurrentSegmentID = %d depois do checkpoint e o writer está no %d: este espelho não é reconciliado", got, currentOfFato)
 	}
 }
 
-// abreComResiduoOrfaoNoSegmento1 monta o dataset que a Task 5 precisa e que
+// openWithResiduoOrfaoInSegmento1 monta o dataset que a Task 5 precisa e que
 // nenhum atalho produz: um segmento SELADO cujo tally está ACIMA do real por
 // exatamente um record órfão, e um Store aberto por cima dele. Devolve também
 // o diretório do dataset e o tamanho em bytes do órfão, que é o oráculo EXATO
@@ -908,7 +908,7 @@ func TestCopyForwardQueRotacionaAtualizaOSegmentoCorrentePublicado(t *testing.T)
 // Inflar o tally à mão seria mais curto e provaria menos: a asserção passaria
 // a valer sobre um estado que o produto não alcança, quando o que está em jogo
 // é justamente o estado que ele alcança e do qual não sai por subtração.
-func abreComResiduoOrfaoNoSegmento1(t *testing.T) (*Store, string, uint64) {
+func openWithResiduoOrfaoInSegmento1(t *testing.T) (*Store, string, uint64) {
 	t.Helper()
 	dir := t.TempDir()
 	opts := Options{Dir: dir, SegmentSize: 400, IndexedFields: []types.FieldID{fldStatus}}
@@ -920,7 +920,7 @@ func abreComResiduoOrfaoNoSegmento1(t *testing.T) (*Store, string, uint64) {
 	}
 	// Em S o segmento 1 tem UM record vivo, e é ele que vira o órfão: o
 	// update abaixo o torna garbage sem que ninguém desconte.
-	orfao := statsDoSegmento(t, dir).LiveBytes
+	orfao := statsOfSegment(t, dir).LiveBytes
 	if orfao == 0 {
 		t.Fatal("o manifest de S não contabilizou o record: sem órfão não há o que provar")
 	}
@@ -941,7 +941,7 @@ func abreComResiduoOrfaoNoSegmento1(t *testing.T) (*Store, string, uint64) {
 	}
 	// A decisão D6 nunca elege o segmento corrente, então o candidato de um
 	// teste honesto tem de estar SELADO antes de a varredura tocá-lo.
-	rotacionaAlemDe(t, s2, 1)
+	rotacionaAlemOf(t, s2, 1)
 	return s2, dir, orfao
 }
 
@@ -962,36 +962,36 @@ func abreComResiduoOrfaoNoSegmento1(t *testing.T) (*Store, string, uint64) {
 // tally exato, "zerar" e "subtrair" produzem o mesmo 0 e nenhum oráculo os
 // separa.
 func TestVarreduraCompletaZeraOTallyMesmoComResiduoOrfao(t *testing.T) {
-	s, _, orfao := abreComResiduoOrfaoNoSegmento1(t)
-	recsAntes, vivoAntes := tallyDoSegmento(s, 1)
-	if recsAntes == 0 || vivoAntes <= orfao {
+	s, _, orfao := openWithResiduoOrfaoInSegmento1(t)
+	recsBefore, vivoBefore := tallyOfSegment(s, 1)
+	if recsBefore == 0 || vivoBefore <= orfao {
 		t.Fatalf("montagem sem o que compactar: o segmento 1 reivindica %d records / %d bytes com um órfão de %d",
-			recsAntes, vivoAntes, orfao)
+			recsBefore, vivoBefore, orfao)
 	}
 
-	copiados, lidos, escritos, err := s.compactaSegmento(context.Background(), 1)
+	copiados, lidos, escritos, err := s.compactaSegment(context.Background(), 1)
 	if err != nil {
-		t.Fatalf("compactaSegmento: %v", err)
+		t.Fatalf("compactaSegment: %v", err)
 	}
 	if copiados == 0 {
-		t.Fatal("nenhum record copiado: a varredura não exercitou o copy-forward")
+		t.Fatal("nenhum record copiado: a varredura não exercitou o cpy-forward")
 	}
 	if escritos >= lidos {
 		t.Errorf("a varredura leu %d bytes e escreveu %d: sem garbage deixado para trás a compaction não devolve disco nenhum",
 			lidos, escritos)
 	}
-	if resto := vivoAntes - uint64(escritos); resto != orfao {
+	if resto := vivoBefore - uint64(escritos); resto != orfao {
 		t.Errorf("os decrementos parariam em %d bytes (reivindicados %d, copiados %d) e o órfão mede %d — "+
 			"se estes números passaram a bater, o resíduo do replay foi corrigido e este teste perdeu o alvo",
-			resto, vivoAntes, escritos, orfao)
+			resto, vivoBefore, escritos, orfao)
 	}
 
-	recs, vivo := tallyDoSegmento(s, 1)
+	recs, vivo := tallyOfSegment(s, 1)
 	if recs != 0 || vivo != 0 {
 		t.Errorf("tally do segmento 1 = %d records / %d bytes após a varredura completa, queria 0/0: "+
 			"a varredura tem autoridade sobre o segmento que ela leu inteiro (§53-55, D4)", recs, vivo)
 	}
-	// O dado não pode ter ido junto: o copy-forward move records vivos, não
+	// O dado não pode ter ido junto: o cpy-forward move records vivos, não
 	// os descarta.
 	if got := mustGetAud(t, s, "lv"); got.Sequence != 2 {
 		t.Errorf("a row copiada voltou para a seq %d; o update seguia sendo o estado corrente", got.Sequence)
@@ -1004,7 +1004,7 @@ func TestVarreduraCompletaZeraOTallyMesmoComResiduoOrfao(t *testing.T) {
 //
 // O zeramento do tally é o único ponto da compaction que mexe no mapa por
 // fora do applyRecord, e é por isso que ele precisa de teste próprio: o
-// copy-forward passa pelo applyRecord, que já mantém os dois lados, mas esta
+// cpy-forward passa pelo applyRecord, que já mantém os dois lados, mas esta
 // linha não passa por lugar nenhum. Zerar só o mapa deixaria o liveBytesAll
 // à frente dele — o /v1/stats e a nishidb_garbage_bytes publicando um vivo
 // que o dataset não tem, a cada compaction.
@@ -1014,29 +1014,29 @@ func TestVarreduraCompletaZeraOTallyMesmoComResiduoOrfao(t *testing.T) {
 // conferência do checkpoint seguinte pega o desconto ESQUECIDO, que é o
 // mutante que passaria despercebido até alguém ler o WARN no log.
 func TestZeramentoDoTallyDescontaOEspelhoNaMesmaSecaoCritica(t *testing.T) {
-	s, _, orfao := abreComResiduoOrfaoNoSegmento1(t)
-	divergenciasAntes := s.EspelhosDivergentesForTest()
-	antes := s.Stats().LiveBytesUpperBound
+	s, _, orfao := openWithResiduoOrfaoInSegmento1(t)
+	divergenciasBefore := s.EspelhosDivergentesForTest()
+	before := s.Stats().LiveBytesUpperBound
 
-	if _, _, _, err := s.compactaSegmento(context.Background(), 1); err != nil {
-		t.Fatalf("compactaSegmento: %v", err)
+	if _, _, _, err := s.compactaSegment(context.Background(), 1); err != nil {
+		t.Fatalf("compactaSegment: %v", err)
 	}
 
 	depois := s.Stats().LiveBytesUpperBound
-	if antes-depois != orfao {
+	if before-depois != orfao {
 		t.Errorf("LiveBytesUpperBound foi de %d para %d (queda de %d), e a queda tem de ser exatamente o órfão, %d: "+
-			"o copy-forward move bytes vivos de um segmento para o outro sem mudar o agregado, então o que sobra "+
-			"para o zeramento descontar é só o resíduo", antes, depois, antes-depois, orfao)
+			"o cpy-forward move bytes vivos de um segmento para o outro sem mudar o agregado, então o que sobra "+
+			"para o zeramento descontar é só o resíduo", before, depois, before-depois, orfao)
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após o zeramento do tally pela varredura")
 
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if got := s.EspelhosDivergentesForTest(); got != divergenciasAntes {
+	if got := s.EspelhosDivergentesForTest(); got != divergenciasBefore {
 		t.Errorf("o checkpoint seguinte acusou %d divergências de espelho contra %d antes da compaction: "+
 			"o mapa e o espelho saíram do zeramento discordando, e o detector está certo",
-			got, divergenciasAntes)
+			got, divergenciasBefore)
 	}
 }
 
@@ -1058,49 +1058,49 @@ func TestZeramentoDoTallyDescontaOEspelhoNaMesmaSecaoCritica(t *testing.T) {
 // está coberto pelo teste da varredura que para em record corrompido, que
 // interrompe a varredura DEPOIS de copiar.
 func TestVarreduraCanceladaNaoZeraOTally(t *testing.T) {
-	s, _, _ := abreComResiduoOrfaoNoSegmento1(t)
-	recsAntes, vivoAntes := tallyDoSegmento(s, 1)
+	s, _, _ := openWithResiduoOrfaoInSegmento1(t)
+	recsBefore, vivoBefore := tallyOfSegment(s, 1)
 
-	ctx, cancela := context.WithCancel(context.Background())
-	cancela()
-	copiados, _, _, err := s.compactaSegmento(ctx, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	copiados, _, _, err := s.compactaSegment(ctx, 1)
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("compactaSegmento com contexto cancelado devolveu %v, queria context.Canceled", err)
+		t.Fatalf("compactaSegment com contexto cancelado devolveu %v, queria context.Canceled", err)
 	}
 	if copiados != 0 {
 		t.Errorf("%d records copiados com o contexto cancelado na entrada: a verificação do ctx não é a primeira coisa do callback", copiados)
 	}
-	if recs, vivo := tallyDoSegmento(s, 1); recs != recsAntes || vivo != vivoAntes {
+	if recs, vivo := tallyOfSegment(s, 1); recs != recsBefore || vivo != vivoBefore {
 		t.Errorf("tally do segmento 1 = %d/%d após a varredura cancelada, queria %d/%d intactos",
-			recs, vivo, recsAntes, vivoAntes)
+			recs, vivo, recsBefore, vivoBefore)
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após a varredura cancelada")
 }
 
-// corrompeOUltimoRecordDoSegmento vira um byte perto do fim do arquivo do
+// corruptOUltimoRecordOfSegment vira um byte perto do fim do arquivo do
 // segmento seg — o suficiente para o ScanFrom parar ali e devolver um prefixo
 // válido MENOR que o arquivo, que é a precondição da varredura parcial.
 //
-// Esta é a única montagem da suíte que faz a compactaSegmento voltar com erro
+// Esta é a única montagem da suíte que faz a compactaSegment voltar com erro
 // tendo LIDO e ESCRITO bytes: os outros dois modos de fracasso param cedo
 // demais para produzir as duas parcelas — o contexto cancelado morre no
 // primeiro record e o writer em modo falho falha na primeira cópia. Por isso
 // ela serve a dois testes com oráculos distintos (o tally e os contadores do
 // §92), e é helper em vez de estar escrita dentro de um deles.
-func corrompeOUltimoRecordDoSegmento(t *testing.T, dir string, seg uint32) {
+func corruptOUltimoRecordOfSegment(t *testing.T, dir string, sec uint32) {
 	t.Helper()
-	caminho := audSegPath(dir, seg)
-	alvo := fileSizeAud(t, caminho) - 8
-	f, err := os.OpenFile(caminho, os.O_RDWR, 0)
+	path := audSecPath(dir, sec)
+	target := fileSizeAud(t, path) - 8
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatalf("abrir o segmento para plantar a corrupção: %v", err)
 	}
 	var b [1]byte
-	if _, err := f.ReadAt(b[:], alvo); err != nil {
+	if _, err := f.ReadAt(b[:], target); err != nil {
 		t.Fatalf("ler o byte a corromper: %v", err)
 	}
 	b[0] ^= 0xFF
-	if _, err := f.WriteAt(b[:], alvo); err != nil {
+	if _, err := f.WriteAt(b[:], target); err != nil {
 		t.Fatalf("gravar a corrupção: %v", err)
 	}
 	if err := f.Close(); err != nil {
@@ -1128,19 +1128,19 @@ func corrompeOUltimoRecordDoSegmento(t *testing.T, dir string, seg uint32) {
 // varredura topar com ela é o dano ter aparecido depois da abertura — que é
 // exatamente o que bit rot é.
 func TestVarreduraQueParaAntesDoFimDoArquivoNaoZeraOTally(t *testing.T) {
-	s, dir, _ := abreComResiduoOrfaoNoSegmento1(t)
-	recsAntes, vivoAntes := tallyDoSegmento(s, 1)
+	s, dir, _ := openWithResiduoOrfaoInSegmento1(t)
+	recsBefore, vivoBefore := tallyOfSegment(s, 1)
 
-	corrompeOUltimoRecordDoSegmento(t, dir, 1)
+	corruptOUltimoRecordOfSegment(t, dir, 1)
 
-	copiados, _, escritos, err := s.compactaSegmento(context.Background(), 1)
+	copiados, _, escritos, err := s.compactaSegment(context.Background(), 1)
 	if !errors.Is(err, ErrDatasetCorrupt) {
-		t.Fatalf("compactaSegmento sobre segmento com record corrompido devolveu %v, queria ErrDatasetCorrupt", err)
+		t.Fatalf("compactaSegment sobre segmento com record corrompido devolveu %v, queria ErrDatasetCorrupt", err)
 	}
 	if copiados == 0 {
 		t.Fatal("a varredura parou antes de copiar qualquer coisa: o teste não chegou a exercitar a varredura parcial")
 	}
-	recs, vivo := tallyDoSegmento(s, 1)
+	recs, vivo := tallyOfSegment(s, 1)
 	if recs == 0 && vivo == 0 {
 		t.Fatal("o tally foi zerado por uma varredura que parou no meio do arquivo: " +
 			"a autoridade do D4 vem de ter lido o segmento INTEIRO, e ela não leu")
@@ -1148,16 +1148,16 @@ func TestVarreduraQueParaAntesDoFimDoArquivoNaoZeraOTally(t *testing.T) {
 	// E o trabalho parcial não se perde nem se conta duas vezes: o que a
 	// varredura alcançou a copiar saiu do tally da origem pelo applyRecord, e
 	// só isso.
-	if recs != recsAntes-copiados || vivo != vivoAntes-uint64(escritos) {
+	if recs != recsBefore-copiados || vivo != vivoBefore-uint64(escritos) {
 		t.Errorf("tally do segmento 1 = %d records / %d bytes após copiar %d records (%d bytes) de %d/%d; "+
 			"queria %d/%d — só a baixa do que foi de fato copiado",
-			recs, vivo, copiados, escritos, recsAntes, vivoAntes, recsAntes-copiados, vivoAntes-uint64(escritos))
+			recs, vivo, copiados, escritos, recsBefore, vivoBefore, recsBefore-copiados, vivoBefore-uint64(escritos))
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após a varredura que parou em record corrompido")
 }
 
 // TestZeramentoDoTallyRecusaDepoisDoCloseSemRecordParaCopiar cobre o entra()
-// do ZERAMENTO — o único trecho da compactaSegmento que roda fora da seção de
+// do ZERAMENTO — o único trecho da compactaSegment que roda fora da seção de
 // vida do reapendaSeVivo e que nenhuma asserção defendia. Apagar as quatro
 // linhas do guard deixava a suíte inteira verde, e guard de ciclo de vida que
 // a suíte não defende é mecanismo que o próximo refator remove sem notar.
@@ -1171,10 +1171,10 @@ func TestVarreduraQueParaAntesDoFimDoArquivoNaoZeraOTally(t *testing.T) {
 // zeramento é de fato alcançado. O único jeito de a chamada não devolver
 // sucesso, aí, é o guard.
 //
-// E "sucesso" é o ponto, não o valor do tally: sem o guard, compactaSegmento
+// E "sucesso" é o ponto, não o valor do tally: sem o guard, compactaSegment
 // devolve nil para um dataset FECHADO — e é sobre esse nil que a
 // aposentadoria da Task 6 vai decidir renomear e depois remover o arquivo. A
-// recusa é da mesma família da do copy-forward: erro, não panic, porque a
+// recusa é da mesma família da do cpy-forward: erro, não panic, porque a
 // ingestão tem política para erro (§101) e não tem para panic.
 //
 // ALCANCE, registrado honestamente: o que fica fixado é "dataset fechado
@@ -1185,15 +1185,15 @@ func TestVarreduraQueParaAntesDoFimDoArquivoNaoZeraOTally(t *testing.T) {
 // vida.Lock().
 func TestZeramentoDoTallyRecusaDepoisDoCloseSemRecordParaCopiar(t *testing.T) {
 	s := openStore(t, Options{})
-	const seg = 1
-	if got := s.Stats().CurrentSegmentID; got != seg {
-		t.Fatalf("montagem: o writer abriu no segmento %d e o vazio deste teste é o %d", got, seg)
+	const sec = 1
+	if got := s.Stats().CurrentSegmentID; got != sec {
+		t.Fatalf("montagem: o writer abriu no segmento %d e o vazio deste teste é o %d", got, sec)
 	}
 
 	// A precondição é o teste inteiro: se houvesse UM record, o erro viria do
 	// entra() do reapendaSeVivo e esta função não estaria medindo nada.
 	var visitados int
-	fimValido, err := s.segR.ScanFrom(seg, segment.HeaderSize, func(uint32, types.Record) error {
+	endValid, err := s.secR.ScanFrom(sec, segment.HeaderSize, func(uint32, types.Record) error {
 		visitados++
 		return nil
 	})
@@ -1201,23 +1201,23 @@ func TestZeramentoDoTallyRecusaDepoisDoCloseSemRecordParaCopiar(t *testing.T) {
 		t.Fatalf("montagem: varredura do segmento recém-criado: %v", err)
 	}
 	if visitados != 0 {
-		t.Fatalf("montagem: o segmento %d já tem %d records, e a porta deste teste é justamente não ter nenhum", seg, visitados)
+		t.Fatalf("montagem: o segmento %d já tem %d records, e a porta deste teste é justamente não ter nenhum", sec, visitados)
 	}
-	tamanho, err := s.tamanhoDoSegmento(seg)
+	size, err := s.sizeOfSegment(sec)
 	if err != nil {
-		t.Fatalf("montagem: tamanho do segmento %d: %v", seg, err)
+		t.Fatalf("montagem: tamanho do segmento %d: %v", sec, err)
 	}
-	if fimValido != tamanho {
+	if endValid != size {
 		t.Fatalf("montagem: prefixo válido de %d bytes contra arquivo de %d — assim o gate de corrupção responderia antes do guard",
-			fimValido, tamanho)
+			endValid, size)
 	}
 
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	copiados, lidos, escritos, err := s.compactaSegmento(context.Background(), seg)
+	copiados, lidos, escritos, err := s.compactaSegment(context.Background(), sec)
 	if !errors.Is(err, ErrDatasetClosed) {
-		t.Fatalf("compactaSegmento sobre dataset fechado devolveu %v, queria ErrDatasetClosed: "+
+		t.Fatalf("compactaSegment sobre dataset fechado devolveu %v, queria ErrDatasetClosed: "+
 			"varredura sem record termina completa e chega ao zeramento, e zerar tally de dataset fechado "+
 			"é reportar sucesso sobre um dataset que já foi embora", err)
 	}
@@ -1228,7 +1228,7 @@ func TestZeramentoDoTallyRecusaDepoisDoCloseSemRecordParaCopiar(t *testing.T) {
 }
 
 // TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader fixa a aritmética dos
-// números que a compactaSegmento devolve, porque a Task 8 vai publicá-los
+// números que a compactaSegment devolve, porque a Task 8 vai publicá-los
 // como série de compaction e comentário não é oráculo.
 //
 // `lidos` soma RecordHeaderSize + key + payload a partir de
@@ -1244,28 +1244,28 @@ func TestZeramentoDoTallyRecusaDepoisDoCloseSemRecordParaCopiar(t *testing.T) {
 // nenhum — quem aposenta o segmento é a Task 6, e até lá o que a varredura
 // leu continua todo lá.
 func TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader(t *testing.T) {
-	s, dir, _ := abreComResiduoOrfaoNoSegmento1(t)
-	tamanho := fileSizeAud(t, audSegPath(dir, 1))
+	s, dir, _ := openWithResiduoOrfaoInSegmento1(t)
+	size := fileSizeAud(t, audSecPath(dir, 1))
 
-	copiados, lidos, escritos, err := s.compactaSegmento(context.Background(), 1)
+	copiados, lidos, escritos, err := s.compactaSegment(context.Background(), 1)
 	if err != nil {
-		t.Fatalf("compactaSegmento: %v", err)
+		t.Fatalf("compactaSegment: %v", err)
 	}
 	if copiados == 0 {
-		t.Fatal("nenhum record copiado: a varredura não exercitou o copy-forward")
+		t.Fatal("nenhum record copiado: a varredura não exercitou o cpy-forward")
 	}
-	if lidos != tamanho-segment.HeaderSize {
+	if lidos != size-segment.HeaderSize {
 		t.Errorf("lidos = %d bytes num arquivo de %d bytes cujo header ocupa %d: a varredura começa DEPOIS do "+
 			"header, e é esta conta — arquivo menos header — que a série de compaction da Task 8 vai publicar",
-			lidos, tamanho, int64(segment.HeaderSize))
+			lidos, size, int64(segment.HeaderSize))
 	}
 	if escritos <= 0 || escritos >= lidos {
 		t.Errorf("a varredura leu %d bytes e escreveu %d: o destino recebe só a parte viva, e a distância entre "+
 			"os dois é o disco que a aposentadoria da Task 6 devolve", lidos, escritos)
 	}
-	if depois := fileSizeAud(t, audSegPath(dir, 1)); depois != tamanho {
+	if depois := fileSizeAud(t, audSecPath(dir, 1)); depois != size {
 		t.Errorf("o segmento de origem foi de %d para %d bytes: a Task 5 copia para frente e não encolhe arquivo "+
-			"nenhum, então a conta acima seguiria valendo", tamanho, depois)
+			"nenhum, então a conta acima seguiria valendo", size, depois)
 	}
 }
 
@@ -1273,7 +1273,7 @@ func TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader(t *testing.T) {
 // Task 6 — a aposentadoria do segmento
 // ---------------------------------------------------------------------------
 
-// discoDosSegmentosPorOsStat soma o tamanho dos arquivos de segmento
+// diskOfSegmentosByOsStat soma o tamanho dos arquivos de segmento
 // perguntando ao FILESYSTEM, um os.Stat por arquivo. Não usa Stats(), e a
 // distinção é a tarefa inteira: Stats é a coisa sob teste, e um oráculo que a
 // consultasse aprovaria uma compaction que só mexeu na contabilidade — o
@@ -1287,27 +1287,27 @@ func TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader(t *testing.T) {
 // participa do que se mede (no corpus deste teste são ~16 MB de índice contra
 // ~90 KB de segmento). É por isso que o piso da metade é aferido aqui, e só
 // aqui. O diretório INTEIRO, que é o texto literal do item, é medido pelo
-// discoDoDatasetInteiroPorOsStat logo abaixo e também tem de cair — sem isso,
+// diskOfDatasetInteiroByOsStat logo abaixo e também tem de cair — sem isso,
 // a escolha de escopo ficaria por conta do implementador, e escopo escolhido
 // por quem é medido é exatamente o defeito que o §92 persegue.
 //
 // A soma tolera o segmento que some no MEIO da medição, e o porquê está no
-// somaDosSegmentosEmDisco logo abaixo: a partir da Task 7 este helper é
+// somaOfSegmentosInDisk logo abaixo: a partir da Task 7 este helper é
 // chamado com a goroutine de compaction viva do outro lado do diretório.
-func discoDosSegmentosPorOsStat(t *testing.T, dir string) int64 {
+func diskOfSegmentosByOsStat(t *testing.T, dir string) int64 {
 	t.Helper()
-	total, err := somaDosSegmentosEmDisco(dir)
+	total, err := somaOfSegmentosInDisk(dir)
 	if err != nil {
 		t.Fatalf("somar os segmentos de %s: %v", dir, err)
 	}
 	return total
 }
 
-// somaDosSegmentosEmDisco é o corpo mensurável do helper acima, e existe
+// somaOfSegmentosInDisk é o corpo mensurável do helper acima, e existe
 // separado dele por uma razão só: um helper que só sabe chamar t.Fatalf não
 // tem como ser aferido de dentro da suíte — o oráculo da tolerância abaixo
 // morreria junto com o teste que a exercitasse.
-func somaDosSegmentosEmDisco(dir string) (int64, error) {
+func somaOfSegmentosInDisk(dir string) (int64, error) {
 	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
 	if err != nil {
 		return 0, fmt.Errorf("glob dos segmentos: %w", err)
@@ -1347,7 +1347,7 @@ func somaDosSegmentosEmDisco(dir string) (int64, error) {
 // passadas de `go test ./internal/storage/ -race -count=5` com "stat
 // segment-0000000N.dat: no such file or directory" — falha do oráculo, com o
 // produto tendo feito exatamente o que se pedia dele. O gêmeo deste helper no
-// e2e (internal/cli/compaction_e2e_test.go, discoDosSegmentos) já tratava o
+// e2e (internal/cli/compaction_e2e_test.go, diskOfSegmentos) já tratava o
 // caso; este não.
 //
 // O symlink pendurado é o estado que o unlink produz, montado sem depender de
@@ -1360,25 +1360,25 @@ func TestSomaDosSegmentosTrataArquivoSumidoEntreOGlobEOStatComoDiscoDevolvido(t 
 	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
 		t.Fatalf("criar o diretório de dados: %v", err)
 	}
-	const bytesPorSegmento = 128
+	const bytesBySegment = 128
 	for _, id := range []uint32{1, 2} {
-		if err := os.WriteFile(audSegPath(dir, id), make([]byte, bytesPorSegmento), 0o644); err != nil {
+		if err := os.WriteFile(audSecPath(dir, id), make([]byte, bytesBySegment), 0o644); err != nil {
 			t.Fatalf("escrever o segmento %d: %v", id, err)
 		}
 	}
-	if err := os.Symlink(filepath.Join(dir, "data", "aposentado-e-removido.dat"), audSegPath(dir, 3)); err != nil {
+	if err := os.Symlink(filepath.Join(dir, "data", "aposentado-e-removido.dat"), audSecPath(dir, 3)); err != nil {
 		t.Fatalf("montar o segmento que some entre o glob e o stat: %v", err)
 	}
 
-	total, err := somaDosSegmentosEmDisco(dir)
+	total, err := somaOfSegmentosInDisk(dir)
 	if err != nil {
 		t.Fatalf("a soma reprovou um segmento que a aposentadoria removeu (%v): "+
 			"a remoção é o disco voltando ao filesystem (§86), e um instrumento que a trata como erro "+
 			"falha justamente na passada em que a compaction fez o seu trabalho", err)
 	}
-	if querido := int64(2 * bytesPorSegmento); total != querido {
+	if querido := int64(2 * bytesBySegment); total != querido {
 		t.Errorf("a soma devolveu %d bytes com dois segmentos de %d em disco e um removido: querido %d — "+
-			"o arquivo que sumiu sai da conta, os que ficaram continuam nela", total, bytesPorSegmento, querido)
+			"o arquivo que sumiu sai da conta, os que ficaram continuam nela", total, bytesBySegment, querido)
 	}
 }
 
@@ -1398,12 +1398,12 @@ func TestSomaDosSegmentosRecusaErroDeStatQueNaoSejaOArquivoAusente(t *testing.T)
 	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
 		t.Fatalf("criar o diretório de dados: %v", err)
 	}
-	emLaco := audSegPath(dir, 4)
-	if err := os.Symlink(emLaco, emLaco); err != nil {
+	inLoop := audSecPath(dir, 4)
+	if err := os.Symlink(inLoop, inLoop); err != nil {
 		t.Fatalf("montar o segmento ilegível: %v", err)
 	}
 
-	total, err := somaDosSegmentosEmDisco(dir)
+	total, err := somaOfSegmentosInDisk(dir)
 	if err == nil {
 		t.Fatalf("a soma devolveu %d bytes sem erro sobre um segmento que o os.Stat não consegue ler: "+
 			"engolir isso encolhe a soma, e soma que encolhe é o que esta suíte lê como disco devolvido", total)
@@ -1414,7 +1414,7 @@ func TestSomaDosSegmentosRecusaErroDeStatQueNaoSejaOArquivoAusente(t *testing.T)
 	}
 }
 
-// discoDoDatasetInteiroPorOsStat é o item 1 do critério de aceite ao pé da
+// diskOfDatasetInteiroByOsStat é o item 1 do critério de aceite ao pé da
 // letra: TODO arquivo sob o diretório do dataset, um os.Stat por arquivo —
 // segmentos, índices, dicionários, manifest. É o número que o `du` do
 // operador devolveria, e o único capaz de responder à pergunta que o §86 faz
@@ -1427,17 +1427,17 @@ func TestSomaDosSegmentosRecusaErroDeStatQueNaoSejaOArquivoAusente(t *testing.T)
 // compaction fez todo o trabalho que podia. Por isso a asserção sobre este
 // número é de DIREÇÃO — tem de cair —, e a de magnitude fica com os
 // segmentos.
-func discoDoDatasetInteiroPorOsStat(t *testing.T, dir string) int64 {
+func diskOfDatasetInteiroByOsStat(t *testing.T, dir string) int64 {
 	t.Helper()
 	var total int64
-	err := filepath.WalkDir(dir, func(caminho string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
-		fi, err := os.Stat(caminho)
+		fi, err := os.Stat(path)
 		if err != nil {
 			return err
 		}
@@ -1450,12 +1450,12 @@ func discoDoDatasetInteiroPorOsStat(t *testing.T, dir string) int64 {
 	return total
 }
 
-// seladosEmDisco fotografa os segmentos que a compaction pode eleger AGORA
+// seladosInDisk fotografa os segmentos que a compaction pode eleger AGORA
 // (decisão D6: o corrente nunca entra). A fotografia é tirada antes do
-// primeiro ciclo de propósito — o copy-forward empurra o segmento corrente
+// primeiro ciclo de propósito — o cpy-forward empurra o segmento corrente
 // para frente e SELA novos arquivos, e um laço que relesse a lista a cada
 // volta perseguiria as próprias cópias sem nunca terminar.
-func seladosEmDisco(t *testing.T, dir string, corrente uint32) []uint32 {
+func seladosInDisk(t *testing.T, dir string, current uint32) []uint32 {
 	t.Helper()
 	refs, err := segment.ListSegments(filepath.Join(dir, "data"))
 	if err != nil {
@@ -1463,17 +1463,17 @@ func seladosEmDisco(t *testing.T, dir string, corrente uint32) []uint32 {
 	}
 	var ids []uint32
 	for _, ref := range refs {
-		if ref.ID != corrente {
+		if ref.ID != current {
 			ids = append(ids, ref.ID)
 		}
 	}
 	return ids
 }
 
-func chaveDoCorpus(i int) string           { return fmt.Sprintf("e2e-%04d", i) }
-func sequenceDoCorpus(rodada, i int) int64 { return int64(rodada*10000 + i) }
+func keyOfCorpus(i int) string             { return fmt.Sprintf("e2e-%04d", i) }
+func sequenceOfCorpus(rodada, i int) int64 { return int64(rodada*10000 + i) }
 
-func payloadDoCorpus(t testing.TB, s *Store, key string, rodada int) []byte {
+func payloadOfCorpus(t testing.TB, s *Store, key string, rodada int) []byte {
 	t.Helper()
 	return statusPayload(t, s, key, fmt.Sprintf("R%02d", rodada), int64(rodada))
 }
@@ -1485,15 +1485,15 @@ func payloadDoCorpus(t testing.TB, s *Store, key string, rodada int) []byte {
 func exigeCorpusNaUltimaRodada(t *testing.T, s *Store, keys, rodada int, quando string) {
 	t.Helper()
 	for i := 0; i < keys; i++ {
-		k := chaveDoCorpus(i)
+		k := keyOfCorpus(i)
 		rec, _, ok, err := s.GetByKey(s.presente(), []byte(k), nil)
 		if err != nil || !ok {
 			t.Fatalf("%s: a row %q sumiu (ok=%v, err=%v)", quando, k, ok, err)
 		}
-		if want := sequenceDoCorpus(rodada, i); rec.Sequence != want {
+		if want := sequenceOfCorpus(rodada, i); rec.Sequence != want {
 			t.Fatalf("%s: a row %q voltou com sequence %d, queria %d", quando, k, rec.Sequence, want)
 		}
-		if want := payloadDoCorpus(t, s, k, rodada); !bytes.Equal(rec.Payload, want) {
+		if want := payloadOfCorpus(t, s, k, rodada); !bytes.Equal(rec.Payload, want) {
 			t.Fatalf("%s: o payload da row %q não é o da última rodada", quando, k)
 		}
 	}
@@ -1515,7 +1515,7 @@ func exigeCorpusNaUltimaRodada(t *testing.T, s *Store, keys, rodada int, quando 
 //     o Open repara, e ela existe de propósito.
 //  2. Invariante 4: a poda dos mapas e o ajuste dos espelhos acontecem na
 //     mesma seção crítica, e no MESMO passo do rename. Sem observar aqui
-//     dentro, a poda é invisível: o segundo Checkpoint reconstrói o segSize
+//     dentro, a poda é invisível: o segundo Checkpoint reconstrói o secSize
 //     do ListSegments e poda o tally por conta própria, de modo que o estado
 //     FINAL é idêntico com e sem ela. O que a poda decide é o que o Stats
 //     publica DURANTE a janela — e é justamente aí que ele estaria mentindo.
@@ -1528,23 +1528,23 @@ func TestAposentadoriaSaiDosMapasNoMesmoInstanteEmQueSaiDoDiretorio(t *testing.T
 		k := fmt.Sprintf("apo-%03d", i)
 		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
 	}
-	const alvo = 1
-	if _, _, _, err := s.compactaSegmento(context.Background(), alvo); err != nil {
-		t.Fatalf("compactaSegmento: %v", err)
+	const target = 1
+	if _, _, _, err := s.compactaSegment(context.Background(), target); err != nil {
+		t.Fatalf("compactaSegment: %v", err)
 	}
-	// O checkpoint ancora o "antes": o segSize só se move no checkpoint, e sem
+	// O checkpoint ancora o "antes": o secSize só se move no checkpoint, e sem
 	// este a comparação de StorageBytes mediria o atraso da série em vez da
 	// aposentadoria.
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint de base: %v", err)
 	}
-	canonico := audSegPath(dir, alvo)
+	canonico := audSecPath(dir, target)
 	info, err := os.Stat(canonico)
 	if err != nil {
 		t.Fatalf("stat do segmento a aposentar: %v", err)
 	}
-	antes := s.Stats()
-	divergenciasAntes := s.EspelhosDivergentesForTest()
+	before := s.Stats()
+	divergenciasBefore := s.EspelhosDivergentesForTest()
 
 	type foto struct {
 		passo      string
@@ -1555,7 +1555,7 @@ func TestAposentadoriaSaiDosMapasNoMesmoInstanteEmQueSaiDoDiretorio(t *testing.T
 		disk       int64
 	}
 	var fotos []foto
-	s.SetAposentadoriaTraceForTest(func(passo string) {
+	s.SetRetirementTraceForTest(func(passo string) {
 		st := s.Stats()
 		m, err := checkpoint.Load(audManifestPath(dir))
 		if err != nil {
@@ -1563,12 +1563,12 @@ func TestAposentadoriaSaiDosMapasNoMesmoInstanteEmQueSaiDoDiretorio(t *testing.T
 		}
 		listado := false
 		for _, si := range m.Segments {
-			if si.ID == alvo {
+			if si.ID == target {
 				listado = true
 			}
 		}
 		_, errCanonico := os.Stat(canonico)
-		_, errAposentado := os.Stat(canonico + sufixoAposentadoNoTeste)
+		_, errAposentado := os.Stat(canonico + sufixoAposentadoInTest)
 		fotos = append(fotos, foto{
 			passo:      passo,
 			canonico:   errCanonico == nil,
@@ -1578,17 +1578,17 @@ func TestAposentadoriaSaiDosMapasNoMesmoInstanteEmQueSaiDoDiretorio(t *testing.T
 			disk:       st.StorageBytes,
 		})
 	})
-	defer s.SetAposentadoriaTraceForTest(nil)
+	defer s.SetRetirementTraceForTest(nil)
 
-	if err := s.aposentaSegmento(alvo); err != nil {
-		t.Fatalf("aposentaSegmento: %v", err)
+	if err := s.aposentaSegment(target); err != nil {
+		t.Fatalf("aposentaSegment: %v", err)
 	}
 
 	querido := []foto{
-		{"checkpointDasLocations", true, false, true, antes.SegmentsTotal, antes.StorageBytes},
-		{"rename", false, true, true, antes.SegmentsTotal - 1, antes.StorageBytes - info.Size()},
-		{"checkpointDoManifest", false, true, false, antes.SegmentsTotal - 1, antes.StorageBytes - info.Size()},
-		{"unlink", false, false, false, antes.SegmentsTotal - 1, antes.StorageBytes - info.Size()},
+		{"checkpointDasLocations", true, false, true, before.SegmentsTotal, before.StorageBytes},
+		{"rename", false, true, true, before.SegmentsTotal - 1, before.StorageBytes - info.Size()},
+		{"checkpointDoManifest", false, true, false, before.SegmentsTotal - 1, before.StorageBytes - info.Size()},
+		{"unlink", false, false, false, before.SegmentsTotal - 1, before.StorageBytes - info.Size()},
 	}
 	if len(fotos) != len(querido) {
 		t.Fatalf("a aposentadoria passou por %d passos (%+v), queria %d", len(fotos), fotos, len(querido))
@@ -1607,9 +1607,9 @@ func TestAposentadoriaSaiDosMapasNoMesmoInstanteEmQueSaiDoDiretorio(t *testing.T
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint pós-aposentadoria: %v", err)
 	}
-	if got := s.EspelhosDivergentesForTest(); got != divergenciasAntes {
+	if got := s.EspelhosDivergentesForTest(); got != divergenciasBefore {
 		t.Errorf("o checkpoint seguinte acusou %d divergências contra %d antes: a poda e os espelhos saíram discordando",
-			got, divergenciasAntes)
+			got, divergenciasBefore)
 	}
 }
 
@@ -1635,55 +1635,55 @@ func TestCompactionDevolveDiscoSemPerderNenhumaRow(t *testing.T) {
 	const keys, rodadas = 40, 30
 	for r := 0; r < rodadas; r++ {
 		for i := 0; i < keys; i++ {
-			k := chaveDoCorpus(i)
-			mustPut(t, s, k, sequenceDoCorpus(r, i), payloadDoCorpus(t, s, k, r), nil)
+			k := keyOfCorpus(i)
+			mustPut(t, s, k, sequenceOfCorpus(r, i), payloadOfCorpus(t, s, k, r), nil)
 		}
 	}
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 
-	alvos := seladosEmDisco(t, dir, s.Stats().CurrentSegmentID)
+	alvos := seladosInDisk(t, dir, s.Stats().CurrentSegmentID)
 	if len(alvos) < 3 {
 		t.Fatalf("o corpus selou %d segmento(s): sem uma pilha de selados o teste não mede compaction nenhuma", len(alvos))
 	}
-	antes := discoDosSegmentosPorOsStat(t, dir)
-	antesDoDataset := discoDoDatasetInteiroPorOsStat(t, dir)
-	for _, seg := range alvos {
-		if _, _, _, err := s.compactaSegmento(context.Background(), seg); err != nil {
-			t.Fatalf("compactaSegmento(%d): %v", seg, err)
+	before := diskOfSegmentosByOsStat(t, dir)
+	beforeOfDataset := diskOfDatasetInteiroByOsStat(t, dir)
+	for _, sec := range alvos {
+		if _, _, _, err := s.compactaSegment(context.Background(), sec); err != nil {
+			t.Fatalf("compactaSegment(%d): %v", sec, err)
 		}
-		if err := s.aposentaSegmento(seg); err != nil {
-			t.Fatalf("aposentaSegmento(%d): %v", seg, err)
+		if err := s.aposentaSegment(sec); err != nil {
+			t.Fatalf("aposentaSegment(%d): %v", sec, err)
 		}
 	}
-	depois := discoDosSegmentosPorOsStat(t, dir)
-	depoisDoDataset := discoDoDatasetInteiroPorOsStat(t, dir)
+	depois := diskOfSegmentosByOsStat(t, dir)
+	depoisOfDataset := diskOfDatasetInteiroByOsStat(t, dir)
 	t.Logf("disco em segment-*.dat: %d bytes antes, %d depois — %d devolvidos ao filesystem em %d segmentos aposentados",
-		antes, depois, antes-depois, len(alvos))
+		before, depois, before-depois, len(alvos))
 	t.Logf("diretório do dataset INTEIRO (item 1 do critério de aceite, ao pé da letra): %d bytes antes, %d depois — %d devolvidos",
-		antesDoDataset, depoisDoDataset, antesDoDataset-depoisDoDataset)
+		beforeOfDataset, depoisOfDataset, beforeOfDataset-depoisOfDataset)
 
-	if depois >= antes {
-		t.Fatalf("o diretório saiu de %d para %d bytes: não houve compaction nenhuma", antes, depois)
+	if depois >= before {
+		t.Fatalf("o diretório saiu de %d para %d bytes: não houve compaction nenhuma", before, depois)
 	}
 	// O item 1 pede o DIRETÓRIO, e é isto: se os segmentos encolhem enquanto o
 	// dataset inteiro não, a compaction moveu o custo de lugar em vez de
 	// devolvê-lo — e é o dataset inteiro que ocupa o volume que o §86 dá 2 a 3
 	// dias para encher.
-	if depoisDoDataset >= antesDoDataset {
+	if depoisOfDataset >= beforeOfDataset {
 		t.Fatalf("os segmentos caíram de %d para %d bytes mas o dataset inteiro foi de %d para %d: "+
-			"o disco mudou de arquivo, não voltou para o filesystem", antes, depois, antesDoDataset, depoisDoDataset)
+			"o disco mudou de arquivo, não voltou para o filesystem", before, depois, beforeOfDataset, depoisOfDataset)
 	}
 	// O piso não é cosmética. Com %d rodadas sobre o mesmo key set, o vivo é
 	// uma fração pequena do escrito, então uma queda menor que a metade
 	// denuncia aposentadoria PARCIAL — o mutante que retira um segmento e para
 	// deixaria "depois < antes" verde.
-	if depois > antes/2 {
+	if depois > before/2 {
 		t.Errorf("o disco caiu de %d para %d bytes, menos da metade, com %d rodadas de update sobre %d keys: "+
-			"a maior parte do arquivo era garbage e deveria ter voltado", antes, depois, rodadas, keys)
+			"a maior parte do arquivo era garbage e deveria ter voltado", before, depois, rodadas, keys)
 	}
-	sobreviventes, err := filepath.Glob(filepath.Join(dir, "data", "*"+sufixoAposentadoNoTeste))
+	sobreviventes, err := filepath.Glob(filepath.Join(dir, "data", "*"+sufixoAposentadoInTest))
 	if err != nil {
 		t.Fatalf("glob dos aposentados: %v", err)
 	}
@@ -1712,7 +1712,7 @@ func TestCompactionDevolveDiscoSemPerderNenhumaRow(t *testing.T) {
 // descreve ajusta o espelho, na mesma seção crítica —, então o que se afere
 // aqui é a poda contra um tally QUALQUER, e não contra o tally que a
 // sequência feliz produz. É por isso que o teste chama a poda direto em vez de
-// passar pelo aposentaSegmento: aposentar um segmento com record vivo dentro
+// passar pelo aposentaSegment: aposentar um segmento com record vivo dentro
 // dele é o que a função proíbe, e montar essa proibição só para observar uma
 // subtração deixaria em disco um dataset com location pendurada.
 func TestPodaDoSegmentoAposentadoDescontaOsTresEspelhos(t *testing.T) {
@@ -1723,46 +1723,46 @@ func TestPodaDoSegmentoAposentadoDescontaOsTresEspelhos(t *testing.T) {
 		k := fmt.Sprintf("poda-%03d", i)
 		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
 	}
-	// O checkpoint ancora o segSize, que só se move nele: sem isto o
+	// O checkpoint ancora o secSize, que só se move nele: sem isto o
 	// StorageBytes de "antes" descreveria um diretório mais antigo que o
 	// arquivo que a poda desconta.
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint de base: %v", err)
 	}
-	const alvo = 1
-	info, err := os.Stat(audSegPath(dir, alvo))
+	const target = 1
+	info, err := os.Stat(audSecPath(dir, target))
 	if err != nil {
 		t.Fatalf("stat do segmento alvo: %v", err)
 	}
-	_, vivo := tallyDoSegmento(s, alvo)
+	_, vivo := tallyOfSegment(s, target)
 	if vivo == 0 {
 		t.Fatal("a montagem deixou o segmento 1 sem tally vivo: o desconto seria de zero e o teste não provaria nada")
 	}
-	antes := s.Stats()
-	divergenciasAntes := s.EspelhosDivergentesForTest()
+	before := s.Stats()
+	divergenciasBefore := s.EspelhosDivergentesForTest()
 
-	if err := s.podaSegmentoAposentado(alvo); err != nil {
-		t.Fatalf("podaSegmentoAposentado: %v", err)
+	if err := s.podaSegmentAposentado(target); err != nil {
+		t.Fatalf("podaSegmentAposentado: %v", err)
 	}
 
 	depois := s.Stats()
-	if want := antes.LiveBytesUpperBound - vivo; depois.LiveBytesUpperBound != want {
+	if want := before.LiveBytesUpperBound - vivo; depois.LiveBytesUpperBound != want {
 		t.Errorf("LiveBytesUpperBound = %d, queria %d (%d menos os %d que o segmento reivindicava)",
-			depois.LiveBytesUpperBound, want, antes.LiveBytesUpperBound, vivo)
+			depois.LiveBytesUpperBound, want, before.LiveBytesUpperBound, vivo)
 	}
-	if want := antes.SegmentsTotal - 1; depois.SegmentsTotal != want {
+	if want := before.SegmentsTotal - 1; depois.SegmentsTotal != want {
 		t.Errorf("SegmentsTotal = %d, queria %d", depois.SegmentsTotal, want)
 	}
-	if want := antes.StorageBytes - info.Size(); depois.StorageBytes != want {
+	if want := before.StorageBytes - info.Size(); depois.StorageBytes != want {
 		t.Errorf("StorageBytes = %d, queria %d (%d menos os %d bytes do arquivo)",
-			depois.StorageBytes, want, antes.StorageBytes, info.Size())
+			depois.StorageBytes, want, before.StorageBytes, info.Size())
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após a poda do segmento aposentado")
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint pós-poda: %v", err)
 	}
-	if got := s.EspelhosDivergentesForTest(); got != divergenciasAntes {
-		t.Errorf("o checkpoint seguinte acusou %d divergências contra %d antes da poda", got, divergenciasAntes)
+	if got := s.EspelhosDivergentesForTest(); got != divergenciasBefore {
+		t.Errorf("o checkpoint seguinte acusou %d divergências contra %d antes da poda", got, divergenciasBefore)
 	}
 }
 
@@ -1799,18 +1799,18 @@ func segmentosDuraveisDasRows(t *testing.T, dir string, rows []types.RowID) map[
 		if !ok {
 			t.Fatalf("a row %d não tem location DURÁVEL: o dataset em disco não a nomeia em lugar nenhum", rid)
 		}
-		seg, _, _ := rowindex.Unpack(packed)
-		fora[rid] = seg
+		sec, _, _ := rowindex.Unpack(packed)
+		fora[rid] = sec
 	}
 	return fora
 }
 
-// contaPresasAoSegmento devolve quantas das rows ainda têm, EM DISCO, location
+// countPresasAoSegment devolve quantas das rows ainda têm, EM DISCO, location
 // apontando para o segmento dado.
-func contaPresasAoSegmento(duraveis map[types.RowID]uint32, seg uint32) int {
+func countPresasAoSegment(duraveis map[types.RowID]uint32, sec uint32) int {
 	n := 0
 	for _, s := range duraveis {
-		if s == seg {
+		if s == sec {
 			n++
 		}
 	}
@@ -1855,10 +1855,10 @@ func TestAposentadoriaTornaAsLocationsDuraveisAntesDoRename(t *testing.T) {
 		rid, _ := mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
 		rows = append(rows, rid)
 	}
-	const alvo = 1
+	const target = 1
 	var migradas []types.RowID
 	for _, rid := range rows {
-		if seg, _ := localizacaoDaRow(t, s, rid); seg == alvo {
+		if sec, _ := localizacaoOfRow(t, s, rid); sec == target {
 			migradas = append(migradas, rid)
 		}
 	}
@@ -1871,13 +1871,13 @@ func TestAposentadoriaTornaAsLocationsDuraveisAntesDoRename(t *testing.T) {
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint de base: %v", err)
 	}
-	if presas := contaPresasAoSegmento(segmentosDuraveisDasRows(t, dir, migradas), alvo); presas != len(migradas) {
+	if presas := countPresasAoSegment(segmentosDuraveisDasRows(t, dir, migradas), target); presas != len(migradas) {
 		t.Fatalf("o checkpoint de base deixou %d das %d rows fora do segmento %d em disco: a montagem não é a que o teste descreve",
-			len(migradas)-presas, len(migradas), alvo)
+			len(migradas)-presas, len(migradas), target)
 	}
 
-	if _, _, _, err := s.compactaSegmento(context.Background(), alvo); err != nil {
-		t.Fatalf("compactaSegmento: %v", err)
+	if _, _, _, err := s.compactaSegment(context.Background(), target); err != nil {
+		t.Fatalf("compactaSegment: %v", err)
 	}
 	// A premissa que dá sentido à asserção: a varredura republica no OVERLAY
 	// (rowindex.go:171), então neste instante o Store já responde o destino e
@@ -1885,51 +1885,51 @@ func TestAposentadoriaTornaAsLocationsDuraveisAntesDoRename(t *testing.T) {
 	// existe para fechar — se ela não existisse aqui, o teste seria vacuidade
 	// com outro nome.
 	for _, rid := range migradas {
-		if sec, _ := localizacaoDaRow(t, s, rid); sec == alvo {
-			t.Fatalf("a row %d continua no segmento %d depois da varredura: o copy-forward não republicou nada", rid, alvo)
+		if sec, _ := localizacaoOfRow(t, s, rid); sec == target {
+			t.Fatalf("a row %d continua no segmento %d depois da varredura: o cpy-forward não republicou nada", rid, target)
 		}
 	}
-	if presas := contaPresasAoSegmento(segmentosDuraveisDasRows(t, dir, migradas), alvo); presas != len(migradas) {
+	if presas := countPresasAoSegment(segmentosDuraveisDasRows(t, dir, migradas), target); presas != len(migradas) {
 		t.Fatalf("a varredura já deixou %d das %d republicações DURÁVEIS sem checkpoint nenhum: "+
 			"o overlay deixou de ser overlay e este teste não mede mais o passo 1", len(migradas)-presas, len(migradas))
 	}
 
-	canonico := audSegPath(dir, alvo)
+	canonico := audSecPath(dir, target)
 	type observacao struct {
 		passo    string
 		canonico bool
 		presas   int
 	}
 	var obs []observacao
-	s.SetAposentadoriaTraceForTest(func(passo string) {
+	s.SetRetirementTraceForTest(func(passo string) {
 		_, errCanonico := os.Stat(canonico)
 		obs = append(obs, observacao{
 			passo:    passo,
 			canonico: errCanonico == nil,
-			presas:   contaPresasAoSegmento(segmentosDuraveisDasRows(t, dir, migradas), alvo),
+			presas:   countPresasAoSegment(segmentosDuraveisDasRows(t, dir, migradas), target),
 		})
 	})
-	defer s.SetAposentadoriaTraceForTest(nil)
+	defer s.SetRetirementTraceForTest(nil)
 
-	if err := s.aposentaSegmento(alvo); err != nil {
-		t.Fatalf("aposentaSegmento: %v", err)
+	if err := s.aposentaSegment(target); err != nil {
+		t.Fatalf("aposentaSegment: %v", err)
 	}
 
-	antesDoRename := 0
+	beforeOfRename := 0
 	for _, o := range obs {
 		if !o.canonico {
 			continue
 		}
-		antesDoRename++
+		beforeOfRename++
 		if o.presas != 0 {
 			t.Errorf("no passo %q o segmento %d ainda tinha o nome canônico e %d das %d locations republicadas continuavam presas a ele EM DISCO: "+
 				"o Checkpoint que as torna duráveis não rodou antes do rename (invariante 3 da Fase B, §53-55 D5)",
-				o.passo, alvo, o.presas, len(migradas))
+				o.passo, target, o.presas, len(migradas))
 		}
 	}
-	if antesDoRename == 0 {
+	if beforeOfRename == 0 {
 		t.Fatalf("a aposentadoria não deu sinal nenhum enquanto o segmento %d ainda tinha o nome canônico (%+v): "+
-			"sem uma observação ANTES do rename este teste não afirma nada sobre a ordem", alvo, obs)
+			"sem uma observação ANTES do rename este teste não afirma nada sobre a ordem", target, obs)
 	}
 }
 
@@ -1961,12 +1961,12 @@ func TestAposentadoriaDurabilizaODiretorioNoRenameENoUnlink(t *testing.T) {
 		k := fmt.Sprintf("fsy-%03d", i)
 		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
 	}
-	const alvo = 1
-	if _, _, _, err := s.compactaSegmento(context.Background(), alvo); err != nil {
-		t.Fatalf("compactaSegmento: %v", err)
+	const target = 1
+	if _, _, _, err := s.compactaSegment(context.Background(), target); err != nil {
+		t.Fatalf("compactaSegment: %v", err)
 	}
-	canonico := audSegPath(dir, alvo)
-	aposentado := canonico + sufixoAposentadoNoTeste
+	canonico := audSecPath(dir, target)
+	aposentado := canonico + sufixoAposentadoInTest
 
 	type sinal struct {
 		dir        string
@@ -1975,14 +1975,14 @@ func TestAposentadoriaDurabilizaODiretorioNoRenameENoUnlink(t *testing.T) {
 		listado    bool
 	}
 	var sinais []sinal
-	s.SetSyncDeDiretorioTraceForTest(func(d string) {
+	s.SetSyncOfDiretorioTraceForTest(func(d string) {
 		m, err := checkpoint.Load(audManifestPath(dir))
 		if err != nil {
 			t.Fatalf("carregar o manifest no fsync de %q: %v", d, err)
 		}
 		listado := false
 		for _, si := range m.Segments {
-			if si.ID == alvo {
+			if si.ID == target {
 				listado = true
 			}
 		}
@@ -1995,31 +1995,31 @@ func TestAposentadoriaDurabilizaODiretorioNoRenameENoUnlink(t *testing.T) {
 			listado:    listado,
 		})
 	})
-	defer s.SetSyncDeDiretorioTraceForTest(nil)
+	defer s.SetSyncOfDiretorioTraceForTest(nil)
 
-	if err := s.aposentaSegmento(alvo); err != nil {
-		t.Fatalf("aposentaSegmento: %v", err)
+	if err := s.aposentaSegment(target); err != nil {
+		t.Fatalf("aposentaSegment: %v", err)
 	}
 
 	dataDir := filepath.Join(dir, "data")
-	depoisDoRename, depoisDoUnlink := false, false
+	depoisOfRename, depoisOfUnlink := false, false
 	for _, sn := range sinais {
 		if sn.dir != dataDir {
 			t.Errorf("a aposentadoria durabilizou o diretório %q, e o que ela renomeia e remove está em %q", sn.dir, dataDir)
 			continue
 		}
 		if !sn.canonico && sn.aposentado && sn.listado {
-			depoisDoRename = true
+			depoisOfRename = true
 		}
 		if !sn.canonico && !sn.aposentado && !sn.listado {
-			depoisDoUnlink = true
+			depoisOfUnlink = true
 		}
 	}
-	if !depoisDoRename {
+	if !depoisOfRename {
 		t.Errorf("nenhum fsync de %q aconteceu com o rename feito e o manifest ainda nomeando o segmento %d (sinais: %+v): "+
-			"o manifest do passo 3 pode ficar durável sobre uma entrada de diretório que não ficou", dataDir, alvo, sinais)
+			"o manifest do passo 3 pode ficar durável sobre uma entrada de diretório que não ficou", dataDir, target, sinais)
 	}
-	if !depoisDoUnlink {
+	if !depoisOfUnlink {
 		t.Errorf("nenhum fsync de %q aconteceu depois do unlink (sinais: %+v): a remoção fica só em cache e o ciclo seguinte "+
 			"volta a medir disco que esta função já devolveu", dataDir, sinais)
 	}
@@ -2029,20 +2029,20 @@ func TestAposentadoriaDurabilizaODiretorioNoRenameENoUnlink(t *testing.T) {
 // Task 7 — seleção de candidatos e ciclo de vida da goroutine (§53, D6, D7)
 // ============================================================================
 
-// corpusDeSegmentosSelados enche o dataset com updates sobre um key set FIXO
+// corpusOfSegmentosSelados enche o dataset com updates sobre um key set FIXO
 // até haver uma pilha de segmentos SELADOS quase todos de garbage, e deixa o
 // checkpoint feito.
 //
-// O checkpoint não é cerimônia: o segSize só se move nele (store.go, godoc do
+// O checkpoint não é cerimônia: o secSize só se move nele (store.go, godoc do
 // campo), e a seleção do §53 divide o tally pelo TAMANHO DO ARQUIVO. Sem ele
 // nenhum segmento teria tamanho conhecido e a eleição devolveria lista vazia
 // por falta de medida — um teste verde que não mediu nada.
-func corpusDeSegmentosSelados(t *testing.T, s *Store, keys, rodadas int) {
+func corpusOfSegmentosSelados(t *testing.T, s *Store, keys, rodadas int) {
 	t.Helper()
 	for r := 0; r < rodadas; r++ {
 		for i := 0; i < keys; i++ {
-			k := chaveDoCorpus(i)
-			mustPut(t, s, k, sequenceDoCorpus(r, i), payloadDoCorpus(t, s, k, r), nil)
+			k := keyOfCorpus(i)
+			mustPut(t, s, k, sequenceOfCorpus(r, i), payloadOfCorpus(t, s, k, r), nil)
 		}
 	}
 	if err := s.Checkpoint(); err != nil {
@@ -2057,16 +2057,16 @@ func corpusDeSegmentosSelados(t *testing.T, s *Store, keys, rodadas int) {
 // está no meio de um Append.
 func TestSegmentoCorrenteNuncaEhCandidato(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 40, 20)
+	corpusOfSegmentosSelados(t, s, 40, 20)
 
-	corrente := s.Stats().CurrentSegmentID
+	current := s.Stats().CurrentSegmentID
 	eleitos := s.candidatos(0.99)
 	if len(eleitos) == 0 {
 		t.Fatal("nenhum candidato com 20 rodadas de update sobre 40 keys: a montagem não produziu garbage, e a asserção abaixo passaria por vacuidade")
 	}
 	for _, c := range eleitos {
-		if c == corrente {
-			t.Fatalf("o segmento corrente %d foi eleito candidato (eleitos: %v)", corrente, eleitos)
+		if c == current {
+			t.Fatalf("o segmento corrente %d foi eleito candidato (eleitos: %v)", current, eleitos)
 		}
 	}
 }
@@ -2074,10 +2074,10 @@ func TestSegmentoCorrenteNuncaEhCandidato(t *testing.T) {
 // TestCandidatosLeOSegmentoCorrenteDEPOISDeEntrarNaSecaoCritica fixa a ORDEM
 // que o esboço do plano tem invertida, e ela decide a D6 inteira.
 //
-// Lido ANTES do wmu, o curSegID é um valor de um instante em que ninguém
+// Lido ANTES do wmu, o curSecID é um valor de um instante em que ninguém
 // segurava o lock do writer — e quem espera esse lock quase sempre está
 // esperando um CHECKPOINT, que é a operação que o segura do início ao fim.
-// É justamente o checkpoint que instala no segSize o tamanho do segmento
+// É justamente o checkpoint que instala no secSize o tamanho do segmento
 // recém-rotacionado: ou seja, a janela entre a leitura e o Lock é exatamente
 // aquela em que o segmento que virou corrente ganha tamanho conhecido e passa
 // a ser elegível. A seleção acorda com o corrente ANTIGO na mão, não reconhece
@@ -2091,7 +2091,7 @@ func TestSegmentoCorrenteNuncaEhCandidato(t *testing.T) {
 func TestCandidatosLeOSegmentoCorrenteDEPOISDeEntrarNaSecaoCritica(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 20, 20)
+	corpusOfSegmentosSelados(t, s, 20, 20)
 	const key = "cand-barreira"
 	payload := statusPayload(t, s, key, "Start", 1)
 	rowID, _ := mustPut(t, s, key, 1, payload, nil)
@@ -2102,32 +2102,32 @@ func TestCandidatosLeOSegmentoCorrenteDEPOISDeEntrarNaSecaoCritica(t *testing.T)
 	s.wmu.Lock()
 	eleitos := make(chan []uint32, 1)
 	go func() { eleitos <- s.candidatos(0.99) }()
-	if !paradaNoWmuEm("candidatos", 10*time.Second) {
+	if !paradaInWmuIn("candidatos", 10*time.Second) {
 		s.wmu.Unlock()
 		t.Fatal("a seleção não chegou a parar no lock do writer: sem a barreira o teste não distingue implementação nenhuma")
 	}
 
 	// Rotação de verdade, com a seleção já parada no Lock: Append mais
 	// applyRecord, que é o par que o Put executa.
-	antes, _ := s.segW.Current()
-	corrente := antes
-	for i := 0; i < 500 && corrente == antes; i++ {
+	before, _ := s.secW.Current()
+	current := before
+	for i := 0; i < 500 && current == before; i++ {
 		publicaUpdateSobOWmu(t, s, rowID, key, int64(1000+i), payload, payload)
-		corrente, _ = s.segW.Current()
+		current, _ = s.secW.Current()
 	}
-	if corrente == antes {
+	if current == before {
 		s.wmu.Unlock()
-		t.Fatalf("o writer não rotacionou além do segmento %d: sem rotação nesta janela não há o que a leitura antecipada erre", antes)
+		t.Fatalf("o writer não rotacionou além do segmento %d: sem rotação nesta janela não há o que a leitura antecipada erre", before)
 	}
 	// O que o checkpoint que segurava este lock deixaria feito. Não é estado
 	// inventado: é a MESMA escrita da reconciliação (store_checkpoint.go), na
 	// mesma seção crítica, e com o espelho ajustado junto — invariante 4.
-	fi, err := os.Stat(audSegPath(dir, corrente))
+	fi, err := os.Stat(audSecPath(dir, current))
 	if err != nil {
 		s.wmu.Unlock()
 		t.Fatalf("stat do segmento recém-rotacionado: %v", err)
 	}
-	s.segSize[corrente] = fi.Size()
+	s.secSize[current] = fi.Size()
 	s.diskBytesAll.Add(fi.Size())
 	s.wmu.Unlock()
 
@@ -2136,9 +2136,9 @@ func TestCandidatosLeOSegmentoCorrenteDEPOISDeEntrarNaSecaoCritica(t *testing.T)
 		t.Fatal("a seleção devolveu lista vazia: o corpus deixou de produzir candidato e a asserção abaixo não discriminaria nada")
 	}
 	for _, c := range lista {
-		if c == corrente {
+		if c == current {
 			t.Fatalf("o segmento %d virou corrente COM a seleção já parada no lock e ainda assim foi eleito (eleitos: %v): "+
-				"o corrente foi lido antes da seção crítica, e a D6 vale sobre um instante que já passou", corrente, lista)
+				"o corrente foi lido antes da seção crítica, e a D6 vale sobre um instante que já passou", current, lista)
 		}
 	}
 }
@@ -2154,13 +2154,13 @@ func TestCandidatosLeOSegmentoCorrenteDEPOISDeEntrarNaSecaoCritica(t *testing.T)
 // com ratio 1.0 seria o dataset inteiro, em laço.
 func TestCandidatoSoSaiAbaixoDoMinimumLiveRatio(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 40, 20)
-	corrente := s.Stats().CurrentSegmentID
+	corpusOfSegmentosSelados(t, s, 40, 20)
+	current := s.Stats().CurrentSegmentID
 
 	razoes := map[uint32]float64{}
 	s.wmu.Lock()
-	for id, t := range s.segTally {
-		if tam, ok := s.segSize[id]; ok && tam > 0 && id != corrente {
+	for id, t := range s.secTally {
+		if tam, ok := s.secSize[id]; ok && tam > 0 && id != current {
 			razoes[id] = float64(t.liveBytes) / float64(tam)
 		}
 	}
@@ -2188,12 +2188,12 @@ func TestCandidatoSoSaiAbaixoDoMinimumLiveRatio(t *testing.T) {
 
 // TestCandidatosElegeOSegmentoSemeadoPeloOpenSemCheckpointDoChamador fixa a
 // mecânica que TODO dataset novo tem e que nenhum teste desta suíte alcançava.
-// Os outros montam o corpus com o corpusDeSegmentosSelados, que TERMINA em
-// Checkpoint: todos eles medem a eleição já com o segSize reconciliado, e
+// Os outros montam o corpus com o corpusOfSegmentosSelados, que TERMINA em
+// Checkpoint: todos eles medem a eleição já com o secSize reconciliado, e
 // nenhum distingue "o segmento tem tamanho conhecido" de "alguém checkpointou".
 //
 // O que se afirma aqui é o caso sem checkpoint nenhum do chamador. O Checkpoint
-// incondicional do Open reconstrói o segSize a partir do ListSegments que o
+// incondicional do Open reconstrói o secSize a partir do ListSegments que o
 // checkpoint() de store_checkpoint.go faz ao montar o manifest, e num dataset recém-criado o único
 // arquivo listado é o corrente, ainda do tamanho do header
 // (segment.HeaderSize). O segmento 1 nasce, portanto, com DENOMINADOR
@@ -2202,7 +2202,7 @@ func TestCandidatoSoSaiAbaixoDoMinimumLiveRatio(t *testing.T) {
 //
 // Não é curiosidade de laboratório, e é por isso que o teste existe: é a causa
 // do primeiro dente da curva de disco da rodada de aceite, e o comentário de
-// fracaoDeCrescimentoTolerada (benchmark/ingest-bench/harness.go) se apoia
+// fractionOfGrowthTolerada (benchmark/ingest-bench/harness.go) se apoia
 // NESTE teste em vez de afirmar a mecânica por conta própria. A explicação que
 // estava escrita lá — "segmento selado depois do último checkpoint ainda não é
 // elegível" — descreve o caso geral e não este, e o artefato da rodada a
@@ -2215,9 +2215,9 @@ func TestCandidatoSoSaiAbaixoDoMinimumLiveRatio(t *testing.T) {
 func TestCandidatosElegeOSegmentoSemeadoPeloOpenSemCheckpointDoChamador(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 400})
 
-	tam, ok := tamanhoConhecidoDoSegmento(s, 1)
+	tam, ok := sizeConhecidoOfSegment(s, 1)
 	if !ok || tam != segment.HeaderSize {
-		t.Fatalf("segSize[1] = (%d, %v) logo após o Open, queria (%d, true): é esta semeadura que "+
+		t.Fatalf("secSize[1] = (%d, %v) logo após o Open, queria (%d, true): é esta semeadura que "+
 			"torna o segmento 1 elegível sem checkpoint do chamador", tam, ok, segment.HeaderSize)
 	}
 	if eleitos := s.candidatos(0.50); len(eleitos) != 0 {
@@ -2226,15 +2226,15 @@ func TestCandidatosElegeOSegmentoSemeadoPeloOpenSemCheckpointDoChamador(t *testi
 
 	// Enche o segmento 1 até a rotação, guardando as keys que nasceram nele —
 	// são elas, e só elas, que precisam ser superadas para o tally zerar.
-	var doSeg1 []string
+	var ofSeg1 []string
 	for i := 0; i < 500 && s.Stats().CurrentSegmentID == 1; i++ {
 		k := fmt.Sprintf("semeadura-%03d", i)
 		mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
-		doSeg1 = append(doSeg1, k)
+		ofSeg1 = append(ofSeg1, k)
 	}
 	if s.Stats().CurrentSegmentID == 1 {
 		t.Fatalf("o segmento 1 continua corrente após %d records: sem selá-lo a eleição cairia na D6 e o "+
-			"teste passaria pelo motivo errado", len(doSeg1))
+			"teste passaria pelo motivo errado", len(ofSeg1))
 	}
 	if eleitos := s.candidatos(0.50); len(eleitos) != 0 {
 		t.Fatalf("candidatos = %v com as rows do segmento 1 ainda VIVAS: a eleição não está lendo o liveBytes", eleitos)
@@ -2243,15 +2243,15 @@ func TestCandidatosElegeOSegmentoSemeadoPeloOpenSemCheckpointDoChamador(t *testi
 	// O esgotamento: toda row nascida no segmento 1 superada por um update. É
 	// o que a carga de regime do harness faz por sorteio, e o que lá custa o
 	// coupon collector das rows do primeiro segmento.
-	for _, k := range doSeg1 {
+	for _, k := range ofSeg1 {
 		prev := mustGetAud(t, s, k)
 		mustPut(t, s, k, 2, statusPayload(t, s, k, "Stop", 2), &prev)
 	}
-	if _, vivos := tallyDoSegmento(s, 1); vivos != 0 {
+	if _, vivos := tallyOfSegment(s, 1); vivos != 0 {
 		t.Fatalf("liveBytes do segmento 1 = %d depois de superar todas as rows dele", vivos)
 	}
-	if tam, _ := tamanhoConhecidoDoSegmento(s, 1); tam != segment.HeaderSize {
-		t.Fatalf("segSize[1] = %d, queria %d: alguma coisa checkpointou no meio e o teste deixou de ser "+
+	if tam, _ := sizeConhecidoOfSegment(s, 1); tam != segment.HeaderSize {
+		t.Fatalf("secSize[1] = %d, queria %d: alguma coisa checkpointou no meio e o teste deixou de ser "+
 			"sobre a semeadura do Open", tam, segment.HeaderSize)
 	}
 	if eleitos := s.candidatos(0.50); !slices.Equal(eleitos, []uint32{1}) {
@@ -2266,7 +2266,7 @@ func TestCandidatosElegeOSegmentoSemeadoPeloOpenSemCheckpointDoChamador(t *testi
 // distinguir uma mudança de estado de uma troca de ordem.
 func TestCandidatosSaemEmOrdemDeterministica(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 40, 20)
+	corpusOfSegmentosSelados(t, s, 40, 20)
 
 	primeira := s.candidatos(0.99)
 	if len(primeira) < 3 {
@@ -2302,23 +2302,23 @@ func TestCloseCancelaEAguardaACompaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	corpusDeSegmentosSelados(t, s, 40, 30)
+	corpusOfSegmentosSelados(t, s, 40, 30)
 
-	emVoo := make(chan struct{})
-	libera := make(chan struct{})
-	liberar := sync.OnceFunc(func() { close(libera) })
+	inVoo := make(chan struct{})
+	release := make(chan struct{})
+	liberar := sync.OnceFunc(func() { close(release) })
 	defer liberar()
-	var umaVez sync.Once
-	s.SetAposentadoriaTraceForTest(func(string) {
-		umaVez.Do(func() {
-			close(emVoo)
-			<-libera
+	var oneVez sync.Once
+	s.SetRetirementTraceForTest(func(string) {
+		oneVez.Do(func() {
+			close(inVoo)
+			<-release
 		})
 	})
 
-	s.IniciaCompaction(context.Background(), 0.5)
+	s.StartCompaction(context.Background(), 0.5)
 	select {
-	case <-emVoo:
+	case <-inVoo:
 	case <-time.After(60 * time.Second):
 		t.Fatal("a compaction não chegou a aposentar nada em 60s: sem uma operação em voo o Close não tem o que aguardar")
 	}
@@ -2344,7 +2344,7 @@ func TestCloseCancelaEAguardaACompaction(t *testing.T) {
 }
 
 // TestCompactionEmBackgroundDevolveDiscoSemNinguemChamar é a Task 7 inteira do
-// lado do storage: ninguém chama compactaSegmento nem aposentaSegmento aqui.
+// lado do storage: ninguém chama compactaSegment nem aposentaSegment aqui.
 // A goroutine elege, varre, aposenta e volta a dormir por conta própria, que é
 // como ela roda em produção.
 //
@@ -2356,28 +2356,28 @@ func TestCompactionEmBackgroundDevolveDiscoSemNinguemChamar(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
 	const keys, rodadas = 40, 30
-	corpusDeSegmentosSelados(t, s, keys, rodadas)
+	corpusOfSegmentosSelados(t, s, keys, rodadas)
 
-	antes := discoDosSegmentosPorOsStat(t, dir)
-	s.IniciaCompaction(context.Background(), 0.5)
+	before := diskOfSegmentosByOsStat(t, dir)
+	s.StartCompaction(context.Background(), 0.5)
 
 	prazo := time.Now().Add(60 * time.Second)
-	depois := antes
+	depois := before
 	for time.Now().Before(prazo) {
-		if depois = discoDosSegmentosPorOsStat(t, dir); depois <= antes/2 {
+		if depois = diskOfSegmentosByOsStat(t, dir); depois <= before/2 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	s.ParaCompaction()
+	s.ForCompaction()
 
 	t.Logf("disco em segment-*.dat: %d bytes antes, %d depois — %d devolvidos sem ninguém chamar a compaction",
-		antes, depois, antes-depois)
-	if depois > antes/2 {
+		before, depois, before-depois)
+	if depois > before/2 {
 		t.Fatalf("o disco saiu de %d para %d bytes com %d rodadas de update sobre %d keys: "+
-			"a maior parte do arquivo era garbage e a goroutine não a devolveu", antes, depois, rodadas, keys)
+			"a maior parte do arquivo era garbage e a goroutine não a devolveu", before, depois, rodadas, keys)
 	}
-	sobreviventes, err := filepath.Glob(filepath.Join(dir, "data", "*"+sufixoAposentadoNoTeste))
+	sobreviventes, err := filepath.Glob(filepath.Join(dir, "data", "*"+sufixoAposentadoInTest))
 	if err != nil {
 		t.Fatalf("glob dos aposentados: %v", err)
 	}
@@ -2394,22 +2394,22 @@ func TestCompactionEmBackgroundDevolveDiscoSemNinguemChamar(t *testing.T) {
 	exigeCorpusNaUltimaRodada(t, reaberto, keys, rodadas-1, "após Close+Open")
 }
 
-// registroDeLog é o io.Writer do logger quando quem escreve é uma goroutine e
+// recordOfLog é o io.Writer do logger quando quem escreve é uma goroutine e
 // quem lê é o teste. Um bytes.Buffer nu aí é corrida de dado, e o -race a
 // acusaria antes de o oráculo chegar a dizer qualquer coisa — o que se perde
 // nesse caso não é só a asserção, é a razão da falha.
-type registroDeLog struct {
+type recordOfLog struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
-func (r *registroDeLog) Write(p []byte) (int, error) {
+func (r *recordOfLog) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.buf.Write(p)
 }
 
-func (r *registroDeLog) String() string {
+func (r *recordOfLog) String() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.buf.String()
@@ -2436,9 +2436,9 @@ func mataOWriter(t *testing.T, s *Store) {
 }
 
 // TestCompactionEmBackgroundParaNaPrimeiraFalhaDoWriter é o oráculo do modo
-// falho sticky do LAÇO, que o godoc do rodaCompaction gasta um parágrafo
+// falho sticky do LAÇO, que o godoc do runCompaction gasta um parágrafo
 // argumentando e que a suíte não media: trocar o bloco de erro inteiro por
-// `_ = s.passadaDeCompaction(ctx, ratio)` deixava `go test ./...` verde de ponta
+// `_ = s.passOfCompaction(ctx, ratio)` deixava `go test ./...` verde de ponta
 // a ponta, com o laço insistindo para sempre sobre um writer que só sai do modo
 // falho com Close e reabertura (§14.14).
 //
@@ -2450,132 +2450,132 @@ func mataOWriter(t *testing.T, s *Store) {
 // São duas metades, e nenhuma delas basta sozinha:
 //
 //   - a goroutine TERMINA por conta própria, sem cancelamento e sem Close. Quem
-//     responde isso sem inventar seam novo é o próprio compEmVoo: um laço que
+//     responde isso sem inventar seam novo é o próprio compInVoo: um laço que
 //     insistisse continuaria de pé, e o Wait nunca voltaria;
 //   - e ela se EXPLICA. `compaction.parou` é o único aviso de que o disco
 //     voltou a crescer sem nada devolvê-lo (§53-55, §86); uma parada silenciosa
 //     é indistinguível, no painel do operador, de uma compaction que nunca teve
 //     o que fazer.
 func TestCompactionEmBackgroundParaNaPrimeiraFalhaDoWriter(t *testing.T) {
-	var registro registroDeLog
+	var record recordOfLog
 	s := openStore(t, Options{
 		Dir:           t.TempDir(),
 		SegmentSize:   8 << 10,
 		IndexedFields: []types.FieldID{fldStatus},
-		Log:           logging.New(&registro, logging.FormatText, slog.LevelInfo),
+		Log:           logging.New(&record, logging.FormatText, slog.LevelInfo),
 	})
-	corpusDeSegmentosSelados(t, s, 40, 30)
+	corpusOfSegmentosSelados(t, s, 40, 30)
 	if eleitos := s.candidatos(0.5); len(eleitos) == 0 {
 		t.Fatal("nenhum candidato depois do corpus: sem passada para falhar, a asserção abaixo passaria por vacuidade")
 	}
 	mataOWriter(t, s)
 
-	s.IniciaCompaction(context.Background(), 0.5)
+	s.StartCompaction(context.Background(), 0.5)
 
 	terminou := make(chan struct{})
-	go func() { s.compEmVoo.Wait(); close(terminou) }()
+	go func() { s.compInVoo.Wait(); close(terminou) }()
 	select {
 	case <-terminou:
 	case <-time.After(60 * time.Second):
 		t.Fatal("a goroutine de compaction continua de pé com o writer em modo falho: ela está insistindo sobre um estado " +
 			"que só Close e reabertura desfazem (§14.14), varrendo segmento e disputando o wmu para reencontrar o mesmo erro")
 	}
-	if saida := registro.String(); !strings.Contains(saida, "compaction.parou") {
+	if saida := record.String(); !strings.Contains(saida, "compaction.parou") {
 		t.Errorf("a compaction parou sem dizer nada ao operador: o disco volta a crescer e o único aviso do §53-55 não saiu.\nlog:\n%s", saida)
 	}
 }
 
-// eventoSegmentoAposentado é o `event` do §95 que a passadaDeCompaction emite
+// eventSegmentAposentado é o `event` do §95 que a passOfCompaction emite
 // por segmento removido. Fica em constante porque o teste abaixo o usa como
 // CHAVE de busca e como texto de falha, e um `event` é justamente o
 // identificador estável que alerta e script casam (logging.go, godoc do
 // Debug): errar a grafia aqui produziria um teste que procura por uma linha
 // que ninguém emite e falha dizendo o contrário do que houve.
-const eventoSegmentoAposentado = "compaction.segmento_aposentado"
+const eventSegmentAposentado = "compaction.segmento_aposentado"
 
-// linhasDoEvento decodifica a saída do logger linha a linha e devolve, NA
+// rowsOfEvent decodifica a saída do logger linha a linha e devolve, NA
 // ORDEM em que saíram, os campos daquelas cujo `event` é o pedido.
 //
 // Lê o formato JSON, que é o de produção (§95), e com UseNumber de propósito.
 // Decodificado no default do encoding/json todo número vira float64, e aí o
 // teste aprovaria pela última casa uma aritmética errada — além de perder a
 // distinção entre o número e o texto que o parágrafo seguinte cobra.
-func linhasDoEvento(t *testing.T, saida, evento string) []map[string]any {
+func rowsOfEvent(t *testing.T, saida, event string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
-	for i, texto := range strings.Split(strings.TrimSpace(saida), "\n") {
-		if texto == "" {
+	for i, text := range strings.Split(strings.TrimSpace(saida), "\n") {
+		if text == "" {
 			continue
 		}
-		dec := json.NewDecoder(strings.NewReader(texto))
+		dec := json.NewDecoder(strings.NewReader(text))
 		dec.UseNumber()
-		var linha map[string]any
-		if err := dec.Decode(&linha); err != nil {
-			t.Fatalf("a linha %d do log não é JSON: %v — %q", i+1, err, texto)
+		var row map[string]any
+		if err := dec.Decode(&row); err != nil {
+			t.Fatalf("a linha %d do log não é JSON: %v — %q", i+1, err, text)
 		}
-		if linha[campoEventoDoLog] == evento {
-			out = append(out, linha)
+		if row[fieldEventOfLog] == event {
+			out = append(out, row)
 		}
 	}
 	return out
 }
 
-// campoEventoDoLog repete o nome que o §95 dá ao campo e que o pacote logging
+// fieldEventOfLog repete o nome que o §95 dá ao campo e que o pacote logging
 // escreve (logging.go, fieldEvent). A repetição é o preço de o teste ler o log
 // como o COLETOR o lê — um handler traduzido por ReplaceAttr não expõe o nome
 // final por nenhuma outra via, e assumir "event" sem dizer de onde ele vem é
 // que seria acoplamento silencioso.
-const campoEventoDoLog = "event"
+const fieldEventOfLog = "event"
 
-// campoNumerico exige que a chave esteja na linha E que tenha saído como
+// fieldNumerico exige que a chave esteja na linha E que tenha saído como
 // número. As duas metades são o oráculo, e nenhuma delas cobre a outra:
 // ausente, o operador simplesmente não tem o dado; presente como TEXTO, ele
 // continua legível para um humano e quebra todo consumidor que o log
 // estruturado do §95 existe para servir.
-func campoNumerico(t *testing.T, linha map[string]any, chave string) int64 {
+func fieldNumerico(t *testing.T, row map[string]any, key string) int64 {
 	t.Helper()
-	bruto, presente := linha[chave]
+	bruto, presente := row[key]
 	if !presente {
 		t.Fatalf("o %s saiu sem o campo %q, que é um dos cinco números pelos quais o operador acompanha o disco voltando (§53-55, §86): %v",
-			eventoSegmentoAposentado, chave, linha)
+			eventSegmentAposentado, key, row)
 	}
 	n, ok := bruto.(json.Number)
 	if !ok {
 		t.Fatalf("o campo %q do %s saiu como %T (%v) em vez de número: o painel do M4 não soma texto",
-			chave, eventoSegmentoAposentado, bruto, bruto)
+			key, eventSegmentAposentado, bruto, bruto)
 	}
 	v, err := n.Int64()
 	if err != nil {
-		t.Fatalf("o campo %q do %s saiu com %q, que não é inteiro: %v", chave, eventoSegmentoAposentado, n.String(), err)
+		t.Fatalf("o campo %q do %s saiu com %q, que não é inteiro: %v", key, eventSegmentAposentado, n.String(), err)
 	}
 	return v
 }
 
-// rowsVivasPorSegmento conta, segmento a segmento, quantas rows do corpus a
+// rowsVivasBySegment conta, segmento a segmento, quantas rows do corpus a
 // location NOMEIA neste instante. É o critério de vivo da decisão D2 — "a
 // location ainda aponta para este record" — aplicado pelo teste numa varredura
 // própria, e é contra ele que o `records_copiados` do log é medido.
-func rowsVivasPorSegmento(t *testing.T, s *Store, keys int) map[uint32]int64 {
+func rowsVivasBySegment(t *testing.T, s *Store, keys int) map[uint32]int64 {
 	t.Helper()
 	fora := make(map[uint32]int64)
 	for i := 0; i < keys; i++ {
-		k := chaveDoCorpus(i)
+		k := keyOfCorpus(i)
 		rec, _, ok, err := s.GetByKey(s.presente(), []byte(k), nil)
 		if err != nil || !ok {
 			t.Fatalf("a row %q sumiu antes da passada (ok=%v, err=%v)", k, ok, err)
 		}
-		seg, _ := localizacaoDaRow(t, s, rec.RowID)
-		fora[seg]++
+		sec, _ := localizacaoOfRow(t, s, rec.RowID)
+		fora[sec]++
 	}
 	return fora
 }
 
-// tamanhosDosSegmentosPorArquivo fotografa o diretório de dados arquivo a
-// arquivo, por os.Stat. Diferente do discoDosSegmentosPorOsStat, que soma, ele
+// tamanhosOfSegmentosByArquivo fotografa o diretório de dados arquivo a
+// arquivo, por os.Stat. Diferente do diskOfSegmentosByOsStat, que soma, ele
 // PRESERVA quem é quem: é a diferença entre saber que o diretório cresceu e
 // saber em qual arquivo o byte caiu, e é essa segunda pergunta que separa o
-// que o copy-forward apendou do que ele apenas encontrou lá.
-func tamanhosDosSegmentosPorArquivo(t *testing.T, dir string) map[string]int64 {
+// que o cpy-forward apendou do que ele apenas encontrou lá.
+func tamanhosOfSegmentosByArquivo(t *testing.T, dir string) map[string]int64 {
 	t.Helper()
 	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
 	if err != nil {
@@ -2588,7 +2588,7 @@ func tamanhosDosSegmentosPorArquivo(t *testing.T, dir string) map[string]int64 {
 	return fora
 }
 
-// bytesApendadosNoDestino é o oráculo do `bytes_escritos`, e ele é feito de
+// bytesApendadosInDest é o oráculo do `bytes_escritos`, e ele é feito de
 // ARQUIVO: quantos bytes a passada acrescentou aos segmentos de DESTINO entre
 // as duas fotografias.
 //
@@ -2597,7 +2597,7 @@ func tamanhosDosSegmentosPorArquivo(t *testing.T, dir string) map[string]int64 {
 // padding, sem prealocação (segment.go:191) —, logo arquivo que cresce cresceu
 // de record copiado. O writer rotaciona criando o segmento seguinte com um
 // header de segment.HeaderSize, que é o único byte de um arquivo novo que não
-// veio do copy-forward, e por isso ele é descontado. E os IDs são monotônicos
+// veio do cpy-forward, e por isso ele é descontado. E os IDs são monotônicos
 // (openNew(segID+1)), de modo que nenhum nome aposentado volta com outro
 // conteúdo por baixo do mesmo caminho.
 //
@@ -2605,21 +2605,21 @@ func tamanhosDosSegmentosPorArquivo(t *testing.T, dir string) map[string]int64 {
 // não recebeu escrita nenhuma — a compaction só o lê — e fica fora da conta,
 // que é o que faz esta medida ser sobre o destino e não sobre o saldo do
 // diretório.
-func bytesApendadosNoDestino(antes, depois map[string]int64) int64 {
+func bytesApendadosInDest(before, depois map[string]int64) int64 {
 	var total int64
-	for caminho, tamanhoDepois := range depois {
-		if tamanhoAntes, existia := antes[caminho]; existia {
-			total += tamanhoDepois - tamanhoAntes
+	for path, sizeDepois := range depois {
+		if sizeBefore, existia := before[path]; existia {
+			total += sizeDepois - sizeBefore
 			continue
 		}
-		total += tamanhoDepois - segment.HeaderSize
+		total += sizeDepois - segment.HeaderSize
 	}
 	return total
 }
 
 // TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu é o oráculo do
 // compaction.segmento_aposentado, e ele existe porque a revisão desta tarefa
-// MEDIU o mutante: apagar o bloco inteiro do Log.Info da passadaDeCompaction
+// MEDIU o mutante: apagar o bloco inteiro do Log.Info da passOfCompaction
 // deixava `go test ./... -count=1` verde de ponta a ponta. A única menção à
 // linha em toda a suíte era uma frase dentro de um COMENTÁRIO do e2e
 // (compaction_e2e_test.go), e comentário não é asserção.
@@ -2642,7 +2642,7 @@ func bytesApendadosNoDestino(antes, depois map[string]int64) int64 {
 //     operador com uma conta de disco que não fecha, e a ordem é o que o godoc
 //     do candidatos compra com o slices.Sort — sem ela o operador não
 //     distingue mudança de estado de troca de ordem;
-//   - os CINCO campos estão lá, e como NÚMERO (campoNumerico);
+//   - os CINCO campos estão lá, e como NÚMERO (fieldNumerico);
 //   - `bytes_lidos` bate com o ARQUIVO em disco medido antes da passada, menos
 //     o header do segmento. É o oráculo do
 //     TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader aplicado agora ao
@@ -2651,7 +2651,7 @@ func bytesApendadosNoDestino(antes, depois map[string]int64) int64 {
 //   - `records_copiados` bate com quantas rows o índice nomeava dentro do
 //     segmento antes da passada, contadas pelo teste;
 //   - `bytes_escritos` bate, SOMADO na passada, com o que os arquivos de
-//     DESTINO cresceram nela (bytesApendadosNoDestino). A medida é do total e
+//     DESTINO cresceram nela (bytesApendadosInDest). A medida é do total e
 //     não de cada linha, e o motivo é do produto: os segmentos eleitos copiam
 //     todos para o MESMO writer, então o disco não sabe dizer qual byte veio
 //     de qual origem. O que ela apanha é todo viés que não se cancele dentro
@@ -2670,17 +2670,17 @@ func bytesApendadosNoDestino(antes, depois map[string]int64) int64 {
 // soma de disco acima; e é por isso que ela não substitui o
 // TestVarreduraCompletaZeraOTallyMesmoComResiduoOrfao nem o
 // TestVarreduraQueParaAntesDoFimDoArquivoNaoZeraOTally, que fixam o `escritos`
-// no RETORNO do compactaSegmento, segmento a segmento.
+// no RETORNO do compactaSegment, segmento a segmento.
 func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
-	var registro registroDeLog
+	var record recordOfLog
 	dir := t.TempDir()
 	s := openStore(t, Options{
 		Dir:         dir,
 		SegmentSize: 8 << 10,
-		Log:         logging.New(&registro, logging.FormatJSON, slog.LevelInfo),
+		Log:         logging.New(&record, logging.FormatJSON, slog.LevelInfo),
 	})
 	const keys, rodadas = 40, 30
-	corpusDeSegmentosSelados(t, s, keys, rodadas)
+	corpusOfSegmentosSelados(t, s, keys, rodadas)
 
 	// A eleição é fotografada ANTES da passada, e é a mesma que ela vai fazer:
 	// nada escreve neste dataset além do teste, e o candidatos é determinístico
@@ -2691,31 +2691,31 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 			"e todas as asserções abaixo passariam por vacuidade", rodadas, keys)
 	}
 	tamanhos := make(map[uint32]int64, len(eleitos))
-	for _, seg := range eleitos {
-		tamanhos[seg] = fileSizeAud(t, audSegPath(dir, seg))
+	for _, sec := range eleitos {
+		tamanhos[sec] = fileSizeAud(t, audSecPath(dir, sec))
 	}
-	vivas := rowsVivasPorSegmento(t, s, keys)
-	arquivosAntes := tamanhosDosSegmentosPorArquivo(t, dir)
+	vivas := rowsVivasBySegment(t, s, keys)
+	arquivosBefore := tamanhosOfSegmentosByArquivo(t, dir)
 
-	if _, err := s.passadaDeCompaction(context.Background(), 0.5); err != nil {
-		t.Fatalf("passadaDeCompaction: %v", err)
+	if _, err := s.passOfCompaction(context.Background(), 0.5); err != nil {
+		t.Fatalf("passOfCompaction: %v", err)
 	}
-	arquivosDepois := tamanhosDosSegmentosPorArquivo(t, dir)
+	arquivosDepois := tamanhosOfSegmentosByArquivo(t, dir)
 
-	saida := registro.String()
-	linhas := linhasDoEvento(t, saida, eventoSegmentoAposentado)
-	registrados := make([]uint32, 0, len(linhas))
-	var copiadosNoTotal, escritosNoTotal, devolvidoNoTotal int64
-	for _, linha := range linhas {
-		sec := uint32(campoNumerico(t, linha, "segmento"))
-		copiados := campoNumerico(t, linha, "records_copiados")
-		lidos := campoNumerico(t, linha, "bytes_lidos")
-		escritos := campoNumerico(t, linha, "bytes_escritos")
-		devolvidos := campoNumerico(t, linha, "bytes_devolvidos")
+	saida := record.String()
+	rows := rowsOfEvent(t, saida, eventSegmentAposentado)
+	registrados := make([]uint32, 0, len(rows))
+	var copiadosInTotal, escritosInTotal, devolvidoInTotal int64
+	for _, row := range rows {
+		sec := uint32(fieldNumerico(t, row, "segmento"))
+		copiados := fieldNumerico(t, row, "records_copiados")
+		lidos := fieldNumerico(t, row, "bytes_lidos")
+		escritos := fieldNumerico(t, row, "bytes_escritos")
+		devolvidos := fieldNumerico(t, row, "bytes_devolvidos")
 		registrados = append(registrados, sec)
-		copiadosNoTotal += copiados
-		escritosNoTotal += escritos
-		devolvidoNoTotal += devolvidos
+		copiadosInTotal += copiados
+		escritosInTotal += escritos
+		devolvidoInTotal += devolvidos
 
 		if devolvidos != lidos-escritos {
 			t.Errorf("o segmento %d registrou bytes_devolvidos=%d com bytes_lidos=%d e bytes_escritos=%d: "+
@@ -2730,7 +2730,7 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 		}
 		if querido := vivas[sec]; copiados != querido {
 			t.Errorf("o segmento %d registrou records_copiados=%d, mas o índice nomeava %d row(s) dentro dele antes da passada: "+
-				"vivo é a location apontar para o record (decisão D2), e é essa contagem que o copy-forward move",
+				"vivo é a location apontar para o record (decisão D2), e é essa contagem que o cpy-forward move",
 				sec, copiados, querido)
 		}
 		if (copiados == 0) != (escritos == 0) {
@@ -2742,38 +2742,38 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 		t.Fatalf("a passada aposentou %v e registrou %v: cada aposentadoria tem de deixar a sua linha, na ordem da eleição — "+
 			"o que não sai no log é disco que voltou sem ninguém saber.\nlog:\n%s", eleitos, registrados, saida)
 	}
-	if copiadosNoTotal == 0 {
-		t.Fatal("nenhum record copiado na passada inteira: o corpus não exercitou o copy-forward e o campo records_copiados " +
+	if copiadosInTotal == 0 {
+		t.Fatal("nenhum record copiado na passada inteira: o corpus não exercitou o cpy-forward e o campo records_copiados " +
 			"seria zero mesmo com a contagem quebrada")
 	}
-	if devolvidoNoTotal <= 0 {
+	if devolvidoInTotal <= 0 {
 		t.Fatalf("a passada registrou %d bytes devolvidos no total: sem garbage recolhido a asserção da aritmética "+
-			"passaria com lidos e escritos ambos zerados", devolvidoNoTotal)
+			"passaria com lidos e escritos ambos zerados", devolvidoInTotal)
 	}
 	// O `bytes_escritos` contra o DISCO. Sem esta linha ele é o único dos cinco
 	// campos sem medida própria aqui: as duas conferências de coerência lá de
 	// cima leem o valor logado dos dois lados da conta, e um `escritos` errado
 	// que chegue coerente à linha passa por elas — o que sobra é uma métrica de
 	// volume de escrita que ninguém confere contra a escrita.
-	if apendado := bytesApendadosNoDestino(arquivosAntes, arquivosDepois); escritosNoTotal != apendado {
+	if apendado := bytesApendadosInDest(arquivosBefore, arquivosDepois); escritosInTotal != apendado {
 		t.Errorf("a passada registrou bytes_escritos somando %d, mas os arquivos de destino cresceram %d bytes nela: "+
-			"o campo mede o que o copy-forward gravou, e é contra o filesystem que ele responde — "+
+			"o campo mede o que o cpy-forward gravou, e é contra o filesystem que ele responde — "+
 			"viés que não se cancele entre os %d segmento(s) eleitos aparece exatamente aqui",
-			escritosNoTotal, apendado, len(eleitos))
+			escritosInTotal, apendado, len(eleitos))
 	}
 	t.Logf("%d aposentadoria(s) registradas: %d records copiados, %d bytes escritos no destino e %d devolvidos ao filesystem",
-		len(linhas), copiadosNoTotal, escritosNoTotal, devolvidoNoTotal)
+		len(rows), copiadosInTotal, escritosInTotal, devolvidoInTotal)
 }
 
 // TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine é a guarda de dupla
-// partida do IniciaCompaction, que o godoc afirma e que nada sustentava: apagar
-// o `if s.compCancela != nil { return }` deixava storage, server e cli verdes.
+// partida do StartCompaction, que o godoc afirma e que nada sustentava: apagar
+// o `if s.compCancel != nil { return }` deixava storage, server e cli verdes.
 //
 // O estrago que a guarda impede está escrito no próprio godoc e é de ARQUIVO,
 // não de contagem: duas varreduras disputam o wmu record a record, elegem a
 // mesma lista, e a segunda renomeia e apaga um segmento que a primeira ainda
 // está lendo. A isso soma-se um vazamento de ciclo de vida — a segunda partida
-// SOBRESCREVE o compCancela, de modo que o ParaCompaction do Close cancelaria só
+// SOBRESCREVE o compCancel, de modo que o ForCompaction do Close cancelaria só
 // a última goroutine e ficaria esperando para sempre pela primeira.
 //
 // O oráculo é positivo, e não uma espera por travamento: a primeira goroutine
@@ -2783,27 +2783,27 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 // são quatro passos por segmento, todos da mesma goroutine.
 func TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 40, 30)
+	corpusOfSegmentosSelados(t, s, 40, 30)
 
-	emVoo := make(chan struct{})
-	libera := make(chan struct{})
-	liberar := sync.OnceFunc(func() { close(libera) })
+	inVoo := make(chan struct{})
+	release := make(chan struct{})
+	liberar := sync.OnceFunc(func() { close(release) })
 	defer liberar()
 	var barreira atomic.Bool
 	var intrusos atomic.Int64
-	s.SetAposentadoriaTraceForTest(func(string) {
+	s.SetRetirementTraceForTest(func(string) {
 		if barreira.CompareAndSwap(false, true) {
-			close(emVoo)
-			<-libera
+			close(inVoo)
+			<-release
 			return
 		}
 		intrusos.Add(1)
 	})
 
 	comecou := time.Now()
-	s.IniciaCompaction(context.Background(), 0.5)
+	s.StartCompaction(context.Background(), 0.5)
 	select {
-	case <-emVoo:
+	case <-inVoo:
 	case <-time.After(60 * time.Second):
 		t.Fatal("a compaction não chegou a aposentar nada em 60s: sem a primeira goroutine parada dentro de uma " +
 			"aposentadoria não há com quem a segunda colidir, e a asserção passaria por vacuidade")
@@ -2816,22 +2816,22 @@ func TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine(t *testing.T) {
 	// piso de dois segundos, é folga para o -race e para máquina carregada sem
 	// transformar o teste numa espera fixa.
 	decorrido := time.Since(comecou)
-	janela := 20 * decorrido
-	if janela < 2*time.Second {
-		janela = 2 * time.Second
+	window := 20 * decorrido
+	if window < 2*time.Second {
+		window = 2 * time.Second
 	}
 
-	s.IniciaCompaction(context.Background(), 0.5)
-	prazo := time.Now().Add(janela)
+	s.StartCompaction(context.Background(), 0.5)
+	prazo := time.Now().Add(window)
 	for time.Now().Before(prazo) && intrusos.Load() == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if n := intrusos.Load(); n != 0 {
-		t.Fatalf("a segunda chamada do IniciaCompaction subiu outra goroutine: %d passo(s) de aposentadoria em %v com a "+
+		t.Fatalf("a segunda chamada do StartCompaction subiu outra goroutine: %d passo(s) de aposentadoria em %v com a "+
 			"primeira parada no seam. Duas varreduras concorrentes aposentam o arquivo que a outra está lendo, e o "+
-			"cancelamento do Close só alcança a última que partiu", n, janela)
+			"cancelamento do Close só alcança a última que partiu", n, window)
 	}
-	t.Logf("segunda partida ignorada: nenhum passo de aposentadoria alheio em %v (primeira passada em %v)", janela, decorrido)
+	t.Logf("segunda partida ignorada: nenhum passo de aposentadoria alheio em %v (primeira passada em %v)", window, decorrido)
 	liberar()
 }
 
@@ -2850,16 +2850,16 @@ func TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine(t *testing.T) {
 // não pede o valor, pede a TAXA, que só existe sobre série monotônica. O
 // segmento varrido na segunda volta é o DESTINO da primeira cópia, porque é o
 // único jeito de as duas parcelas de `escritos` serem não nulas: depois do
-// copy-forward, a origem não tem mais nada vivo.
+// cpy-forward, a origem não tem mais nada vivo.
 func TestContadoresDaCompactionAcumulamOQueAVarreduraLeuEEscreveu(t *testing.T) {
-	s, _, _ := abreComResiduoOrfaoNoSegmento1(t)
+	s, _, _ := openWithResiduoOrfaoInSegmento1(t)
 	if lidos, escritos := s.compBytesLidos.Load(), s.compBytesEscritos.Load(); lidos != 0 || escritos != 0 {
 		t.Fatalf("montagem: o dataset já contabiliza %d bytes lidos / %d escritos antes de qualquer varredura", lidos, escritos)
 	}
 
-	_, lidos1, escritos1, err := s.compactaSegmento(context.Background(), 1)
+	_, lidos1, escritos1, err := s.compactaSegment(context.Background(), 1)
 	if err != nil {
-		t.Fatalf("compactaSegmento(1): %v", err)
+		t.Fatalf("compactaSegment(1): %v", err)
 	}
 	if lidos1 <= 0 || escritos1 <= 0 {
 		t.Fatalf("montagem: a varredura do segmento 1 leu %d e escreveu %d bytes — com qualquer um dos dois zerado "+
@@ -2875,19 +2875,19 @@ func TestContadoresDaCompactionAcumulamOQueAVarreduraLeuEEscreveu(t *testing.T) 
 	// (D6 nunca elege o corrente) e varrê-lo é o que produz a SEGUNDA parcela
 	// de bytes escritos.
 	rec := mustGetAud(t, s, "lv")
-	destino, _ := localizacaoDaRow(t, s, rec.RowID)
-	if destino == 1 {
-		t.Fatalf("a cópia continua no segmento 1: o copy-forward não moveu nada e a segunda varredura releria a mesma origem")
+	dest, _ := localizacaoOfRow(t, s, rec.RowID)
+	if dest == 1 {
+		t.Fatalf("a cópia continua no segmento 1: o cpy-forward não moveu nada e a segunda varredura releria a mesma origem")
 	}
-	rotacionaAlemDe(t, s, destino)
+	rotacionaAlemOf(t, s, dest)
 
-	_, lidos2, escritos2, err := s.compactaSegmento(context.Background(), destino)
+	_, lidos2, escritos2, err := s.compactaSegment(context.Background(), dest)
 	if err != nil {
-		t.Fatalf("compactaSegmento(%d): %v", destino, err)
+		t.Fatalf("compactaSegment(%d): %v", dest, err)
 	}
 	if lidos2 <= 0 || escritos2 <= 0 {
 		t.Fatalf("montagem: a varredura do segmento %d leu %d e escreveu %d bytes; sem segunda parcela não há acumulação a provar",
-			destino, lidos2, escritos2)
+			dest, lidos2, escritos2)
 	}
 	if lidos, escritos := s.compBytesLidos.Load(), s.compBytesEscritos.Load(); lidos != lidos1+lidos2 || escritos != escritos1+escritos2 {
 		t.Errorf("depois de duas varreduras os contadores valem %d/%d, e as parcelas somam %d/%d: "+
@@ -2899,7 +2899,7 @@ func TestContadoresDaCompactionAcumulamOQueAVarreduraLeuEEscreveu(t *testing.T) 
 // TestContadoresDaCompactionSobemNaVarreduraQueFracassou é o oráculo do
 // caminho de ERRO dos dois contadores do §92, que o teste irmão não alcança:
 // lá as duas varreduras terminam bem, e um `if err != nil { return }` antes
-// dos dois `Add` do defer da compactaSegmento sobrevive à suíte inteira.
+// dos dois `Add` do defer da compactaSegment sobrevive à suíte inteira.
 //
 // A escolha que ele fixa é deliberada e está argumentada em produção: o que
 // estas séries medem é o I/O que a compaction CONSUMIU, e uma varredura que
@@ -2912,21 +2912,21 @@ func TestContadoresDaCompactionAcumulamOQueAVarreduraLeuEEscreveu(t *testing.T) 
 // sobem e o tally do teste vizinho NÃO zera, sobre a mesma montagem.
 //
 // A montagem é a da corrupção porque é a única que devolve erro com as DUAS
-// parcelas não nulas (ver corrompeOUltimoRecordDoSegmento). Os outros dois
+// parcelas não nulas (ver corruptOUltimoRecordOfSegment). Os outros dois
 // caminhos de fracasso citados pelo comentário de produção — a falha sticky do
 // writer (§14.14) e o cancelamento do Close (D7) — passam pelo mesmo defer e
 // param cedo demais para produzir `escritos`: cobri-los aqui trocaria um
 // oráculo de dois lados por um de um lado só.
 func TestContadoresDaCompactionSobemNaVarreduraQueFracassou(t *testing.T) {
-	s, dir, _ := abreComResiduoOrfaoNoSegmento1(t)
+	s, dir, _ := openWithResiduoOrfaoInSegmento1(t)
 	if lidos, escritos := s.compBytesLidos.Load(), s.compBytesEscritos.Load(); lidos != 0 || escritos != 0 {
 		t.Fatalf("montagem: o dataset já contabiliza %d bytes lidos / %d escritos antes de qualquer varredura", lidos, escritos)
 	}
-	corrompeOUltimoRecordDoSegmento(t, dir, 1)
+	corruptOUltimoRecordOfSegment(t, dir, 1)
 
-	copiados, lidos, escritos, err := s.compactaSegmento(context.Background(), 1)
+	copiados, lidos, escritos, err := s.compactaSegment(context.Background(), 1)
 	if !errors.Is(err, ErrDatasetCorrupt) {
-		t.Fatalf("compactaSegmento sobre segmento com record corrompido devolveu %v, queria ErrDatasetCorrupt", err)
+		t.Fatalf("compactaSegment sobre segmento com record corrompido devolveu %v, queria ErrDatasetCorrupt", err)
 	}
 	if copiados == 0 || lidos <= 0 || escritos <= 0 {
 		t.Fatalf("montagem: a varredura que fracassou devolveu %d record(s) copiado(s), %d bytes lidos e %d escritos — "+
@@ -2941,7 +2941,7 @@ func TestContadoresDaCompactionSobemNaVarreduraQueFracassou(t *testing.T) {
 	}
 	if got := s.compBytesEscritos.Load(); got != escritos {
 		t.Errorf("nishidb_compaction_bytes_written = %d depois de uma varredura que devolveu erro tendo escrito %d bytes: "+
-			"o copy-forward parcial já está no disco de destino e já saiu do tally da origem — descontá-lo da série "+
+			"o cpy-forward parcial já está no disco de destino e já saiu do tally da origem — descontá-lo da série "+
 			"faria o /metrics negar trabalho que foi feito (§92)",
 			got, escritos)
 	}
@@ -2962,26 +2962,26 @@ func TestContadoresDaCompactionSobemNaVarreduraQueFracassou(t *testing.T) {
 // de ver; a atividade ele lê na taxa dos dois contadores.
 func TestMedidorDaCompactionSobeComOLacoEDesceQuandoEleAcaba(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 40, 10)
+	corpusOfSegmentosSelados(t, s, 40, 10)
 
 	if s.Stats().CompactionRunning {
 		t.Fatal("montagem: o medidor já dizia 1 antes de alguém iniciar a compaction")
 	}
-	s.IniciaCompaction(context.Background(), 0.5)
+	s.StartCompaction(context.Background(), 0.5)
 	if !s.Stats().CompactionRunning {
 		t.Error("o medidor do §92 diz 0 com a goroutine do §53-55 de pé: o operador que ligou a chave no YAML " +
 			"vê no painel exatamente o mesmo número de quem a deixou desligada")
 	}
-	s.ParaCompaction()
+	s.ForCompaction()
 	if s.Stats().CompactionRunning {
-		t.Error("o medidor continua em 1 depois do ParaCompaction, que CANCELA e AGUARDA (decisão D7): " +
+		t.Error("o medidor continua em 1 depois do ForCompaction, que CANCELA e AGUARDA (decisão D7): " +
 			"série presa em 1 é alerta que nunca dispara")
 	}
 }
 
 // TestMedidorDaCompactionDesceQuandoOLacoParaSozinho é o caso que justifica a
 // série existir, e ele não é alcançado pelo teste irmão: ali quem derruba o
-// laço é o ParaCompaction, aqui o laço morre SOZINHO pelo modo falho sticky do
+// laço é o ForCompaction, aqui o laço morre SOZINHO pelo modo falho sticky do
 // writer (§14.14), sem cancelamento e sem Close.
 //
 // É a única situação em que o disco volta a crescer para sempre com o processo
@@ -2996,22 +2996,22 @@ func TestMedidorDaCompactionSobeComOLacoEDesceQuandoEleAcaba(t *testing.T) {
 // número que a parada publica, e acoplá-los faria um oráculo cobrir o buraco do
 // outro.
 func TestMedidorDaCompactionDesceQuandoOLacoParaSozinho(t *testing.T) {
-	var registro registroDeLog
+	var record recordOfLog
 	s := openStore(t, Options{
 		Dir:           t.TempDir(),
 		SegmentSize:   8 << 10,
 		IndexedFields: []types.FieldID{fldStatus},
-		Log:           logging.New(&registro, logging.FormatText, slog.LevelInfo),
+		Log:           logging.New(&record, logging.FormatText, slog.LevelInfo),
 	})
-	corpusDeSegmentosSelados(t, s, 40, 30)
+	corpusOfSegmentosSelados(t, s, 40, 30)
 	if eleitos := s.candidatos(0.5); len(eleitos) == 0 {
 		t.Fatal("nenhum candidato depois do corpus: a passada não teria em que falhar e o laço terminaria por falta de trabalho")
 	}
 	mataOWriter(t, s)
 
-	s.IniciaCompaction(context.Background(), 0.5)
+	s.StartCompaction(context.Background(), 0.5)
 	terminou := make(chan struct{})
-	go func() { s.compEmVoo.Wait(); close(terminou) }()
+	go func() { s.compInVoo.Wait(); close(terminou) }()
 	select {
 	case <-terminou:
 	case <-time.After(60 * time.Second):
@@ -3019,6 +3019,6 @@ func TestMedidorDaCompactionDesceQuandoOLacoParaSozinho(t *testing.T) {
 	}
 	if s.Stats().CompactionRunning {
 		t.Errorf("o medidor do §92 diz 1 com o laço já encerrado pela falha sticky: o painel afirma que a compaction está de pé "+
-			"justamente quando ela parou e NÃO volta sozinha (§53-55, §86).\nlog:\n%s", registro.String())
+			"justamente quando ela parou e NÃO volta sozinha (§53-55, §86).\nlog:\n%s", record.String())
 	}
 }

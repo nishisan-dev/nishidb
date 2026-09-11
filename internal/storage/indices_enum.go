@@ -14,7 +14,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// lookupIndexado é a superfície ÚNICA de consulta ao índice por segmento, e é
+// lookupIndexed é a superfície ÚNICA de consulta ao índice por segmento, e é
 // ela que o Store.Lookup chama (spec §3.1).
 //
 // Ela nasceu como o corpo comum de LookupBitmap e LookupHash: mantendo os dois
@@ -32,10 +32,10 @@ import (
 // enumeração do histórico. A ordem vida → aposMu e vida → selMu respeita a
 // invariante do godoc do aposMu.
 //
-// A chave canônica sai de um buffer LOCAL, e não do s.chaveIndiceBuf: aquele é
+// A chave canônica sai de um buffer LOCAL, e não do s.keyIndexBuf: aquele é
 // reutilizado sob o wmu pelo caminho de escrita. Uma alocação por CONSULTA não
 // aparece em gate nenhum — os gates medem por LINHA varrida.
-func (s *Store) lookupIndexado(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
+func (s *Store) lookupIndexed(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
 	}
@@ -44,23 +44,23 @@ func (s *Store) lookupIndexado(field types.FieldID, v types.Value) (types.RowIDI
 	// aqui depois de perguntar pelas capabilities, então um campo sem índice é
 	// plano inválido — e devolver vazio faria um bug de planner virar resultado
 	// silenciosamente menor.
-	if !slices.Contains(s.camposIndexados, field) {
+	if !slices.Contains(s.fieldsIndexados, field) {
 		return nil, fmt.Errorf("%w: campo %d não tem índice por segmento", ErrInvalidArgument, field)
 	}
-	chave, err := valuekey.Append(nil, v)
+	key, err := valuekey.Append(nil, v)
 	if err != nil {
 		return nil, err
 	}
 	// primary.HashKey é a MESMA função da ingestão e da reconstrução. Trocá-la
 	// aqui daria um hash bem formado que não casa com posting nenhuma.
-	fontes, err := s.fontesDoCampo(field, primary.HashKey(chave))
+	fontes, err := s.fontesOfField(field, primary.HashKey(key))
 	if err != nil {
 		return nil, err
 	}
 	return &hashIterator{s: s, it: segindex.Union(fontes)}, nil
 }
 
-// fontesDoCampo monta as fontes da consulta, em ordem crescente de segmento
+// fontesOfField monta as fontes da consulta, em ordem crescente de segmento
 // (spec §3.2):
 //
 //	selado COM seção do campo → a fatia contígua das postings, zero alocação;
@@ -84,12 +84,12 @@ func (s *Store) lookupIndexado(field types.FieldID, v types.Value) (types.RowIDI
 // escreve a ressalva por extenso. Tratar ok=false como "zero linhas" seria
 // falso negativo, a única coisa que a revalidação do §44 não sabe consertar:
 // ela só descarta candidato a mais.
-func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Source, error) {
+func (s *Store) fontesOfField(field types.FieldID, h uint64) ([]segindex.Source, error) {
 	refs, err := s.listaSegmentos()
 	if err != nil {
 		return nil, err
 	}
-	corrente := s.curSegID.Load()
+	current := s.curSecID.Load()
 	fontes := make([]segindex.Source, 0, len(refs))
 	// desiste fecha o que já foi montado. Sem isto, uma falha no meio da
 	// montagem vazaria as fontes anteriores — e vazar iterador de índice só
@@ -105,11 +105,11 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Source,
 	// mesma linha de cache por Lookup, e é justamente contenção de atômico que a
 	// medição pré-ciclo do piloto encontrou consumindo 64% do CPU. Duas somas por
 	// consulta não aparecem em gate nenhum — os gates medem por LINHA varrida.
-	var porIndice, porEnumeracao int64
+	var byIndex, byEnumeration int64
 	for i, ref := range refs {
-		if f, ok := s.fonteIndexada(ref.ID, corrente, campo, h); ok {
+		if f, ok := s.sourceIndexada(ref.ID, current, field, h); ok {
 			fontes = append(fontes, f)
-			porIndice++
+			byIndex++
 			continue
 		}
 		// NO MATERIALIZADO, um único segmento sem índice COLAPSA a consulta
@@ -127,7 +127,7 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Source,
 		// O histórico não precisa disso: lá não existe update, as faixas de
 		// rowId são estáticas e a enumeração por faixa não consulta estado
 		// concorrente nenhum.
-		if !s.EhHistorico() {
+		if !s.EhHistory() {
 			for _, f := range fontes {
 				_ = f.Close()
 			}
@@ -135,26 +135,26 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Source,
 			// segmentos responderam pela enumeração única. Contar os que
 			// "teriam" respondido por índice esconderia exatamente o que a
 			// série existe para mostrar.
-			s.segPorEnumeracao.Add(int64(len(refs)))
-			return []segindex.Source{s.fonteDeTodasAsLocations()}, nil
+			s.secByEnumeration.Add(int64(len(refs)))
+			return []segindex.Source{s.sourceOfTodasAsLocations()}, nil
 		}
-		f, err := s.fonteDaFaixa(refs, i)
+		f, err := s.sourceOfFaixa(refs, i)
 		if err != nil {
 			return desiste(err)
 		}
 		fontes = append(fontes, f)
-		porEnumeracao++
+		byEnumeration++
 	}
 	// Publicadas mesmo com a montagem tendo falhado? Não: o desiste() acima
 	// retorna antes, e o que ele desfaz são as fontes, não o trabalho de decidir
 	// por qual caminho cada segmento responderia. Contar uma montagem abortada
 	// diria que houve consulta onde não houve.
-	s.segPorIndice.Add(porIndice)
-	s.segPorEnumeracao.Add(porEnumeracao)
+	s.secByIndex.Add(byIndex)
+	s.secByEnumeration.Add(byEnumeration)
 	return fontes, nil
 }
 
-// fonteIndexada devolve a fonte do índice do segmento, ou ok=false quando este
+// sourceIndexada devolve a fonte do índice do segmento, ou ok=false quando este
 // segmento não responde por este campo e o chamador precisa enumerá-lo.
 //
 // Erro de ABERTURA do selado não sobe: um .sidx ausente, com formato que este
@@ -172,24 +172,24 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Source,
 // arquivo, para o segmento voltar a ser pendente por AUSÊNCIA; é o gatilho 3 da
 // §2.4, e ele tem número próprio — débito 103 —, com a decisão que falta escrita
 // lá: se uma CONSULTA pode apagar arquivo do dataset.
-func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint64) (segindex.Source, bool) {
-	if seg == corrente {
-		if f, ok := s.fonteDoWIP(seg, campo, h); ok {
+func (s *Store) sourceIndexada(sec, current uint32, field types.FieldID, h uint64) (segindex.Source, bool) {
+	if sec == current {
+		if f, ok := s.sourceOfWIP(sec, field, h); ok {
 			return f, true
 		}
 		// ok=false aqui tem DUAS causas, e as duas caem certas no caminho
 		// selado: o mapa vazio da janela de rotação (o .sidx deste segmento
 		// ainda não existe → enumera), e o snapshot de `corrente` OBSOLETO —
 		// a rotação completou no meio da consulta e os WIPs publicados já são
-		// do segmento novo (wipsSeg difere). Neste segundo caso o segmento
+		// do segmento novo (wipsSec difere). Neste segundo caso o segmento
 		// acabou de ganhar .sidx, e é ele que responde; devolver ok=false
 		// direto o faria enumerar sem necessidade, e devolver o WIP do
 		// segmento errado — o que este código fazia — suprimia as linhas dele
 		// dos candidatos: falso negativo, que o §44 não conserta.
 	}
-	s.garanteSelado(seg)
+	s.garanteSealed(sec)
 	// O Lookup roda SOB o selMu, e não só a busca no mapa, pela mesma razão que
-	// o fonteDoWIP segura o lock durante a caminhada da cadeia: entre pegar o
+	// o sourceOfWIP segura o lock durante a caminhada da cadeia: entre pegar o
 	// ponteiro e usá-lo, a aposentadoria pode fechar o índice. É lá dentro que a
 	// Fonte registra a vida que impede o munmap (segindex.Sealed.Close), e
 	// registrar fora do lock deixaria justamente a janela que a vida existe para
@@ -197,19 +197,19 @@ func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint6
 	//
 	// O QUE NÃO PODE ACONTECER DEBAIXO DESTE LOCK é trabalho longo, e o crc32c
 	// era isso: o selMu é o mesmo lock que o aposAppend toma a cada rotação, sob
-	// o wmu. Por isso o garanteSelado já o conferiu, fora de lock nenhum, e o
+	// o wmu. Por isso o garanteSealed já o conferiu, fora de lock nenhum, e o
 	// Lookup daqui encontra o sync.Once cumprido. O que sobra sob o lock é busca
 	// binária em tabela de dezenas de entradas mais o incremento da vida.
 	s.selMu.RLock()
 	defer s.selMu.RUnlock()
-	sel := s.selados[seg]
+	sel := s.selados[sec]
 	if sel == nil {
 		return nil, false
 	}
-	return sel.Lookup(campo, h)
+	return sel.Lookup(field, h)
 }
 
-// garanteSelado abre o índice selado do segmento sob demanda e o publica no
+// garanteSealed abre o índice selado do segmento sob demanda e o publica no
 // cache. Não devolve nada de propósito: quem for usá-lo tem de relê-lo do mapa
 // sob o selMu, porque entre publicar e usar a aposentadoria pode ter passado.
 //
@@ -220,7 +220,7 @@ func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint6
 // A ausência NÃO é memorizada, e a escolha é deliberada: um dataset migrado
 // paga um open(2) falho por segmento por consulta, que é ruído ao lado da
 // enumeração que vem logo depois — e memorizar a ausência exigiria um segundo
-// estado no mapa que o Close teria de saber distinguir de um Selado vivo.
+// estado no mapa que o Close teria de saber distinguir de um Sealed vivo.
 //
 // A APOSENTADORIA PODE FECHAR O ÍNDICE COM UMA VARREDURA EM VOO, e quem resolve
 // isso é a contagem de vidas do segindex.Sealed: o Fecha impede leitores novos e
@@ -240,16 +240,16 @@ func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint6
 // inode, então ele sobrevive ao rename e continuaria servindo o conteúdo velho.
 // Publicá-lo depois da evição faria o segmento responder sem a seção do campo
 // novo (ou seja, ENUMERANDO) até a próxima abertura do dataset, e ainda
-// prenderia o inode substituído. Ver o godoc do selGeracao.
-func (s *Store) garanteSelado(seg uint32) {
+// prenderia o inode substituído. Ver o godoc do selGeneration.
+func (s *Store) garanteSealed(sec uint32) {
 	s.selMu.RLock()
-	_, ok := s.selados[seg]
-	geracao := s.selGeracao
+	_, ok := s.selados[sec]
+	generation := s.selGeneration
 	s.selMu.RUnlock()
 	if ok {
 		return
 	}
-	novo, err := segindex.OpenSealed(segindex.SealedPath(s.dirDeDados(), seg))
+	nw, err := segindex.OpenSealed(segindex.SealedPath(s.dirOfData(), sec))
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			// Ausente é o estado NORMAL — segmento fora da janela, ou gravado
@@ -269,7 +269,7 @@ func (s *Store) garanteSelado(seg uint32) {
 			// simplesmente ausente.
 			s.opts.Log.Warn("indice.selado_ilegivel",
 				"o índice do segmento não pôde ser aberto; ele responde por enumeração",
-				"segmento", seg, "erro", err.Error())
+				"segmento", sec, "erro", err.Error())
 		}
 		return
 	}
@@ -293,12 +293,12 @@ func (s *Store) garanteSelado(seg uint32) {
 	// ok=false e o segmento enumera, que é a degradação correta. Publicar
 	// mantém o Once cumprido e faz esse ok=false custar nada; recusar obrigaria
 	// a próxima consulta a reabrir e reconferir o arquivo podre inteiro.
-	if err := novo.IntegrityErr(); err != nil {
+	if err := nw.IntegrityErr(); err != nil {
 		// A série sobe junto do WARN, e no mesmo ponto, porque as duas descrevem
 		// o mesmo evento: um arquivo de índice reprovado.
 		//
 		// Ela conta por ABERTURA, e a linha logo abaixo é o que torna isso quase
-		// "uma vez por processo": o publicaSelado instala o mapeamento REPROVADO
+		// "uma vez por processo": o publicaSealed instala o mapeamento REPROVADO
 		// no cache, então a consulta seguinte o encontra lá e volta sem reconferir
 		// o crc. O incremento só se repete se a evição tirar o mapeamento do
 		// caminho. Por isso a série é DEGRAU e não taxa — e por isso a Ajuda dela
@@ -307,15 +307,15 @@ func (s *Store) garanteSelado(seg uint32) {
 		s.crcFalhas.Add(1)
 		s.opts.Log.Warn("indice.selado_corrompido",
 			"o índice do segmento não passou no crc32c; ele responde por enumeração até ser reconstruído",
-			"segmento", seg, "erro", err.Error())
+			"segmento", sec, "erro", err.Error())
 	}
-	s.publicaSelado(seg, novo, geracao)
+	s.publicaSealed(sec, nw, generation)
 }
 
-// publicaSelado instala no cache o mapeamento aberto pelo garanteSelado, ou o
+// publicaSealed instala no cache o mapeamento aberto pelo garanteSealed, ou o
 // descarta quando ele já não descreve o arquivo que está em disco.
 //
-// Função própria, e não o rabo do garanteSelado, porque a janela que ela fecha é
+// Função própria, e não o rabo do garanteSealed, porque a janela que ela fecha é
 // entre DUAS chamadas — abrir e publicar — e um teste que não consiga se meter no
 // meio delas não prova nada sobre a geração.
 //
@@ -323,37 +323,37 @@ func (s *Store) garanteSelado(seg uint32) {
 // de OUTRO segmento) e é o lado barato do erro: a consulta seguinte reabre o
 // arquivo. O lado caro é o oposto — publicar o velho, que degrada até a próxima
 // abertura do dataset.
-func (s *Store) publicaSelado(seg uint32, novo *segindex.Sealed, geracao uint64) {
+func (s *Store) publicaSealed(sec uint32, nw *segindex.Sealed, generation uint64) {
 	s.selMu.Lock()
 	defer s.selMu.Unlock()
 	if s.selados == nil {
-		// Só acontece em dataset sem campo indexado, que o lookupIndexado já
+		// Só acontece em dataset sem campo indexado, que o lookupIndexed já
 		// recusou antes de chegar aqui. A guarda existe porque a alternativa é
 		// escrever num mapa nil — pânico —, e o preço dela é fechar o
 		// mapeamento que ninguém mais teria como alcançar.
-		_ = novo.Close()
+		_ = nw.Close()
 		return
 	}
-	if s.selGeracao != geracao {
-		_ = novo.Close()
+	if s.selGeneration != generation {
+		_ = nw.Close()
 		return
 	}
 	// Duas consultas podem ter aberto o mesmo arquivo em paralelo: quem chega
 	// depois descarta o próprio mapeamento e fica com o já publicado, senão o
 	// segundo vazaria — o Close só alcança o que está no mapa.
-	if _, ok := s.selados[seg]; ok {
-		_ = novo.Close()
+	if _, ok := s.selados[sec]; ok {
+		_ = nw.Close()
 		return
 	}
-	s.selados[seg] = novo
+	s.selados[sec] = nw
 }
 
-// fonteDoWIP caminha a cadeia do valor no índice MUTÁVEL do segmento corrente.
+// sourceOfWIP caminha a cadeia do valor no índice MUTÁVEL do segmento corrente.
 //
 // ok=false em dois casos. O primeiro é não haver WIP para o campo — a janela de
 // rotação, em que o aposAppend fecha os WIPs do segmento que deixou de ser
 // corrente, sela e só então abre os do novo. O segundo é a IDENTIDADE: `seg` é
-// o que o CHAMADOR acredita ser o corrente (um snapshot do curSegID tirado no
+// o que o CHAMADOR acredita ser o corrente (um snapshot do curSecID tirado no
 // início da consulta), e os WIPs publicados podem já pertencer ao segmento
 // seguinte quando a rotação completou no meio. Responder pelo WIP do segmento
 // errado devolveria ok=true com as postings de OUTRO segmento e suprimiria as
@@ -365,13 +365,13 @@ func (s *Store) publicaSelado(seg uint32, novo *segindex.Sealed, geracao uint64)
 // fechá-lo entre pegar o ponteiro e caminhar a cadeia. É lock FOLHA e a
 // consulta não toma o wmu por baixo dele. A identidade mora sob o MESMO lock
 // que publica mapa e dono juntos — não há janela entre conferir e caminhar.
-func (s *Store) fonteDoWIP(seg uint32, campo types.FieldID, h uint64) (segindex.Source, bool) {
+func (s *Store) sourceOfWIP(sec uint32, field types.FieldID, h uint64) (segindex.Source, bool) {
 	s.selMu.RLock()
 	defer s.selMu.RUnlock()
-	if s.wipsSeg != seg {
+	if s.wipsSec != sec {
 		return nil, false
 	}
-	w := s.wips[campo]
+	w := s.wips[field]
 	if w == nil {
 		return nil, false
 	}
@@ -380,15 +380,15 @@ func (s *Store) fonteDoWIP(seg uint32, campo types.FieldID, h uint64) (segindex.
 	// linha: a fatia é a única forma de o iterador sobreviver ao lock, que não
 	// pode durar a varredura inteira sem travar a rotação atrás de um
 	// consumidor lento.
-	return &fonteMaterializada{rows: w.Lookup(h)}, true
+	return &sourceMaterializada{rows: w.Lookup(h)}, true
 }
 
 // A enumeração — a resposta de segmento SEM índice — tem uma forma por modo de
-// dataset, e as duas moram no laço do fontesDoCampo:
+// dataset, e as duas moram no laço do fontesOfField:
 //
-//	histórico     → fonteDaFaixa, por segmento: as faixas de rowId são
+//	histórico     → sourceOfFaixa, por segmento: as faixas de rowId são
 //	                estáticas e a fonte não consulta estado concorrente nenhum;
-//	materializado → fonteDeTodasAsLocations, para a CONSULTA INTEIRA: a
+//	materializado → sourceOfTodasAsLocations, para a CONSULTA INTEIRA: a
 //	                caminhada única do locations.idx, pelo colapso explicado lá.
 //
 // NÃO HÁ REGRESSÃO CONTRA O FULL SCAN, e esta é a frase que impede a próxima
@@ -397,13 +397,13 @@ func (s *Store) fonteDoWIP(seg uint32, campo types.FieldID, h uint64) (segindex.
 // chama GetByRowID em cada um. No materializado a frase é literal: a caminhada
 // única É a fonte de candidatos de um full scan.
 
-// fonteDaFaixa monta a enumeração do HISTÓRICO: a faixa [primeiro,
+// sourceOfFaixa monta a enumeração do HISTÓRICO: a faixa [primeiro,
 // primeiroDoSeguinte).
 //
 // Ela é possível por uma propriedade que só a tabela histórica tem: os appends
 // são serializados pelo mutex do writer e o rowId é monotônico, então os
 // segmentos particionam o espaço de rowId em faixas contíguas e ordenadas. É a
-// mesma propriedade que o primeiroRowIDDoSeguinte da retenção já explora, com o
+// mesma propriedade que o primeiroRowIDOfSeguinte da retenção já explora, com o
 // mesmo pread — e é ela que faz a união escolher CONCATENAÇÃO no histórico, sem
 // uma comparação sequer entre fontes.
 //
@@ -414,7 +414,7 @@ func (s *Store) fonteDoWIP(seg uint32, campo types.FieldID, h uint64) (segindex.
 //
 // A LISTAGEM NÃO ESTÁ SOB A MESMA BARREIRA QUE OS PREADS, e o comentário diz
 // isso porque a diferença tem consequência. O `refs` é capturado uma vez, no
-// fontesDoCampo, fora do aposMu; os preads acontecem aqui, sob ele. Entre os
+// fontesOfField, fora do aposMu; os preads acontecem aqui, sob ele. Entre os
 // dois, a retenção pode aposentar um segmento — e então o arquivo que a listagem
 // nomeou já não existe.
 //
@@ -426,46 +426,46 @@ func (s *Store) fonteDoWIP(seg uint32, campo types.FieldID, h uint64) (segindex.
 //
 // O aposMu continua aqui pela razão do GetByRowID: ele impede que o descritor
 // feche ENTRE o pread e a leitura dos bytes.
-func (s *Store) fonteDaFaixa(refs []segment.Ref, i int) (segindex.Source, error) {
+func (s *Store) sourceOfFaixa(refs []segment.Ref, i int) (segindex.Source, error) {
 	s.aposMu.RLock()
 	defer s.aposMu.RUnlock()
 	var buf []byte
-	ini, buf, ok, err := s.primeiroRowIDDe(refs[i], buf)
+	ini, buf, ok, err := s.primeiroRowIDOf(refs[i], buf)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
 		// Segmento sem record nenhum: não há o que enumerar, e uma fonte vazia
 		// por declaração some na união sem empurrar ninguém para o merge.
-		return &fonteFaixa{}, nil
+		return &sourceFaixa{}, nil
 	}
-	fim := types.RowID(s.nextRowID.Load())
+	end := types.RowID(s.nextRowID.Load())
 	for j := i + 1; j < len(refs); j++ {
-		p, b, ok, err := s.primeiroRowIDDe(refs[j], buf)
+		p, b, ok, err := s.primeiroRowIDOf(refs[j], buf)
 		buf = b
 		if err != nil {
 			return nil, err
 		}
 		if ok {
-			fim = p
+			end = p
 			break
 		}
 	}
-	return &fonteFaixa{ini: ini, prox: ini, fim: fim}, nil
+	return &sourceFaixa{ini: ini, prox: ini, end: end}, nil
 }
 
-// primeiroRowIDDe lê o rowId do primeiro record do segmento, que mora sempre no
+// primeiroRowIDOf lê o rowId do primeiro record do segmento, que mora sempre no
 // offset fixo logo após o header. ok=false para segmento sem record.
 //
-// É o mesmo pread do primeiroRowIDDoSeguinte da retenção, com buffer do
+// É o mesmo pread do primeiroRowIDOfSeguinte da retenção, com buffer do
 // CHAMADOR: o s.retBuf daquele caminho é do writer, e uma consulta que o
 // reutilizasse o corromperia sem tomar o wmu — que é justamente o que este
 // ciclo existe para não fazer.
-func (s *Store) primeiroRowIDDe(ref segment.Ref, buf []byte) (types.RowID, []byte, bool, error) {
+func (s *Store) primeiroRowIDOf(ref segment.Ref, buf []byte) (types.RowID, []byte, bool, error) {
 	if ref.SizeBytes <= segment.HeaderSize {
 		return 0, buf, false, nil
 	}
-	rec, out, err := s.segR.ReadRecord(ref.ID, uint32(segment.HeaderSize), buf)
+	rec, out, err := s.secR.ReadRecord(ref.ID, uint32(segment.HeaderSize), buf)
 	if err != nil {
 		// Segmento aposentado entre a listagem e este pread responde "não tenho
 		// primeiro rowId", e não erro: ele já não tem linha viva nenhuma, e a
@@ -481,28 +481,28 @@ func (s *Store) primeiroRowIDDe(ref segment.Ref, buf []byte) (types.RowID, []byt
 	return rec.RowID, out, true, nil
 }
 
-// fonteDeTodasAsLocations monta a enumeração do MATERIALIZADO: a caminhada
-// única sobre o locations.idx que o colapso do fontesDoCampo usa.
+// sourceOfTodasAsLocations monta a enumeração do MATERIALIZADO: a caminhada
+// única sobre o locations.idx que o colapso do fontesOfField usa.
 //
 // Os limites são a marca-d'água e o nextRowID, tomados uma vez: a fonte é um
 // instantâneo do limite superior, como o ScanLive.
-func (s *Store) fonteDeTodasAsLocations() segindex.Source {
+func (s *Store) sourceOfTodasAsLocations() segindex.Source {
 	base := s.RowIDBase()
-	return &fonteLocations{s: s, ini: base, prox: base, fim: types.RowID(s.nextRowID.Load())}
+	return &sourceLocations{s: s, ini: base, prox: base, end: types.RowID(s.nextRowID.Load())}
 }
 
-// fonteMaterializada percorre uma fatia de rowIds já pronta — hoje, só a que o
+// sourceMaterializada percorre uma fatia de rowIds já pronta — hoje, só a que o
 // WIP do segmento corrente devolve.
 //
 // Ela é o oposto das outras três: aqui os rowIds JÁ estão em memória, e os
 // limites saem das pontas da fatia, que o WIP entrega ordenada e compactada.
-type fonteMaterializada struct {
+type sourceMaterializada struct {
 	rows []types.RowID
 	i    int
 	cur  types.RowID
 }
 
-func (f *fonteMaterializada) Next() bool {
+func (f *sourceMaterializada) Next() bool {
 	if f.i >= len(f.rows) {
 		return false
 	}
@@ -511,41 +511,41 @@ func (f *fonteMaterializada) Next() bool {
 	return true
 }
 
-func (f *fonteMaterializada) RowID() types.RowID { return f.cur }
-func (f *fonteMaterializada) Err() error         { return nil }
-func (f *fonteMaterializada) Close() error       { return nil }
+func (f *sourceMaterializada) RowID() types.RowID { return f.cur }
+func (f *sourceMaterializada) Err() error         { return nil }
+func (f *sourceMaterializada) Close() error       { return nil }
 
 // MinRowID devolve math.MaxUint64 na fatia vazia, que é o Min > Max com que o
 // contrato da Fonte declara "não vou emitir nada" — e é o que faz a união
 // descartá-la em vez de empurrar as vizinhas para o merge.
-func (f *fonteMaterializada) MinRowID() types.RowID {
+func (f *sourceMaterializada) MinRowID() types.RowID {
 	if len(f.rows) == 0 {
 		return math.MaxUint64
 	}
 	return f.rows[0]
 }
 
-func (f *fonteMaterializada) MaxRowID() types.RowID {
+func (f *sourceMaterializada) MaxRowID() types.RowID {
 	if len(f.rows) == 0 {
 		return 0
 	}
 	return f.rows[len(f.rows)-1]
 }
 
-// fonteFaixa enumera os rowIds de um segmento do HISTÓRICO, onde eles formam
-// faixa contígua (ver fonteDaFaixa).
+// sourceFaixa enumera os rowIds de um segmento do HISTÓRICO, onde eles formam
+// faixa contígua (ver sourceOfFaixa).
 //
 // PREGUIÇOSA e sem alocação nenhuma: são três inteiros, e a ordem crescente sai
 // do próprio incremento. Ela emite rowIds que podem não existir mais — abaixo
 // da marca-d'água de retenção, por exemplo —, e isso é correto: o contrato é
 // SUPERCONJUNTO de candidatos, e o executor revalida cada um pelo GetByRowID
 // (§44), que é exatamente o que ele faria num full scan.
-type fonteFaixa struct {
-	ini, prox, fim, cur types.RowID
+type sourceFaixa struct {
+	ini, prox, end, cur types.RowID
 }
 
-func (f *fonteFaixa) Next() bool {
-	if f.prox >= f.fim {
+func (f *sourceFaixa) Next() bool {
+	if f.prox >= f.end {
 		return false
 	}
 	f.cur = f.prox
@@ -553,29 +553,29 @@ func (f *fonteFaixa) Next() bool {
 	return true
 }
 
-func (f *fonteFaixa) RowID() types.RowID { return f.cur }
-func (f *fonteFaixa) Err() error         { return nil }
-func (f *fonteFaixa) Close() error       { return nil }
+func (f *sourceFaixa) RowID() types.RowID { return f.cur }
+func (f *sourceFaixa) Err() error         { return nil }
+func (f *sourceFaixa) Close() error       { return nil }
 
 // MinRowID e MaxRowID descrevem a faixa TODA, e não o que resta iterar: o
 // contrato da Fonte exige que os dois valham ANTES de consumir, porque é sobre
 // eles que a união decide entre concatenação e merge sem tocar em fonte alguma.
-func (f *fonteFaixa) MinRowID() types.RowID {
-	if f.ini >= f.fim {
+func (f *sourceFaixa) MinRowID() types.RowID {
+	if f.ini >= f.end {
 		return math.MaxUint64
 	}
 	return f.ini
 }
 
-func (f *fonteFaixa) MaxRowID() types.RowID {
-	if f.ini >= f.fim {
+func (f *sourceFaixa) MaxRowID() types.RowID {
+	if f.ini >= f.end {
 		return 0
 	}
-	return f.fim - 1
+	return f.end - 1
 }
 
-// fonteLocations enumera TODOS os rowIds com location publicada, no dataset
-// MATERIALIZADO — onde a propriedade da fonteFaixa não vale, porque um update
+// sourceLocations enumera TODOS os rowIds com location publicada, no dataset
+// MATERIALIZADO — onde a propriedade da sourceFaixa não vale, porque um update
 // traz para o segmento corrente uma linha de rowId arbitrário, possivelmente
 // menor que o do primeiro record dele.
 //
@@ -593,9 +593,9 @@ func (f *fonteFaixa) MaxRowID() types.RowID {
 //
 // MinRowID/MaxRowID são a marca-d'água e o nextRowID: o intervalo inteiro do
 // dataset, que é exatamente o que a fonte pode emitir.
-type fonteLocations struct {
+type sourceLocations struct {
 	s                   *Store
-	ini, prox, fim, cur types.RowID
+	ini, prox, end, cur types.RowID
 }
 
 // Next avança até o próximo rowId com location publicada.
@@ -604,8 +604,8 @@ type fonteLocations struct {
 // SEGUNDA definição de "vivo" ao lado da do executor, e as duas divergiriam na
 // primeira vez que uma delas mudasse. Candidato a mais o §44 descarta; a
 // definição duplicada, ninguém.
-func (f *fonteLocations) Next() bool {
-	for f.prox < f.fim {
+func (f *sourceLocations) Next() bool {
+	for f.prox < f.end {
 		id := f.prox
 		f.prox++
 		if _, ok := f.s.locs.Get(id); !ok {
@@ -617,20 +617,20 @@ func (f *fonteLocations) Next() bool {
 	return false
 }
 
-func (f *fonteLocations) RowID() types.RowID { return f.cur }
-func (f *fonteLocations) Err() error         { return nil }
-func (f *fonteLocations) Close() error       { return nil }
+func (f *sourceLocations) RowID() types.RowID { return f.cur }
+func (f *sourceLocations) Err() error         { return nil }
+func (f *sourceLocations) Close() error       { return nil }
 
-func (f *fonteLocations) MinRowID() types.RowID {
-	if f.ini >= f.fim {
+func (f *sourceLocations) MinRowID() types.RowID {
+	if f.ini >= f.end {
 		return math.MaxUint64
 	}
 	return f.ini
 }
 
-func (f *fonteLocations) MaxRowID() types.RowID {
-	if f.ini >= f.fim {
+func (f *sourceLocations) MaxRowID() types.RowID {
+	if f.ini >= f.end {
 		return 0
 	}
-	return f.fim - 1
+	return f.end - 1
 }

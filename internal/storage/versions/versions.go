@@ -87,10 +87,10 @@ func (c *Journal) Retain(row types.RowID, prevPacked, epoch uint64) {
 	if prevPacked == 0 {
 		return // linha sem location anterior: não há passado a guardar
 	}
-	seg, _, _ := rowindex.Unpack(prevPacked)
+	sec, _, _ := rowindex.Unpack(prevPacked)
 	c.mu.Lock()
 	c.byRow[row] = append(c.byRow[row], version{epoch: epoch, packed: prevPacked})
-	c.pin[seg]++
+	c.pin[sec]++
 	c.n++
 	c.liveEntries.Store(int64(c.n))
 	c.mu.Unlock()
@@ -140,11 +140,11 @@ func (c *Journal) Prune(minLiveEpoch uint64) int {
 	for row, vs := range c.byRow {
 		cut := 0
 		for cut < len(vs) && vs[cut].epoch <= minLiveEpoch {
-			seg, _, _ := rowindex.Unpack(vs[cut].packed)
-			if c.pin[seg] > 1 {
-				c.pin[seg]--
+			sec, _, _ := rowindex.Unpack(vs[cut].packed)
+			if c.pin[sec] > 1 {
+				c.pin[sec]--
 			} else {
-				delete(c.pin, seg)
+				delete(c.pin, sec)
 			}
 			cut++
 		}
@@ -171,10 +171,10 @@ func (c *Journal) Prune(minLiveEpoch uint64) int {
 
 // Pinned responde se o segmento guarda alguma versão que um leitor ainda
 // alcança. A compaction não pode aposentá-lo enquanto isso for verdade.
-func (c *Journal) Pinned(seg uint32) bool {
+func (c *Journal) Pinned(sec uint32) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.pin[seg] > 0
+	return c.pin[sec] > 0
 }
 
 // Bytes é o consumo de heap estimado do journal, para o teto de memória.

@@ -178,11 +178,11 @@ func TestMergeCampoAusenteMantemAnterior(t *testing.T) {
 func TestMergeNullRemoveCampoEAusenciaEhTransitiva(t *testing.T) {
 	prev := encodeFields(t, fieldKV{1, vi64(10)}, fieldKV{2, vstr("some")}, fieldKV{3, vi64(30)})
 
-	semCampo2 := mustMerge(t, prev, []patchEntry{peNull(2)})
-	wantFields(t, semCampo2, fieldKV{1, vi64(10)}, fieldKV{3, vi64(30)})
+	withoutCampo2 := mustMerge(t, prev, []patchEntry{peNull(2)})
+	wantFields(t, withoutCampo2, fieldKV{1, vi64(10)}, fieldKV{3, vi64(30)})
 
 	// Segundo patch não menciona o campo 2: continua ausente.
-	depois := mustMerge(t, semCampo2, []patchEntry{pe(1, vi64(11))})
+	depois := mustMerge(t, withoutCampo2, []patchEntry{pe(1, vi64(11))})
 	wantFields(t, depois, fieldKV{1, vi64(11)}, fieldKV{3, vi64(30)})
 }
 
@@ -262,16 +262,16 @@ func TestMergeTodosOsTiposRoundTrip(t *testing.T) {
 	}
 
 	// Metade vem do prev (cópia crua), metade do patch (codificação).
-	var doPrev []fieldKV
+	var ofPrev []fieldKV
 	var patch []patchEntry
 	for i, kv := range todos {
 		if i%2 == 0 {
-			doPrev = append(doPrev, kv)
+			ofPrev = append(ofPrev, kv)
 		} else {
 			patch = append(patch, pe(kv.id, kv.v))
 		}
 	}
-	got := mustMerge(t, encodeFields(t, doPrev...), patch)
+	got := mustMerge(t, encodeFields(t, ofPrev...), patch)
 	wantFields(t, got, todos...)
 
 	// E o inverso: os mesmos campos, agora todos sobrescritos pelo patch.
@@ -279,7 +279,7 @@ func TestMergeTodosOsTiposRoundTrip(t *testing.T) {
 	for _, kv := range todos {
 		todosPatch = append(todosPatch, pe(kv.id, kv.v))
 	}
-	got2 := mustMerge(t, encodeFields(t, doPrev...), todosPatch)
+	got2 := mustMerge(t, encodeFields(t, ofPrev...), todosPatch)
 	wantFields(t, got2, todos...)
 }
 
@@ -305,7 +305,7 @@ func TestMergeReutilizaBufferDeSaida(t *testing.T) {
 // são separados, e o prev permanece intacto (o merge não escreve nele).
 func TestMergeNaoEscreveNoPrev(t *testing.T) {
 	prev := encodeFields(t, fieldKV{1, vi64(10)}, fieldKV{2, vstr("original")}, fieldKV{5, vi64(50)})
-	copia := append([]byte(nil), prev...)
+	cpy := append([]byte(nil), prev...)
 
 	out := make([]byte, 0, 256)
 	got, err := mergeRecords(prev, []patchEntry{pe(2, vstr("novo")), pe(9, vi64(90))}, out, nil)
@@ -314,8 +314,8 @@ func TestMergeNaoEscreveNoPrev(t *testing.T) {
 	}
 	wantFields(t, got, fieldKV{1, vi64(10)}, fieldKV{2, vstr("novo")}, fieldKV{5, vi64(50)}, fieldKV{9, vi64(90)})
 
-	if !bytes.Equal(prev, copia) {
-		t.Errorf("o merge alterou o payload anterior:\n got  %x\n want %x", prev, copia)
+	if !bytes.Equal(prev, cpy) {
+		t.Errorf("o merge alterou o payload anterior:\n got  %x\n want %x", prev, cpy)
 	}
 	// E a saída não pode ser uma janela sobre o prev: o Put recebe os dois e
 	// o prev precisa sobreviver ao diff de índices.

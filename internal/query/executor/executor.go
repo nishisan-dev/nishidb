@@ -59,7 +59,7 @@ type Options struct {
 	// SpillBytes é o teto de DISCO do transbordo de UMA query. 0 = sem teto.
 	SpillBytes int64
 	// TopNMax é o maior N (= OFFSET + limite efetivo) que ainda escolhe o
-	// caminho rápido de top-N do ORDER BY. 0 usa tetoTopNPadrao; NEGATIVO
+	// caminho rápido de top-N do ORDER BY. 0 usa ceilingTopNPadrao; NEGATIVO
 	// desliga o caminho rápido e força o ORDER BY completo.
 	//
 	// É teto de LINHAS retidas, e não de bytes, porque é decidido no Open — não
@@ -74,15 +74,15 @@ type Options struct {
 	TopNMax int64
 }
 
-// DiretorioDeSpill é a capability opcional do Store que diz onde o transbordo
+// DiretorioOfSpill é a capability opcional do Store que diz onde o transbordo
 // pode escrever.
 //
 // Store que não a implementa — ou que devolve vazio — faz o ORDER BY RECUSAR ao
 // estourar o orçamento de memória, em vez de degradar para disco. É o desfecho
 // certo: sem lugar declarado para escrever, escrever em os.TempDir seria o
 // motor inventando onde pôr dado do usuário.
-type DiretorioDeSpill interface {
-	DiretorioDeSpill() string
+type DiretorioOfSpill interface {
+	DiretorioOfSpill() string
 }
 
 // sortMemoryPadrao é o teto do ORDER BY quando o dataset não o declara.
@@ -127,7 +127,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 		pular:   bq.Offset,
 		// Truncamento por teto IMPLÍCITO: só quando a parada não veio de um
 		// LIMIT que o usuário escreveu e que é menor que o teto.
-		tetoImplicito: !bq.HasLimit || bq.Limit > bq.MaxRows,
+		ceilingImplicito: !bq.HasLimit || bq.Limit > bq.MaxRows,
 	}
 	if len(bq.OrderBy) > 0 {
 		for i := range bq.OrderBy {
@@ -140,13 +140,13 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 					ErrInvalidPlan, k.Field.Name, k.Slot, len(it.slots))
 			}
 		}
-		teto := opts.SortMemory
-		if teto <= 0 {
-			teto = sortMemoryPadrao
+		ceiling := opts.SortMemory
+		if ceiling <= 0 {
+			ceiling = sortMemoryPadrao
 		}
 		var area *spill.Area
-		if d, ok := opts.Store.(DiretorioDeSpill); ok {
-			if dir := d.DiretorioDeSpill(); dir != "" {
+		if d, ok := opts.Store.(DiretorioOfSpill); ok {
+			if dir := d.DiretorioOfSpill(); dir != "" {
 				a, err := spill.NewArea(dir, opts.SpillBytes)
 				if err != nil {
 					return nil, err
@@ -154,12 +154,12 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 				area = a
 			}
 		}
-		it.ord = novoOrdenador(bq.OrderBy, teto, area, bq.Slots.IDs)
+		it.ord = newOrdenador(bq.OrderBy, ceiling, area, bq.Slots.IDs)
 		// O modo é decidido AQUI, e não na primeira linha, porque ele depende
 		// só da forma da query — LIMIT explícito e OFFSET —, e trocar de modo
 		// no meio da varredura obrigaria a reprocessar o que já passou.
-		if n, ok := tamanhoDoTopN(bq, opts.TopNMax); ok {
-			it.ord.ativaTopN(n)
+		if n, ok := sizeOfTopN(bq, opts.TopNMax); ok {
+			it.ord.activeTopN(n)
 			if opts.Metrics != nil {
 				// Uma vez por QUERY, direto: não é caminho quente, e o
 				// acumulador local do iterador existe para o que roda por
@@ -170,7 +170,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 	}
 
 	cols := make([]ColView, len(bq.Columns))
-	slotDaColuna := make([]int32, len(bq.Columns))
+	slotOfColumn := make([]int32, len(bq.Columns))
 	for i, c := range bq.Columns {
 		if c.Field == nil {
 			return nil, fmt.Errorf("%w: coluna %d com campo nulo", ErrInvalidPlan, i)
@@ -189,11 +189,11 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 			// ausentes ou nulas.
 			Nullable: !c.Field.IsKey && !c.Field.IsSequence,
 		}
-		slotDaColuna[i] = int32(c.Slot)
+		slotOfColumn[i] = int32(c.Slot)
 	}
-	it.cols, it.slotDaColuna = cols, slotDaColuna
+	it.cols, it.slotOfColumn = cols, slotOfColumn
 
-	pred, err := compila(bq.Where, len(it.slots))
+	pred, err := compile(bq.Where, len(it.slots))
 	if err != nil {
 		// O erro do avaliador é reembrulhado em ErrInvalidPlan porque a
 		// classificação é do EXECUTOR: quem consome (o servidor) decide o
@@ -205,7 +205,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 
 	// Máscara da cadência de ctx: 0 no full scan (checa a cada candidato),
 	// BatchSize-1 nos planos indexados.
-	it.mask = int64(potenciaDeDois(opts.BatchSize) - 1)
+	it.mask = int64(potenciaOfDois(opts.BatchSize) - 1)
 	if _, full := plan.(*planner.FullScanPlan); full {
 		it.mask = 0
 	}
@@ -220,7 +220,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 	// deadline vence. A consulta longa terminaria em TIMEOUT com o teto
 	// configurado dizendo que ela podia. Quem tem deadline já decidiu a
 	// política; repeti-la aqui só pode encurtá-la.
-	if _, temPrazo := ctx.Deadline(); temPrazo {
+	if _, hasPrazo := ctx.Deadline(); hasPrazo {
 		it.ctx, it.cancel = context.WithCancel(ctx)
 	} else {
 		it.ctx, it.cancel = context.WithTimeout(ctx, bq.Timeout)
@@ -234,7 +234,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 
 	// A fonte é aberta POR ÚLTIMO: qualquer erro acima não pode deixar
 	// iteradores de índice abertos e sem dono.
-	src, err := fonteDoPlano(plan, opts.Store, opts.Metrics, snap)
+	src, err := sourceOfPlano(plan, opts.Store, opts.Metrics, snap)
 	if err != nil {
 		it.cancel()
 		// O Open que falha DEPOIS de abrir o snapshot é o único caminho em
@@ -249,9 +249,9 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 	return it, nil
 }
 
-// potenciaDeDois arredonda para cima até a próxima potência de dois (mínimo 1),
+// potenciaOfDois arredonda para cima até a próxima potência de dois (mínimo 1),
 // porque a cadência é medida com máscara de bits.
-func potenciaDeDois(n int) int64 {
+func potenciaOfDois(n int) int64 {
 	if n <= 0 {
 		n = batchPadrao
 	}
@@ -276,16 +276,16 @@ type iterador struct {
 
 	slots        []slot
 	cols         []ColView
-	slotDaColuna []int32
+	slotOfColumn []int32
 	pred         *programa
 	fr           encoding.FieldReader
 
 	rowBuf []byte
 
-	eff           int64 // teto efetivo de linhas (min(LIMIT, maxRows))
-	tetoImplicito bool
-	emitidas      int64
-	pular         int64 // linhas do OFFSET ainda a descartar
+	eff              int64 // teto efetivo de linhas (min(LIMIT, maxRows))
+	ceilingImplicito bool
+	emitidas         int64
+	pular            int64 // linhas do OFFSET ainda a descartar
 	// ord é nil quando não há ORDER BY, e a query segue estritamente
 	// streaming. Não-nil, o executor troca de modo: drena e depois emite.
 	ord    *ordenador
@@ -293,7 +293,7 @@ type iterador struct {
 	n      int64 // candidatos consumidos, para a cadência de ctx
 	mask   int64
 
-	cnt      contadores
+	cnt      counters
 	done     bool
 	fechou   bool
 	err      error
@@ -315,7 +315,7 @@ func (it *iterador) Next() bool {
 	for {
 		if it.mask == 0 || it.n&it.mask == 0 {
 			if err := it.ctx.Err(); err != nil {
-				it.contaCancel()
+				it.countCancel()
 				it.termina(fmt.Errorf("executor: query interrompida após %d candidatos: %w", it.n, err))
 				return false
 			}
@@ -344,7 +344,7 @@ func (it *iterador) Next() bool {
 			it.termina(fmt.Errorf("executor: payload da row %d: %w", rec.RowID, err))
 			return false
 		}
-		if !it.pred.Avalia(it.slots, &it.cnt.typeMismatch) {
+		if !it.pred.Evaluate(it.slots, &it.cnt.typeMismatch) {
 			it.cnt.rejected++
 			continue
 		}
@@ -364,7 +364,7 @@ func (it *iterador) Next() bool {
 			// com LIMIT 3 sobre um milhão de candidatos não pode segurar o
 			// iterador do índice até o consumidor decidir chamar Next de novo.
 			it.encerra()
-			it.marcaTruncado()
+			it.markTruncado()
 		}
 		return true
 	}
@@ -415,7 +415,7 @@ func (it *iterador) proximaOrdenada() bool {
 	it.emitidas++
 	it.cnt.emitted++
 	if it.emitidas >= it.eff {
-		it.marcaTruncado()
+		it.markTruncado()
 	}
 	return true
 }
@@ -426,7 +426,7 @@ func (it *iterador) drena() bool {
 	for {
 		if it.mask == 0 || it.n&it.mask == 0 {
 			if err := it.ctx.Err(); err != nil {
-				it.contaCancel()
+				it.countCancel()
 				// A mensagem NOMEIA A FASE: com ORDER BY, "interrompida após N
 				// candidatos" sem mais nada faria o operador procurar lentidão
 				// na entrega, quando o tempo foi todo na varredura.
@@ -453,7 +453,7 @@ func (it *iterador) drena() bool {
 			it.termina(fmt.Errorf("executor: payload da row %d: %w", rec.RowID, err))
 			return false
 		}
-		if !it.pred.Avalia(it.slots, &it.cnt.typeMismatch) {
+		if !it.pred.Evaluate(it.slots, &it.cnt.typeMismatch) {
 			it.cnt.rejected++
 			continue
 		}
@@ -466,7 +466,7 @@ func (it *iterador) drena() bool {
 
 // projeta copia os valores dos slots para as colunas de saída.
 func (it *iterador) projeta() {
-	for j, s := range it.slotDaColuna {
+	for j, s := range it.slotOfColumn {
 		sl := &it.slots[s]
 		if sl.Present {
 			it.cols[j].Null, it.cols[j].Val = false, sl.Val
@@ -485,7 +485,7 @@ func (it *iterador) projeta() {
 	}
 }
 
-// marcaTruncado registra o erro de teto quando a parada veio do limite
+// markTruncado registra o erro de teto quando a parada veio do limite
 // IMPLÍCITO (query.maxRows). Resultado truncado apresentado como completo é
 // resposta errada, e o erro depois das rows é o menor mal.
 //
@@ -495,8 +495,8 @@ func (it *iterador) projeta() {
 // potencialmente o dataset inteiro, que é exatamente o custo que o teto existe
 // para evitar. Um alarme falso é aceitável; um resultado truncado silencioso
 // não é.
-func (it *iterador) marcaTruncado() {
-	if !it.tetoImplicito {
+func (it *iterador) markTruncado() {
+	if !it.ceilingImplicito {
 		return
 	}
 	it.err = fmt.Errorf("%w: %d", ErrMaxRowsExceeded, it.eff)
@@ -505,7 +505,7 @@ func (it *iterador) marcaTruncado() {
 	}
 }
 
-func (it *iterador) contaCancel() {
+func (it *iterador) countCancel() {
 	if it.metrics != nil {
 		it.metrics.Canceled.Add(1)
 	}
@@ -522,10 +522,10 @@ func (it *iterador) termina(err error) {
 		it.err = err
 	}
 	it.encerra()
-	it.liberaSpill()
+	it.releaseSpill()
 }
 
-// liberaSpill remove os arquivos de transbordo desta query.
+// releaseSpill remove os arquivos de transbordo desta query.
 //
 // SEPARADO do encerra de propósito, e a separação é o defeito que ela impede: o
 // encerra é chamado logo DEPOIS de ordenar, para soltar o iterador do índice
@@ -535,7 +535,7 @@ func (it *iterador) termina(err error) {
 //
 // Roda no termina (fim normal, erro e timeout) e no Close (o defer de quem
 // consome), que juntos cobrem todos os caminhos de saída.
-func (it *iterador) liberaSpill() {
+func (it *iterador) releaseSpill() {
 	if it.ord == nil || it.ord.area == nil {
 		return
 	}
@@ -602,7 +602,7 @@ func (it *iterador) Err() error { return it.err }
 func (it *iterador) Close() error {
 	it.done = true
 	it.encerra()
-	it.liberaSpill()
+	it.releaseSpill()
 	// O snapshot é devolvido DEPOIS do encerra: enquanto a fonte upstream
 	// pode estar lendo, as versões que ela alcança têm de continuar retidas.
 	// O guard de idempotência é do contrato do Close (ele é chamado por

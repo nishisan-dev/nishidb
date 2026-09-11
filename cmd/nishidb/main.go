@@ -17,7 +17,7 @@ func main() {
 	// O sinal CANCELA o contexto em vez de matar o processo: a ingestão
 	// precisa gravar o checkpoint do que já aplicou antes de sair, senão o
 	// Ctrl-C joga fora o trabalho desde o último checkpoint.
-	ctx, parar := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
 	// `parar` é chamado ANTES do os.Exit, e não por defer: o os.Exit não
 	// desempilha nada, então um `defer parar()` aqui é linha que jamais roda.
@@ -30,6 +30,6 @@ func main() {
 		Stderr: os.Stderr,
 		Ctx:    ctx,
 	})
-	parar()
+	stop()
 	os.Exit(code)
 }

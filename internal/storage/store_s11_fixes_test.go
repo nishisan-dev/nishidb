@@ -78,15 +78,15 @@ func TestLivenessDecrementaEmUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seg := m.Segments[0]
-	if seg.TotalRecords != 5 {
-		t.Fatalf("TotalRecords: esperado 5, obtido %d", seg.TotalRecords)
+	sec := m.Segments[0]
+	if sec.TotalRecords != 5 {
+		t.Fatalf("TotalRecords: esperado 5, obtido %d", sec.TotalRecords)
 	}
-	if seg.LiveRecords != 3 {
-		t.Fatalf("LiveRecords: esperado 3 (2 updates viraram garbage), obtido %d", seg.LiveRecords)
+	if sec.LiveRecords != 3 {
+		t.Fatalf("LiveRecords: esperado 3 (2 updates viraram garbage), obtido %d", sec.LiveRecords)
 	}
-	if seg.LiveBytes == 0 || seg.LiveBytes >= uint64(seg.SizeBytes) {
-		t.Fatalf("LiveBytes deveria excluir o garbage: %+v", seg)
+	if sec.LiveBytes == 0 || sec.LiveBytes >= uint64(sec.SizeBytes) {
+		t.Fatalf("LiveBytes deveria excluir o garbage: %+v", sec)
 	}
 }
 
@@ -145,7 +145,7 @@ func TestErroDeAppendNaRotacaoEhSticky(t *testing.T) {
 func TestCheckpointConcorrenteComPutSerializa(t *testing.T) {
 	// S11-I2: writer-only deixou de ser convenção — o mutex do writer
 	// serializa Put×Checkpoint; a violação da convenção não pode corromper
-	// (antes: concurrent map read/write no segTally = fatal error).
+	// (antes: concurrent map read/write no secTally = fatal error).
 	s := openStore(t, Options{})
 	var wg sync.WaitGroup
 	stop := make(chan struct{})

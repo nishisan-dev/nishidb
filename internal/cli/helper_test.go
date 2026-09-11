@@ -8,9 +8,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
-// abreDireto abre o dataset por baixo do CLI, para simular o "outro processo"
+// openDirect abre o dataset por baixo do CLI, para simular o "outro processo"
 // que segura o lock.
-func abreDireto(t *testing.T, a *ambiente) (*storage.Store, *schema.Compiled) {
+func openDirect(t *testing.T, a *env) (*storage.Store, *schema.Compiled) {
 	t.Helper()
 	spec, err := schema.Load(filepath.Join(a.dir, "datasets", "radius_sessions.yaml"), schema.BuiltinDefaults)
 	if err != nil {

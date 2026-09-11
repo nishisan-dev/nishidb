@@ -100,8 +100,8 @@ func TestLixoDeDiscoNuncaPassaPorBaixoDeZero(t *testing.T) {
 	for _, c := range casos {
 		t.Run(c.name, func(t *testing.T) {
 			st := storage.Stats{StorageBytes: c.disk, LiveBytesUpperBound: c.vivo}
-			if got := lixoDeDisco(st); got != c.want {
-				t.Errorf("lixoDeDisco(disco=%d, vivo=%d) = %d, queria %d",
+			if got := garbageOfDisk(st); got != c.want {
+				t.Errorf("garbageOfDisk(disco=%d, vivo=%d) = %d, queria %d",
 					c.disk, c.vivo, got, c.want)
 			}
 		})

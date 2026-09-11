@@ -541,7 +541,7 @@ Onde vão os 902 µs, por profile de 45 s em produção:
 | Componente | % do CPU |
 |---|---:|
 | `buscaPath` — a extração declarada, varrendo o documento uma vez por path | **21,6%** |
-| `ExpiraUmaPassada` — varredura de TTL, em background | **18,8%** |
+| `ExpiraOnePass` — varredura de TTL, em background | **18,8%** |
 | `Store.Put` — tabela base | 16,0% |
 | `Apenda` — tabela histórica | **11,4%** |
 | parse do evento em si | 1,8% |
@@ -696,7 +696,7 @@ não acompanhou por um instante.
 
 | Cadeia | % cumulativo |
 |---|---:|
-| `decodificadores.roda` → `Decodifica` → `PatchBuffer.Parse` | **33,2%** |
+| `decodificadores.roda` → `Decode` → `PatchBuffer.Parse` | **33,2%** |
 | `Writer.aplica` → `Materializer.Aplica` | **33,8%** |
 
 Meio a meio. É a medida do teto que o godoc de `decodeWorkers` afirmava por
@@ -980,7 +980,7 @@ em 1,80 GB/h. A purga disparou sozinha e passou a devolver **um segmento
 
 ```json
 {"event":"retencao.passada","porTempo":0,"porTamanho":1,
- "indicesExpulsos":0,"bytes":268435279,"marcaDagua":118351}
+ "indicesExpulsos":0,"bytes":268435279,"markDagua":118351}
 ```
 
 Em ~1 h e 20 segmentos purgados, o dado ficou **ancorado no teto**, oscilando

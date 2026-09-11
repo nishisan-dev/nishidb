@@ -35,7 +35,7 @@ func eventos() []string {
 
 func semeado(t *testing.T) *harness {
 	t.Helper()
-	h := novoHarness(t)
+	h := newHarness(t)
 	h.ingere(eventos()...)
 	return h
 }
@@ -75,7 +75,7 @@ func TestSpec106BitmapLookup(t *testing.T) {
 // bitmap, para provar que o plano de hash respondia sozinho. Com `index: true`
 // como grafia única, `nas` compila para o mesmo estado que qualquer outro campo
 // indexado (era IndexKind, hoje CompiledField.Indexed) e entra no MESMO
-// conjunto — novoHarness não distingue mais os dois. O nome do teste ficou porque o
+// conjunto — newHarness não distingue mais os dois. O nome do teste ficou porque o
 // item numerado do §106 é este; o que ele prova — a consulta por `nas`
 // resolve sem varredura — não mudou.
 func TestSpec106HashLookup(t *testing.T) {
@@ -93,19 +93,19 @@ func TestSpec106HashLookup(t *testing.T) {
 // §106 — AND
 func TestSpec106And(t *testing.T) {
 	h := semeado(t)
-	indexado := h.consultaOK(
+	indexed := h.consultaOK(
 		`SELECT id FROM radius_sessions WHERE status = 'Stop' AND protocol = 'PPPoE'`)
 	// O mesmo predicado sem índice tem de dar o mesmo resultado: se a
 	// interseção perder candidato, a divergência aparece aqui.
 	scan := h.consultaOK(
 		`SELECT id FROM radius_sessions WHERE username != 'zzz' AND status = 'Stop' AND protocol = 'PPPoE'`)
 
-	if got := chaves(indexado, "id"); !reflect.DeepEqual(got, []string{"CMP-0001", "CMP-0004"}) {
+	if got := chaves(indexed, "id"); !reflect.DeepEqual(got, []string{"CMP-0001", "CMP-0004"}) {
 		t.Fatalf("resultado = %v", got)
 	}
-	if !reflect.DeepEqual(chaves(indexado, "id"), chaves(scan, "id")) {
+	if !reflect.DeepEqual(chaves(indexed, "id"), chaves(scan, "id")) {
 		t.Errorf("indexado = %v, scan = %v: a interseção divergiu do full scan",
-			chaves(indexado, "id"), chaves(scan, "id"))
+			chaves(indexed, "id"), chaves(scan, "id"))
 	}
 }
 

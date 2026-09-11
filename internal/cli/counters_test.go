@@ -8,8 +8,8 @@ import (
 )
 
 func TestOUsoAnunciaCounters(t *testing.T) {
-	a := novoAmbiente(t)
-	if code := a.roda("--help"); code != 0 {
+	a := newEnv(t)
+	if code := a.run("--help"); code != 0 {
 		t.Fatalf("--help saiu com %d", code)
 	}
 	for _, trecho := range []string{"nishidb counters", "--audit", "--rebuild", "_counters."} {
@@ -20,7 +20,7 @@ func TestOUsoAnunciaCounters(t *testing.T) {
 }
 
 func TestCountersValidaAsFlags(t *testing.T) {
-	a := novoAmbiente(t)
+	a := newEnv(t)
 	casos := []struct {
 		name string
 		args []string
@@ -34,7 +34,7 @@ func TestCountersValidaAsFlags(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.name, func(t *testing.T) {
-			if code := a.roda(c.args...); code != cli.ExitUsageError {
+			if code := a.run(c.args...); code != cli.ExitUsageError {
 				t.Fatalf("exit = %d, quer %d\n%s", code, cli.ExitUsageError, a.stderr.String())
 			}
 			if !strings.Contains(a.stderr.String(), c.quer) {
@@ -47,14 +47,14 @@ func TestCountersValidaAsFlags(t *testing.T) {
 // TestCountersLocalListaAuditaEReconstroi: o caminho --config, com o servidor
 // parado — a tabela da proposta §5.6, sem divergência num dataset recém-ingerido.
 func TestCountersLocalListaAuditaEReconstroi(t *testing.T) {
-	a := novoAmbiente(t)
-	escreveDatasetServicos(t, a)
-	if code := a.rodaComEntrada(eventosDeServico(24),
+	a := newEnv(t)
+	writeDatasetServices(t, a)
+	if code := a.runWithEntry(eventosOfServico(24),
 		"ingest", "--config", a.config, "--dataset", "servicos", "--input", "-"); code != cli.ExitOK {
 		t.Fatalf("ingest = %d\n%s", code, a.stderr.String())
 	}
 
-	if code := a.roda("counters", "--config", a.config, "--dataset", "servicos"); code != cli.ExitOK {
+	if code := a.run("counters", "--config", a.config, "--dataset", "servicos"); code != cli.ExitOK {
 		t.Fatalf("counters = %d\n%s", code, a.stderr.String())
 	}
 	saida := a.stdout.String()
@@ -66,11 +66,11 @@ func TestCountersLocalListaAuditaEReconstroi(t *testing.T) {
 	// 24 serviços, todos com `olt`; autenticados são os i%3 != 0, que são 16.
 	// Os dois números serem DIFERENTES é o que faz a asserção discriminar a
 	// troca das colunas.
-	if got := colunasDoContador(t, saida, "autenticados_por_olt"); got[0] != "24" || got[1] != "16" {
+	if got := columnsOfCounter(t, saida, "autenticados_por_olt"); got[0] != "24" || got[1] != "16" {
 		t.Errorf("autenticados_por_olt: linhas %q total %q, quero 24 e 16:\n%s", got[0], got[1], saida)
 	}
 
-	if code := a.roda("counters", "--config", a.config, "--dataset", "servicos", "--audit"); code != cli.ExitOK {
+	if code := a.run("counters", "--config", a.config, "--dataset", "servicos", "--audit"); code != cli.ExitOK {
 		t.Fatalf("counters --audit = %d\n%s", code, a.stderr.String())
 	}
 	saida = a.stdout.String()
@@ -84,7 +84,7 @@ func TestCountersLocalListaAuditaEReconstroi(t *testing.T) {
 		t.Errorf("a auditoria tinha de mostrar os 16 autenticados:\n%s", saida)
 	}
 
-	if code := a.roda("counters", "--config", a.config, "--dataset", "servicos", "--rebuild"); code != cli.ExitOK {
+	if code := a.run("counters", "--config", a.config, "--dataset", "servicos", "--rebuild"); code != cli.ExitOK {
 		t.Fatalf("counters --rebuild = %d\n%s", code, a.stderr.String())
 	}
 	if !strings.Contains(a.stdout.String(), "LINHAS") || !strings.Contains(a.stdout.String(), "24") {
@@ -94,7 +94,7 @@ func TestCountersLocalListaAuditaEReconstroi(t *testing.T) {
 	// `--config` é uma abertura nova: a listagem local volta a dizer "nunca".
 	// Quem quer ver a última auditoria na listagem é o servidor no ar, e o
 	// teste remoto cobre isso.
-	if code := a.roda("counters", "--config", a.config, "--dataset", "servicos"); code != cli.ExitOK {
+	if code := a.run("counters", "--config", a.config, "--dataset", "servicos"); code != cli.ExitOK {
 		t.Fatalf("counters = %d\n%s", code, a.stderr.String())
 	}
 	if !strings.Contains(a.stdout.String(), "nunca") {
@@ -103,12 +103,12 @@ func TestCountersLocalListaAuditaEReconstroi(t *testing.T) {
 }
 
 func TestCountersLocalEmDatasetSemContadores(t *testing.T) {
-	a := novoAmbiente(t)
-	if code := a.rodaComEntrada(corpus(t, 10),
+	a := newEnv(t)
+	if code := a.runWithEntry(corpus(t, 10),
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != cli.ExitOK {
 		t.Fatalf("ingest = %d\n%s", code, a.stderr.String())
 	}
-	if code := a.roda("counters", "--config", a.config, "--dataset", "radius_sessions", "--audit"); code != cli.ExitOK {
+	if code := a.run("counters", "--config", a.config, "--dataset", "radius_sessions", "--audit"); code != cli.ExitOK {
 		t.Fatalf("counters --audit = %d\n%s", code, a.stderr.String())
 	}
 	if !strings.Contains(a.stdout.String(), "não declara counters") {
@@ -119,15 +119,15 @@ func TestCountersLocalEmDatasetSemContadores(t *testing.T) {
 // TestCountersRemotoChamaAsRotas: o caminho --server, com o servidor no ar —
 // a listagem sai do /v1/stats, a auditoria e a reconstrução das rotas ADMIN.
 func TestCountersRemotoChamaAsRotas(t *testing.T) {
-	a := novoAmbienteRemoto(t, 100000)
-	escreveDatasetServicos(t, a.ambiente)
-	if code := a.rodaComEntrada(eventosDeServico(24),
+	a := newEnvRemote(t, 100000)
+	writeDatasetServices(t, a.env)
+	if code := a.runWithEntry(eventosOfServico(24),
 		"ingest", "--config", a.config, "--dataset", "servicos", "--input", "-"); code != cli.ExitOK {
 		t.Fatalf("ingest = %d\n%s", code, a.stderr.String())
 	}
-	a.sobeServidor(t)
+	a.risesServer(t)
 
-	if code := a.roda("counters", "--server", a.endereco(), "--dataset", "servicos"); code != cli.ExitOK {
+	if code := a.run("counters", "--server", a.endereco(), "--dataset", "servicos"); code != cli.ExitOK {
 		t.Fatalf("counters --server = %d\n%s", code, a.stderr.String())
 	}
 	if !strings.Contains(a.stdout.String(), "autenticados_por_olt") {
@@ -135,34 +135,34 @@ func TestCountersRemotoChamaAsRotas(t *testing.T) {
 	}
 	// O caminho remoto lê o /v1/stats, e é aqui que a troca de Rows por Total
 	// no mapeamento do wire aparece.
-	if got := colunasDoContador(t, a.stdout.String(), "autenticados_por_olt"); got[0] != "24" || got[1] != "16" {
+	if got := columnsOfCounter(t, a.stdout.String(), "autenticados_por_olt"); got[0] != "24" || got[1] != "16" {
 		t.Errorf("listagem remota: linhas %q total %q, quero 24 e 16:\n%s", got[0], got[1], a.stdout.String())
 	}
-	if code := a.roda("counters", "--server", a.endereco(), "--dataset", "servicos", "--audit"); code != cli.ExitOK {
+	if code := a.run("counters", "--server", a.endereco(), "--dataset", "servicos", "--audit"); code != cli.ExitOK {
 		t.Fatalf("counters --server --audit = %d\n%s", code, a.stderr.String())
 	}
 	if !strings.Contains(a.stdout.String(), "DIVERGÊNCIA") {
 		t.Errorf("auditoria remota sem a tabela:\n%s", a.stdout.String())
 	}
-	if code := a.roda("counters", "--server", a.endereco(), "--dataset", "servicos", "--rebuild"); code != cli.ExitOK {
+	if code := a.run("counters", "--server", a.endereco(), "--dataset", "servicos", "--rebuild"); code != cli.ExitOK {
 		t.Fatalf("counters --server --rebuild = %d\n%s", code, a.stderr.String())
 	}
 	if !strings.Contains(a.stdout.String(), "24") {
 		t.Errorf("reconstrução remota sem as linhas:\n%s", a.stdout.String())
 	}
 	// No servidor no ar a listagem mostra a última auditoria desta abertura.
-	if code := a.roda("counters", "--server", a.endereco(), "--dataset", "servicos"); code != cli.ExitOK {
+	if code := a.run("counters", "--server", a.endereco(), "--dataset", "servicos"); code != cli.ExitOK {
 		t.Fatalf("counters --server = %d\n%s", code, a.stderr.String())
 	}
 	if !strings.Contains(a.stdout.String(), "0 divergente(s)") {
 		t.Errorf("depois da auditoria a listagem remota tinha de mostrá-la:\n%s", a.stdout.String())
 	}
 	// Dataset que o servidor não serve.
-	if code := a.roda("counters", "--server", a.endereco(), "--dataset", "nao_existe"); code != cli.ExitUsageError {
+	if code := a.run("counters", "--server", a.endereco(), "--dataset", "nao_existe"); code != cli.ExitUsageError {
 		t.Fatalf("dataset desconhecido = %d, quer %d", code, cli.ExitUsageError)
 	}
 	// E o caminho local, com o servidor no ar, sai com 3 e aponta o --server.
-	if code := a.roda("counters", "--config", a.config, "--dataset", "servicos"); code != cli.ExitDataset {
+	if code := a.run("counters", "--config", a.config, "--dataset", "servicos"); code != cli.ExitDataset {
 		t.Fatalf("counters --config com o servidor no ar = %d, quer %d\n%s", code, cli.ExitDataset, a.stderr.String())
 	}
 	if !strings.Contains(a.stderr.String(), "--server") {
@@ -170,18 +170,18 @@ func TestCountersRemotoChamaAsRotas(t *testing.T) {
 	}
 }
 
-// colunasDoContador devolve LINHAS e TOTAL da line do contador nomeado na
+// columnsOfCounter devolve LINHAS e TOTAL da line do contador nomeado na
 // tabela do `counters`. A tabela sai alinhada por um tabwriter, então as
 // colunas se separam por espaços e nenhum dos três primeiros campos os contém.
-func colunasDoContador(t *testing.T, saida, nome string) [2]string {
+func columnsOfCounter(t *testing.T, saida, name string) [2]string {
 	t.Helper()
 	for _, l := range strings.Split(saida, "\n") {
-		campos := strings.Fields(l)
-		if len(campos) < 3 || campos[0] != nome {
+		fields := strings.Fields(l)
+		if len(fields) < 3 || fields[0] != name {
 			continue
 		}
-		return [2]string{campos[1], campos[2]}
+		return [2]string{fields[1], fields[2]}
 	}
-	t.Fatalf("o contador %q não está na tabela:\n%s", nome, saida)
+	t.Fatalf("o contador %q não está na tabela:\n%s", name, saida)
 	return [2]string{}
 }

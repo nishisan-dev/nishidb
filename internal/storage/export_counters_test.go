@@ -2,22 +2,22 @@ package storage
 
 import "github.com/nishisan-dev/nishidb/internal/types"
 
-// ContadoresConstruidosForTest expõe quantos contadores esta abertura teve de
+// CountersConstruidosForTest expõe quantos contadores esta abertura teve de
 // construir em vez de adotar — o observável que separa "adotou" de
 // "reconstruiu e chegou ao mesmo resultado", como o da agenda.
-func (s *Store) ContadoresConstruidosForTest() int { return s.contadoresConstruidos }
+func (s *Store) CountersConstruidosForTest() int { return s.countersConstruidos }
 
-// PartialCheckpointComContadoresForTest é o PartialCheckpointForTest com os
+// PartialCheckpointWithCountersForTest é o PartialCheckpointForTest com os
 // passos dos contadores: segSync, overlays aplicados (locations e contadores)
 // e msyncs, SEM o manifest — o crash entre os passos 3 e 4 do §10.2, com o
 // vetor de grupos em disco à frente do ponto S.
-func (s *Store) PartialCheckpointComContadoresForTest() error {
+func (s *Store) PartialCheckpointWithCountersForTest() error {
 	if err := s.PartialCheckpointForTest(); err != nil {
 		return err
 	}
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	for _, c := range s.contadores {
+	for _, c := range s.counters {
 		if err := c.ApplyOverlay(); err != nil {
 			return err
 		}
@@ -28,18 +28,18 @@ func (s *Store) PartialCheckpointComContadoresForTest() error {
 	return nil
 }
 
-// SetAuditoriaTraceForTest instala o observador chamado depois de cada linha
+// SetAuditTraceForTest instala o observador chamado depois de cada linha
 // que a auditoria dos contadores varre (seam de teste; nil em produção). É por
 // ele que o teste escreve NO MEIO da varredura — o único jeito determinístico
 // de estourar o snapshot que a auditoria segura.
-func (s *Store) SetAuditoriaTraceForTest(fn func(linha types.RowID)) { s.audTrace = fn }
+func (s *Store) SetAuditTraceForTest(fn func(row types.RowID)) { s.audTrace = fn }
 
-// SetAuditoriaAntesDaCopiaForTest instala o observador chamado entre abrir o
+// SetAuditBeforeOfCopyForTest instala o observador chamado entre abrir o
 // snapshot e copiar os totais (seam de teste; nil em produção). No código
 // certo ele roda SOB o wmu — e é isso que o teste prova: um Put disparado
 // dali só entra depois da cópia.
-func (s *Store) SetAuditoriaAntesDaCopiaForTest(fn func()) { s.audAntesDaCopia = fn }
+func (s *Store) SetAuditBeforeOfCopyForTest(fn func()) { s.audBeforeOfCopy = fn }
 
-// AposentadoriaAtivaForTest expõe se o laço de aposentadoria de grupos está
+// RetirementActiveForTest expõe se o laço de aposentadoria de grupos está
 // de pé — o mesmo observável que o servidor consulta na subida.
-func (s *Store) AposentadoriaAtivaForTest() bool { return s.AposentadoriaDeGruposAtiva() }
+func (s *Store) RetirementActiveForTest() bool { return s.RetirementOfGroupsActive() }

@@ -114,9 +114,9 @@ Renomearemos os utilitários de consumo e writer do Kafka.
 - `novoPoolDeDecode` ➔ `newDecodePool`
 - `NovoWriter` ➔ `NewWriter`
 - `precisaCheckpoint` ➔ `needsCheckpoint`
-- `valorDoCampo` ➔ `fieldValue`
+- `valueOfField` ➔ `fieldValue`
 - `novaEsteira` ➔ `newPipeline`
-- `potenciaDeDois` ➔ `powerOfTwo`
+- `powerOfTwo` ➔ `powerOfTwo`
 - `limiarDeSlot` ➔ `slotThreshold`
 - `intervaloDaVigia` ➔ `watchdogInterval`
 - `registraMetricas` ➔ `registerMetrics`
@@ -143,10 +143,10 @@ Renomearemos funções internas de controle de índices e persistência.
 
 ### `internal/metakafka`
 #### [MODIFY] Vários arquivos em internal/metakafka/
-- `Tabela` ➔ `Table`
+- `Table` ➔ `Table`
 - `igualAChave` ➔ `equalsKey`
 - `EstadoDeclarado` ➔ `DeclaredState`
-- `Registra` ➔ `Register`
+- `Retain` ➔ `Register`
 - `erroDeColuna` ➔ `columnError`
 
 ## Plano de Verificação

@@ -21,7 +21,7 @@ func materializationStats(spec *schema.DatasetSpec, snap materializer.MetricsSna
 		FrozenPreserved: snap.CongeladasPreservadas,
 		Summed:          snap.Acumuladas,
 		SummedSaturated: snap.Saturadas,
-		TTLUnmatched:    snap.SemRegra,
+		TTLUnmatched:    snap.WithoutRegra,
 	}
 	regras := spec.Materialization.TTLRules
 	if len(regras) == 0 {
@@ -53,12 +53,12 @@ func ruleDuration(r schema.TTLRule) string {
 	return r.Duration.String()
 }
 
-// amostrasDeMaterializacao publica as mesmas contagens como séries.
+// samplesOfMaterializacao publica as mesmas contagens como séries.
 //
 // Saem pela MESMA leitura do snapshot que alimenta o /v1/stats, e não de uma
 // cópia própria: dois contadores para o mesmo fato divergem no dia em que um
 // caminho de erro esquece de somar, e em produção alguém lê o errado.
-func amostrasDeMaterializacao(dataset string, spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) []metrics.Sample {
+func samplesOfMaterializacao(dataset string, spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) []metrics.Sample {
 	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: dataset}}
 	out := []metrics.Sample{
 		{
@@ -95,7 +95,7 @@ func amostrasDeMaterializacao(dataset string, spec *schema.DatasetSpec, snap mat
 			Family: metrics.MetTTLUnmatched, Name: metrics.MetTTLUnmatched,
 			Help:   "escritas que não casaram com regra de ttl nenhuma; só acontece em dataset sem regra de fundo",
 			Type:   metrics.TypeCounter,
-			Labels: rotulo, Value: float64(snap.SemRegra),
+			Labels: rotulo, Value: float64(snap.WithoutRegra),
 		},
 	}
 	for i := range spec.Materialization.TTLRules {

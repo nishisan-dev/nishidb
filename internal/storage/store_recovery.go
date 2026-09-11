@@ -23,18 +23,18 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.Ref, dataDir 
 	s.nextRowID.Store(m.NextRowID)
 	s.rowCount.Store(m.RowCount)
 	var (
-		segmentosDoManifest uint32
-		vivoDoManifest      uint64
+		segmentosOfManifest uint32
+		vivoOfManifest      uint64
 	)
 	for _, si := range m.Segments {
-		s.segTally[si.ID] = &segStats{
+		s.secTally[si.ID] = &secStats{
 			totalRecords: si.TotalRecords,
 			liveRecords:  si.LiveRecords,
 			liveBytes:    si.LiveBytes,
 		}
-		segmentosDoManifest++
-		vivoDoManifest += si.LiveBytes
-		// O segSize NÃO é semeado aqui de propósito: o Open faz um Checkpoint
+		segmentosOfManifest++
+		vivoOfManifest += si.LiveBytes
+		// O secSize NÃO é semeado aqui de propósito: o Open faz um Checkpoint
 		// incondicional antes de devolver o Store, e esse checkpoint zera o
 		// mapa e o repovoa pelo ListSegments. Semear aqui seria escrita que
 		// nenhuma leitura alcança — não existe Stats() possível entre este
@@ -53,10 +53,10 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.Ref, dataDir 
 	// o defeito, apenas o esconde: uma invariante que só vale porque o
 	// próximo passo a reescreve não é invariante, é coincidência de ordem —
 	// e a compaction do §53-55 vai mexer nesses mesmos mapas fora do Open.
-	// O espelho de disco fica em zero porque o segSize também fica: cada
+	// O espelho de disco fica em zero porque o secSize também fica: cada
 	// espelho continua sendo cópia fiel do SEU mapa.
-	s.segCount.Store(segmentosDoManifest)
-	s.liveBytesAll.Store(vivoDoManifest)
+	s.secCount.Store(segmentosOfManifest)
+	s.liveBytesAll.Store(vivoOfManifest)
 	// PrimarySlotCount do manifest é ADVISORY: a fonte de verdade é o header do
 	// primary.idx (um rehash pós-checkpoint deixa o manifest para trás —
 	// divergência é esperada, não erro).
@@ -84,7 +84,7 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.Ref, dataDir 
 	// aposentadoria existe justamente para que os bytes fiquem em disco até o
 	// manifest concordar, e conferir o conjunto antes de restaurá-los faria o
 	// Open condenar como corrompido um dataset íntegro.
-	mudou, err := s.reparaAposentados(dataDir, m.Segments)
+	mudou, err := s.repairAposentados(dataDir, m.Segments)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.Ref, dataDir 
 			maxID = ref.ID
 		}
 	}
-	declaradoNoManifest := make(map[uint32]int64, len(m.Segments))
+	declaradoInManifest := make(map[uint32]int64, len(m.Segments))
 	for _, si := range m.Segments {
 		ref, present := byID[si.ID]
 		if !present {
@@ -122,7 +122,7 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.Ref, dataDir 
 			return fmt.Errorf("%w: segmento %d encolheu de %d para %d bytes (truncamento externo, não falha do engine)",
 				ErrDatasetCorrupt, si.ID, si.SizeBytes, ref.SizeBytes)
 		}
-		declaradoNoManifest[si.ID] = si.SizeBytes
+		declaradoInManifest[si.ID] = si.SizeBytes
 	}
 	if _, present := byID[m.CurrentSegment]; !present {
 		return fmt.Errorf("%w: segmento corrente %d do manifest ausente em %s",
@@ -146,7 +146,7 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.Ref, dataDir 
 			// dados: um segmento que continha records e foi zerado por
 			// truncamento externo é byte a byte idêntico a este, e reparar
 			// apagaria a evidência de uma perda real.
-			if declarado := declaradoNoManifest[id]; declarado > segment.HeaderSize {
+			if declarado := declaradoInManifest[id]; declarado > segment.HeaderSize {
 				return fmt.Errorf("%w: segmento %d está com %d bytes, mas o manifest o declara com %d (arquivo encolheu)",
 					ErrDatasetCorrupt, id, ref.SizeBytes, declarado)
 			}
@@ -169,7 +169,7 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.Ref, dataDir 
 					ErrDatasetCorrupt, from, id, ref.SizeBytes)
 			}
 		}
-		validEnd, err := s.segR.ScanFrom(id, from, func(off uint32, rec types.Record) error {
+		validEnd, err := s.secR.ScanFrom(id, from, func(off uint32, rec types.Record) error {
 			return s.replayRecord(st, id, off, rec)
 		})
 		if err != nil {
@@ -192,8 +192,8 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.Ref, dataDir 
 	if err != nil {
 		return err
 	}
-	s.segW = w
-	s.curSegID.Store(maxID)
+	s.secW = w
+	s.curSecID.Store(maxID)
 	// Único instante em que os espelhos podem ser lidos como a RECOVERY os
 	// deixou: o Checkpoint incondicional do Open recarrega os três em valor
 	// absoluto logo adiante, e depois dele nenhuma leitura de Stats
@@ -207,7 +207,7 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.Ref, dataDir 
 	return nil
 }
 
-// reparaAposentados fecha as duas janelas de crash da decisão D5, e é a
+// repairAposentados fecha as duas janelas de crash da decisão D5, e é a
 // contrapartida obrigatória de a aposentadoria ser feita em três tempos
 // (checkpoint, rename, unlink) em vez de um unlink só. Devolve se mexeu no
 // diretório, porque quem chama montou a listagem de segmentos antes.
@@ -235,31 +235,31 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.Ref, dataDir 
 // apagar aquele fsync deixava `go test ./...` INTEIRO verde, no único caminho
 // desta fase capaz de DESTRUIR dado. Nada em produção muda com isso: o campo
 // nasce nil e não há como instalá-lo de fora do pacote.
-func (s *Store) reparaAposentados(dataDir string, listados []checkpoint.SegmentInfo) (bool, error) {
+func (s *Store) repairAposentados(dataDir string, listados []checkpoint.SegmentInfo) (bool, error) {
 	entradas, err := os.ReadDir(dataDir)
 	if err != nil {
 		return false, fmt.Errorf("storage: listar %s: %w", dataDir, err)
 	}
-	noManifest := make(map[uint32]struct{}, len(listados))
+	inManifest := make(map[uint32]struct{}, len(listados))
 	for _, si := range listados {
-		noManifest[si.ID] = struct{}{}
+		inManifest[si.ID] = struct{}{}
 	}
 	mudou := false
 	for _, e := range entradas {
 		if e.IsDir() {
 			continue
 		}
-		seg, ok := retiredNameID(e.Name())
+		sec, ok := retiredNameID(e.Name())
 		if !ok {
 			continue
 		}
 		aposentado := filepath.Join(dataDir, e.Name())
-		canonico := caminhoCanonicoDoSegmento(dataDir, seg)
-		presente, err := arquivoExiste(canonico)
+		canonico := pathCanonicoOfSegment(dataDir, sec)
+		presente, err := arquivoExists(canonico)
 		if err != nil {
 			return mudou, err
 		}
-		_, listado := noManifest[seg]
+		_, listado := inManifest[sec]
 		// Restaurar exige as DUAS condições. A segunda é defensiva e a
 		// sequência do D5 não a produz — o rename cria um nome e apaga o outro
 		// no mesmo passo atômico —, mas a alternativa é um rename
@@ -268,13 +268,13 @@ func (s *Store) reparaAposentados(dataDir string, listados []checkpoint.SegmentI
 		// este reparo destruir dado, e ela custa um Stat.
 		if listado && !presente {
 			if err := os.Rename(aposentado, canonico); err != nil {
-				return mudou, fmt.Errorf("storage: restaurar o segmento aposentado %d: %w", seg, err)
+				return mudou, fmt.Errorf("storage: restaurar o segmento aposentado %d: %w", sec, err)
 			}
 			mudou = true
 			continue
 		}
 		if err := os.Remove(aposentado); err != nil {
-			return mudou, fmt.Errorf("storage: remover o segmento aposentado %d: %w", seg, err)
+			return mudou, fmt.Errorf("storage: remover o segmento aposentado %d: %w", sec, err)
 		}
 		mudou = true
 	}
@@ -297,20 +297,20 @@ func (s *Store) reparaAposentados(dataDir string, listados []checkpoint.SegmentI
 	return true, nil
 }
 
-// arquivoExiste separa "não está lá" de "não deu para olhar". A distinção é
+// arquivoExists separa "não está lá" de "não deu para olhar". A distinção é
 // load-bearing no reparo acima: tratar um EIO como ausência faria o reparo
 // REMOVER um arquivo aposentado por não ter conseguido enxergar o canônico —
 // decidir destruição com base numa leitura que falhou é a mesma família do
 // instrumento que devolve resultado sem ter medido.
-func arquivoExiste(caminho string) (bool, error) {
-	_, err := os.Stat(caminho)
+func arquivoExists(path string) (bool, error) {
+	_, err := os.Stat(path)
 	if err == nil {
 		return true, nil
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	return false, fmt.Errorf("storage: verificar %s: %w", caminho, err)
+	return false, fmt.Errorf("storage: verificar %s: %w", path, err)
 }
 
 // replayState carrega o que o replay precisa lembrar entre records.
@@ -325,7 +325,7 @@ type replayState struct {
 	novas map[types.RowID]struct{}
 }
 
-// contaComoNova decide se este record representa uma row criada após o
+// countComoNew decide se este record representa uma row criada após o
 // ponto S. Não dá para usar "não tem location": um checkpoint interrompido
 // entre o ApplyOverlay e o manifest deixa a location da row nova já no
 // mmap, e o manifest antigo (que governa) não a contou.
@@ -336,7 +336,7 @@ type replayState struct {
 // fato não existe), mas significa que RowCount é ESTATÍSTICA e não
 // invariante: não use a diferença entre RowCount e nextRowID como prova de
 // nada. Visibilidade e lookup não dependem dele.
-func (st *replayState) contaComoNova(id types.RowID) bool {
+func (st *replayState) countComoNew(id types.RowID) bool {
 	if uint64(id) < st.baseNextRowID {
 		return false // já existia em S; o manifest já a contabilizou
 	}
@@ -351,7 +351,7 @@ func (st *replayState) contaComoNova(id types.RowID) bool {
 // (applyRecord, §15A Option A) — o que impede que restart e escrita
 // divirjam em silêncio. As diferenças do §10.3 (location direto no mmap,
 // primary por insert-if-absent) estão no modo applyReplay.
-func (s *Store) replayRecord(st *replayState, seg, off uint32, rec types.Record) error {
+func (s *Store) replayRecord(st *replayState, sec, off uint32, rec types.Record) error {
 	id := rec.RowID
 	// nextRowID = max(manifest.NextRowID, maiorRowIdVisto+1): nunca regride
 	// e nunca reutiliza um id (risco 9 do §14 — ABA de rowId).
@@ -412,8 +412,8 @@ func (s *Store) replayRecord(st *replayState, seg, off uint32, rec types.Record)
 	prevConhecido := false
 	if oldPacked, ok := s.locs.Get(id); ok {
 		oseg, ooff, _ := rowindex.Unpack(oldPacked)
-		if oseg < seg || (oseg == seg && ooff < off) {
-			prevRec, buf, err := s.segR.ReadRecord(oseg, ooff, s.prevBuf)
+		if oseg < sec || (oseg == sec && ooff < off) {
+			prevRec, buf, err := s.secR.ReadRecord(oseg, ooff, s.prevBuf)
 			s.prevBuf = buf
 			if err != nil {
 				return fmt.Errorf("%w: replay da row %d: estado anterior ilegível: %w", ErrDatasetCorrupt, id, err)
@@ -430,8 +430,8 @@ func (s *Store) replayRecord(st *replayState, seg, off uint32, rec types.Record)
 		payload:     rec.Payload,
 		prevPayload: prevPayload,
 		hadPrevious: prevConhecido,
-		countsAsNew: st.contaComoNova(id),
-		seg:         seg,
+		countsAsNew: st.countComoNew(id),
+		sec:         sec,
 		off:         off,
 		recLen:      encoding.RecordHeaderSize + len(rec.Key) + len(rec.Payload),
 		mode:        applyReplay,

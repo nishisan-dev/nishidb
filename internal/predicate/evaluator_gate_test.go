@@ -14,13 +14,13 @@ import (
 // permanente numa ingestão 24/7 — e é exatamente o tipo de alocação que só
 // aparece com profile na mão, porque nenhum teste de valor a vê.
 func TestAvaliadorDePayloadNaoAloca(t *testing.T) {
-	c := compila(t, dsContadorYAML)
-	prog, slots, err := predicate.CompilaCondicao("x", "authenticated = true AND slot > 0", c)
+	c := compile(t, dsCounterYAML)
+	prog, slots, err := predicate.CompileCondition("x", "authenticated = true AND slot > 0", c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	av := predicate.NovoAvaliadorDePayload(prog, slots.IDs)
-	payload := payloadDe(t, c, map[string]types.Value{
+	av := predicate.NewAvaliadorOfPayload(prog, slots.IDs)
+	payload := payloadOf(t, c, map[string]types.Value{
 		"customerId":    {Type: types.TypeString, Bytes: []byte("A")},
 		"authenticated": {Type: types.TypeBool, I64: 1},
 		"slot":          {Type: types.TypeInt64, I64: 3},

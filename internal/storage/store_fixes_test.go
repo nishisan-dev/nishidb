@@ -17,8 +17,8 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// payloadSemStatus monta payload só com id+counter (campo status ausente).
-func payloadSemStatus(t *testing.T, s *Store, key string, counter int64) []byte {
+// payloadWithoutStatus monta payload só com id+counter (campo status ausente).
+func payloadWithoutStatus(t *testing.T, s *Store, key string, counter int64) []byte {
 	t.Helper()
 	for _, name := range []string{"id", "status", "counter"} {
 		if _, err := s.FieldDict().LookupOrCreate([]byte(name)); err != nil {
@@ -164,7 +164,7 @@ func TestStatsConcorrenteComPut(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		var lastSeg uint32
+		var lastSec uint32
 		for {
 			select {
 			case <-stop:
@@ -172,11 +172,11 @@ func TestStatsConcorrenteComPut(t *testing.T) {
 			default:
 			}
 			st := s.Stats()
-			if st.CurrentSegmentID < lastSeg {
-				t.Errorf("CurrentSegmentID regrediu: %d → %d", lastSeg, st.CurrentSegmentID)
+			if st.CurrentSegmentID < lastSec {
+				t.Errorf("CurrentSegmentID regrediu: %d → %d", lastSec, st.CurrentSegmentID)
 				return
 			}
-			lastSeg = st.CurrentSegmentID
+			lastSec = st.CurrentSegmentID
 		}
 	}()
 	for i := 0; i < 300; i++ {
@@ -194,7 +194,7 @@ func TestBitmapCampoQueEntraESai(t *testing.T) {
 	// M4: os ramos "campo que entra" (Set pré-commit) e "campo que sai"
 	// (Clear pós-commit) do diff.
 	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
-	id, _ := mustPut(t, s, "es", 1, payloadSemStatus(t, s, "es", 1), nil)
+	id, _ := mustPut(t, s, "es", 1, payloadWithoutStatus(t, s, "es", 1), nil)
 
 	lookup := func() []types.RowID {
 		it, err := s.Lookup(fldStatus, strVal("Start"))
@@ -226,7 +226,7 @@ func TestBitmapCampoQueEntraESai(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustPut(t, s, "es", 3, payloadSemStatus(t, s, "es", 3), &prev2) // campo sai
+	mustPut(t, s, "es", 3, payloadWithoutStatus(t, s, "es", 3), &prev2) // campo sai
 	if rows := lookupRevalidado(t, s, fldStatus, strVal("Start")); len(rows) != 0 {
 		t.Fatalf("campo que sai: pós-revalidação status=Start deveria ser vazio, tem %v", rows)
 	}

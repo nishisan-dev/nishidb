@@ -144,7 +144,7 @@ counters:
 O que a rodada **não** exercitou: SIGTERM no meio de uma auditoria — sobre 1 010
 linhas ela termina em 3 ms, e não há janela para o sinal. A prova de que a
 auditoria honra o cancelamento é `TestAuditoriaRespeitaOContexto`, e a rota
-corre sob o mesmo `ctxDeMutacao` de `compact` e `checkpoint`.
+corre sob o mesmo `ctxOfMutacao` de `compact` e `checkpoint`.
 
 ## Veredito
 

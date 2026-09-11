@@ -75,12 +75,12 @@ type Writer struct {
 	// entrada do writer. Com decodeWorkers=1 ela tem um produtor só, e ainda
 	// assim está no caminho: um caminho de código, dimensionado diferente.
 	est *esteira
-	// limiarDeEncolhimento é o teto de memória retida por slot acima do qual os
+	// limiarOfEncolhimento é o teto de memória retida por slot acima do qual os
 	// buffers são soltos ao liberar o slot. Ver o godoc de limiarDeSlot.
-	limiarDeEncolhimento int
+	limiarOfEncolhimento int
 	log                  *logging.Logger
 	met                  *metricas
-	origem               checkpoint.Source
+	source               checkpoint.Source
 	cad                  Cadencia
 
 	// commit publica o offset no broker DEPOIS do checkpoint durável (§48).
@@ -176,10 +176,10 @@ func NewWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fila
 	return &Writer{
 		cfg: cfg, mat: mat, store: st, fila: fila,
 		est:                  newPipeline(cfg.MaxPollRecords),
-		limiarDeEncolhimento: slotThreshold(cfg),
+		limiarOfEncolhimento: slotThreshold(cfg),
 		log:                  log.Component("kafka").Dataset(cfg.Dataset),
 		met:                  met,
-		origem:               cfg.Source(),
+		source:               cfg.Source(),
 		cad:                  cad,
 		commit:               commit,
 		offsets:              o,
@@ -250,10 +250,10 @@ func (w *Writer) Run(ctx context.Context) error {
 			// tudo o que foi enfileirado antes dela, mesmo com K
 			// decodificadores terminando fora de ordem.
 			s.barreira.conclui(w.checkpoint(ctx))
-			w.liberaSlot()
+			w.releaseSlot()
 		default:
 			err := w.aplica(ctx, s)
-			w.liberaSlot()
+			w.releaseSlot()
 			if err != nil {
 				return err
 			}
@@ -280,12 +280,12 @@ func (w *Writer) despertador() (<-chan time.Time, func()) {
 	return t.C, t.Stop
 }
 
-// liberaSlot devolve o slot ao anel e contabiliza o encolhimento.
+// releaseSlot devolve o slot ao anel e contabiliza o encolhimento.
 //
 // Sempre depois de aplicar, inclusive no caminho de erro: o slot preso seria
 // uma vaga a menos para sempre, e com a janela cheia os decodificadores param.
-func (w *Writer) liberaSlot() {
-	if w.est.avanca(w.limiarDeEncolhimento) {
+func (w *Writer) releaseSlot() {
+	if w.est.advance(w.limiarOfEncolhimento) {
 		w.met.slotsEncolhidos.Inc()
 	}
 }
@@ -301,10 +301,10 @@ func (w *Writer) aplica(ctx context.Context, s *slot) error {
 	// decode passa a ser concorrente, e somá-lo aqui faria o histograma medir
 	// a soma de trabalhos paralelos como se fosse latência serial. O que este
 	// número responde é "o writer é o gargalo?", e o writer é o Aplica.
-	inicio := time.Now()
+	start := time.Now()
 	r := w.mat.Aplica(&s.dec)
-	w.met.aplicaSeg.Observe(time.Since(inicio).Seconds())
-	w.conta(r)
+	w.met.aplicaSec.Observe(time.Since(start).Seconds())
+	w.count(r)
 
 	switch {
 	case r.Fatal():
@@ -325,7 +325,7 @@ func (w *Writer) aplica(ctx context.Context, s *slot) error {
 			"categoria", r.Category.String(),
 			"partition", it.Rec.Partition, "offset", it.Rec.Offset,
 			"erro", r.Err.Error())
-		w.avanca(it.Rec)
+		w.advance(it.Rec)
 
 	case r.Err != nil:
 		// STORAGE_ERROR e INTERNAL_STATE: não é culpa do evento e não há
@@ -336,12 +336,12 @@ func (w *Writer) aplica(ctx context.Context, s *slot) error {
 			ErrPausado, r.Category, r.Err), "storage.falhou", it.Rec)
 
 	default:
-		w.avanca(it.Rec)
+		w.advance(it.Rec)
 	}
 	return w.talvezCheckpoint(ctx)
 }
 
-func (w *Writer) conta(r materializer.ApplyResult) {
+func (w *Writer) count(r materializer.ApplyResult) {
 	w.mu.Lock()
 	w.desfecho.Eventos++
 	switch {
@@ -370,19 +370,19 @@ func (w *Writer) conta(r materializer.ApplyResult) {
 	}
 }
 
-// avanca move a posição da partição para o PRÓXIMO offset a consumir. Só é
+// advance move a posição da partição para o PRÓXIMO offset a consumir. Só é
 // chamado para eventos DECIDIDOS — aplicados, stale ou descartados por
 // política. Evento que parou a ingestão nunca avança.
-func (w *Writer) avanca(rec *kgo.Record) {
+func (w *Writer) advance(rec *kgo.Record) {
 	w.posMu.Lock()
 	w.offsets[rec.Partition] = rec.Offset + 1
 	w.desdeCP++
 	w.posMu.Unlock()
-	w.met.posicaoDe(rec.Partition).Store(rec.Offset + 1)
+	w.met.positionOf(rec.Partition).Store(rec.Offset + 1)
 }
 
 // para registra a pausa de forma observável e torna durável o que já entrou.
-func (w *Writer) para(ctx context.Context, motivo error, evento string, rec *kgo.Record) error {
+func (w *Writer) para(ctx context.Context, motivo error, event string, rec *kgo.Record) error {
 	// Checkpoint ANTES de parar: os eventos já aplicados têm de ficar
 	// duráveis, e o offset persistido tem de apontar exatamente para o
 	// evento problemático — é isso que permite ao operador vê-lo e decidir.
@@ -396,7 +396,7 @@ func (w *Writer) para(ctx context.Context, motivo error, evento string, rec *kgo
 	}
 	w.mu.Unlock()
 	w.met.bloqueado.Set(1)
-	w.log.Error(evento, "ingestão PARADA; as consultas seguem de pé (§51). Use `nishidb offsets` para reposicionar",
+	w.log.Error(event, "ingestão PARADA; as consultas seguem de pé (§51). Use `nishidb offsets` para reposicionar",
 		"partition", rec.Partition, "offset", rec.Offset, "motivo", motivo.Error())
 	return w.Pausa()
 }
@@ -487,7 +487,7 @@ func (w *Writer) checkpoint(ctx context.Context) error {
 	for p, v := range w.offsets {
 		snap[p] = v
 	}
-	o := checkpoint.SourceOffsets{Source: w.origem, Offsets: snap}
+	o := checkpoint.SourceOffsets{Source: w.source, Offsets: snap}
 	if err := w.store.SetSourceOffsets(o); err != nil {
 		return err
 	}
@@ -514,8 +514,8 @@ func (w *Writer) finaliza(ctx context.Context) error {
 	// Contexto próprio: o ctx do consumer já pode estar cancelado no
 	// encerramento, e um checkpoint que não roda por causa disso jogaria
 	// fora trabalho já aplicado.
-	cctx, cancela := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancela()
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	return w.checkpoint(cctx)
 }
 

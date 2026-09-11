@@ -8,25 +8,25 @@ import (
 
 // Os artefatos de aceite do M4 são REGISTRO DE EXECUÇÃO — não são regerados, e
 // é sobre eles que os números de docs/aceite-m4.md são conferíveis. O que não
-// existia era alguém que os CONFERISSE: `avaliaGateDeDisco` só era exercitado
+// existia era alguém que os CONFERISSE: `evaluateGateOfDisk` só era exercitado
 // contra séries sintéticas (TestGateDeDiscoReprovaCrescimentoLinear e vizinhos),
 // de modo que a série da rodada REAL entrava no documento sem oráculo nenhum.
 // É o débito 6 num nível acima: o instrumento mede, publica, e ninguém confere o
 // que ele publicou.
 const (
-	artefatoDoAceiteM4 = "../baselines/aceite-m4-1m-20260822.json"
+	artefatoOfAceiteM4 = "../baselines/aceite-m4-1m-20260822.json"
 	artefatoBase250k   = "../baselines/aceite-m4-base-250k-20260822.json"
 )
 
-func leArtefato(t *testing.T, caminho string) Report {
+func readArtefato(t *testing.T, path string) Report {
 	t.Helper()
-	bruto, err := os.ReadFile(caminho)
+	bruto, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("lendo %s: %v", caminho, err)
+		t.Fatalf("lendo %s: %v", path, err)
 	}
 	var rep Report
 	if err := json.Unmarshal(bruto, &rep); err != nil {
-		t.Fatalf("decodificando %s: %v", caminho, err)
+		t.Fatalf("decodificando %s: %v", path, err)
 	}
 	return rep
 }
@@ -42,7 +42,7 @@ func leArtefato(t *testing.T, caminho string) Report {
 // depois, com UM evento de avanço. Nesse vão a compaction seguiu moendo com
 // ZERO evento entrando, e devolveu 33,5 MiB.
 //
-// `avaliaGateDeDisco` lê `serie[len(serie)-1]` como extremo da segunda metade,
+// `evaluateGateOfDisk` lê `serie[len(serie)-1]` como extremo da segunda metade,
 // sem perguntar QUANDO aquela amostra foi colhida. O resultado é que o veredito
 // do gate DURO da rodada inteira pendura-se num ponto medido fora da janela de
 // carga — e o comentário do próprio collector (harness.go, no `sample`) condena
@@ -54,8 +54,8 @@ func leArtefato(t *testing.T, caminho string) Report {
 // que o artefato publica; um oráculo que só confirmasse o publicado seria
 // satisfeito por `return GatePassou`. Conserto do instrumento é o débito 68.
 func TestOPlateauDoAceiteM4DependeDaAmostraColhidaForaDaJanelaDeCarga(t *testing.T) {
-	rep := leArtefato(t, artefatoDoAceiteM4)
-	serie := serieDeDiscoDoSteady(rep.Samples)
+	rep := readArtefato(t, artefatoOfAceiteM4)
+	serie := serieOfDiskOfSteady(rep.Samples)
 	if len(serie) < 2 {
 		t.Fatalf("série de disco do steady com %d amostras: o artefato mudou", len(serie))
 	}
@@ -63,8 +63,8 @@ func TestOPlateauDoAceiteM4DependeDaAmostraColhidaForaDaJanelaDeCarga(t *testing
 	// O vão. Ele é a razão de a última amostra não pertencer à janela de carga:
 	// entre ela e a anterior a ingestão avançou UM evento — o que foi
 	// reproduzido à mão no tópico para destravar o harness.
-	amostras := amostrasDoSteady(rep.Samples)
-	ultima, penultima := amostras[len(amostras)-1], amostras[len(amostras)-2]
+	samples := samplesOfSteady(rep.Samples)
+	ultima, penultima := samples[len(samples)-1], samples[len(samples)-2]
 	vao := ultima.ElapsedSec - penultima.ElapsedSec
 	avanco := ultima.Events - penultima.Events
 	if vao < 600 || avanco > 1 {
@@ -76,21 +76,21 @@ func TestOPlateauDoAceiteM4DependeDaAmostraColhidaForaDaJanelaDeCarga(t *testing
 			"o defeito descrito aqui não é este", ultima.DiskBytes, penultima.DiskBytes)
 	}
 
-	comAAmostra := avaliaGateDeDisco(serie)
-	if comAAmostra.Status != GatePassou {
+	withAAmostra := evaluateGateOfDisk(serie)
+	if withAAmostra.Status != GatePassou {
 		t.Errorf("com a amostra pós-bloqueio o gate = %q, e o artefato publica pass: %s",
-			comAAmostra.Status, comAAmostra.Detail)
+			withAAmostra.Status, withAAmostra.Detail)
 	}
 
-	semAAmostra := avaliaGateDeDisco(serie[:len(serie)-1])
-	if semAAmostra.Status != GateReprovou {
+	withoutAAmostra := evaluateGateOfDisk(serie[:len(serie)-1])
+	if withoutAAmostra.Status != GateReprovou {
 		t.Errorf("sem a amostra pós-bloqueio o gate = %q, queria %q — se esta asserção "+
 			"passar a falhar, a rodada passou a provar o plateau por si e o texto de "+
 			"docs/aceite-m4.md precisa ser reescrito: %s",
-			semAAmostra.Status, GateReprovou, semAAmostra.Detail)
+			withoutAAmostra.Status, GateReprovou, withoutAAmostra.Detail)
 	}
-	t.Logf("com a amostra:  %s", comAAmostra.Detail)
-	t.Logf("sem a amostra:  %s", semAAmostra.Detail)
+	t.Logf("com a amostra:  %s", withAAmostra.Detail)
+	t.Logf("sem a amostra:  %s", withoutAAmostra.Detail)
 
 	// A razão publicada não depende só da última amostra: ela é um ponto de
 	// SORTE na vizinhança. Truncando de 1 a 7 amostras do fim o veredito
@@ -105,7 +105,7 @@ func TestOPlateauDoAceiteM4DependeDaAmostraColhidaForaDaJanelaDeCarga(t *testing
 	// TestOPlateauDoAceiteM4TambemReprovaPorMinimosQuadrados.
 	vistos := map[GateStatus]int{}
 	for k := 0; k <= 7; k++ {
-		g := avaliaGateDeDisco(serie[:len(serie)-k])
+		g := evaluateGateOfDisk(serie[:len(serie)-k])
 		vistos[g.Status]++
 	}
 	if vistos[GatePassou] == 0 || vistos[GateReprovou] == 0 {
@@ -132,13 +132,13 @@ func TestOPlateauDoAceiteM4DependeDaAmostraColhidaForaDaJanelaDeCarga(t *testing
 // não vale a pena repetir o erro para provar que o outro existe.
 func TestOPlateauDoAceiteM4TambemReprovaPorMinimosQuadrados(t *testing.T) {
 	rampa := []int64{100, 300, 500, 700, 900}
-	if got := inclinacaoPorMinimosQuadrados(rampa); got != 200 {
+	if got := inclinacaoByMinimosQuadrados(rampa); got != 200 {
 		t.Fatalf("o estimador devolveu %.4f para uma rampa de 200 por amostra: "+
 			"sem aferição ele não serve para aferir coisa nenhuma", got)
 	}
 
-	rep := leArtefato(t, artefatoDoAceiteM4)
-	serie := serieDeDiscoDoSteady(rep.Samples)
+	rep := readArtefato(t, artefatoOfAceiteM4)
+	serie := serieOfDiskOfSteady(rep.Samples)
 	for _, caso := range []struct {
 		name  string
 		serie []int64
@@ -147,13 +147,13 @@ func TestOPlateauDoAceiteM4TambemReprovaPorMinimosQuadrados(t *testing.T) {
 		{"sem a amostra pós-bloqueio", serie[:len(serie)-1]},
 	} {
 		meio := len(caso.serie) / 2
-		primeira := inclinacaoPorMinimosQuadrados(caso.serie[:meio+1])
-		segunda := inclinacaoPorMinimosQuadrados(caso.serie[meio:])
+		primeira := inclinacaoByMinimosQuadrados(caso.serie[:meio+1])
+		segunda := inclinacaoByMinimosQuadrados(caso.serie[meio:])
 		razao := segunda / primeira
-		if razao < fracaoDeCrescimentoTolerada {
+		if razao < fractionOfGrowthTolerada {
 			t.Errorf("%s: razão por mínimos quadrados = %.3f, abaixo do teto %.2f — "+
 				"o estimador robusto passou a APROVAR, e o texto de docs/aceite-m4.md "+
-				"precisa ser reescrito", caso.name, razao, fracaoDeCrescimentoTolerada)
+				"precisa ser reescrito", caso.name, razao, fractionOfGrowthTolerada)
 		}
 		t.Logf("%s: 1ª %.0f B/amostra, 2ª %.0f B/amostra, razão %.3f",
 			caso.name, primeira, segunda, razao)
@@ -170,30 +170,30 @@ func TestOPlateauDoAceiteM4TambemReprovaPorMinimosQuadrados(t *testing.T) {
 // primeira transição contra 26 MiB/min na última —, e desacelerar adia o ENOSPC
 // do §86; parar é o que o evita, e parar não aconteceu nesta escala.
 func TestODiscoDoAceiteM4CresceEmTodaJanelaDeSessentaSegundos(t *testing.T) {
-	rep := leArtefato(t, artefatoDoAceiteM4)
-	amostras := amostrasDoSteady(rep.Samples)
-	sobCarga := amostras[:len(amostras)-1] // a pós-bloqueio não pertence à janela
+	rep := readArtefato(t, artefatoOfAceiteM4)
+	samples := samplesOfSteady(rep.Samples)
+	sobCarga := samples[:len(samples)-1] // a pós-bloqueio não pertence à janela
 
-	inicio := sobCarga[0].ElapsedSec
+	start := sobCarga[0].ElapsedSec
 	var medias []float64
 	var soma float64
 	var n int
-	janelaAtual := 0
-	fecha := func() {
+	windowAtual := 0
+	close := func() {
 		if n > 0 {
 			medias = append(medias, soma/float64(n)/(1<<20))
 		}
 		soma, n = 0, 0
 	}
 	for _, a := range sobCarga {
-		if j := int((a.ElapsedSec - inicio) / 60); j != janelaAtual {
-			fecha()
-			janelaAtual = j
+		if j := int((a.ElapsedSec - start) / 60); j != windowAtual {
+			close()
+			windowAtual = j
 		}
 		soma += float64(a.DiskBytes)
 		n++
 	}
-	fecha()
+	close()
 
 	if len(medias) < 10 {
 		t.Fatalf("%d janelas de 60 s na fase de carga: a série encurtou", len(medias))
@@ -208,10 +208,10 @@ func TestODiscoDoAceiteM4CresceEmTodaJanelaDeSessentaSegundos(t *testing.T) {
 	t.Logf("médias por janela de 60 s (MiB): %.1f", medias)
 }
 
-// inclinacaoPorMinimosQuadrados devolve o crescimento por AMOSTRA da reta que
+// inclinacaoByMinimosQuadrados devolve o crescimento por AMOSTRA da reta que
 // melhor ajusta a série — o eixo x é o índice, exatamente a normalização que o
 // gate usa, para que as duas leituras sejam comparáveis.
-func inclinacaoPorMinimosQuadrados(serie []int64) float64 {
+func inclinacaoByMinimosQuadrados(serie []int64) float64 {
 	n := float64(len(serie))
 	var somaX, somaY float64
 	for i, v := range serie {
@@ -239,13 +239,13 @@ func inclinacaoPorMinimosQuadrados(serie []int64) float64 {
 // `disk_plateau` dela PASSA. Uma regra que o próprio conjunto de artefatos
 // contradiz não é regra; é coincidência promovida a explicação.
 func TestOChurnNaoSeparaAprovacaoDeReprovacaoNosArtefatosDoM4(t *testing.T) {
-	base := leArtefato(t, artefatoBase250k)
+	base := readArtefato(t, artefatoBase250k)
 	churn := float64(base.Steady.Events) / float64(base.Config.Entities)
 	if churn >= 6 {
 		t.Fatalf("churn de %.2f× na rodada de referência: ela deixou de ser o "+
 			"contraexemplo da fronteira de ~6×", churn)
 	}
-	g := avaliaGateDeDisco(serieDeDiscoDoSteady(base.Samples))
+	g := evaluateGateOfDisk(serieOfDiskOfSteady(base.Samples))
 	if g.Status != GatePassou {
 		t.Errorf("disk_plateau = %q com churn de %.2f×, queria %q — a fronteira por "+
 			"churn voltaria a se sustentar e docs/aceite-m4.md precisaria voltar "+
@@ -254,12 +254,12 @@ func TestOChurnNaoSeparaAprovacaoDeReprovacaoNosArtefatosDoM4(t *testing.T) {
 	t.Logf("churn %.2f×, disk_plateau %s: %s", churn, g.Status, g.Detail)
 }
 
-// amostrasDoSteady é o gêmeo de serieDeDiscoDoSteady que preserva a amostra
+// samplesOfSteady é o gêmeo de serieOfDiskOfSteady que preserva a amostra
 // inteira, porque o defeito acima só é visível no par (elapsed, events) que a
 // série de int64 joga fora.
-func amostrasDoSteady(amostras []Sample) []Sample {
+func samplesOfSteady(samples []Sample) []Sample {
 	var fora []Sample
-	for _, a := range amostras {
+	for _, a := range samples {
 		if a.Phase == "steady" {
 			fora = append(fora, a)
 		}

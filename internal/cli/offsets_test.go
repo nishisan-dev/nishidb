@@ -14,8 +14,8 @@ import (
 // pílula de veneno e um restore parcial obrigaria a apagar o dataset.
 
 func TestOffsetsShowEmDatasetSemPosicao(t *testing.T) {
-	a := novoAmbiente(t)
-	code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions", "--show")
+	a := newEnv(t)
+	code := a.run("offsets", "--config", a.config, "--dataset", "radius_sessions", "--show")
 	if code != cli.ExitOK {
 		t.Fatalf("code = %d\n%s", code, a.stderr.String())
 	}
@@ -31,11 +31,11 @@ func TestOffsetsShowEmDatasetSemPosicao(t *testing.T) {
 // Um dataset com linhas e sem posição não sobe ingestão. O --show tem de
 // dizer isso, e não só mostrar "ausente".
 func TestOffsetsShowAvisaQuandoHaLinhasSemPosicao(t *testing.T) {
-	a := novoAmbiente(t)
-	a.rodaComEntrada(`{"id":"A","_SEQ":1,"Acct-Status-Type":"Start"}`+"\n",
+	a := newEnv(t)
+	a.runWithEntry(`{"id":"A","_SEQ":1,"Acct-Status-Type":"Start"}`+"\n",
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-")
 
-	if code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions", "--show"); code != cli.ExitOK {
+	if code := a.run("offsets", "--config", a.config, "--dataset", "radius_sessions", "--show"); code != cli.ExitOK {
 		t.Fatalf("code = %d\nstdout:%s\nstderr:%s", code, a.stdout.String(), a.stderr.String())
 	}
 	saida := a.stdout.String()
@@ -50,8 +50,8 @@ func TestOffsetsShowAvisaQuandoHaLinhasSemPosicao(t *testing.T) {
 // --set e --reset são destrutivos: pedem confirmação explícita. Uma reposição
 // acidental reprocessa ou pula uma janela inteira do tópico.
 func TestOffsetsSetExigeConfirmacao(t *testing.T) {
-	a := novoAmbiente(t)
-	code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions", "--set", "0:100")
+	a := newEnv(t)
+	code := a.run("offsets", "--config", a.config, "--dataset", "radius_sessions", "--set", "0:100")
 	if code != cli.ExitUsageError {
 		t.Errorf("code = %d, quer %d (sem --yes)", code, cli.ExitUsageError)
 	}
@@ -64,14 +64,14 @@ func TestOffsetsSetExigeConfirmacao(t *testing.T) {
 }
 
 func TestOffsetsSetGravaEDepoisEhLido(t *testing.T) {
-	a := novoAmbiente(t)
-	code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions",
+	a := newEnv(t)
+	code := a.run("offsets", "--config", a.config, "--dataset", "radius_sessions",
 		"--set", "0:100,2:250", "--yes")
 	if code != cli.ExitOK {
 		t.Fatalf("code = %d\n%s", code, a.stderr.String())
 	}
 
-	if code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions", "--show"); code != cli.ExitOK {
+	if code := a.run("offsets", "--config", a.config, "--dataset", "radius_sessions", "--show"); code != cli.ExitOK {
 		t.Fatalf("show: code = %d\n%s", code, a.stderr.String())
 	}
 	saida := a.stdout.String()
@@ -91,8 +91,8 @@ func TestOffsetsSetRecusaEntradaInvalida(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.value, func(t *testing.T) {
-			a := novoAmbiente(t)
-			if code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions",
+			a := newEnv(t)
+			if code := a.run("offsets", "--config", a.config, "--dataset", "radius_sessions",
 				"--set", c.value, "--yes"); code != cli.ExitUsageError {
 				t.Errorf("code = %d, quer %d", code, cli.ExitUsageError)
 			}
@@ -106,16 +106,16 @@ func TestOffsetsSetRecusaEntradaInvalida(t *testing.T) {
 // --reset descarta a posição: a próxima subida volta a valer o
 // autoOffsetReset, o que é exatamente a saída para um restore parcial.
 func TestOffsetsResetDescartaAPosicao(t *testing.T) {
-	a := novoAmbiente(t)
-	if code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions",
+	a := newEnv(t)
+	if code := a.run("offsets", "--config", a.config, "--dataset", "radius_sessions",
 		"--set", "0:100", "--yes"); code != cli.ExitOK {
 		t.Fatalf("set: %d\n%s", code, a.stderr.String())
 	}
-	if code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions",
+	if code := a.run("offsets", "--config", a.config, "--dataset", "radius_sessions",
 		"--reset", "earliest", "--yes"); code != cli.ExitOK {
 		t.Fatalf("reset: %d\n%s", code, a.stderr.String())
 	}
-	if code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions", "--show"); code != cli.ExitOK {
+	if code := a.run("offsets", "--config", a.config, "--dataset", "radius_sessions", "--show"); code != cli.ExitOK {
 		t.Fatalf("show: %d\n%s", code, a.stderr.String())
 	}
 	if !strings.Contains(a.stdout.String(), "offsets: nenhum") {
@@ -124,12 +124,12 @@ func TestOffsetsResetDescartaAPosicao(t *testing.T) {
 }
 
 func TestOffsetsExigeUmaAcao(t *testing.T) {
-	a := novoAmbiente(t)
-	if code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions"); code != cli.ExitUsageError {
+	a := newEnv(t)
+	if code := a.run("offsets", "--config", a.config, "--dataset", "radius_sessions"); code != cli.ExitUsageError {
 		t.Errorf("code = %d, quer %d (nenhuma ação)", code, cli.ExitUsageError)
 	}
-	a2 := novoAmbiente(t)
-	if code := a2.roda("offsets", "--config", a2.config, "--dataset", "radius_sessions",
+	a2 := newEnv(t)
+	if code := a2.run("offsets", "--config", a2.config, "--dataset", "radius_sessions",
 		"--show", "--reset", "earliest"); code != cli.ExitUsageError {
 		t.Errorf("code = %d, quer %d (duas ações)", code, cli.ExitUsageError)
 	}
@@ -138,16 +138,16 @@ func TestOffsetsExigeUmaAcao(t *testing.T) {
 // §101 — a política `stop` deixou de ser chave sem leitor: o `ingest` a lê e
 // para, com código próprio.
 func TestIngestParaComInvalidEventStop(t *testing.T) {
-	a := novoAmbiente(t)
+	a := newEnv(t)
 	a.declaraPolitica(t, "stop")
 
-	entrada := strings.Join([]string{
+	entry := strings.Join([]string{
 		`{"id":"A","_SEQ":1,"Acct-Status-Type":"Start"}`,
 		`{isso nao e json}`,
 		`{"id":"C","_SEQ":1,"Acct-Status-Type":"Start"}`,
 	}, "\n") + "\n"
 
-	code := a.rodaComEntrada(entrada,
+	code := a.runWithEntry(entry,
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-")
 	if code != cli.ExitPolicyStopped {
 		t.Errorf("code = %d, quer %d\n%s", code, cli.ExitPolicyStopped, a.stderr.String())
@@ -165,9 +165,9 @@ func TestIngestParaComInvalidEventStop(t *testing.T) {
 // O default continua sendo log-and-skip: mudar o default silenciosamente
 // mudaria o comportamento de todo YAML já escrito.
 func TestPoliticaPadraoContinuaLogAndSkip(t *testing.T) {
-	a := novoAmbiente(t)
-	entrada := `{"id":"A","_SEQ":1,"Acct-Status-Type":"Start"}` + "\n" + `{isso nao e json}` + "\n"
-	if code := a.rodaComEntrada(entrada,
+	a := newEnv(t)
+	entry := `{"id":"A","_SEQ":1,"Acct-Status-Type":"Start"}` + "\n" + `{isso nao e json}` + "\n"
+	if code := a.runWithEntry(entry,
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != cli.ExitOK {
 		t.Errorf("code = %d, quer 0\n%s", code, a.stderr.String())
 	}
@@ -176,28 +176,28 @@ func TestPoliticaPadraoContinuaLogAndSkip(t *testing.T) {
 // Débito 48: `mode: replace` era contado no materializer e sumia do resumo, e
 // o total não fechava com as parcelas.
 func TestResumoQuebraSubstituidos(t *testing.T) {
-	a := novoAmbiente(t)
-	a.rodaComEntrada(`{"id":"A","_SEQ":1,"Acct-Status-Type":"Start"}`+"\n",
+	a := newEnv(t)
+	a.runWithEntry(`{"id":"A","_SEQ":1,"Acct-Status-Type":"Start"}`+"\n",
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-")
 	if !strings.Contains(a.stderr.String(), "substituídos") {
 		t.Errorf("o resumo não quebra substituídos: %q", a.stderr.String())
 	}
 }
 
-func (a *ambiente) pathOffsets() string {
+func (a *env) pathOffsets() string {
 	return filepath.Join(a.dir, "dados", "radius_sessions", "checkpoint", "kafka.offsets")
 }
 
 // declaraPolitica acrescenta o bloco `errors` ao YAML do dataset. É append
 // porque o fixture é o do §12 e tem de continuar intocado no repositório.
-func (a *ambiente) declaraPolitica(t *testing.T, valor string) {
+func (a *env) declaraPolitica(t *testing.T, value string) {
 	t.Helper()
 	path := filepath.Join(a.dir, "datasets", "radius_sessions.yaml")
 	yml, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	yml = append(yml, []byte("\nerrors:\n  invalidEvent: "+valor+"\n")...)
+	yml = append(yml, []byte("\nerrors:\n  invalidEvent: "+value+"\n")...)
 	if err := os.WriteFile(path, yml, 0o644); err != nil {
 		t.Fatal(err)
 	}

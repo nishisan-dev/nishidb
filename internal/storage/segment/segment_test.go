@@ -115,8 +115,8 @@ func TestRotacaoCriaNovoSegmento(t *testing.T) {
 	dir := t.TempDir()
 	rec := makeRecord(t, 1, 1, "rotation-key", 100)
 	// Espaço para exatamente 2 records por segmento.
-	segSize := int64(HeaderSize + 2*len(rec))
-	w, err := OpenWriter(dir, segSize, 0, 0)
+	secSize := int64(HeaderSize + 2*len(rec))
+	w, err := OpenWriter(dir, secSize, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,11 +124,11 @@ func TestRotacaoCriaNovoSegmento(t *testing.T) {
 
 	var segs []uint32
 	for i := 0; i < 5; i++ {
-		seg, _, err := w.Append(rec)
+		sec, _, err := w.Append(rec)
 		if err != nil {
 			t.Fatalf("Append %d: %v", i, err)
 		}
-		segs = append(segs, seg)
+		segs = append(segs, sec)
 	}
 	want := []uint32{1, 1, 2, 2, 3}
 	for i := range want {
@@ -191,7 +191,7 @@ func TestReopenParaAppendTruncaLixo(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec1 := makeRecord(t, 1, 1, "first", 0)
-	seg, off1, err := w.Append(rec1)
+	sec, off1, err := w.Append(rec1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestReopenParaAppendTruncaLixo(t *testing.T) {
 	f.Close()
 
 	// Reabre posicionado no fim válido: o lixo deve ser truncado.
-	w2, err := OpenWriter(dir, 1<<20, seg, validEnd)
+	w2, err := OpenWriter(dir, 1<<20, sec, validEnd)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -230,8 +230,8 @@ func TestReopenParaAppendTruncaLixo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seg2 != seg || int64(off2) != validEnd {
-		t.Fatalf("append pós-reopen: esperado seg=%d off=%d, obtido seg=%d off=%d", seg, validEnd, seg2, off2)
+	if seg2 != sec || int64(off2) != validEnd {
+		t.Fatalf("append pós-reopen: esperado seg=%d off=%d, obtido seg=%d off=%d", sec, validEnd, seg2, off2)
 	}
 
 	r, err := OpenReader(dir)
@@ -251,7 +251,7 @@ func TestReadRecordDetectaCorrupcao(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := makeRecord(t, 9, 9, "corrupt-me", 50)
-	seg, off, err := w.Append(rec)
+	sec, off, err := w.Append(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestReadRecordDetectaCorrupcao(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if _, _, err := r.ReadRecord(seg, off, nil); !errors.Is(err, encoding.ErrCorrupt) {
+	if _, _, err := r.ReadRecord(sec, off, nil); !errors.Is(err, encoding.ErrCorrupt) {
 		t.Fatalf("esperado ErrCorrupt, obtido %v", err)
 	}
 }
@@ -287,7 +287,7 @@ func TestReadRecordComLengthCorrompidoNaoAlocaGigante(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := makeRecord(t, 9, 9, "len-corrupto", 50)
-	seg, off, err := w.Append(rec)
+	sec, off, err := w.Append(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestReadRecordComLengthCorrompidoNaoAlocaGigante(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	_, buf, err := r.ReadRecord(seg, off, nil)
+	_, buf, err := r.ReadRecord(sec, off, nil)
 	if !errors.Is(err, encoding.ErrCorrupt) {
 		t.Fatalf("esperado ErrCorrupt, obtido %v", err)
 	}
@@ -389,7 +389,7 @@ func TestReadRecordGrande(t *testing.T) {
 	}
 	defer w.Close()
 	rec := makeRecord(t, 5, 5, "big-record", 8192)
-	seg, off, err := w.Append(rec)
+	sec, off, err := w.Append(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestReadRecordGrande(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	got, _, err := r.ReadRecord(seg, off, nil)
+	got, _, err := r.ReadRecord(sec, off, nil)
 	if err != nil {
 		t.Fatalf("ReadRecord grande: %v", err)
 	}
@@ -422,8 +422,8 @@ func TestReadSegmentoInexistente(t *testing.T) {
 func TestListSegments(t *testing.T) {
 	dir := t.TempDir()
 	rec := makeRecord(t, 1, 1, "list-key", 100)
-	segSize := int64(HeaderSize + 2*len(rec))
-	w, err := OpenWriter(dir, segSize, 0, 0)
+	secSize := int64(HeaderSize + 2*len(rec))
+	w, err := OpenWriter(dir, secSize, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

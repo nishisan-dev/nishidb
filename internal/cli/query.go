@@ -26,10 +26,10 @@ func runQuery(args []string, amb Context) int {
 		argConfig = fs.String("config", "", "caminho do nishidb.yaml")
 		dataset   = fs.String("dataset", "", "nome do dataset")
 		limit     = fs.Int("limit", -1, "sobrepõe o LIMIT da query")
-		servidor  = fs.String("server", "", "consulta pelo protocolo remoto em vez de abrir o dataset local")
+		server    = fs.String("server", "", "consulta pelo protocolo remoto em vez de abrir o dataset local")
 	)
-	var params listaDeParametros
-	fs.Var(&params, "param", "valor de um `?` posicional, no formato <tipo>:<valor> ("+tiposDeParametro+"); repetível, na ordem dos ?")
+	var params listaOfParametros
+	fs.Var(&params, "param", "valor de um `?` posicional, no formato <tipo>:<valor> ("+tiposOfParametro+"); repetível, na ordem dos ?")
 	credFlags := setupRemoteFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return ExitUsageError
@@ -56,10 +56,10 @@ func runQuery(args []string, amb Context) int {
 	case *dataset == "":
 		fmt.Fprintln(amb.Stderr, "query: --dataset é obrigatório")
 		return ExitUsageError
-	case *servidor == "" && *argConfig == "":
+	case *server == "" && *argConfig == "":
 		fmt.Fprintln(amb.Stderr, "query: informe --config (consulta local) ou --server (consulta remota)")
 		return ExitUsageError
-	case *servidor != "" && *argConfig != "":
+	case *server != "" && *argConfig != "":
 		fmt.Fprintln(amb.Stderr, "query: --config e --server são exclusivos; o --server usa a configuração do servidor")
 		return ExitUsageError
 	}
@@ -87,8 +87,8 @@ func runQuery(args []string, amb Context) int {
 		sql = withLimit(sql, *limit)
 	}
 
-	if *servidor != "" {
-		return remoteQuery(*servidor, *dataset, sql, params, cred, amb)
+	if *server != "" {
+		return remoteQuery(*server, *dataset, sql, params, cred, amb)
 	}
 
 	cfg, err := nishiconfig.Load(*argConfig)
@@ -97,13 +97,13 @@ func runQuery(args []string, amb Context) int {
 		return ExitUsageError
 	}
 
-	st, compilado, spec, fecha, err := openForQuery(cfg, *dataset)
+	st, compilado, spec, close, err := openForQuery(cfg, *dataset)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		serverHint(err, *argConfig, *dataset, amb)
 		return errorCode(err)
 	}
-	defer fecha()
+	defer close()
 
 	eng := query.NewEngine()
 	if err := eng.Register(*dataset, compilado, st); err != nil {
@@ -123,8 +123,8 @@ func runQuery(args []string, amb Context) int {
 	//
 	// Só no dataset DECLARADO, como no servidor: a irmã não tem fonte própria.
 	if spec != nil {
-		if err := metakafka.Register(eng, *dataset, metakafka.Fonte{
-			Declarada: metakafka.DoYAML(spec.Source.Kafka),
+		if err := metakafka.Register(eng, *dataset, metakafka.Source{
+			Declarada: metakafka.OfYAML(spec.Source.Kafka),
 			Duraveis:  st.SourceOffsets,
 		}); err != nil {
 			notify(amb, "query: %v\n", err)
@@ -223,14 +223,14 @@ func withLimit(sql string, n int) string {
 		// escreveu.
 		return fmt.Sprintf("%s LIMIT %d", corte, n)
 	}
-	inicio := len(corte)
-	if st.HasLimit && st.LimitPos < inicio {
-		inicio = clauseStart(corte, st.LimitPos)
+	start := len(corte)
+	if st.HasLimit && st.LimitPos < start {
+		start = clauseStart(corte, st.LimitPos)
 	}
-	if st.HasOffset && clauseStart(corte, st.OffsetPos) < inicio {
-		inicio = clauseStart(corte, st.OffsetPos)
+	if st.HasOffset && clauseStart(corte, st.OffsetPos) < start {
+		start = clauseStart(corte, st.OffsetPos)
 	}
-	corte = strings.TrimSpace(corte[:inicio])
+	corte = strings.TrimSpace(corte[:start])
 	if st.HasOffset {
 		return fmt.Sprintf("%s LIMIT %d OFFSET %d", corte, n, st.Offset)
 	}
@@ -243,8 +243,8 @@ func withLimit(sql string, n int) string {
 // O parser guarda a posição do NÚMERO (`LimitPos` aponta para o `10` de
 // `LIMIT 10`), que é o que a mensagem de erro precisa. Para cortar, é preciso a
 // posição da PALAVRA — cortar no número deixaria um `LIMIT` órfão no texto.
-func clauseStart(sql string, posDoLiteral int) int {
-	i := posDoLiteral
+func clauseStart(sql string, posOfLiteral int) int {
+	i := posOfLiteral
 	// Recua o espaço entre a palavra e o número.
 	for i > 0 && (sql[i-1] == ' ' || sql[i-1] == '\t' || sql[i-1] == '\n' || sql[i-1] == '\r') {
 		i--
@@ -277,26 +277,26 @@ func printQueryError(w io.Writer, sql string, err error) {
 	if pos < 0 || pos > len(sql) {
 		return
 	}
-	linha, coluna, texto := recorta(sql, pos)
+	row, column, text := recorta(sql, pos)
 	fmt.Fprintf(w, "  linha %d, coluna %d:\n    %s\n    %s^\n",
-		linha, coluna, texto, strings.Repeat(" ", coluna-1))
+		row, column, text, strings.Repeat(" ", column-1))
 }
 
 // recorta devolve a line (1-based), a coluna (1-based) e o texto da line
 // onde o offset cai.
 func recorta(sql string, pos int) (int, int, string) {
-	linha, inicio := 1, 0
+	row, start := 1, 0
 	for i := 0; i < pos && i < len(sql); i++ {
 		if sql[i] == '\n' {
-			linha++
-			inicio = i + 1
+			row++
+			start = i + 1
 		}
 	}
-	fim := strings.IndexByte(sql[inicio:], '\n')
-	if fim < 0 {
-		fim = len(sql)
+	end := strings.IndexByte(sql[start:], '\n')
+	if end < 0 {
+		end = len(sql)
 	} else {
-		fim += inicio
+		end += start
 	}
-	return linha, pos - inicio + 1, sql[inicio:fim]
+	return row, pos - start + 1, sql[start:end]
 }

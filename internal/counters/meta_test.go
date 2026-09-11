@@ -13,9 +13,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
 )
 
-// motorComMeta registra o dataset de mentira e a `_meta.counters` sobre os
+// engineWithMeta registra o dataset de mentira e a `_meta.counters` sobre os
 // contadores dados — a mesma costura do Registra, sem o Store real.
-func motorComMeta(t *testing.T, cs ...*counter.Counter) *query.Engine {
+func engineWithMeta(t *testing.T, cs ...*counter.Counter) *query.Engine {
 	t.Helper()
 	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
 	if err != nil {
@@ -33,11 +33,11 @@ func motorComMeta(t *testing.T, cs ...*counter.Counter) *query.Engine {
 	for _, c := range cs {
 		contados = append(contados, c)
 	}
-	msc, fonte, err := counters.TabelaMeta(contados)
+	msc, source, err := counters.TableMeta(contados)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.RegisterVirtual("servicos", meta.Namespace, counters.TabelaMetaCounters, msc, fonte); err != nil {
+	if err := eng.RegisterVirtual("servicos", meta.Namespace, counters.TableMetaCounters, msc, source); err != nil {
 		t.Fatal(err)
 	}
 	return eng
@@ -46,30 +46,30 @@ func motorComMeta(t *testing.T, cs ...*counter.Counter) *query.Engine {
 // TestMetaCountersListaOsContadores: uma linha por contador, com a
 // definição e o retrato vivo — o que antes só saía pelo `nishidb counters`.
 func TestMetaCountersListaOsContadores(t *testing.T) {
-	porOLT := abreContador(t, defPorOLT("autenticados_por_olt"))
-	porPON := abreContador(t, defPorPON("autenticados_por_pon"))
-	populaPON(t, porOLT)
-	populaPON(t, porPON)
-	eng := motorComMeta(t, porOLT, porPON)
+	byOLT := openCounter(t, defByOLT("autenticados_por_olt"))
+	byPON := openCounter(t, defByPON("autenticados_por_pon"))
+	populaPON(t, byOLT)
+	populaPON(t, byPON)
+	eng := engineWithMeta(t, byOLT, byPON)
 
 	rows := consulta(t, eng, "SELECT name, groupBy, condition, groups, maxGroups, retired, refused, orphans FROM _meta.counters ORDER BY name")
-	if got := coluna(rows, "name"); got != "autenticados_por_olt,autenticados_por_pon" {
+	if got := column(rows, "name"); got != "autenticados_por_olt,autenticados_por_pon" {
 		t.Fatalf("name = %s", got)
 	}
-	if got := coluna(rows, "groupBy"); got != "olt,olt|slot|port" {
+	if got := column(rows, "groupBy"); got != "olt,olt|slot|port" {
 		t.Fatalf("groupBy = %s (o separador é o mesmo do groupKey)", got)
 	}
-	if got := coluna(rows, "condition"); got != "authenticated = true,authenticated = true" {
+	if got := column(rows, "condition"); got != "authenticated = true,authenticated = true" {
 		t.Fatalf("condition = %s", got)
 	}
 	// populaPON toca duas OLTs e quatro PONs.
-	if got := coluna(rows, "groups"); got != "2,4" {
+	if got := column(rows, "groups"); got != "2,4" {
 		t.Fatalf("groups = %s", got)
 	}
-	if got := coluna(rows, "maxGroups"); got != "1000,1000" {
+	if got := column(rows, "maxGroups"); got != "1000,1000" {
 		t.Fatalf("maxGroups = %s", got)
 	}
-	if got := coluna(rows, "retired") + "/" + coluna(rows, "refused") + "/" + coluna(rows, "orphans"); got != "0,0/0,0/0,0" {
+	if got := column(rows, "retired") + "/" + column(rows, "refused") + "/" + column(rows, "orphans"); got != "0,0/0,0/0,0" {
 		t.Fatalf("retired/refused/orphans = %s", got)
 	}
 
@@ -88,25 +88,25 @@ func TestMetaCountersListaOsContadores(t *testing.T) {
 // DIFERENTES é o que faz o teste discriminar: com rows == total ele passaria
 // verde com as duas colunas trocadas.
 func TestMetaCountersPublicaLinhasETotal(t *testing.T) {
-	porOLT := abreContador(t, defPorOLT("autenticados_por_olt"))
-	porPON := abreContador(t, defPorPON("autenticados_por_pon"))
-	populaPON(t, porOLT)
-	populaPON(t, porPON)
-	eng := motorComMeta(t, porOLT, porPON)
+	byOLT := openCounter(t, defByOLT("autenticados_por_olt"))
+	byPON := openCounter(t, defByPON("autenticados_por_pon"))
+	populaPON(t, byOLT)
+	populaPON(t, byPON)
+	eng := engineWithMeta(t, byOLT, byPON)
 
 	rows := consulta(t, eng, "SELECT name, rows, total FROM _meta.counters ORDER BY name")
-	if got := coluna(rows, "rows"); got != "113,113" {
+	if got := column(rows, "rows"); got != "113,113" {
 		t.Fatalf("rows = %s, quero 113,113 (toda linha tem as colunas do groupBy)", got)
 	}
-	if got := coluna(rows, "total"); got != "110,110" {
+	if got := column(rows, "total"); got != "110,110" {
 		t.Fatalf("total = %s, quero 110,110 (três linhas não estão autenticadas)", got)
 	}
 
 	// Nunca NULL, ao contrário das duas da auditoria: zero linhas é um fato
 	// medido, e a diferença entre as duas ausências é justamente o que a
 	// tabela existe para mostrar.
-	vazio := abreContador(t, defPorOLT("sem_linha"))
-	rows = consulta(t, motorComMeta(t, vazio), "SELECT name, rows, total FROM _meta.counters WHERE rows = 0 AND total = 0")
+	vazio := openCounter(t, defByOLT("sem_linha"))
+	rows = consulta(t, engineWithMeta(t, vazio), "SELECT name, rows, total FROM _meta.counters WHERE rows = 0 AND total = 0")
 	if len(rows) != 1 {
 		t.Fatalf("contador sem linha tem de sair com zero, não com NULL: %v", rows)
 	}
@@ -115,7 +115,7 @@ func TestMetaCountersPublicaLinhasETotal(t *testing.T) {
 // TestMetaCountersSemContadorEhTabelaVazia: a tabela existe em todo dataset,
 // e "nenhum" é uma resposta — não um erro de tabela desconhecida.
 func TestMetaCountersSemContadorEhTabelaVazia(t *testing.T) {
-	eng := motorComMeta(t)
+	eng := engineWithMeta(t)
 	rows := consulta(t, eng, "SELECT name FROM _meta.counters")
 	if len(rows) != 0 {
 		t.Fatalf("dataset sem contador listou %v", rows)
@@ -126,9 +126,9 @@ func TestMetaCountersSemContadorEhTabelaVazia(t *testing.T) {
 // auditado" são afirmações diferentes, e as duas colunas da auditoria só
 // ganham valor depois de uma auditoria conclusiva.
 func TestMetaCountersAuditoriaEhNulaAteAPrimeira(t *testing.T) {
-	c := abreContador(t, defPorOLT("autenticados_por_olt"))
+	c := openCounter(t, defByOLT("autenticados_por_olt"))
 	populaPON(t, c)
-	eng := motorComMeta(t, c)
+	eng := engineWithMeta(t, c)
 
 	rows := consulta(t, eng, "SELECT auditDivergent, auditAt FROM _meta.counters")
 	if len(rows) != 1 || rows[0]["auditDivergent"] != "<null>" || rows[0]["auditAt"] != "<null>" {
@@ -153,11 +153,11 @@ func TestMetaCountersAuditoriaEhNulaAteAPrimeira(t *testing.T) {
 // TestMetaCountersSemWhereTemCondicaoNula: contador sem `where` conta toda
 // linha com grupo, e a coluna diz isso por ausência.
 func TestMetaCountersSemWhereTemCondicaoNula(t *testing.T) {
-	def := defPorOLT("servicos_por_olt")
+	def := defByOLT("servicos_por_olt")
 	def.Where = ""
 	def.NewEvaluator = nil
-	c := abreContador(t, def)
-	eng := motorComMeta(t, c)
+	c := openCounter(t, def)
+	eng := engineWithMeta(t, c)
 	rows := consulta(t, eng, "SELECT name, condition FROM _meta.counters WHERE condition IS NULL")
 	if len(rows) != 1 || rows[0]["name"] != "servicos_por_olt" {
 		t.Fatalf("condition IS NULL = %v", rows)
@@ -166,9 +166,9 @@ func TestMetaCountersSemWhereTemCondicaoNula(t *testing.T) {
 
 // TestMetaCountersPointLookupPeloNome: o nome é a key da tabela.
 func TestMetaCountersPointLookupPeloNome(t *testing.T) {
-	a := abreContador(t, defPorOLT("a"))
-	b := abreContador(t, defPorPON("b"))
-	eng := motorComMeta(t, a, b)
+	a := openCounter(t, defByOLT("a"))
+	b := openCounter(t, defByPON("b"))
+	eng := engineWithMeta(t, a, b)
 	rows := consulta(t, eng, "SELECT name, groupBy FROM _meta.counters WHERE name = 'b'")
 	if len(rows) != 1 || rows[0]["groupBy"] != "olt|slot|port" {
 		t.Fatalf("point lookup = %v", rows)
@@ -181,7 +181,7 @@ func TestMetaCountersPointLookupPeloNome(t *testing.T) {
 // TestMetaFieldsContinuaRespondendoAoLadoDaCounters: as duas tabelas do
 // `_meta` convivem, e a recusa de tabela desconhecida nomeia as duas.
 func TestMetaFieldsContinuaRespondendoAoLadoDaCounters(t *testing.T) {
-	eng := motorComMeta(t, abreContador(t, defPorOLT("a")))
+	eng := engineWithMeta(t, openCounter(t, defByOLT("a")))
 	rows := consulta(t, eng, "SELECT name FROM _meta.fields")
 	if len(rows) == 0 {
 		t.Fatal("_meta.fields tem de continuar respondendo")
@@ -195,9 +195,9 @@ func TestMetaFieldsContinuaRespondendoAoLadoDaCounters(t *testing.T) {
 // TestTabelaMetaRecusaNomeRepetido: dois contadores com o mesmo nome não
 // cabem numa tabela cuja key é o nome.
 func TestTabelaMetaRecusaNomeRepetido(t *testing.T) {
-	a := abreContador(t, defPorOLT("a"))
-	b := abreContador(t, defPorOLT("a"))
-	if _, _, err := counters.TabelaMeta([]counters.Contado{a, b}); err == nil {
+	a := openCounter(t, defByOLT("a"))
+	b := openCounter(t, defByOLT("a"))
+	if _, _, err := counters.TableMeta([]counters.Contado{a, b}); err == nil {
 		t.Fatal("nome repetido tem de ser recusado")
 	}
 }

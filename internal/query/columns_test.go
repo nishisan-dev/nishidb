@@ -9,10 +9,10 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// colunas abre a query e devolve o metadado da projeção SEM iterar. É o
+// columns abre a query e devolve o metadado da projeção SEM iterar. É o
 // caminho que o protocolo remoto usa para emitir a linha de schema antes da
 // primeira row.
-func colunas(t *testing.T, h *harness, sql string) []executor.ColMeta {
+func columns(t *testing.T, h *harness, sql string) []executor.ColMeta {
 	t.Helper()
 	it, err := h.engine.Execute(context.Background(), dataset, sql, nil)
 	if err != nil {
@@ -26,8 +26,8 @@ func colunas(t *testing.T, h *harness, sql string) []executor.ColMeta {
 // vazio: quem consome o stream precisa do schema para montar o
 // ResultSetMetaData, e um resultado vazio também tem colunas.
 func TestColunasSaoConhecidasAntesDaPrimeiraRow(t *testing.T) {
-	h := novoHarness(t) // nada ingerido
-	cols := colunas(t, h, `SELECT id, status, nas_ip FROM radius_sessions`)
+	h := newHarness(t) // nada ingerido
+	cols := columns(t, h, `SELECT id, status, nas_ip FROM radius_sessions`)
 
 	// Nullable explícito nos três, e não omitido: a comparação é da struct
 	// inteira, então um campo novo que ninguém preencha quebra aqui em vez de
@@ -52,7 +52,7 @@ func TestColunasSaoConhecidasAntesDaPrimeiraRow(t *testing.T) {
 // a razão de a linha de schema existir.
 func TestColunaNulaEmTodasAsLinhasAindaTemTipo(t *testing.T) {
 	h := semeado(t) // nenhum evento do fixture traz Filter-Id
-	cols := colunas(t, h, `SELECT id, filter_id FROM radius_sessions`)
+	cols := columns(t, h, `SELECT id, filter_id FROM radius_sessions`)
 
 	if len(cols) != 2 {
 		t.Fatalf("colunas = %+v", cols)
@@ -72,14 +72,14 @@ func TestColunaNulaEmTodasAsLinhasAindaTemTipo(t *testing.T) {
 // O nome do metadado é o de SAÍDA, o mesmo que sai nas chaves do NDJSON.
 // Divergir aqui faria o driver casar coluna por um nome que o dado não usa.
 func TestONomeDoMetadadoEhODeSaida(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 
 	// Projeção explícita: o rótulo é o que o usuário escreveu.
-	if cols := colunas(t, h, `SELECT status FROM radius_sessions`); cols[0].Name != "status" {
+	if cols := columns(t, h, `SELECT status FROM radius_sessions`); cols[0].Name != "status" {
 		t.Fatalf("nome = %q, quer o escrito na projeção", cols[0].Name)
 	}
 	// '*': o rótulo é o alias, quando existe.
-	cols := colunas(t, h, `SELECT * FROM radius_sessions`)
+	cols := columns(t, h, `SELECT * FROM radius_sessions`)
 	achou := false
 	for _, c := range cols {
 		if c.Name == "Acct-Status-Type" {
@@ -104,8 +104,8 @@ func TestColunasDevolveCopiaIndependente(t *testing.T) {
 	}
 	defer it.Close()
 
-	antes := it.Columns()
-	antes[0].Name = "mexido"
+	before := it.Columns()
+	before[0].Name = "mexido"
 	for it.Next() {
 	}
 	if err := it.Err(); err != nil {
@@ -132,8 +132,8 @@ func TestColunasDevolveCopiaIndependente(t *testing.T) {
 // antes disso não o têm — é o caso que TestRowSemInstanteDeEscritaNaoVence
 // exercita do lado do storage.
 func TestChaveESequenceSaoAsUnicasColunasNaoNulaveis(t *testing.T) {
-	h := novoHarness(t)
-	cols := colunas(t, h, `SELECT id, _SEQ, status, nas_ip FROM radius_sessions`)
+	h := newHarness(t)
+	cols := columns(t, h, `SELECT id, _SEQ, status, nas_ip FROM radius_sessions`)
 
 	quer := []executor.ColMeta{
 		{Name: "id", Type: types.TypeString, Nullable: false},    // key
@@ -160,19 +160,19 @@ func TestChaveESequenceSaoAsUnicasColunasNaoNulaveis(t *testing.T) {
 // Um teste que procurasse por "id" passaria a marcar a chave como nulável e
 // não acusaria nada.
 func TestSelectEstrelaTambemMarcaAChaveComoNaoNulavel(t *testing.T) {
-	h := novoHarness(t)
-	nomeDeSaida := func(f *schema.CompiledField) string {
+	h := newHarness(t)
+	nameOfSaida := func(f *schema.CompiledField) string {
 		if f.Alias != "" {
 			return f.Alias
 		}
 		return f.Name
 	}
-	chave, sequence := nomeDeSaida(h.sch.Key), nomeDeSaida(h.sch.Seq)
+	key, sequence := nameOfSaida(h.sch.Key), nameOfSaida(h.sch.Seq)
 
-	viuChave, viuSequence := false, false
-	for _, c := range colunas(t, h, `SELECT * FROM radius_sessions`) {
-		naoNulavel := c.Name == chave || c.Name == sequence
-		viuChave = viuChave || c.Name == chave
+	viuKey, viuSequence := false, false
+	for _, c := range columns(t, h, `SELECT * FROM radius_sessions`) {
+		naoNulavel := c.Name == key || c.Name == sequence
+		viuKey = viuKey || c.Name == key
 		viuSequence = viuSequence || c.Name == sequence
 		if c.Nullable == naoNulavel {
 			t.Errorf("coluna %q: Nullable = %v", c.Name, c.Nullable)
@@ -180,7 +180,7 @@ func TestSelectEstrelaTambemMarcaAChaveComoNaoNulavel(t *testing.T) {
 	}
 	// Sem isto o teste passaria vazio no dia em que o '*' deixasse de trazer
 	// as duas colunas — que é justamente a regressão que interessa.
-	if !viuChave || !viuSequence {
-		t.Fatalf("o '*' não trouxe chave (%q: %v) e sequence (%q: %v)", chave, viuChave, sequence, viuSequence)
+	if !viuKey || !viuSequence {
+		t.Fatalf("o '*' não trouxe chave (%q: %v) e sequence (%q: %v)", key, viuKey, sequence, viuSequence)
 	}
 }

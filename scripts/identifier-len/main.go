@@ -48,8 +48,8 @@ func executar(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	brokersFlag := fs.String("brokers", "", "brokers Kafka, separados por vírgula (obrigatório; PLAINTEXT)")
-	topico := fs.String("topic", "events", "tópico a medir")
-	campo := fs.String("field", "identifier", "campo do payload JSON cujo tamanho em bytes é medido")
+	topic := fs.String("topic", "events", "tópico a medir")
+	field := fs.String("field", "identifier", "campo do payload JSON cujo tamanho em bytes é medido")
 	reportEvery := fs.Int64("report-every", 1_000_000, "mensagens entre cada linha de progresso no stderr")
 
 	fs.Usage = func() {
@@ -89,25 +89,25 @@ TLS/SASL não são suportados: os brokers do piloto são PLAINTEXT.
 		brokers[i] = strings.TrimSpace(brokers[i])
 	}
 
-	ctx, parar := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer parar()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	progresso := func(lidos, alvo int64, decorrido time.Duration) {
+	progresso := func(lidos, target int64, decorrido time.Duration) {
 		var pct, taxa float64
-		if alvo > 0 {
-			pct = float64(lidos) / float64(alvo) * 100
+		if target > 0 {
+			pct = float64(lidos) / float64(target) * 100
 		}
 		if s := decorrido.Seconds(); s > 0 {
 			taxa = float64(lidos) / s
 		}
 		_, _ = fmt.Fprintf(stderr, "progresso: %d/%d lidas (%.1f%% do watermark) — %.0f msgs/s\n",
-			lidos, alvo, pct, taxa)
+			lidos, target, pct, taxa)
 	}
 
 	hist, err := Coleta(ctx, ConfigColeta{
 		Brokers:     brokers,
-		Topico:      *topico,
-		Campo:       *campo,
+		Topic:       *topic,
+		Field:       *field,
 		ReportEvery: *reportEvery,
 	}, progresso)
 	if err != nil {
@@ -115,6 +115,6 @@ TLS/SASL não são suportados: os brokers do piloto são PLAINTEXT.
 		return 1
 	}
 
-	ImprimeRelatorio(stdout, *campo, hist, topNRelatorio)
+	ImprimeRelatorio(stdout, *field, hist, topNRelatorio)
 	return 0
 }

@@ -67,15 +67,15 @@ func TestConvertRecusaUTF8Invalido(t *testing.T) {
 func TestUTF8InvalidoNaoSujaOArena(t *testing.T) {
 	arena := make([]byte, 0, 64)
 	arena = append(arena, "prefixo"...)
-	tamanho := len(arena)
+	size := len(arena)
 
 	f := jsonp.Field{Kind: jsonp.KindString, Raw: []byte(invalidUTF8)}
 	_, out, err := Convert(f, types.TypeString, nil, arena)
 	if err == nil {
 		t.Fatal("esperava erro")
 	}
-	if len(out) != tamanho {
-		t.Errorf("arena com %d bytes após recusa, want %d", len(out), tamanho)
+	if len(out) != size {
+		t.Errorf("arena com %d bytes após recusa, want %d", len(out), size)
 	}
 	if string(out) != "prefixo" {
 		t.Errorf("arena = %q, want %q", out, "prefixo")

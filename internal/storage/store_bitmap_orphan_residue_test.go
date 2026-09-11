@@ -30,9 +30,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// postingsDeStatus devolve as rows presentes nas postings de cada valor de
+// postingsOfStatus devolve as rows presentes nas postings de cada valor de
 // status pedido, na ordem em que os valores foram pedidos.
-func postingsDeStatus(t *testing.T, s *Store, valores ...string) map[string][]types.RowID {
+func postingsOfStatus(t *testing.T, s *Store, valores ...string) map[string][]types.RowID {
 	t.Helper()
 	out := make(map[string][]types.RowID, len(valores))
 	for _, v := range valores {
@@ -85,10 +85,10 @@ func TestPostingOrfaDoReplayNaoConverge(t *testing.T) {
 	if rec := mustGetAud(t, s2, "bm"); rec.Sequence != 2 {
 		t.Fatalf("o estado do tail deveria estar visível: %+v", rec)
 	}
-	depois := postingsDeStatus(t, s2, "Start", "Stop")
+	depois := postingsOfStatus(t, s2, "Start", "Stop")
 	t.Logf("após o replay: postings de Start=%v Stop=%v (payload corrente = status Stop)",
 		depois["Start"], depois["Stop"])
-	exigeOrfaDeStatus(t, "após o replay", depois, id, "Start", "Stop")
+	exigeOrfaOfStatus(t, "após o replay", depois, id, "Start", "Stop")
 
 	// 4. Um TERCEIRO update com checkpoint completo — o "próximo checkpoint
 	// que enxerga a row inteira". O que ele limpa é a posting do estado que a
@@ -98,15 +98,15 @@ func TestPostingOrfaDoReplayNaoConverge(t *testing.T) {
 	if err := s2.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	final := postingsDeStatus(t, s2, "Start", "Stop", "Idle")
+	final := postingsOfStatus(t, s2, "Start", "Stop", "Idle")
 	t.Logf("após o terceiro update + checkpoint: postings de Start=%v Stop=%v Idle=%v",
 		final["Start"], final["Stop"], final["Idle"])
 	// A asserção que estava aqui — "a posting de Stop deveria ter sido limpa,
 	// esse prev o replay conhecia" — media a fase de CLEAR, que o índice por
 	// segmento não tem (spec §5.2). Sem Clear, Stop vira órfã pela MESMA porta
 	// que Start, e não há mais "prev que o replay conhecia" a distinguir.
-	exigeOrfaDeStatus(t, "após o terceiro update + checkpoint", final, id, "Start", "Idle")
-	exigeOrfaDeStatus(t, "após o terceiro update + checkpoint", final, id, "Stop", "Idle")
+	exigeOrfaOfStatus(t, "após o terceiro update + checkpoint", final, id, "Start", "Idle")
+	exigeOrfaOfStatus(t, "após o terceiro update + checkpoint", final, id, "Stop", "Idle")
 
 	// 5. E o resíduo NÃO é falso negativo: o valor corrente está nas postings,
 	// que é a única propriedade da qual o §44 depende.
@@ -125,11 +125,11 @@ func TestPostingOrfaDoReplayNaoConverge(t *testing.T) {
 	// E o resíduo deixou de ser eterno, que era a outra metade do débito: a
 	// posting órfã mora no índice do segmento em que foi escrita e sai de disco
 	// quando a compaction ou a retenção aposenta aquele segmento.
-	semCrash := postingsSemCrash(t)
+	withoutCrash := postingsWithoutCrash(t)
 	for _, v := range []string{"Start", "Stop", "Idle"} {
-		if len(semCrash[v]) != 1 || semCrash[v][0] != id {
+		if len(withoutCrash[v]) != 1 || withoutCrash[v][0] != id {
 			t.Fatalf("write path sem crash: postings de %s = %v, esperado [%d] — o write path e o "+
-				"replay têm de convergir para o mesmo estado", v, semCrash[v], id)
+				"replay têm de convergir para o mesmo estado", v, withoutCrash[v], id)
 		}
 	}
 	// A propriedade de produto, nos dois caminhos: só o valor CORRENTE
@@ -142,7 +142,7 @@ func TestPostingOrfaDoReplayNaoConverge(t *testing.T) {
 	}
 }
 
-// exigeOrfaDeStatus separa as duas afirmações que o M4 precisa encontrar:
+// exigeOrfaOfStatus separa as duas afirmações que o M4 precisa encontrar:
 //
 //   - a INVARIANTE, que vale para sempre: o valor CORRENTE tem de estar nas
 //     postings. Faltar aqui é falso negativo, e falso negativo é query
@@ -151,24 +151,24 @@ func TestPostingOrfaDoReplayNaoConverge(t *testing.T) {
 //   - a MEDIDA de hoje: o excesso é EXATAMENTE a posting do valor que a row
 //     tinha no ponto S, e ela permanece. Se ela sumir, o teste falha de
 //     propósito, com a instrução do que fazer.
-func exigeOrfaDeStatus(t *testing.T, momento string, postings map[string][]types.RowID, id types.RowID, orfao, corrente string) {
+func exigeOrfaOfStatus(t *testing.T, moment string, postings map[string][]types.RowID, id types.RowID, orfao, current string) {
 	t.Helper()
-	if len(postings[corrente]) != 1 || postings[corrente][0] != id {
+	if len(postings[current]) != 1 || postings[current][0] != id {
 		t.Fatalf("%s: FALSO NEGATIVO — a row %d tem status=%s no payload corrente, mas as postings "+
-			"desse valor são %v", momento, id, corrente, postings[corrente])
+			"desse valor são %v", moment, id, current, postings[current])
 	}
 	if len(postings[orfao]) != 1 || postings[orfao][0] != id {
 		t.Fatalf("%s: as postings de %s são %v; o resíduo medido do replay é de exatamente uma "+
 			"posting órfã, a row %d. Se ela deixou de existir, a correção do M4 aconteceu: "+
 			"atualize esta expectativa, o comentário do replayRecord em store_recovery.go, o "+
 			"§10.2 do planning/m1-design-storage.md e o débito 45 do docs/debitos.md",
-			momento, orfao, postings[orfao], id)
+			moment, orfao, postings[orfao], id)
 	}
 }
 
-// postingsSemCrash roda a mesma sequência de escritas sem crash nenhum e
+// postingsWithoutCrash roda a mesma sequência de escritas sem crash nenhum e
 // devolve as postings finais de cada valor.
-func postingsSemCrash(t *testing.T) map[string][]types.RowID {
+func postingsWithoutCrash(t *testing.T) map[string][]types.RowID {
 	t.Helper()
 	dir := t.TempDir()
 	s := audOpen(t, Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}})
@@ -182,5 +182,5 @@ func postingsSemCrash(t *testing.T) map[string][]types.RowID {
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	return postingsDeStatus(t, s, "Start", "Stop", "Idle")
+	return postingsOfStatus(t, s, "Start", "Stop", "Idle")
 }

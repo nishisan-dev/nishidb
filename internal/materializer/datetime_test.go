@@ -108,13 +108,13 @@ func TestConvertTimeRecusaNumeroForaDoDia(t *testing.T) {
 // NULL é campo ausente para qualquer alvo, inclusive os temporais.
 func TestConvertTemporalNuloContinuaCampoAusente(t *testing.T) {
 	nulo := jsonp.Field{Kind: jsonp.KindNull, Raw: []byte("null")}
-	for _, alvo := range []types.FieldType{types.TypeDateTime, types.TypeTime} {
-		v, _, err := Convert(nulo, alvo, nil, nil)
+	for _, target := range []types.FieldType{types.TypeDateTime, types.TypeTime} {
+		v, _, err := Convert(nulo, target, nil, nil)
 		if err != nil {
-			t.Fatalf("%v: %v", alvo, err)
+			t.Fatalf("%v: %v", target, err)
 		}
 		if v.Type != types.TypeNull {
-			t.Errorf("%v: esperava TypeNull, obtido %v", alvo, v.Type)
+			t.Errorf("%v: esperava TypeNull, obtido %v", target, v.Type)
 		}
 	}
 }
@@ -123,14 +123,14 @@ func TestConvertTemporalNuloContinuaCampoAusente(t *testing.T) {
 // depender disso: sem o fecho, um caminho novo que esquecesse o layout viraria
 // nil deref no meio da ingestão em vez de um evento recusado.
 func TestConvertTemporalSemLayoutFalhaEmVezDeEntrarEmPanic(t *testing.T) {
-	for _, alvo := range []types.FieldType{types.TypeDateTime, types.TypeTime} {
-		_, _, err := Convert(str("qualquer coisa"), alvo, nil, nil)
+	for _, target := range []types.FieldType{types.TypeDateTime, types.TypeTime} {
+		_, _, err := Convert(str("qualquer coisa"), target, nil, nil)
 		if err == nil {
-			t.Errorf("%v: esperava erro", alvo)
+			t.Errorf("%v: esperava erro", target)
 			continue
 		}
 		if !strings.Contains(err.Error(), "format") {
-			t.Errorf("%v: mensagem não nomeia a causa: %v", alvo, err)
+			t.Errorf("%v: mensagem não nomeia a causa: %v", target, err)
 		}
 	}
 }

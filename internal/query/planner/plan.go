@@ -58,7 +58,7 @@ type IndexTerm struct {
 	Val   types.Value
 }
 
-// PointLookupPlan: no máximo 1 candidato, via primary (Store.GetByKey).
+// PointLookupPlan no máximo 1 candidato, via primary (Store.GetByKey).
 // Key.Type é SEMPRE types.TypeString — a v1 só aceita key string, e o campo
 // key nunca tem índice secundário, então não há disputa com as regras 2-4.
 type PointLookupPlan struct {
@@ -66,7 +66,7 @@ type PointLookupPlan struct {
 	Key   types.Value
 }
 
-// IndexScanPlan: Store.Lookup(Field.ID, Val).
+// IndexScanPlan Store.Lookup(Field.ID, Val).
 //
 // É UM tipo, e não mais o par BitmapScanPlan/HashIndexPlan: os dois nomeavam o
 // mesmo despacho para dois motores que colapsaram num só (spec §3.1).
@@ -75,18 +75,18 @@ type IndexScanPlan struct {
 	Val   types.Value
 }
 
-// IndexIntersectPlan: interseção dos iteradores. len(Terms) >= 2 sempre, sem
+// IndexIntersectPlan interseção dos iteradores. len(Terms) >= 2 sempre, sem
 // duplicatas exatas.
 type IndexIntersectPlan struct {
 	Terms []IndexTerm
 }
 
-// IndexUnionPlan: união COM DEDUP dos iteradores. len(Terms) >= 2 sempre.
+// IndexUnionPlan união COM DEDUP dos iteradores. len(Terms) >= 2 sempre.
 type IndexUnionPlan struct {
 	Terms []IndexTerm
 }
 
-// FullScanPlan: Store.ScanLive(). Struct VAZIA e SINGLETON — ver FullScan.
+// FullScanPlan Store.ScanLive(). Struct VAZIA e SINGLETON — ver FullScan.
 type FullScanPlan struct{}
 
 // fullScan é compartilhado por todas as queries do processo. É seguro porque

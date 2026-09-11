@@ -17,7 +17,7 @@ func scrape(t *testing.T, r *metrics.Registry) string {
 	return sb.String()
 }
 
-func linhaComPrefixo(s, prefixo string) (string, bool) {
+func rowWithPrefixo(s, prefixo string) (string, bool) {
 	for _, l := range strings.Split(s, "\n") {
 		if strings.HasPrefix(l, prefixo) {
 			return l, true
@@ -47,20 +47,20 @@ func TestCheckpointPublicaDuracaoEUltimoSucesso(t *testing.T) {
 		`nishidb_checkpoint_duration_seconds_count{dataset="radius_sessions"}`,
 		`nishidb_checkpoint_last_success_timestamp{dataset="radius_sessions"}`,
 	} {
-		if _, ok := linhaComPrefixo(s, prefixo); !ok {
+		if _, ok := rowWithPrefixo(s, prefixo); !ok {
 			t.Errorf("série ausente: %s\n%s", prefixo, s)
 		}
 	}
 
-	antes, _ := linhaComPrefixo(s, `nishidb_checkpoint_duration_seconds_count{dataset="radius_sessions"}`)
-	if antes != `nishidb_checkpoint_duration_seconds_count{dataset="radius_sessions"} 1` {
-		t.Errorf("contagem após o Open = %q, quer 1 (o checkpoint imediato)", antes)
+	before, _ := rowWithPrefixo(s, `nishidb_checkpoint_duration_seconds_count{dataset="radius_sessions"}`)
+	if before != `nishidb_checkpoint_duration_seconds_count{dataset="radius_sessions"} 1` {
+		t.Errorf("contagem após o Open = %q, quer 1 (o checkpoint imediato)", before)
 	}
 
 	if err := st.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	depois, _ := linhaComPrefixo(scrape(t, reg),
+	depois, _ := rowWithPrefixo(scrape(t, reg),
 		`nishidb_checkpoint_duration_seconds_count{dataset="radius_sessions"}`)
 	if depois != `nishidb_checkpoint_duration_seconds_count{dataset="radius_sessions"} 2` {
 		t.Errorf("contagem após o segundo checkpoint = %q, quer 2", depois)
@@ -82,11 +82,11 @@ func TestCheckpointFalhoNaoMoveOUltimoSucesso(t *testing.T) {
 	}
 	defer st.Close()
 
-	antes, ok := linhaComPrefixo(scrape(t, reg), `nishidb_checkpoint_last_success_timestamp{dataset="d"}`)
+	before, ok := rowWithPrefixo(scrape(t, reg), `nishidb_checkpoint_last_success_timestamp{dataset="d"}`)
 	if !ok {
 		t.Fatal("série de último sucesso ausente após o Open")
 	}
-	if strings.HasSuffix(antes, " 0") {
+	if strings.HasSuffix(before, " 0") {
 		t.Fatal("o checkpoint do Open deveria ter marcado o último sucesso")
 	}
 
@@ -99,13 +99,13 @@ func TestCheckpointFalhoNaoMoveOUltimoSucesso(t *testing.T) {
 		t.Fatal("Checkpoint sobre Store fechado deveria falhar")
 	}
 
-	depois, _ := linhaComPrefixo(scrape(t, reg), `nishidb_checkpoint_last_success_timestamp{dataset="d"}`)
-	if depois != antes {
-		t.Errorf("checkpoint falho moveu o último sucesso:\n  antes: %s\n  depois: %s", antes, depois)
+	depois, _ := rowWithPrefixo(scrape(t, reg), `nishidb_checkpoint_last_success_timestamp{dataset="d"}`)
+	if depois != before {
+		t.Errorf("checkpoint falho moveu o último sucesso:\n  antes: %s\n  depois: %s", before, depois)
 	}
-	contagem, _ := linhaComPrefixo(scrape(t, reg), `nishidb_checkpoint_duration_seconds_count{dataset="d"}`)
-	if contagem != `nishidb_checkpoint_duration_seconds_count{dataset="d"} 1` {
-		t.Errorf("checkpoint falho entrou no histograma: %q", contagem)
+	count, _ := rowWithPrefixo(scrape(t, reg), `nishidb_checkpoint_duration_seconds_count{dataset="d"}`)
+	if count != `nishidb_checkpoint_duration_seconds_count{dataset="d"} 1` {
+		t.Errorf("checkpoint falho entrou no histograma: %q", count)
 	}
 }
 
@@ -133,7 +133,7 @@ func TestDatasetVazioHerdaONomeDoDiretorio(t *testing.T) {
 	}
 	defer st.Close()
 
-	if _, ok := linhaComPrefixo(scrape(t, reg),
+	if _, ok := rowWithPrefixo(scrape(t, reg),
 		`nishidb_checkpoint_last_success_timestamp{dataset="radius_sessions"}`); !ok {
 		t.Errorf("label dataset não herdou o nome do diretório:\n%s", scrape(t, reg))
 	}

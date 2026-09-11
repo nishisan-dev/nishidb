@@ -19,7 +19,7 @@ import (
 )
 
 // blocoExposto* montam server.tls/server.authentication no molde de
-// novoAmbienteCom (server_test.go): um único %d para a porta, injetado pelo
+// newEnvWith (server_test.go): um único %d para a porta, injetado pelo
 // harness.
 
 // A célula central da matriz do §77: bind exposto, autenticação LIGADA,
@@ -30,19 +30,19 @@ func TestAuthSemTLSComBindExpostoRecusaASubida(t *testing.T) {
 	const variavel = "NISHIDB_TESTE_AUTHSEMTLS_ADMIN"
 	t.Setenv(variavel, "senha-bem-forte")
 
-	bloco := "\nserver:\n  bind: 0.0.0.0\n  port: %d\n" +
+	block := "\nserver:\n  bind: 0.0.0.0\n  port: %d\n" +
 		"  authentication:\n    enabled: true\n    users:\n" +
 		"      - username: admin\n        passwordEnv: " + variavel + "\n        role: ADMIN\n"
-	a := novoAmbienteCom(t, bloco)
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, block)
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	_, err := server.Novo(a.carrega(), server.Opcoes{})
+	_, err := server.Novo(a.load(), server.Options{})
 	if err == nil {
 		t.Fatal("quer recusa: bind exposto, authentication ligada, tls desligado")
 	}
-	for _, chave := range []string{"server.bind", "server.authentication.enabled", "server.tls.enabled"} {
-		if !strings.Contains(err.Error(), chave) {
-			t.Errorf("a mensagem não nomeia %s: %v", chave, err)
+	for _, key := range []string{"server.bind", "server.authentication.enabled", "server.tls.enabled"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("a mensagem não nomeia %s: %v", key, err)
 		}
 	}
 }
@@ -53,10 +53,10 @@ func TestAuthSemTLSComBindExpostoRecusaASubida(t *testing.T) {
 // subiria exposto e sem credencial nenhuma, sem que ninguém tivesse decidido
 // isso de propósito.
 func TestBindExpostoSemSecaoDeAuthenticationRecusaASubida(t *testing.T) {
-	a := novoAmbienteCom(t, "\nserver:\n  bind: 0.0.0.0\n  port: %d\n")
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, "\nserver:\n  bind: 0.0.0.0\n  port: %d\n")
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	_, err := server.Novo(a.carrega(), server.Opcoes{})
+	_, err := server.Novo(a.load(), server.Options{})
 	if err == nil {
 		t.Fatal("quer recusa: bind exposto sem a seção server.authentication no arquivo")
 	}
@@ -81,13 +81,13 @@ func TestLoopbackComAutenticacaoSemTLSSobeComAviso(t *testing.T) {
 	const variavel = "NISHIDB_TESTE_LOOPBACK_AUTH_SEM_TLS"
 	t.Setenv(variavel, "senha-bem-forte")
 
-	bloco := "\nserver:\n  bind: 127.0.0.1\n  port: %d\n" +
+	block := "\nserver:\n  bind: 127.0.0.1\n  port: %d\n" +
 		"  authentication:\n    enabled: true\n    users:\n" +
 		"      - username: op\n        passwordEnv: " + variavel + "\n        role: READ\n"
-	a := novoAmbienteCom(t, bloco)
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, block)
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	saida := sobeCapturandoLog(t, a)
+	saida := risesCapturandoLog(t, a)
 	if !strings.Contains(saida, "auth.sem_tls") {
 		t.Fatalf("loopback com autenticação ligada e sem TLS deveria avisar: %s", saida)
 	}
@@ -97,23 +97,23 @@ func TestLoopbackComAutenticacaoSemTLSSobeComAviso(t *testing.T) {
 // TLS ligado com um par de certificado/chave que CARREGA. Sobe sem recusa e
 // sem o aviso de bind exposto — a topologia está correta.
 func TestBindExpostoComAutenticacaoETLSSobeSemRecusa(t *testing.T) {
-	certPath, keyPath := geraCertificadoDeTeste(t)
+	certPath, keyPath := generateCertOfTest(t)
 	const variavel = "NISHIDB_TESTE_EXPOSTO_COM_TLS_ADMIN"
 	t.Setenv(variavel, "senha-bem-forte")
 
-	bloco := fmt.Sprintf("\nserver:\n  bind: 0.0.0.0\n  port: %%d\n"+
+	block := fmt.Sprintf("\nserver:\n  bind: 0.0.0.0\n  port: %%d\n"+
 		"  tls:\n    enabled: true\n    certificateFile: %s\n    privateKeyFile: %s\n"+
 		"  authentication:\n    enabled: true\n    users:\n"+
 		"      - username: admin\n        passwordEnv: %s\n        role: ADMIN\n",
 		certPath, keyPath, variavel)
-	a := novoAmbienteCom(t, bloco)
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, block)
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("bind exposto com authentication e tls ligados deveria subir: %v", err)
 	}
-	if err := srv.Fecha(); err != nil {
+	if err := srv.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -123,19 +123,19 @@ func TestBindExpostoComAutenticacaoETLSSobeSemRecusa(t *testing.T) {
 // quando TLS está desligado, e "bind.exposto" não se aplica a loopback. A
 // combinação correta sobe em silêncio, sem nenhum dos dois avisos.
 func TestLoopbackComAutenticacaoETLSSobeSemAviso(t *testing.T) {
-	certPath, keyPath := geraCertificadoDeTeste(t)
+	certPath, keyPath := generateCertOfTest(t)
 	const variavel = "NISHIDB_TESTE_LOOPBACK_COM_TLS_ADMIN"
 	t.Setenv(variavel, "senha-bem-forte")
 
-	bloco := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
+	block := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
 		"  tls:\n    enabled: true\n    certificateFile: %s\n    privateKeyFile: %s\n"+
 		"  authentication:\n    enabled: true\n    users:\n"+
 		"      - username: admin\n        passwordEnv: %s\n        role: ADMIN\n",
 		certPath, keyPath, variavel)
-	a := novoAmbienteCom(t, bloco)
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, block)
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	saida := sobeCapturandoLog(t, a)
+	saida := risesCapturandoLog(t, a)
 	if strings.Contains(saida, "auth.sem_tls") {
 		t.Errorf("loopback com TLS ligado não deveria avisar auth.sem_tls: %s", saida)
 	}
@@ -153,10 +153,10 @@ func TestLoopbackComAutenticacaoETLSSobeSemAviso(t *testing.T) {
 // seção ausente pede, este teste tem de ser atualizado de propósito, e não
 // quebrar como efeito colateral de outra mudança.
 func TestBindExpostoComAuthenticationSecaoVaziaSobeComAviso(t *testing.T) {
-	a := novoAmbienteCom(t, "\nserver:\n  bind: 0.0.0.0\n  port: %d\n  authentication: {}\n")
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, "\nserver:\n  bind: 0.0.0.0\n  port: %d\n  authentication: {}\n")
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	saida := sobeCapturandoLog(t, a)
+	saida := risesCapturandoLog(t, a)
 	if !strings.Contains(saida, "bind.exposto") {
 		t.Fatalf("authentication: {} deveria ser tratada como declarada+desligada, subindo com aviso: %s", saida)
 	}
@@ -164,7 +164,7 @@ func TestBindExpostoComAuthenticationSecaoVaziaSobeComAviso(t *testing.T) {
 
 // Violações simultâneas: bind exposto, autenticação ligada, TLS desligado, E
 // a variável de senha ausente do ambiente. A ORDEM documentada em
-// avaliaExposicaoEAutenticacao/New (matriz antes de segredos, porque a
+// evaluateExposicaoEAuth/New (matriz antes de segredos, porque a
 // matriz é só leitura de config) diz que a recusa da matriz (célula "auth
 // sem TLS") tem de sair PRIMEIRO — nomeando as três chaves — sem que
 // resolveCredenciais chegue a tocar o ambiente. Este teste pega uma
@@ -174,19 +174,19 @@ func TestViolacoesSimultaneasSaemNaOrdemDaMatrizNaoNosSegredos(t *testing.T) {
 	const variavel = "NISHIDB_TESTE_ORDEM_VIOLACOES_SIMULTANEAS"
 	os.Unsetenv(variavel) //nolint:errcheck // ausência é o próprio setup do teste
 
-	bloco := "\nserver:\n  bind: 0.0.0.0\n  port: %d\n" +
+	block := "\nserver:\n  bind: 0.0.0.0\n  port: %d\n" +
 		"  authentication:\n    enabled: true\n    users:\n" +
 		"      - username: admin\n        passwordEnv: " + variavel + "\n        role: ADMIN\n"
-	a := novoAmbienteCom(t, bloco)
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, block)
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	_, err := server.Novo(a.carrega(), server.Opcoes{})
+	_, err := server.Novo(a.load(), server.Options{})
 	if err == nil {
 		t.Fatal("quer recusa: bind exposto, auth ligada, tls desligado E env de senha ausente")
 	}
-	for _, chave := range []string{"server.bind", "server.authentication.enabled", "server.tls.enabled"} {
-		if !strings.Contains(err.Error(), chave) {
-			t.Errorf("a recusa que sai não é a da matriz, não nomeia %s: %v", chave, err)
+	for _, key := range []string{"server.bind", "server.authentication.enabled", "server.tls.enabled"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("a recusa que sai não é a da matriz, não nomeia %s: %v", key, err)
 		}
 	}
 	if strings.Contains(err.Error(), variavel) {
@@ -200,17 +200,17 @@ func TestViolacoesSimultaneasSaemNaOrdemDaMatrizNaoNosSegredos(t *testing.T) {
 // caminho, e não no primeiro handshake com o listener já aberto.
 func TestCertificadoOuChaveInvalidosRecusamASubidaNomeandoOCaminho(t *testing.T) {
 	t.Run("certificado e chave trocados", func(t *testing.T) {
-		certPath, keyPath := geraCertificadoDeTeste(t)
+		certPath, keyPath := generateCertOfTest(t)
 		// certificateFile recebe a CHAVE e privateKeyFile recebe o
 		// CERTIFICADO: LoadX509KeyPair falha ao tentar interpretar cada
 		// arquivo como o tipo de PEM errado.
-		bloco := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
+		block := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
 			"  tls:\n    enabled: true\n    certificateFile: %s\n    privateKeyFile: %s\n",
 			keyPath, certPath)
-		a := novoAmbienteCom(t, bloco)
-		a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+		a := newEnvWith(t, block)
+		a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-		_, err := server.Novo(a.carrega(), server.Opcoes{})
+		_, err := server.Novo(a.load(), server.Options{})
 		if err == nil {
 			t.Fatal("quer recusa: certificado e chave trocados")
 		}
@@ -220,15 +220,15 @@ func TestCertificadoOuChaveInvalidosRecusamASubidaNomeandoOCaminho(t *testing.T)
 	})
 
 	t.Run("chave inexistente", func(t *testing.T) {
-		certPath, _ := geraCertificadoDeTeste(t)
+		certPath, _ := generateCertOfTest(t)
 		keyPath := filepath.Join(t.TempDir(), "nao-existe.pem")
 		block := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
 			"  tls:\n    enabled: true\n    certificateFile: %s\n    privateKeyFile: %s\n",
 			certPath, keyPath)
-		a := novoAmbienteCom(t, block)
-		a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+		a := newEnvWith(t, block)
+		a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-		_, err := server.Novo(a.carrega(), server.Opcoes{})
+		_, err := server.Novo(a.load(), server.Options{})
 		if err == nil {
 			t.Fatal("quer recusa: privateKeyFile inexistente")
 		}
@@ -245,13 +245,13 @@ func TestPasswordEnvAusenteRecusaASubidaDoServidor(t *testing.T) {
 	const variavel = "NISHIDB_TESTE_SUBIDA_SENHA_AUSENTE"
 	os.Unsetenv(variavel) //nolint:errcheck // ausência é o próprio setup do teste
 
-	bloco := "\nserver:\n  bind: 127.0.0.1\n  port: %d\n" +
+	block := "\nserver:\n  bind: 127.0.0.1\n  port: %d\n" +
 		"  authentication:\n    enabled: true\n    users:\n" +
 		"      - username: op\n        passwordEnv: " + variavel + "\n        role: READ\n"
-	a := novoAmbienteCom(t, bloco)
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+	a := newEnvWith(t, block)
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	_, err := server.Novo(a.carrega(), server.Opcoes{})
+	_, err := server.Novo(a.load(), server.Options{})
 	if err == nil {
 		t.Fatal("quer recusa: passwordEnv não definida no ambiente")
 	}
@@ -262,36 +262,36 @@ func TestPasswordEnvAusenteRecusaASubidaDoServidor(t *testing.T) {
 
 func TestPasswordFileWorldReadableRecusaASubidaDoServidor(t *testing.T) {
 	dir := t.TempDir()
-	senhaPath := filepath.Join(dir, "senha.txt")
-	if err := os.WriteFile(senhaPath, []byte("segredo\n"), 0o644); err != nil {
+	passwordPath := filepath.Join(dir, "senha.txt")
+	if err := os.WriteFile(passwordPath, []byte("segredo\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(senhaPath, 0o644); err != nil {
+	if err := os.Chmod(passwordPath, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	bloco := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
+	block := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
 		"  authentication:\n    enabled: true\n    users:\n"+
-		"      - username: op\n        passwordFile: %s\n        role: READ\n", senhaPath)
-	a := novoAmbienteCom(t, bloco)
-	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+		"      - username: op\n        passwordFile: %s\n        role: READ\n", passwordPath)
+	a := newEnvWith(t, block)
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
-	_, err := server.Novo(a.carrega(), server.Opcoes{})
+	_, err := server.Novo(a.load(), server.Options{})
 	if err == nil {
 		t.Fatal("quer recusa: passwordFile legível por group/world")
 	}
-	if !strings.Contains(err.Error(), senhaPath) {
+	if !strings.Contains(err.Error(), passwordPath) {
 		t.Errorf("a mensagem não nomeia o caminho: %v", err)
 	}
 }
 
-// geraCertificadoDeTeste gera um par certificado/chave autoassinado (ECDSA
+// generateCertOfTest gera um par certificado/chave autoassinado (ECDSA
 // P-256) só para exercitar tls.LoadX509KeyPair — não precisa ser válido para
 // handshake real, só decodificar como PEM do tipo certo (isso é B4).
-func geraCertificadoDeTeste(t *testing.T) (certPath, keyPath string) {
+func generateCertOfTest(t *testing.T) (certPath, keyPath string) {
 	t.Helper()
 
-	chave, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func geraCertificadoDeTeste(t *testing.T) (certPath, keyPath string) {
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     []string{"localhost"},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &chave.PublicKey, chave)
+	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func geraCertificadoDeTeste(t *testing.T) (certPath, keyPath string) {
 		t.Fatal(err)
 	}
 
-	chaveBytes, err := x509.MarshalECPrivateKey(chave)
+	keyBytes, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func geraCertificadoDeTeste(t *testing.T) (certPath, keyPath string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: chaveBytes}); err != nil {
+	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes}); err != nil {
 		t.Fatal(err)
 	}
 	if err := keyOut.Close(); err != nil {

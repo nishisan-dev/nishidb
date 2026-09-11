@@ -130,11 +130,11 @@ func serverRefusal(resp *http.Response, amb Context) int {
 		fmt.Fprintf(amb.Stderr, "  linha %d, coluna %d\n", corpo.Error.Line, corpo.Error.Column)
 	}
 	if resp.StatusCode == http.StatusServiceUnavailable {
-		if espera := resp.Header.Get("Retry-After"); espera != "" {
-			fmt.Fprintf(amb.Stderr, "  tente de novo em %s s\n", espera)
+		if wait := resp.Header.Get("Retry-After"); wait != "" {
+			fmt.Fprintf(amb.Stderr, "  tente de novo em %s s\n", wait)
 		}
 	}
-	return codigoDoProtocolo(corpo.Error.Code)
+	return codigoOfProtocolo(corpo.Error.Code)
 }
 
 // leStream repassa as rows para o stdout e traduz o fecho em exit code.
@@ -159,18 +159,18 @@ func readStream(corpo io.Reader, amb Context) int {
 	}
 	if e := l.Failure(); e != nil {
 		fmt.Fprintf(amb.Stderr, "query: %s (%d linhas entregues)\n", e.Message, e.Rows)
-		return codigoDoProtocolo(e.Code)
+		return codigoOfProtocolo(e.Code)
 	}
 	// Fecho normal. O truncated aqui só acontece quando o PRÓPRIO cliente pediu
 	// menos linhas, e atender ao que foi pedido não é falha.
 	return ExitOK
 }
 
-// codigoDoProtocolo traduz o código do wire no exit code do contrato.
+// codigoOfProtocolo traduz o código do wire no exit code do contrato.
 //
 // A tabela é a mesma do caminho local, e é isso que permite trocar `--config`
 // por `--server` num script sem reescrever o tratamento de $?.
-func codigoDoProtocolo(codigo string) int {
+func codigoOfProtocolo(codigo string) int {
 	switch codigo {
 	case protocol.CodeSyntax, protocol.CodeBind, protocol.CodeBadParameter,
 		protocol.CodeUnsupportedClause:

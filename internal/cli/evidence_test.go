@@ -23,9 +23,9 @@ import (
 // Mora aqui, junto do teste que executa o README, porque este pacote é onde a
 // documentação é tratada como código.
 
-var reNomeDeTeste = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
+var reNameOfTest = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 
-// reNomeDeTestePython casa o nome de um teste Python (`test_algo_assim`).
+// reNameOfTestPython casa o nome de um teste Python (`test_algo_assim`).
 //
 // A segunda grafia existe porque o client Python é código de produção com
 // suíte própria, e um documento de aceite que só pudesse citar teste Go teria
@@ -35,7 +35,7 @@ var reNomeDeTeste = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 // O `\b` antes de `test_` é o que impede um NOME DE ARQUIVO (`sql_test.py`,
 // `integracao_test.py`) de ser lido como citação: ali o "test" vem precedido
 // de `_`, que é caractere de palavra, e a fronteira não casa.
-var reNomeDeTestePython = regexp.MustCompile(`\btest_[a-z0-9_]+`)
+var reNameOfTestPython = regexp.MustCompile(`\btest_[a-z0-9_]+`)
 
 func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
 	// mutacoes-indice-por-segmento.md entra aqui porque ele é FEITO de citações:
@@ -58,33 +58,33 @@ func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
 		"../../docs/mutacoes-indice-por-segmento.md",
 		"../../docs/doutrina-de-verificacao.md", "../../README.md", "../../CLAUDE.md"}
 
-	existentes := testesDoRepositorio(t)
+	existentes := testesOfRepositorio(t)
 	for _, doc := range docs {
 		conteudo, err := os.ReadFile(doc)
 		if err != nil {
 			t.Fatal(err)
 		}
 		vistos := map[string]bool{}
-		nomes := reNomeDeTeste.FindAllString(string(conteudo), -1)
-		nomes = append(nomes, reNomeDeTestePython.FindAllString(string(conteudo), -1)...)
-		for _, nome := range nomes {
-			if vistos[nome] {
+		nomes := reNameOfTest.FindAllString(string(conteudo), -1)
+		nomes = append(nomes, reNameOfTestPython.FindAllString(string(conteudo), -1)...)
+		for _, name := range nomes {
+			if vistos[name] {
 				continue
 			}
-			vistos[nome] = true
-			if !existentes[nome] {
-				t.Errorf("%s cita %s, que não existe na suíte", filepath.Base(doc), nome)
+			vistos[name] = true
+			if !existentes[name] {
+				t.Errorf("%s cita %s, que não existe na suíte", filepath.Base(doc), name)
 			}
 		}
 	}
 }
 
-// testesDoRepositorio indexa toda função de teste declarada no repositório.
-func testesDoRepositorio(t *testing.T) map[string]bool {
+// testesOfRepositorio indexa toda função de teste declarada no repositório.
+func testesOfRepositorio(t *testing.T) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
 	raiz := "../.."
-	err := filepath.WalkDir(raiz, func(caminho string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(raiz, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -105,30 +105,30 @@ func testesDoRepositorio(t *testing.T) map[string]bool {
 		if !ehGo && !ehPython {
 			return nil
 		}
-		conteudo, err := os.ReadFile(caminho)
+		conteudo, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		for _, linha := range strings.Split(string(conteudo), "\n") {
+		for _, row := range strings.Split(string(conteudo), "\n") {
 			if ehGo {
-				if !strings.HasPrefix(linha, "func Test") {
+				if !strings.HasPrefix(row, "func Test") {
 					continue
 				}
-				nome := strings.TrimPrefix(linha, "func ")
-				if i := strings.IndexByte(nome, '('); i > 0 {
-					out[nome[:i]] = true
+				name := strings.TrimPrefix(row, "func ")
+				if i := strings.IndexByte(name, '('); i > 0 {
+					out[name[:i]] = true
 				}
 				continue
 			}
 			// Python: o método é indentado dentro da classe de teste, então a
 			// comparação é sobre a linha aparada.
-			corpo := strings.TrimSpace(linha)
+			corpo := strings.TrimSpace(row)
 			if !strings.HasPrefix(corpo, "def test_") {
 				continue
 			}
-			nome := strings.TrimPrefix(corpo, "def ")
-			if i := strings.IndexByte(nome, '('); i > 0 {
-				out[nome[:i]] = true
+			name := strings.TrimPrefix(corpo, "def ")
+			if i := strings.IndexByte(name, '('); i > 0 {
+				out[name[:i]] = true
 			}
 		}
 		return nil

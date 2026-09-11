@@ -275,7 +275,7 @@ func TestLocationsConcorrencia(t *testing.T) {
 			}
 			for r := types.RowID(0); r < 200; r++ {
 				if p, ok := l.Get(r); ok {
-					if seg, _, _ := Unpack(p); seg == 0 {
+					if sec, _, _ := Unpack(p); sec == 0 {
 						t.Errorf("Get(%d) devolveu packed inválido %#x", r, p)
 						return
 					}

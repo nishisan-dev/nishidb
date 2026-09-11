@@ -48,12 +48,12 @@ schema:
       type: string
 `
 
-func servidorSpec106(t *testing.T) *server.Servidor {
+func serverSpec106(t *testing.T) *server.Server {
 	t.Helper()
-	a := novoAmbienteCom(t, blocoPadrao)
-	a.escreveDataset("d", strings.ReplaceAll(spec106YAML, "%s", "d"))
+	a := newEnvWith(t, blockPadrao)
+	a.writeDataset("d", strings.ReplaceAll(spec106YAML, "%s", "d"))
 
-	cfg := a.carrega()
+	cfg := a.load()
 	spec, err := schema.Load(cfg.DatasetSpecPath("d"), cfg.QueryDefaults())
 	if err != nil {
 		t.Fatal(err)
@@ -101,16 +101,16 @@ func servidorSpec106(t *testing.T) *server.Servidor {
 		t.Fatal(err)
 	}
 
-	srv, err := server.Novo(cfg, server.Opcoes{})
+	srv, err := server.Novo(cfg, server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 	return srv
 }
 
-// idsDe extrai a coluna `id` das rows cruas, na ordem em que chegaram.
-func idsDe(t *testing.T, rows []string) []string {
+// idsOf extrai a coluna `id` das rows cruas, na ordem em que chegaram.
+func idsOf(t *testing.T, rows []string) []string {
 	t.Helper()
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
@@ -125,7 +125,7 @@ func idsDe(t *testing.T, rows []string) []string {
 }
 
 func TestSpec106PeloProtocoloHTTP(t *testing.T) {
-	srv := servidorSpec106(t)
+	srv := serverSpec106(t)
 
 	casos := []struct {
 		caso   string // o item do §106
@@ -167,7 +167,7 @@ func TestSpec106PeloProtocoloHTTP(t *testing.T) {
 		{"aliases", `{"dataset":"d","sql":"SELECT id, status FROM d WHERE status = 'Interim'"}`,
 			[]string{"L-4"}},
 
-		// Nome com hífen exige aspas duplas no SQL; o rótulo de saída é o que
+		// Name com hífen exige aspas duplas no SQL; o rótulo de saída é o que
 		// o usuário escreveu.
 		{"quoted fields", `{"dataset":"d","sql":"SELECT id, \"Acct-Status-Type\" FROM d WHERE \"Acct-Status-Type\" = 'Interim'"}`,
 			[]string{"L-4"}},
@@ -180,14 +180,14 @@ func TestSpec106PeloProtocoloHTTP(t *testing.T) {
 	for _, c := range casos {
 		t.Run(c.caso, func(t *testing.T) {
 			resp := consulta(t, srv, c.corpo)
-			rows, l := resultado(t, resp)
+			rows, l := result(t, resp)
 			if l.Failure() != nil {
 				t.Fatalf("fecho de erro: %+v", l.Failure())
 			}
 			if l.End() == nil {
 				t.Fatal("a resposta não trouxe fecho de sucesso")
 			}
-			if got := idsDe(t, rows); !mesmosIDs(got, c.querID) {
+			if got := idsOf(t, rows); !mesmosIDs(got, c.querID) {
 				t.Fatalf("ids = %v, quer %v", got, c.querID)
 			}
 			if l.End().Rows != int64(len(c.querID)) {
@@ -201,7 +201,7 @@ func TestSpec106PeloProtocoloHTTP(t *testing.T) {
 // com as chaves das rows. Divergir aqui faria o ResultSetMetaData descrever
 // colunas que o dado não tem.
 func TestSpec106RotuloDaMolduraCasaComAsRows(t *testing.T) {
-	srv := servidorSpec106(t)
+	srv := serverSpec106(t)
 
 	casos := map[string][]string{
 		`{"dataset":"d","sql":"SELECT id, status FROM d LIMIT 1"}`:               {"id", "status"},
@@ -210,7 +210,7 @@ func TestSpec106RotuloDaMolduraCasaComAsRows(t *testing.T) {
 	}
 	for corpo, quer := range casos {
 		resp := consulta(t, srv, corpo)
-		rows, l := resultado(t, resp)
+		rows, l := result(t, resp)
 		if len(rows) != 1 {
 			t.Fatalf("%s: rows = %d", corpo, len(rows))
 		}
@@ -233,9 +233,9 @@ func TestSpec106RotuloDaMolduraCasaComAsRows(t *testing.T) {
 		if len(l.Schema().Columns) != len(quer) {
 			t.Fatalf("%s: colunas = %d, quer %d", corpo, len(l.Schema().Columns), len(quer))
 		}
-		for i, nome := range quer {
-			if l.Schema().Columns[i].Name != nome {
-				t.Fatalf("%s: coluna %d = %q, quer %q", corpo, i, l.Schema().Columns[i].Name, nome)
+		for i, name := range quer {
+			if l.Schema().Columns[i].Name != name {
+				t.Fatalf("%s: coluna %d = %q, quer %q", corpo, i, l.Schema().Columns[i].Name, name)
 			}
 		}
 	}

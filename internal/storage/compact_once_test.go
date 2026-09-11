@@ -11,13 +11,13 @@ import (
 
 // TestCompactaUmaVezFuncionaComOLacoDesligado é o caso de uso central da Task
 // B5: o operador desligou o laço automático (storage.compaction.enabled:
-// false) e quer devolver disco na mão. Sem NUNCA ter chamado IniciaCompaction,
+// false) e quer devolver disco na mão. Sem NUNCA ter chamado StartCompaction,
 // CompactaUmaVez varre e aposenta os candidatos de uma eleição só, e devolve
 // o agregado do trabalho feito.
 func TestCompactaUmaVezFuncionaComOLacoDesligado(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
 	const keys, rodadas = 40, 30
-	corpusDeSegmentosSelados(t, s, keys, rodadas)
+	corpusOfSegmentosSelados(t, s, keys, rodadas)
 
 	eleitos := s.candidatos(0.5)
 	if len(eleitos) == 0 {
@@ -46,7 +46,7 @@ func TestCompactaUmaVezFuncionaComOLacoDesligado(t *testing.T) {
 func TestCompactaUmaVezSemCandidatoDevolveZerosSemErro(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
 	const keys, rodadas = 40, 30
-	corpusDeSegmentosSelados(t, s, keys, rodadas)
+	corpusOfSegmentosSelados(t, s, keys, rodadas)
 
 	if _, err := s.CompactaUmaVez(context.Background(), 0.5); err != nil {
 		t.Fatalf("primeira passada: %v", err)
@@ -56,14 +56,14 @@ func TestCompactaUmaVezSemCandidatoDevolveZerosSemErro(t *testing.T) {
 	if err != nil {
 		t.Fatalf("segunda passada (nada para compactar): %v", err)
 	}
-	if res != (ResultadoCompactacao{}) {
+	if res != (ResultCompactacao{}) {
 		t.Errorf("segunda passada sobre dataset já compactado devolveu %+v, queria todos os campos zerados", res)
 	}
 }
 
 // TestCompactaUmaVezComPassadaDoLacoEmVooDevolveBusy é o Critical da revisão
 // da B5: o 409 tem de disparar com uma passada de VERDADE em voo — não só
-// porque o laço automático EXISTE (compCancela fica não-nil da primeira à
+// porque o laço automático EXISTE (compCancel fica não-nil da primeira à
 // última hora do laço, dormindo ou varrendo; checá-lo tornava a rota morta o
 // tempo todo na config default). Aqui o mesmo gate de aposentadoria de
 // TestCloseCancelaEAguardaACompaction trava a PRIMEIRA passada do laço (ela é
@@ -71,25 +71,25 @@ func TestCompactaUmaVezSemCandidatoDevolveZerosSemErro(t *testing.T) {
 // — determinístico, sem sleep de corrida.
 func TestCompactaUmaVezComPassadaDoLacoEmVooDevolveBusy(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 40, 30)
+	corpusOfSegmentosSelados(t, s, 40, 30)
 
-	emVoo := make(chan struct{})
-	libera := make(chan struct{})
-	liberar := sync.OnceFunc(func() { close(libera) })
+	inVoo := make(chan struct{})
+	release := make(chan struct{})
+	liberar := sync.OnceFunc(func() { close(release) })
 	defer liberar()
-	var umaVez sync.Once
-	s.SetAposentadoriaTraceForTest(func(string) {
-		umaVez.Do(func() {
-			close(emVoo)
-			<-libera
+	var oneVez sync.Once
+	s.SetRetirementTraceForTest(func(string) {
+		oneVez.Do(func() {
+			close(inVoo)
+			<-release
 		})
 	})
 
-	s.IniciaCompaction(context.Background(), 0.5)
-	defer s.ParaCompaction()
+	s.StartCompaction(context.Background(), 0.5)
+	defer s.ForCompaction()
 
 	select {
-	case <-emVoo:
+	case <-inVoo:
 	case <-time.After(60 * time.Second):
 		t.Fatal("o laço não chegou a aposentar nada em 60s: sem uma passada em voo o teste não exercita nada")
 	}
@@ -109,23 +109,23 @@ func TestCompactaUmaVezComPassadaDoLacoEmVooDevolveBusy(t *testing.T) {
 // oráculo é o mesmo estilo de "ausência dentro de uma janela" de
 // TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine: se o laço tivesse
 // intrudido, um segundo passo de aposentadoria chegaria ao seam quase
-// imediatamente (a primeira passada de IniciaCompaction não tem cochilo
+// imediatamente (a primeira passada de StartCompaction não tem cochilo
 // antes dela) — a janela de 500ms é folga larga sobre qualquer agendamento
 // de goroutine.
 func TestRodaCompactionPulaARodadaQuandoUmaChamadaManualEstaEmVoo(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 40, 30)
+	corpusOfSegmentosSelados(t, s, 40, 30)
 
-	emVoo := make(chan struct{})
-	libera := make(chan struct{})
-	liberar := sync.OnceFunc(func() { close(libera) })
+	inVoo := make(chan struct{})
+	release := make(chan struct{})
+	liberar := sync.OnceFunc(func() { close(release) })
 	defer liberar()
 	var primeira atomic.Bool
 	var intrusos atomic.Int64
-	s.SetAposentadoriaTraceForTest(func(string) {
+	s.SetRetirementTraceForTest(func(string) {
 		if primeira.CompareAndSwap(false, true) {
-			close(emVoo)
-			<-libera
+			close(inVoo)
+			<-release
 			return
 		}
 		intrusos.Add(1)
@@ -138,7 +138,7 @@ func TestRodaCompactionPulaARodadaQuandoUmaChamadaManualEstaEmVoo(t *testing.T) 
 	}()
 
 	select {
-	case <-emVoo:
+	case <-inVoo:
 	case <-time.After(60 * time.Second):
 		t.Fatal("a chamada manual não chegou a aposentar nada em 60s")
 	}
@@ -146,8 +146,8 @@ func TestRodaCompactionPulaARodadaQuandoUmaChamadaManualEstaEmVoo(t *testing.T) 
 	// A passada MANUAL está em voo (parada no gate). O laço automático
 	// começa AGORA — a primeira passada dele é imediata — e disputa a MESMA
 	// vaga do single-flight fino.
-	s.IniciaCompaction(context.Background(), 0.5)
-	defer s.ParaCompaction()
+	s.StartCompaction(context.Background(), 0.5)
+	defer s.ForCompaction()
 
 	time.Sleep(500 * time.Millisecond)
 	if n := intrusos.Load(); n != 0 {
@@ -175,8 +175,8 @@ func TestRodaCompactionPulaARodadaQuandoUmaChamadaManualEstaEmVoo(t *testing.T) 
 func TestCompactaUmaVezFuncionaComOLacoLigadoMasOcioso(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
 
-	s.IniciaCompaction(context.Background(), 0.5)
-	defer s.ParaCompaction()
+	s.StartCompaction(context.Background(), 0.5)
+	defer s.ForCompaction()
 
 	const tentativas = 500
 	var err error
@@ -194,7 +194,7 @@ func TestCompactaUmaVezFuncionaComOLacoLigadoMasOcioso(t *testing.T) {
 // TestCompactaUmaVezDuasChamadasConcorrentesUmaGanhaUmaRecebeBusy é a outra
 // metade do critério: duas chamadas MANUAIS concorrentes, sem laço nenhum de
 // pé. Determinístico pelo mesmo gate que TestCloseCancelaEAguardaACompaction e
-// TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine já usam — SetAposentadoriaTraceForTest
+// TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine já usam — SetRetirementTraceForTest
 // trava a primeira chamada NO MEIO da aposentadoria do primeiro candidato, e é
 // só depois de confirmar (por canal fechado, nunca por sleep) que ela está em
 // voo que a segunda chamada roda — de forma síncrona, porque CompactaUmaVez
@@ -202,17 +202,17 @@ func TestCompactaUmaVezFuncionaComOLacoLigadoMasOcioso(t *testing.T) {
 // na hora.
 func TestCompactaUmaVezDuasChamadasConcorrentesUmaGanhaUmaRecebeBusy(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 40, 30)
+	corpusOfSegmentosSelados(t, s, 40, 30)
 
-	emVoo := make(chan struct{})
-	libera := make(chan struct{})
-	liberar := sync.OnceFunc(func() { close(libera) })
+	inVoo := make(chan struct{})
+	release := make(chan struct{})
+	liberar := sync.OnceFunc(func() { close(release) })
 	defer liberar()
-	var umaVez sync.Once
-	s.SetAposentadoriaTraceForTest(func(string) {
-		umaVez.Do(func() {
-			close(emVoo)
-			<-libera
+	var oneVez sync.Once
+	s.SetRetirementTraceForTest(func(string) {
+		oneVez.Do(func() {
+			close(inVoo)
+			<-release
 		})
 	})
 
@@ -223,7 +223,7 @@ func TestCompactaUmaVezDuasChamadasConcorrentesUmaGanhaUmaRecebeBusy(t *testing.
 	}()
 
 	select {
-	case <-emVoo:
+	case <-inVoo:
 	case <-time.After(60 * time.Second):
 		t.Fatal("a primeira chamada não chegou a aposentar nada em 60s: sem uma passada em voo a segunda não tem com o que colidir")
 	}
@@ -246,7 +246,7 @@ func TestCompactaUmaVezDuasChamadasConcorrentesUmaGanhaUmaRecebeBusy(t *testing.
 // TestCompactaUmaVezCanceladoNoMeioNaoCorrompeReabreEContaRows é a garantia
 // de segurança do brief: o contexto do CLIENTE HTTP (r.Context()) cancelado
 // no meio de uma passada não pode corromper o dataset. O cancelamento chega
-// ENTRE dois candidatos — o de dentro (aposentaSegmento) não observa ctx e
+// ENTRE dois candidatos — o de dentro (aposentaSegment) não observa ctx e
 // sempre termina o candidato corrente por inteiro, e é só na volta do laço
 // que candidatos() é revisitado que o ctx.Err() interrompe o resto. O
 // oráculo é reabrir o dataset (recovery de verdade) e contar rows: qualquer
@@ -255,17 +255,17 @@ func TestCompactaUmaVezCanceladoNoMeioNaoCorrompeReabreEContaRows(t *testing.T) 
 	dir := t.TempDir()
 	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
 	const keys, rodadas = 40, 30
-	corpusDeSegmentosSelados(t, s, keys, rodadas)
+	corpusOfSegmentosSelados(t, s, keys, rodadas)
 
 	eleitos := s.candidatos(0.5)
 	if len(eleitos) < 2 {
 		t.Fatalf("só %d candidato(s): cancelamento ENTRE candidatos não é observável com menos de dois", len(eleitos))
 	}
 
-	ctx, cancela := context.WithCancel(context.Background())
-	var umaVez sync.Once
-	s.SetAposentadoriaTraceForTest(func(string) {
-		umaVez.Do(cancela) // cancela o ctx DA CHAMADA no meio da 1ª aposentadoria
+	ctx, cancel := context.WithCancel(context.Background())
+	var oneVez sync.Once
+	s.SetRetirementTraceForTest(func(string) {
+		oneVez.Do(cancel) // cancela o ctx DA CHAMADA no meio da 1ª aposentadoria
 	})
 
 	res, err := s.CompactaUmaVez(ctx, 0.5)
@@ -287,29 +287,29 @@ func TestCompactaUmaVezCanceladoNoMeioNaoCorrompeReabreEContaRows(t *testing.T) 
 
 // TestCloseEsperaAPassadaManualEmVooAntesDeFechar é o lado (a) do Important
 // do round 2 da revisão da B5: uma chamada manual CLAIMADA (já passou por
-// tentaClaimarPassada, compEmVoo já sabe disso) tem de segurar o Close até
+// tentaClaimarPass, compInVoo já sabe disso) tem de segurar o Close até
 // terminar — nunca o contrário. É o MESMO teste de
 // TestCloseCancelaEAguardaACompaction, mas para o caminho MANUAL em vez do
 // laço automático: aquele já provava que o Add/Done do LAÇO protege a
 // janela; este prova que o Add/Done (agora atômico com o claim, dentro de
-// tentaClaimarPassada) protege a janela também para CompactaUmaVez.
+// tentaClaimarPass) protege a janela também para CompactaUmaVez.
 func TestCloseEsperaAPassadaManualEmVooAntesDeFechar(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(Options{Dir: dir, SegmentSize: 8 << 10})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	corpusDeSegmentosSelados(t, s, 40, 30)
+	corpusOfSegmentosSelados(t, s, 40, 30)
 
-	emVoo := make(chan struct{})
-	libera := make(chan struct{})
-	liberar := sync.OnceFunc(func() { close(libera) })
+	inVoo := make(chan struct{})
+	release := make(chan struct{})
+	liberar := sync.OnceFunc(func() { close(release) })
 	defer liberar()
-	var umaVez sync.Once
-	s.SetAposentadoriaTraceForTest(func(string) {
-		umaVez.Do(func() {
-			close(emVoo)
-			<-libera
+	var oneVez sync.Once
+	s.SetRetirementTraceForTest(func(string) {
+		oneVez.Do(func() {
+			close(inVoo)
+			<-release
 		})
 	})
 
@@ -320,7 +320,7 @@ func TestCloseEsperaAPassadaManualEmVooAntesDeFechar(t *testing.T) {
 	}()
 
 	select {
-	case <-emVoo:
+	case <-inVoo:
 	case <-time.After(60 * time.Second):
 		t.Fatal("a chamada manual não chegou a aposentar nada em 60s: sem uma passada em voo o teste não exercita nada")
 	}
@@ -331,7 +331,7 @@ func TestCloseEsperaAPassadaManualEmVooAntesDeFechar(t *testing.T) {
 	select {
 	case err := <-fechado:
 		t.Fatalf("Close retornou (%v) com a chamada MANUAL parada NO MEIO de uma aposentadoria: "+
-			"o Add/Done de compEmVoo não protegeu a janela, e o que vem depois dele é rename/unlink de "+
+			"o Add/Done de compInVoo não protegeu a janela, e o que vem depois dele é rename/unlink de "+
 			"arquivo sobre um Store já fechado", err)
 	case <-time.After(500 * time.Millisecond):
 	}
@@ -351,21 +351,21 @@ func TestCloseEsperaAPassadaManualEmVooAntesDeFechar(t *testing.T) {
 }
 
 // TestCompactaUmaVezRecusaPermanentementeDepoisDeParaCompaction é o lado (b)
-// do Important do round 2: uma vez que ParaCompaction marca compEncerrando
+// do Important do round 2: uma vez que ForCompaction marca compEncerrando
 // (mesmo sem nunca ter havido laço nenhum — ela é idempotente), NENHUMA
 // chamada manual nova consegue reivindicar a vaga — a recusa é limpa
 // (ErrCompactionBusy), nunca uma tentativa de tocar arquivo já em vias de
 // ser fechado. Determinístico sem gate nenhum: compEncerrando é permanente
-// (godoc do campo, store.go), então a ordem "ParaCompaction, depois
+// (godoc do campo, store.go), então a ordem "ForCompaction, depois
 // CompactaUmaVez" já basta — não há corrida a decidir.
 func TestCompactaUmaVezRecusaPermanentementeDepoisDeParaCompaction(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
-	corpusDeSegmentosSelados(t, s, 40, 30)
+	corpusOfSegmentosSelados(t, s, 40, 30)
 
-	s.ParaCompaction() // idempotente, nunca houve laço — mas marca compEncerrando
+	s.ForCompaction() // idempotente, nunca houve laço — mas marca compEncerrando
 
 	if _, err := s.CompactaUmaVez(context.Background(), 0.5); !errors.Is(err, ErrCompactionBusy) {
-		t.Fatalf("CompactaUmaVez depois de ParaCompaction: err = %v, quer ErrCompactionBusy "+
+		t.Fatalf("CompactaUmaVez depois de ForCompaction: err = %v, quer ErrCompactionBusy "+
 			"(compEncerrando é permanente — nunca reabre a vaga)", err)
 	}
 }

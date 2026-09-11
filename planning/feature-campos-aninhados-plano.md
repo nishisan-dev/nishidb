@@ -197,7 +197,7 @@ Ordem interna:
 **Entrega:** o dataset que chega ao teto **deixa de parar a ingestão para
 sempre**. É o bug corrigido, sem feature nova visível.
 **Testes:** bancada Kafka com construtor novo `novaBancadaCom(t, particoes, opts)`
-— o atual chama `carregaSpec()`+`abre()` dentro do construtor
+— o atual chama `loadSpec()`+`abre()` dentro do construtor
 ([harness_test.go:98-102](internal/kafka/harness_test.go:98)), então setar o
 campo depois chega tarde. Dois testes: `maxCols` no YAML com dict real
 (`Aplicados == 3`, entidade sem o excedente) e dublê provando o ramo de rede.
@@ -290,7 +290,7 @@ passada não pode alocar por evento).
   seguinte bate em `ErrDatasetCorrupt` pela divergência (1) de
   [store.go:838-851](internal/storage/store.go:838).
 - `index` no extract reusando o switch de [spec.go:476-491](internal/schema/spec.go:476).
-- Aviso de `index: hash` sem motor, estendendo `avisaChavesSemMotor`
+- Aviso de `index: hash` sem motor, estendendo `avisaChavesWithoutEngine`
   ([server.go:467](internal/server/server.go:467)).
 - `origem=` no REMARKS do JDBC + campo `Source` em `ColumnMeta`.
 
@@ -341,7 +341,7 @@ saiba os nomes, com teto que o cliente encurta e o servidor recusa acima.
   bitmaps, e `(0,0)` não pode significar "completo".
 - **`internal/storage/backfill.go`** no molde do coletor de expiração
   ([expiry.go:283-365](internal/storage/expiry.go:283)): cursor persistente,
-  `MaxPorPassada`/`TempoPorPassada`, reagendamento imediato ao bater o teto.
+  `MaxPerSweep`/`TimePerSweep`, reagendamento imediato ao bater o teto.
   Roda **como trabalho do writer, sob o `wmu`** — `Set/Clear` são exclusivos do
   writer e compartilham `ix.scratch` ([bitmap.go:115](internal/index/bitmap/bitmap.go:115)),
   então lock novo seria pior. Varredura por `ScanLive()` sem o filtro de prazo.

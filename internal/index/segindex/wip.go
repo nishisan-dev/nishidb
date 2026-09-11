@@ -171,8 +171,8 @@ type WIP struct {
 // um segmento por vez, então ele pode se dar ao luxo de descritores que o
 // selado — 500 segmentos vezes N campos contra um ulimit -n de 1024 — não
 // poderia (spec §1.2).
-func WIPPath(dir string, seg uint32, field types.FieldID) string {
-	return filepath.Join(dir, fmt.Sprintf("segment-%08d-%05d.widx", seg, field))
+func WIPPath(dir string, sec uint32, field types.FieldID) string {
+	return filepath.Join(dir, fmt.Sprintf("segment-%08d-%05d.widx", sec, field))
 }
 
 // parseWIPName separa segmento e campo de um nome do espaço
@@ -202,7 +202,7 @@ func parseWIPName(name string) (uint32, types.FieldID, bool, error) {
 	if sep < 0 {
 		return 0, 0, false, fmt.Errorf("%w: %s não separa segmento e campo em %q", ErrFormat, name, middle)
 	}
-	seg, err := strconv.ParseUint(middle[:sep], 10, 32)
+	sec, err := strconv.ParseUint(middle[:sep], 10, 32)
 	if err != nil {
 		return 0, 0, false, fmt.Errorf("%w: %s não tem um segmento legível em %q", ErrFormat, name, middle[:sep])
 	}
@@ -210,19 +210,19 @@ func parseWIPName(name string) (uint32, types.FieldID, bool, error) {
 	if err != nil {
 		return 0, 0, false, fmt.Errorf("%w: %s não tem um fieldID legível em %q", ErrFormat, name, middle[sep+1:])
 	}
-	if canonical := filepath.Base(WIPPath("", uint32(seg), types.FieldID(field))); name != canonical {
+	if canonical := filepath.Base(WIPPath("", uint32(sec), types.FieldID(field))); name != canonical {
 		return 0, 0, false, fmt.Errorf("%w: %s não é o nome canônico do par (%d, %d), que seria %s",
-			ErrFormat, name, seg, field, canonical)
+			ErrFormat, name, sec, field, canonical)
 	}
-	return uint32(seg), types.FieldID(field), true, nil
+	return uint32(sec), types.FieldID(field), true, nil
 }
 
 // ListWIP devolve, em ordem crescente, os campos que têm .widx no segmento.
 //
 // O FILESYSTEM é a verdade sobre quais campos o segmento corrente indexa: nada
-// no manifest lista isso, seguindo a doutrina que primeiroRowIDDoSeguinte já
+// no manifest lista isso, seguindo a doutrina que primeiroRowIDOfSeguinte já
 // escreve — "um metadado a menos é uma janela de crash a menos" (spec §5.3).
-func ListWIP(dir string, seg uint32) ([]types.FieldID, error) {
+func ListWIP(dir string, sec uint32) ([]types.FieldID, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("segindex: listar os .widx de %s: %w", dir, err)
@@ -232,11 +232,11 @@ func ListWIP(dir string, seg uint32) ([]types.FieldID, error) {
 		if e.IsDir() {
 			continue
 		}
-		fileSeg, field, ok, err := parseWIPName(e.Name())
+		fileSec, field, ok, err := parseWIPName(e.Name())
 		if err != nil {
 			return nil, err
 		}
-		if !ok || fileSeg != seg {
+		if !ok || fileSec != sec {
 			continue
 		}
 		fields = append(fields, field)
@@ -277,14 +277,14 @@ func SegmentsWithWIP(dir string) ([]uint32, error) {
 		if e.IsDir() {
 			continue
 		}
-		seg, _, ok, err := parseWIPName(e.Name())
+		sec, _, ok, err := parseWIPName(e.Name())
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
 			continue
 		}
-		segs = append(segs, seg)
+		segs = append(segs, sec)
 	}
 	slices.Sort(segs)
 	return slices.Compact(segs), nil
@@ -301,8 +301,8 @@ func SegmentsWithWIP(dir string) ([]uint32, error) {
 // Sobre um arquivo EXISTENTE o slotsMin é ignorado: o dirSlots gravado é o que
 // a máscara do diretório usa, e adotá-lo é a única leitura correta dos slots
 // que já estão ocupados.
-func OpenWIP(dir string, seg uint32, field types.FieldID, slotsMin uint32) (*WIP, error) {
-	path := WIPPath(dir, seg, field)
+func OpenWIP(dir string, sec uint32, field types.FieldID, slotsMin uint32) (*WIP, error) {
+	path := WIPPath(dir, sec, field)
 	info, err := os.Stat(path)
 	switch {
 	case err == nil && info.Size() > 0:

@@ -21,14 +21,14 @@ import (
 // bqOrdenada é a query ligada mínima com ORDER BY sobre `nome`.
 func bqOrdenada(t *testing.T, c *schema.Compiled, maxRows int64) *binder.BoundQuery {
 	t.Helper()
-	id, nome := campo(t, c, "id"), campo(t, c, "nome")
+	id, name := field(t, c, "id"), field(t, c, "nome")
 	return &binder.BoundQuery{
 		Dataset: "t",
 		Schema:  c,
 		Columns: []binder.BoundColumn{{Field: id, Name: "id", Slot: 0}},
-		Slots:   binder.Slots{IDs: []types.FieldID{id.ID, nome.ID}},
+		Slots:   binder.Slots{IDs: []types.FieldID{id.ID, name.ID}},
 		OrderBy: []binder.BoundOrderKey{{
-			Field: nome, Slot: 1, Kind: binder.CompareBytes, Want: types.TypeString}},
+			Field: name, Slot: 1, Kind: binder.CompareBytes, Want: types.TypeString}},
 		MaxRows:        maxRows,
 		EffectiveLimit: maxRows,
 		// A guarda de prazo do executor recusa query ligada sem Timeout: um
@@ -45,8 +45,8 @@ func bqOrdenada(t *testing.T, c *schema.Compiled, maxRows int64) *binder.BoundQu
 // O teto é forçado por Options porque essa é a única porta que exercita a
 // recusa sem gerar um corpus de dezenas de megabytes.
 func TestOrcamentoDeOrdenacaoRecusaENaoTrunca(t *testing.T) {
-	c := compilaSchema(t)
-	st := semeiaParaOrdenar(t, c)
+	c := compileSchema(t)
+	st := seedForOrdenar(t, c)
 	it, err := executor.Open(context.Background(), bqOrdenada(t, c, 100), planner.FullScan(),
 		executor.Options{Store: st, SortMemory: 8})
 	if err != nil {
@@ -62,16 +62,16 @@ func TestOrcamentoDeOrdenacaoRecusaENaoTrunca(t *testing.T) {
 	if it.Err() == nil {
 		t.Fatal("o teto foi estourado e a query NÃO falhou: o resultado saiu truncado")
 	}
-	if !errors.Is(it.Err(), executor.ErrOrcamentoDeOrdenacao) {
-		t.Errorf("erro = %v, quer ErrOrcamentoDeOrdenacao", it.Err())
+	if !errors.Is(it.Err(), executor.ErrBudgetOfOrdenacao) {
+		t.Errorf("erro = %v, quer ErrBudgetOfOrdenacao", it.Err())
 	}
 }
 
 // A MESMA query com teto folgado responde inteira e ORDENADA. Sem este, o teste
 // acima passaria com um Open quebrado — qualquer erro serviria.
 func TestOrcamentoFolgadoOrdenaTudo(t *testing.T) {
-	c := compilaSchema(t)
-	st := semeiaParaOrdenar(t, c)
+	c := compileSchema(t)
+	st := seedForOrdenar(t, c)
 	it, err := executor.Open(context.Background(), bqOrdenada(t, c, 100), planner.FullScan(),
 		executor.Options{Store: st, SortMemory: 1 << 20})
 	if err != nil {
@@ -95,14 +95,14 @@ func TestOrcamentoFolgadoOrdenaTudo(t *testing.T) {
 	}
 }
 
-func semeiaParaOrdenar(t *testing.T, c *schema.Compiled) *fakestorage.Store {
+func seedForOrdenar(t *testing.T, c *schema.Compiled) *fakestorage.Store {
 	t.Helper()
 	st := fakestorage.New(fakestorage.Indexes{})
-	id, nome := campo(t, c, "id"), campo(t, c, "nome")
+	id, name := field(t, c, "id"), field(t, c, "nome")
 	for _, r := range []struct{ k, n string }{{"a", "beta"}, {"b", "gama"}, {"c", "alfa"}} {
 		var p []byte
 		var err error
-		primeiro, segundo := id, nome
+		primeiro, segundo := id, name
 		vp := types.Value{Type: types.TypeString, Bytes: []byte(r.k)}
 		vs := types.Value{Type: types.TypeString, Bytes: []byte(r.n)}
 		if segundo.ID < primeiro.ID {
@@ -122,14 +122,14 @@ func semeiaParaOrdenar(t *testing.T, c *schema.Compiled) *fakestorage.Store {
 	return st
 }
 
-// storeComSpill é o dublê com a capability de transbordo: sem ela, o executor
+// storeWithSpill é o dublê com a capability de transbordo: sem ela, o executor
 // RECUSA ao estourar o orçamento em vez de degradar para disco.
-type storeComSpill struct {
+type storeWithSpill struct {
 	*fakestorage.Store
 	dir string
 }
 
-func (s storeComSpill) DiretorioDeSpill() string { return s.dir }
+func (s storeWithSpill) DiretorioOfSpill() string { return s.dir }
 
 // TestSortExternoDaOMesmoResultadoQueOSortEmMemoria é o teste que decide se o
 // transbordo está certo.
@@ -144,41 +144,41 @@ func (s storeComSpill) DiretorioDeSpill() string { return s.dir }
 // testes próprios e divergiria do outro exatamente nos empates, que é onde
 // ninguém olha.
 func TestSortExternoDaOMesmoResultadoQueOSortEmMemoria(t *testing.T) {
-	c := compilaSchema(t)
-	st := semeiaMuitos(t, c, 200)
+	c := compileSchema(t)
+	st := seedMuitos(t, c, 200)
 
-	emMemoria := colheOrdenado(t, c, st, "", 1<<20)
+	inMemoria := colheOrdenado(t, c, st, "", 1<<20)
 
 	// PROVA DE QUE O TETO DE 512 REALMENTE TRANSBORDA. Sem esta asserção o
 	// diferencial abaixo passaria por vacuidade se o orçamento nunca fosse
 	// estourado: os dois caminhos seriam o mesmo caminho. O mesmo teto, num
 	// store SEM a capability de spill, tem de RECUSAR.
-	itSem, err := executor.Open(context.Background(), bqOrdenada(t, c, 10_000), planner.FullScan(),
+	itWithout, err := executor.Open(context.Background(), bqOrdenada(t, c, 10_000), planner.FullScan(),
 		executor.Options{Store: st, SortMemory: 512})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	for itSem.Next() {
+	for itWithout.Next() {
 	}
-	if !errors.Is(itSem.Err(), executor.ErrOrcamentoDeOrdenacao) {
+	if !errors.Is(itWithout.Err(), executor.ErrBudgetOfOrdenacao) {
 		t.Fatalf("com teto de 512 e sem spill, o erro foi %v — o teto não é apertado o bastante "+
-			"e o diferencial abaixo não exercitaria o transbordo", itSem.Err())
+			"e o diferencial abaixo não exercitaria o transbordo", itWithout.Err())
 	}
-	if err := itSem.Close(); err != nil {
+	if err := itWithout.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	comSpill := colheOrdenado(t, c, storeComSpill{Store: st, dir: t.TempDir()}, t.TempDir(), 512)
+	withSpill := colheOrdenado(t, c, storeWithSpill{Store: st, dir: t.TempDir()}, t.TempDir(), 512)
 
-	if len(comSpill) != len(emMemoria) {
-		t.Fatalf("spill devolveu %d linhas, memória devolveu %d", len(comSpill), len(emMemoria))
+	if len(withSpill) != len(inMemoria) {
+		t.Fatalf("spill devolveu %d linhas, memória devolveu %d", len(withSpill), len(inMemoria))
 	}
-	if len(emMemoria) != 200 {
-		t.Fatalf("%d linhas, quer 200: a montagem não produziu o corpus", len(emMemoria))
+	if len(inMemoria) != 200 {
+		t.Fatalf("%d linhas, quer 200: a montagem não produziu o corpus", len(inMemoria))
 	}
-	for i := range emMemoria {
-		if emMemoria[i] != comSpill[i] {
-			t.Fatalf("divergiram na linha %d: memória=%q spill=%q", i, emMemoria[i], comSpill[i])
+	for i := range inMemoria {
+		if inMemoria[i] != withSpill[i] {
+			t.Fatalf("divergiram na linha %d: memória=%q spill=%q", i, inMemoria[i], withSpill[i])
 		}
 	}
 }
@@ -186,9 +186,9 @@ func TestSortExternoDaOMesmoResultadoQueOSortEmMemoria(t *testing.T) {
 // E o transbordo REMOVE os arquivos ao fim, inclusive quando a query termina
 // normalmente. Um run esquecido ficaria em disco até o restart do processo.
 func TestSpillEhRemovidoAoFecharOIterador(t *testing.T) {
-	c := compilaSchema(t)
+	c := compileSchema(t)
 	dir := t.TempDir()
-	st := storeComSpill{Store: semeiaMuitos(t, c, 200), dir: dir}
+	st := storeWithSpill{Store: seedMuitos(t, c, 200), dir: dir}
 	_ = colheOrdenado(t, c, st, dir, 512)
 
 	entradas, err := os.ReadDir(filepath.Join(dir, "spill"))
@@ -201,10 +201,10 @@ func TestSpillEhRemovidoAoFecharOIterador(t *testing.T) {
 }
 
 // colheOrdenado executa a query ordenada e devolve os ids na ordem de saída.
-func colheOrdenado(t *testing.T, c *schema.Compiled, st executor.Store, dirSpill string, teto int64) []string {
+func colheOrdenado(t *testing.T, c *schema.Compiled, st executor.Store, dirSpill string, ceiling int64) []string {
 	t.Helper()
 	it, err := executor.Open(context.Background(), bqOrdenada(t, c, 10_000), planner.FullScan(),
-		executor.Options{Store: st, SortMemory: teto})
+		executor.Options{Store: st, SortMemory: ceiling})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -218,17 +218,17 @@ func colheOrdenado(t *testing.T, c *schema.Compiled, st executor.Store, dirSpill
 		ids = append(ids, string(it.Row().Cols()[0].Val.Bytes))
 	}
 	if err := it.Err(); err != nil {
-		t.Fatalf("Err (teto=%d, dir=%q): %v", teto, dirSpill, err)
+		t.Fatalf("Err (teto=%d, dir=%q): %v", ceiling, dirSpill, err)
 	}
 	return ids
 }
 
-// semeiaMuitos produz n linhas com nomes que NÃO seguem a ordem de rowID — sem
+// seedMuitos produz n linhas com nomes que NÃO seguem a ordem de rowID — sem
 // isso o teste passaria com um sort que não ordena nada.
-func semeiaMuitos(t *testing.T, c *schema.Compiled, n int) *fakestorage.Store {
+func seedMuitos(t *testing.T, c *schema.Compiled, n int) *fakestorage.Store {
 	t.Helper()
 	st := fakestorage.New(fakestorage.Indexes{})
-	id, nome := campo(t, c, "id"), campo(t, c, "nome")
+	id, name := field(t, c, "id"), field(t, c, "nome")
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("k%04d", i)
 		// Nome em ordem INVERSA à da chave, com empates a cada 10 linhas para
@@ -236,7 +236,7 @@ func semeiaMuitos(t *testing.T, c *schema.Compiled, n int) *fakestorage.Store {
 		v := fmt.Sprintf("nome-%04d", (n-i)/10)
 		var p []byte
 		var err error
-		primeiro, segundo := id, nome
+		primeiro, segundo := id, name
 		vp := types.Value{Type: types.TypeString, Bytes: []byte(k)}
 		vs := types.Value{Type: types.TypeString, Bytes: []byte(v)}
 		if segundo.ID < primeiro.ID {

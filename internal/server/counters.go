@@ -5,7 +5,7 @@
 // São rotas, e não SQL, porque não são leitura: a auditoria varre o dataset
 // inteiro segurando um snapshot, e a reconstrução segura o writer. As duas são
 // síncronas — a resposta sai depois do trabalho feito —, e é por isso que
-// correm sob o ctxDeMutacao: uma varredura de segundos tem de honrar o SIGTERM.
+// correm sob o ctxOfMutacao: uma varredura de segundos tem de honrar o SIGTERM.
 // A leitura dos contadores continua sendo `SELECT … FROM _counters.<nome>`.
 
 package server
@@ -21,7 +21,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
 
-// handleAuditoriaDeContadores serve o POST /v1/counters/audit (ADMIN).
+// handleAuditOfCounters serve o POST /v1/counters/audit (ADMIN).
 //
 // Não segura o writer pela varredura: a ingestão continua. O que ela segura é
 // um snapshot de leitura, e o teto do journal pode invalidá-lo — a resposta
@@ -29,36 +29,36 @@ import (
 // inventada por versão perdida mandaria o operador reconstruir um contador
 // certo. Divergência NÃO é erro HTTP: o relatório é o resultado, e é quem
 // chama (o CLI) que decide o exit code.
-func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAuditOfCounters(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
+		s.reject(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
 			Code:    protocol.CodeMethod,
 			Message: fmt.Sprintf("%s não é aceito em /v1/counters/audit; use POST", r.Method),
 		})
 		return
 	}
-	req, falha, status := s.leRequisicaoDataset(w, r)
-	if falha != nil {
-		s.recusa(w, r, status, datasetDesconhecido, *falha)
+	req, fail, status := s.readRequisicaoDataset(w, r)
+	if fail != nil {
+		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
-	alvos, falha, status := s.datasetsAlvo(req.Dataset)
-	if falha != nil {
-		s.recusa(w, r, status, datasetDesconhecido, *falha)
+	alvos, fail, status := s.datasetsTarget(req.Dataset)
+	if fail != nil {
+		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
-	ctx, cancela := s.ctxDeMutacao(r)
-	defer cancela()
+	ctx, cancel := s.ctxOfMutacao(r)
+	defer cancel()
 
 	resultados, parcial := processDatasets(alvos, func(d *dataset) (protocol.DatasetAudit, error) {
-		relatorios, err := d.st.AuditaContadores(ctx)
+		relatorios, err := d.st.AuditaCounters(ctx)
 		if err != nil {
 			return protocol.DatasetAudit{}, err
 		}
 		out := protocol.DatasetAudit{Name: d.nome, Counters: make([]protocol.CounterAudit, 0, len(relatorios))}
 		for _, rel := range relatorios {
-			out.Counters = append(out.Counters, auditoriaContador(rel))
+			out.Counters = append(out.Counters, auditCounter(rel))
 			s.log.Dataset(d.nome).Info("contadores.auditoria",
 				"auditoria do contador concluída",
 				"contador", rel.Name, "grupos", rel.Groups, "divergentes", rel.DivergentGroups,
@@ -69,41 +69,41 @@ func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Re
 	if parcial != nil {
 		status, f := countersError(parcial.Err)
 		f.Message = partialMessage(parcial, f.Message)
-		s.recusa(w, r, status, parcial.Dataset, f)
+		s.reject(w, r, status, parcial.Dataset, f)
 		return
 	}
 	s.respondeJSON(w, protocol.CountersAuditResponse{Datasets: resultados})
 }
 
-// handleReconstrucaoDeContadores serve o POST /v1/counters/rebuild (ADMIN).
+// handleRebuildOfCounters serve o POST /v1/counters/rebuild (ADMIN).
 //
 // Segura o writer pela varredura inteira — é o stall real da ingestão, dito
 // no README e no DurationMs da resposta. É o remédio para uma deriva que a
 // auditoria apontou: explícito, caro e raro.
-func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRebuildOfCounters(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
+		s.reject(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
 			Code:    protocol.CodeMethod,
 			Message: fmt.Sprintf("%s não é aceito em /v1/counters/rebuild; use POST", r.Method),
 		})
 		return
 	}
-	req, falha, status := s.leRequisicaoDataset(w, r)
-	if falha != nil {
-		s.recusa(w, r, status, datasetDesconhecido, *falha)
+	req, fail, status := s.readRequisicaoDataset(w, r)
+	if fail != nil {
+		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
-	alvos, falha, status := s.datasetsAlvo(req.Dataset)
-	if falha != nil {
-		s.recusa(w, r, status, datasetDesconhecido, *falha)
+	alvos, fail, status := s.datasetsTarget(req.Dataset)
+	if fail != nil {
+		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
-	ctx, cancela := s.ctxDeMutacao(r)
-	defer cancela()
+	ctx, cancel := s.ctxOfMutacao(r)
+	defer cancel()
 
 	resultados, parcial := processDatasets(alvos, func(d *dataset) (protocol.DatasetRebuild, error) {
-		recs, err := d.st.ReconstroiContadores(ctx)
+		recs, err := d.st.ReconstroiCounters(ctx)
 		if err != nil {
 			return protocol.DatasetRebuild{}, err
 		}
@@ -118,7 +118,7 @@ func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http
 	if parcial != nil {
 		status, f := countersError(parcial.Err)
 		f.Message = partialMessage(parcial, f.Message)
-		s.recusa(w, r, status, parcial.Dataset, f)
+		s.reject(w, r, status, parcial.Dataset, f)
 		return
 	}
 	s.respondeJSON(w, protocol.CountersRebuildResponse{Datasets: resultados})
@@ -141,7 +141,7 @@ func countersError(err error) (int, protocol.ErrorDetail) {
 	return mutationError(err)
 }
 
-func auditoriaContador(rel counter.Report) protocol.CounterAudit {
+func auditCounter(rel counter.Report) protocol.CounterAudit {
 	out := protocol.CounterAudit{
 		Name:            rel.Name,
 		Groups:          rel.Groups,

@@ -38,36 +38,36 @@ import (
 // Nada do resultado é acumulado (§128): o StreamWriter tem buffer fixo em
 // bytes, e o lote de query.resultBatchSize apenas decide de quanto em quanto o
 // buffer é descarregado no fio.
-func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
-	inicio := time.Now()
+func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
+		s.reject(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
 			Code:    protocol.CodeMethod,
 			Message: fmt.Sprintf("%s não é aceito em /v1/query; use POST", r.Method),
 		})
 		return
 	}
 	if ct := r.Header.Get("Content-Type"); !isJSON(ct) {
-		s.recusa(w, r, http.StatusUnsupportedMediaType, datasetDesconhecido, protocol.ErrorDetail{
+		s.reject(w, r, http.StatusUnsupportedMediaType, datasetDesconhecido, protocol.ErrorDetail{
 			Code:    protocol.CodeMediaType,
 			Message: fmt.Sprintf("Content-Type %q não é aceito; use %s", ct, protocol.ContentTypeJSON),
 		})
 		return
 	}
 
-	req, fail, status := s.leRequisicao(w, r)
+	req, fail, status := s.readRequisicao(w, r)
 	if fail != nil {
-		s.recusa(w, r, status, datasetDesconhecido, *fail)
+		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
 
-	d, ok := s.porNome[req.Dataset]
+	d, ok := s.byName[req.Dataset]
 	if !ok {
 		// O nome NÃO entra na métrica: ele é entrada do cliente, e um label
 		// alimentado por entrada do cliente é uma série nova por requisição.
-		s.recusa(w, r, http.StatusNotFound, datasetDesconhecido, protocol.ErrorDetail{
+		s.reject(w, r, http.StatusNotFound, datasetDesconhecido, protocol.ErrorDetail{
 			Code:    protocol.CodeUnknownDataset,
 			Message: fmt.Sprintf("dataset %q não está registrado neste servidor", req.Dataset),
 		})
@@ -76,23 +76,23 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	params, err := protocol.Values(req.Parameters)
 	if err != nil {
-		s.recusa(w, r, http.StatusBadRequest, d.nome, protocol.ErrorDetail{
+		s.reject(w, r, http.StatusBadRequest, d.nome, protocol.ErrorDetail{
 			Code: protocol.CodeBadParameter, Message: err.Error(),
 		})
 		return
 	}
 
-	tetoDoRequest, fail := rowCeiling(req, d.sch.MaxRows)
+	ceilingOfRequest, fail := rowCeiling(req, d.sch.MaxRows)
 	if fail != nil {
-		s.recusa(w, r, http.StatusBadRequest, d.nome, *fail)
+		s.reject(w, r, http.StatusBadRequest, d.nome, *fail)
 		return
 	}
-	ctx, cancela, prazo, fail := s.contextoDaConsulta(r, req, d.sch)
+	ctx, cancel, prazo, fail := s.contextoOfConsulta(r, req, d.sch)
 	if fail != nil {
-		s.recusa(w, r, http.StatusBadRequest, d.nome, *fail)
+		s.reject(w, r, http.StatusBadRequest, d.nome, *fail)
 		return
 	}
-	defer cancela()
+	defer cancel()
 	// LONGA é quem passa do prazo padrão do dataset, e não quem passa de um
 	// número fixo: `query.timeout` é a declaração de quanto tempo uma consulta
 	// deste dataset costuma levar, então tudo que a excede é, por definição
@@ -107,7 +107,7 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-s.vagas }()
 	default:
 		w.Header().Set("Retry-After", "1")
-		s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocol.ErrorDetail{
+		s.reject(w, r, http.StatusServiceUnavailable, d.nome, protocol.ErrorDetail{
 			Code: protocol.CodeTooManyQueries,
 			Message: fmt.Sprintf("as %d vagas de consulta simultânea estão ocupadas (runtime.query.maxConcurrent)",
 				s.cfg.MaxConcurrent()),
@@ -133,8 +133,8 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// ocupa uma vaga longa pode estar lá por minutos, e mandar o
 			// cliente voltar em um segundo o treinaria a martelar o servidor.
 			w.Header().Set("Retry-After", "30")
-			s.met.recusaLonga()
-			s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocol.ErrorDetail{
+			s.met.rejectLonga()
+			s.reject(w, r, http.StatusServiceUnavailable, d.nome, protocol.ErrorDetail{
 				Code: protocol.CodeTooManyLongQueries,
 				Message: fmt.Sprintf(
 					"as %d vagas de consulta longa estão ocupadas (runtime.query.maxLongRunning); "+
@@ -157,10 +157,10 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// A recusa reusa TOO_MANY_QUERIES, e não ganha código próprio, porque a AÇÃO
 	// do cliente é idêntica à do semáforo cheio — esperar e repetir. O que muda
 	// é a CAUSA, e ela vai na mensagem, nomeando a chave.
-	orc := s.orcamento.Query(s.cfg.MaxBufferPerQuery())
+	orc := s.budget.Query(s.cfg.MaxBufferPerQuery())
 	if !orc.Admit() {
 		w.Header().Set("Retry-After", "1")
-		s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocol.ErrorDetail{
+		s.reject(w, r, http.StatusServiceUnavailable, d.nome, protocol.ErrorDetail{
 			Code: protocol.CodeTooManyQueries,
 			Message: fmt.Sprintf(
 				"o orçamento de memória de consulta do processo está esgotado (runtime.memoryTarget, %d bytes); "+
@@ -179,32 +179,32 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// prazo longo virando padrão, "há 3 consultas ativas" deixou de ser
 	// resposta — o operador precisa saber se são três point lookups ou um
 	// full scan de oito minutos.
-	saiDoRegistro := s.registraEmVoo(d.nome, req.SQL, longa, inicio)
-	defer saiDoRegistro()
-	defer func() { s.met.observa(d.nome, time.Since(inicio).Seconds()) }()
+	saiOfRecord := s.registerInVoo(d.nome, req.SQL, longa, start)
+	defer saiOfRecord()
+	defer func() { s.met.observa(d.nome, time.Since(start).Seconds()) }()
 
 	it, err := s.eng.Execute(ctx, d.nome, req.SQL, params)
 	if err != nil {
-		status, falha := translateOpenError(err, req.SQL)
-		s.recusa(w, r, status, d.nome, falha)
+		status, fail := translateOpenError(err, req.SQL)
+		s.reject(w, r, status, d.nome, fail)
 		return
 	}
 	defer it.Close()
 
-	colunas := it.Columns()
-	if nome, colide := colunaReservada(colunas); colide {
+	columns := it.Columns()
+	if name, colide := columnReservada(columns); colide {
 		// Uma coluna chamada como a chave de moldura tornaria a row
 		// indistinguível de uma linha de controle. A recusa é aqui, antes do
 		// primeiro byte, porque depois dele já não haveria como recusar nada.
-		s.recusa(w, r, http.StatusBadRequest, d.nome, protocol.ErrorDetail{
+		s.reject(w, r, http.StatusBadRequest, d.nome, protocol.ErrorDetail{
 			Code: protocol.CodeReservedColumn,
 			Message: fmt.Sprintf("a coluna de saída %q colide com a chave reservada da resposta; "+
-				"renomeie com um alias na projeção", nome),
+				"renomeie com um alias na projeção", name),
 		})
 		return
 	}
 
-	s.transmite(w, r, d, req, it, colunas, tetoDoRequest, inicio, orc)
+	s.transmite(w, r, d, req, it, columns, ceilingOfRequest, start, orc)
 }
 
 // ehJSON aceita application/json com ou sem parâmetros (charset, por exemplo).
@@ -215,7 +215,7 @@ func isJSON(ct string) bool {
 	return strings.EqualFold(strings.TrimSpace(ct), protocol.ContentTypeJSON)
 }
 
-// leRequisicao decodifica o corpo com teto de tamanho e SEM tolerar chave
+// readRequisicao decodifica o corpo com teto de tamanho e SEM tolerar chave
 // desconhecida.
 //
 // A estritez é o oposto da doutrina do nishidb.yaml, e de propósito: o arquivo
@@ -223,7 +223,7 @@ func isJSON(ct string) bool {
 // operador a manter dois arquivos, mas aqui um `maxRow` com typo aceito em
 // silêncio faria o cliente acreditar que limitou o resultado. O caminho é
 // versionado (/v1) justamente para que campo novo venha com contrato novo.
-func (s *Servidor) leRequisicao(w http.ResponseWriter, r *http.Request) (protocol.Request, *protocol.ErrorDetail, int) {
+func (s *Server) readRequisicao(w http.ResponseWriter, r *http.Request) (protocol.Request, *protocol.ErrorDetail, int) {
 	var req protocol.Request
 	r.Body = http.MaxBytesReader(w, r.Body, protocol.MaxRequestBody)
 
@@ -257,7 +257,7 @@ func (s *Servidor) leRequisicao(w http.ResponseWriter, r *http.Request) (protoco
 // servidor, não uma sugestão. Pedir mais é recusado em vez de reduzido em
 // silêncio — um clamp calado faria o cliente acreditar que recebeu tudo o que
 // pediu.
-func rowCeiling(req protocol.Request, tetoDoDataset int) (int, *protocol.ErrorDetail) {
+func rowCeiling(req protocol.Request, ceilingOfDataset int) (int, *protocol.ErrorDetail) {
 	if req.MaxRows == nil {
 		return 0, nil // sem teto próprio; vale o do dataset, aplicado pelo motor
 	}
@@ -268,17 +268,17 @@ func rowCeiling(req protocol.Request, tetoDoDataset int) (int, *protocol.ErrorDe
 			Code:    protocol.CodeBadRequest,
 			Message: fmt.Sprintf(`"maxRows" precisa ser positivo (recebido %d)`, n),
 		}
-	case n > tetoDoDataset:
+	case n > ceilingOfDataset:
 		return 0, &protocol.ErrorDetail{
 			Code: protocol.CodeMaxRowsAboveCeiling,
 			Message: fmt.Sprintf(`"maxRows" %d acima do teto efetivo do dataset (%d); peça menos ou ajuste query.maxRows`,
-				n, tetoDoDataset),
+				n, ceilingOfDataset),
 		}
 	}
 	return n, nil
 }
 
-// contextoDaConsulta resolve o prazo EFETIVO da consulta e devolve o contexto
+// contextoOfConsulta resolve o prazo EFETIVO da consulta e devolve o contexto
 // já com ele, mais o próprio prazo — que é o que decide se ela é longa.
 //
 // O request pode ALONGAR até `query.maxTimeout` e nunca além dele. Enquanto o
@@ -293,7 +293,7 @@ func rowCeiling(req protocol.Request, tetoDoDataset int) (int, *protocol.ErrorDe
 // deixar o executor pôr o prazo lá embaixo. Não é cerimônia: o executor agora
 // respeita o deadline de quem chama (ver executor.Open), então quem não puser
 // deadline aqui entrega uma consulta sem prazo nenhum.
-func (s *Servidor) contextoDaConsulta(r *http.Request, req protocol.Request, sch *schema.Compiled) (
+func (s *Server) contextoOfConsulta(r *http.Request, req protocol.Request, sch *schema.Compiled) (
 	context.Context, context.CancelFunc, time.Duration, *protocol.ErrorDetail,
 ) {
 	prazo := sch.Timeout
@@ -318,13 +318,13 @@ func (s *Servidor) contextoDaConsulta(r *http.Request, req protocol.Request, sch
 		}
 		prazo = time.Duration(ms) * time.Millisecond
 	}
-	ctx, cancela := context.WithTimeout(r.Context(), prazo)
-	return ctx, cancela, prazo, nil
+	ctx, cancel := context.WithTimeout(r.Context(), prazo)
+	return ctx, cancel, prazo, nil
 }
 
-// colunaReservada procura na projeção uma coluna com o nome da chave de
+// columnReservada procura na projeção uma coluna com o nome da chave de
 // moldura.
-func colunaReservada(cols []executor.ColMeta) (string, bool) {
+func columnReservada(cols []executor.ColMeta) (string, bool) {
 	for _, c := range cols {
 		if c.Name == protocol.FrameKey {
 			return c.Name, true
@@ -334,15 +334,15 @@ func colunaReservada(cols []executor.ColMeta) (string, bool) {
 }
 
 // transmite emite a moldura completa: schema, rows e fecho.
-func (s *Servidor) transmite(
+func (s *Server) transmite(
 	w http.ResponseWriter, r *http.Request, d *dataset, req protocol.Request,
-	it executor.RowIterator, colunas []executor.ColMeta, tetoDoRequest int, inicio time.Time,
+	it executor.RowIterator, columns []executor.ColMeta, ceilingOfRequest int, start time.Time,
 	orc *budget.PerQuery,
 ) {
 	log := s.log.Dataset(d.nome)
 
-	cols := make([]protocol.Column, len(colunas))
-	for i, c := range colunas {
+	cols := make([]protocol.Column, len(columns))
+	for i, c := range columns {
 		cols[i] = protocol.NewColumn(c.Name, c.Type, c.Nullable)
 	}
 
@@ -358,7 +358,7 @@ func (s *Servidor) transmite(
 		// O cliente sumiu antes da primeira linha. Não há a quem responder e
 		// não há dado perdido: só o registro de que a consulta não chegou a ser
 		// entregue.
-		s.met.erro(d.nome, protocol.CodeInternal)
+		s.met.err(d.nome, protocol.CodeInternal)
 		log.Warn("query.escrita_falhou", "o cliente fechou a conexão antes do schema", "erro", err.Error())
 		return
 	}
@@ -385,12 +385,12 @@ func (s *Servidor) transmite(
 	truncadoPeloRequest := false
 	for it.Next() {
 		if err := sw.WriteRow(it.Row()); err != nil {
-			s.fechaComErro(w, d, s.codigoDeErroDeEscrita(err), emitidas, err, log)
+			s.closeWithErr(w, d, s.codigoOfErrOfWrite(err), emitidas, err, log)
 			return
 		}
 		emitidas++
 
-		if tetoDoRequest > 0 && emitidas >= int64(tetoDoRequest) {
+		if ceilingOfRequest > 0 && emitidas >= int64(ceilingOfRequest) {
 			// O teto do PRÓPRIO cliente: parar aqui não é erro, é o pedido
 			// sendo atendido. O iterador fecha no defer.
 			truncadoPeloRequest = true
@@ -402,7 +402,7 @@ func (s *Servidor) transmite(
 			// chunk ao fio. Só o primeiro deixaria os bytes parados no
 			// servidor; só o segundo não teria o que entregar.
 			if err := sw.Flush(); err != nil {
-				s.fechaComErro(w, d, s.codigoDeErroDeEscrita(err), emitidas, err, log)
+				s.closeWithErr(w, d, s.codigoOfErrOfWrite(err), emitidas, err, log)
 				return
 			}
 			if flusher != nil {
@@ -412,11 +412,11 @@ func (s *Servidor) transmite(
 	}
 
 	if err := sw.Flush(); err != nil {
-		s.fechaComErro(w, d, s.codigoDeErroDeEscrita(err), emitidas, err, log)
+		s.closeWithErr(w, d, s.codigoOfErrOfWrite(err), emitidas, err, log)
 		return
 	}
 	if err := it.Err(); err != nil {
-		s.fechaComErro(w, d, codigoDeErroDeQuery(err), emitidas, err, log)
+		s.closeWithErr(w, d, codigoOfErrOfQuery(err), emitidas, err, log)
 		return
 	}
 
@@ -435,7 +435,7 @@ func (s *Servidor) transmite(
 	log.Info("query.concluida", "consulta atendida",
 		"rows", emitidas,
 		"truncado", truncadoPeloRequest,
-		"duracao_ms", time.Since(inicio).Milliseconds())
+		"duracao_ms", time.Since(start).Milliseconds())
 	// O SQL só em DEBUG: ele pode carregar literais com dado do cliente, e o
 	// §95 proíbe registrar payload por default.
 	if log.Enabled(slog.LevelDebug) {
@@ -443,13 +443,13 @@ func (s *Servidor) transmite(
 	}
 }
 
-// fechaComErro escreve o fecho de falha DEPOIS de rows já emitidas.
+// closeWithErr escreve o fecho de falha DEPOIS de rows já emitidas.
 //
 // Nunca troca o status — ele já foi enviado com o schema. É por isso que o
 // formato precisa de uma linha de fecho: sem ela, este caminho seria
 // indistinguível de um resultado que simplesmente acabou.
-func (s *Servidor) fechaComErro(w http.ResponseWriter, d *dataset, codigo string, emitidas int64, causa error, log *logging.Logger) {
-	s.met.erro(d.nome, codigo)
+func (s *Server) closeWithErr(w http.ResponseWriter, d *dataset, codigo string, emitidas int64, causa error, log *logging.Logger) {
+	s.met.err(d.nome, codigo)
 	if err := protocol.WriteLine(w, protocol.ErrorLine{
 		Nishidb: protocol.FrameError,
 		Code:    codigo,
@@ -465,24 +465,24 @@ func (s *Servidor) fechaComErro(w http.ResponseWriter, d *dataset, codigo string
 		"codigo", codigo, "rows", emitidas, "erro", causa.Error())
 }
 
-// recusa responde um erro que aconteceu ANTES da primeira linha: status HTTP de
+// reject responde um erro que aconteceu ANTES da primeira linha: status HTTP de
 // verdade e corpo JSON único.
 //
 // dataset é o nome REGISTRADO, ou datasetDesconhecido quando a falha aconteceu
 // antes de resolvê-lo — nunca o nome cru vindo do request.
-func (s *Servidor) recusa(w http.ResponseWriter, r *http.Request, status int, dataset string, falha protocol.ErrorDetail) {
-	s.met.erro(dataset, falha.Code)
+func (s *Server) reject(w http.ResponseWriter, r *http.Request, status int, dataset string, fail protocol.ErrorDetail) {
+	s.met.err(dataset, fail.Code)
 
 	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(protocol.ErrorBody{Error: falha}); err != nil {
+	if err := json.NewEncoder(w).Encode(protocol.ErrorBody{Error: fail}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo de erro", "erro", err.Error())
 	}
 	// A mensagem NÃO vai para o log: ela pode conter o texto da query, e com
 	// ele literais com dado do cliente. O código classifica, e o cliente já
 	// recebeu a prosa.
 	s.log.Warn("query.recusada", "consulta recusada antes de responder",
-		"codigo", falha.Code, "status", status, "remoto", r.RemoteAddr)
+		"codigo", fail.Code, "status", status, "remoto", r.RemoteAddr)
 }
 
 // traduzErroDeAbertura mapeia a falha do Execute — que acontece antes de
@@ -493,7 +493,7 @@ func translateOpenError(err error, sql string) (int, protocol.ErrorDetail) {
 		f := protocol.ErrorDetail{Code: protocol.CodeSyntax, Message: err.Error()}
 		var se *lexer.SyntaxError
 		if errors.As(err, &se) {
-			f.Line, f.Column = posicao(sql, se.Pos)
+			f.Line, f.Column = position(sql, se.Pos)
 			// A cláusula não suportada é um erro de sintaxe com um nome
 			// melhor, e por isso a distinção mora DENTRO deste case, num
 			// campo, e não num case próprio antes dele. Um case novo teria de
@@ -509,7 +509,7 @@ func translateOpenError(err error, sql string) (int, protocol.ErrorDetail) {
 		f := protocol.ErrorDetail{Code: protocol.CodeBind, Message: err.Error()}
 		var be *binder.Error
 		if errors.As(err, &be) {
-			f.Line, f.Column = posicao(sql, be.Pos)
+			f.Line, f.Column = position(sql, be.Pos)
 		}
 		return http.StatusBadRequest, f
 	case errors.Is(err, context.DeadlineExceeded):
@@ -527,7 +527,7 @@ func translateOpenError(err error, sql string) (int, protocol.ErrorDetail) {
 	}
 }
 
-// codigoDeErroDeEscrita classifica a falha do StreamWriter.
+// codigoOfErrOfWrite classifica a falha do StreamWriter.
 //
 // Existe porque nem toda falha de escrita é defeito do servidor. A linha que não
 // cabe no orçamento de buffer (§80) é o teto de memória sendo APLICADO, com ação
@@ -537,19 +537,19 @@ func translateOpenError(err error, sql string) (int, protocol.ErrorDetail) {
 // em silêncio: não havia nem erro para classificar.
 //
 // A recusa também alimenta o contador do PROCESSO, aqui e não no executor: é a
-// mesma doutrina de metricasDeQuery — as séries de consulta nascem no protocolo,
+// mesma doutrina de metricsOfQuery — as séries de consulta nascem no protocolo,
 // que é quem conhece requisições, e não no motor, que conhece iteradores.
-func (s *Servidor) codigoDeErroDeEscrita(err error) string {
+func (s *Server) codigoOfErrOfWrite(err error) string {
 	if errors.Is(err, executor.ErrRowTooLarge) {
-		s.met.recusaPorOrcamento()
+		s.met.rejectByBudget()
 		return protocol.CodeRowTooLarge
 	}
 	return protocol.CodeInternal
 }
 
-// codigoDeErroDeQuery classifica a falha que aparece DEPOIS das rows, no
+// codigoOfErrOfQuery classifica a falha que aparece DEPOIS das rows, no
 // it.Err().
-func codigoDeErroDeQuery(err error) string {
+func codigoOfErrOfQuery(err error) string {
 	switch {
 	case errors.Is(err, executor.ErrMaxRowsExceeded):
 		return protocol.CodeMaxRows
@@ -569,18 +569,18 @@ func codigoDeErroDeQuery(err error) string {
 	}
 }
 
-// posicao converte o offset em linha e coluna 1-based, como o CLI já faz ao
+// position converte o offset em linha e coluna 1-based, como o CLI já faz ao
 // desenhar o cursor sob o trecho ofensor.
-func posicao(sql string, pos int) (int, int) {
+func position(sql string, pos int) (int, int) {
 	if pos < 0 || pos > len(sql) {
 		return 0, 0
 	}
-	linha, inicio := 1, 0
+	row, start := 1, 0
 	for i := 0; i < pos && i < len(sql); i++ {
 		if sql[i] == '\n' {
-			linha++
-			inicio = i + 1
+			row++
+			start = i + 1
 		}
 	}
-	return linha, pos - inicio + 1
+	return row, pos - start + 1
 }

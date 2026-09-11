@@ -27,25 +27,25 @@ import (
 // de internal/server (Tasks B3/B4); esta suíte confere que o CLI monta a
 // credencial e o transporte certos, na hora certa.
 //
-// geraCertificadoCLIDeTeste duplica geraCertificadoTLSComValidade
+// generateCertCLIOfTest duplica generateCertTLSWithValidade
 // (internal/server/tls_test.go) — não dá para importar um helper de outro
 // pacote de teste (_test.go não gera símbolo exportável entre pacotes), e o
 // próprio internal/server já duplica esse gerador entre tls_test.go e
 // security_test.go pela mesma razão.
 
 const (
-	varLeitorCLI = "NISHIDB_TESTE_CLI_LEITOR"
+	varReaderCLI = "NISHIDB_TESTE_CLI_LEITOR"
 	varChefeCLI  = "NISHIDB_TESTE_CLI_CHEFE"
 
-	senhaLeitorCLI = "senha-leitor-cli-bem-forte"
-	senhaChefeCLI  = "senha-chefe-cli-bem-forte"
+	passwordReaderCLI = "senha-leitor-cli-bem-forte"
+	passwordChefeCLI  = "senha-chefe-cli-bem-forte"
 )
 
-// configComTLSEAuth combina server.tls e server.authentication no MESMO
-// bloco — bind em 127.0.0.1 (loopback, então avaliaExposicaoEAutenticacao
+// configWithTLSEAuth combina server.tls e server.authentication no MESMO
+// bloco — bind em 127.0.0.1 (loopback, então evaluateExposicaoEAuth
 // sobe de qualquer jeito), com um usuário READ e um ADMIN, no molde de
-// blocoAutenticacao (internal/server/auth_test.go).
-const configComTLSEAuth = `version: 1
+// blockAuth (internal/server/auth_test.go).
+const configWithTLSEAuth = `version: 1
 storage:
   path: %s
 datasets:
@@ -61,16 +61,16 @@ server:
     enabled: true
     users:
       - username: leitor
-        passwordEnv: ` + varLeitorCLI + `
+        passwordEnv: ` + varReaderCLI + `
         role: READ
       - username: chefe
         passwordEnv: ` + varChefeCLI + `
         role: ADMIN
 `
 
-func geraCertificadoCLIDeTeste(t *testing.T) (certPath, keyPath string) {
+func generateCertCLIOfTest(t *testing.T) (certPath, keyPath string) {
 	t.Helper()
-	chave, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func geraCertificadoCLIDeTeste(t *testing.T) (certPath, keyPath string) {
 		DNSNames:     []string{"localhost"},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &chave.PublicKey, chave)
+	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func geraCertificadoCLIDeTeste(t *testing.T) (certPath, keyPath string) {
 		t.Fatal(err)
 	}
 
-	chaveBytes, err := x509.MarshalECPrivateKey(chave)
+	keyBytes, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func geraCertificadoCLIDeTeste(t *testing.T) (certPath, keyPath string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: chaveBytes}); err != nil {
+	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes}); err != nil {
 		t.Fatal(err)
 	}
 	if err := keyOut.Close(); err != nil {
@@ -121,22 +121,22 @@ func geraCertificadoCLIDeTeste(t *testing.T) (certPath, keyPath string) {
 	return certPath, keyPath
 }
 
-// novoAmbienteRemotoComTLSEAuth monta um ambiente remoto com TLS e
+// newEnvRemoteWithTLSEAuth monta um ambiente remoto com TLS e
 // autenticação de verdade — devolve também o caminho do certificado, que os
 // testes usam como --tls-ca.
-func novoAmbienteRemotoComTLSEAuth(t *testing.T) (a *ambienteRemoto, certPath string) {
+func newEnvRemoteWithTLSEAuth(t *testing.T) (a *envRemote, certPath string) {
 	t.Helper()
-	amb := novoAmbiente(t)
+	amb := newEnv(t)
 	porta := portaLivre(t)
-	certPath, keyPath := geraCertificadoCLIDeTeste(t)
-	t.Setenv(varLeitorCLI, senhaLeitorCLI)
-	t.Setenv(varChefeCLI, senhaChefeCLI)
-	corpo := fmt.Sprintf(configComTLSEAuth,
+	certPath, keyPath := generateCertCLIOfTest(t)
+	t.Setenv(varReaderCLI, passwordReaderCLI)
+	t.Setenv(varChefeCLI, passwordChefeCLI)
+	corpo := fmt.Sprintf(configWithTLSEAuth,
 		filepath.Join(amb.dir, "dados"), filepath.Join(amb.dir, "datasets"), porta, certPath, keyPath)
 	if err := os.WriteFile(amb.config, []byte(corpo), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return &ambienteRemoto{ambiente: amb, porta: porta}, certPath
+	return &envRemote{env: amb, porta: porta}, certPath
 }
 
 // ---------------------------------------------------------------- caminho feliz
@@ -145,21 +145,21 @@ func novoAmbienteRemotoComTLSEAuth(t *testing.T) (a *ambienteRemoto, certPath st
 // NISHIDB_PASSWORD, validando o certificado do servidor por --tls-ca — as
 // TRÊS pontas do B6 (credencial, TLS, sem --insecure) numa consulta real.
 func TestQueryRemotaComTLSEAuthFuncionaDePontaAPonta(t *testing.T) {
-	a, certPath := novoAmbienteRemotoComTLSEAuth(t)
-	sobeComEntrada(t, a, corpus(t, 20))
+	a, certPath := newEnvRemoteWithTLSEAuth(t)
+	risesWithEntry(t, a, corpus(t, 20))
 
-	t.Setenv("NISHIDB_PASSWORD", senhaLeitorCLI)
-	code := a.roda("query", "--server", "https://"+a.endereco(), "--dataset", "radius_sessions",
+	t.Setenv("NISHIDB_PASSWORD", passwordReaderCLI)
+	code := a.run("query", "--server", "https://"+a.endereco(), "--dataset", "radius_sessions",
 		"--user", "leitor", "--tls-ca", certPath,
 		"SELECT id FROM radius_sessions LIMIT 3")
 	if code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}
-	linhas := strings.Split(strings.TrimSpace(a.stdout.String()), "\n")
-	if len(linhas) != 3 {
-		t.Fatalf("linhas = %d, quer 3:\n%s", len(linhas), a.stdout.String())
+	rows := strings.Split(strings.TrimSpace(a.stdout.String()), "\n")
+	if len(rows) != 3 {
+		t.Fatalf("linhas = %d, quer 3:\n%s", len(rows), a.stdout.String())
 	}
-	for _, l := range linhas {
+	for _, l := range rows {
 		if !strings.HasPrefix(l, `{"id":"`) {
 			t.Fatalf("linha inesperada no stdout: %s", l)
 		}
@@ -171,14 +171,14 @@ func TestQueryRemotaComTLSEAuthFuncionaDePontaAPonta(t *testing.T) {
 // vale para os três, já que a suíte de operation_test.go trava o resto do
 // contrato deles sem credencial.
 func TestStatusRemotoComTLSEAuthFuncionaComPasswordFile(t *testing.T) {
-	a, certPath := novoAmbienteRemotoComTLSEAuth(t)
-	sobeComEntrada(t, a, corpus(t, 5))
+	a, certPath := newEnvRemoteWithTLSEAuth(t)
+	risesWithEntry(t, a, corpus(t, 5))
 
 	arq := filepath.Join(a.dir, "senha-leitor.txt")
-	if err := os.WriteFile(arq, []byte(senhaLeitorCLI+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(arq, []byte(passwordReaderCLI+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code := a.roda("status", "--server", "https://"+a.endereco(), "--tls-ca", certPath,
+	code := a.run("status", "--server", "https://"+a.endereco(), "--tls-ca", certPath,
 		"--user", "leitor", "--password-file", arq)
 	if code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
@@ -187,7 +187,7 @@ func TestStatusRemotoComTLSEAuthFuncionaComPasswordFile(t *testing.T) {
 		t.Errorf("a saída não nomeia o dataset:\n%s", a.stdout.String())
 	}
 	saida := a.stdout.String() + a.stderr.String()
-	if strings.Contains(saida, senhaLeitorCLI) {
+	if strings.Contains(saida, passwordReaderCLI) {
 		t.Fatalf("a senha (lida de --password-file) vazou na saída:\n%s", saida)
 	}
 }
@@ -197,14 +197,14 @@ func TestStatusRemotoComTLSEAuthFuncionaComPasswordFile(t *testing.T) {
 // (mutation_test.go, Task B5) já documenta: tentativas imediatas até 200,
 // sem sleep de corrida.
 func TestCompactRemotoComUsuarioAdminFuncionaDePontaAPonta(t *testing.T) {
-	a, certPath := novoAmbienteRemotoComTLSEAuth(t)
-	sobeComEntrada(t, a, corpus(t, 5))
+	a, certPath := newEnvRemoteWithTLSEAuth(t)
+	risesWithEntry(t, a, corpus(t, 5))
 
-	t.Setenv("NISHIDB_PASSWORD", senhaChefeCLI)
+	t.Setenv("NISHIDB_PASSWORD", passwordChefeCLI)
 	const tentativas = 200
 	var code int
 	for i := 0; i < tentativas; i++ {
-		code = a.roda("compact", "--server", "https://"+a.endereco(), "--tls-ca", certPath, "--user", "chefe")
+		code = a.run("compact", "--server", "https://"+a.endereco(), "--tls-ca", certPath, "--user", "chefe")
 		if code == 0 {
 			break
 		}
@@ -220,10 +220,10 @@ func TestCompactRemotoComUsuarioAdminFuncionaDePontaAPonta(t *testing.T) {
 // ---------------------------------------------------------------- recusas
 
 func TestQueryRemotaComTLSSemCredencialSaiComExit1EMensagemDoServidor(t *testing.T) {
-	a, certPath := novoAmbienteRemotoComTLSEAuth(t)
-	sobeComEntrada(t, a, corpus(t, 5))
+	a, certPath := newEnvRemoteWithTLSEAuth(t)
+	risesWithEntry(t, a, corpus(t, 5))
 
-	code := a.roda("query", "--server", "https://"+a.endereco(), "--dataset", "radius_sessions",
+	code := a.run("query", "--server", "https://"+a.endereco(), "--dataset", "radius_sessions",
 		"--tls-ca", certPath, "SELECT id FROM radius_sessions")
 	if code != 1 {
 		t.Fatalf("exit = %d, quer 1: %s", code, a.stderr.String())
@@ -235,13 +235,13 @@ func TestQueryRemotaComTLSSemCredencialSaiComExit1EMensagemDoServidor(t *testing
 
 // compact exige ADMIN; um usuário READ válido é AUTENTICADO mas não
 // AUTORIZADO — 403, exit 1, mensagem nomeando o papel (internal/server/
-// auth.go:recusaAutorizacao).
+// auth.go:rejectAuthorization).
 func TestCompactRemotoComUsuarioReadSaiComExit1EMencionaOPapel(t *testing.T) {
-	a, certPath := novoAmbienteRemotoComTLSEAuth(t)
-	sobeComEntrada(t, a, corpus(t, 5))
+	a, certPath := newEnvRemoteWithTLSEAuth(t)
+	risesWithEntry(t, a, corpus(t, 5))
 
-	t.Setenv("NISHIDB_PASSWORD", senhaLeitorCLI)
-	code := a.roda("compact", "--server", "https://"+a.endereco(), "--tls-ca", certPath, "--user", "leitor")
+	t.Setenv("NISHIDB_PASSWORD", passwordReaderCLI)
+	code := a.run("compact", "--server", "https://"+a.endereco(), "--tls-ca", certPath, "--user", "leitor")
 	if code != 1 {
 		t.Fatalf("exit = %d, quer 1: %s", code, a.stderr.String())
 	}
@@ -257,10 +257,10 @@ func TestCompactRemotoComUsuarioReadSaiComExit1EMencionaOPapel(t *testing.T) {
 // an HTTPS server." cru, e a mensagem do comando precisa virar uma dica
 // acionável em vez do genérico "sem corpo legível".
 func TestDicaDeEsquemaQuandoAPortaFalaTLSMasOClienteUsaHTTP(t *testing.T) {
-	a, _ := novoAmbienteRemotoComTLSEAuth(t)
-	sobeComEntrada(t, a, corpus(t, 5))
+	a, _ := newEnvRemoteWithTLSEAuth(t)
+	risesWithEntry(t, a, corpus(t, 5))
 
-	code := a.roda("status", "--server", a.endereco()) // sem https://
+	code := a.run("status", "--server", a.endereco()) // sem https://
 	if code != 1 {
 		t.Fatalf("exit = %d, quer 1: %s", code, a.stderr.String())
 	}
@@ -280,24 +280,24 @@ func TestDicaDeEsquemaQuandoAPortaFalaTLSMasOClienteUsaHTTP(t *testing.T) {
 // --server aponta, sempre responde 302) e "alvo" (o destino do Location),
 // que precisa NUNCA ser alcançado.
 func TestComandoRemotoNaoSegueRedirectENuncaReenviaCredencial(t *testing.T) {
-	var chamadasAlvo int32
-	alvo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&chamadasAlvo, 1)
+	var chamadasTarget int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&chamadasTarget, 1)
 		if auth := r.Header.Get("Authorization"); auth != "" {
 			t.Errorf("o alvo do redirect recebeu Authorization (%q) — não deveria nem ter sido alcançado", auth)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer alvo.Close()
+	defer target.Close()
 
-	origem := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, alvo.URL+"/v1/stats", http.StatusFound)
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/v1/stats", http.StatusFound)
 	}))
-	defer origem.Close()
+	defer source.Close()
 
-	a := novoAmbiente(t)
+	a := newEnv(t)
 	t.Setenv("NISHIDB_PASSWORD", "irrelevante-o-servidor-de-mentira-nao-valida-nada")
-	code := a.roda("status", "--server", origem.URL, "--user", "alguem")
+	code := a.run("status", "--server", source.URL, "--user", "alguem")
 	if code != 1 {
 		t.Fatalf("exit = %d, quer 1: %s", code, a.stderr.String())
 	}
@@ -307,7 +307,7 @@ func TestComandoRemotoNaoSegueRedirectENuncaReenviaCredencial(t *testing.T) {
 	if !strings.Contains(a.stderr.String(), "não redireciona") {
 		t.Fatalf("a mensagem não afirma a postura de recusa:\n%s", a.stderr.String())
 	}
-	if n := atomic.LoadInt32(&chamadasAlvo); n != 0 {
+	if n := atomic.LoadInt32(&chamadasTarget); n != 0 {
 		t.Fatalf("o alvo do redirect foi alcançado %d vez(es): o cliente seguiu o redirect em vez de recusar", n)
 	}
 }
@@ -343,7 +343,7 @@ func TestComandoRemotoNaoSegueRedirectENuncaReenviaCredencial(t *testing.T) {
 // da stdlib recusa com "flag provided but not defined" antes de qualquer
 // requisição de rede.
 func TestNenhumComandoRemotoAceitaFlagDePassword(t *testing.T) {
-	a := novoAmbienteRemoto(t, 10)
+	a := newEnvRemote(t, 10)
 	casos := [][]string{
 		{"query", "--server", a.endereco(), "--dataset", "radius_sessions", "--password", "x", "SELECT 1"},
 		{"status", "--server", a.endereco(), "--password", "x"},
@@ -353,7 +353,7 @@ func TestNenhumComandoRemotoAceitaFlagDePassword(t *testing.T) {
 		{"checkpoint", "--server", a.endereco(), "--password", "x"},
 	}
 	for _, args := range casos {
-		if code := a.roda(args...); code != 1 {
+		if code := a.run(args...); code != 1 {
 			t.Errorf("%v: exit = %d, quer 1 (--password não pode ser uma flag aceita)", args, code)
 		}
 		if !strings.Contains(a.stderr.String(), "password") {
@@ -366,7 +366,7 @@ func TestNenhumComandoRemotoAceitaFlagDePassword(t *testing.T) {
 // "as duas fontes presentes ao mesmo tempo" — o caso mais fácil de vazar por
 // engano, porque as duas já foram lidas antes de a validação recusar.
 func TestSenhaNuncaApareceNaMensagemDeDuasFontesAoMesmoTempo(t *testing.T) {
-	a := novoAmbienteRemoto(t, 10)
+	a := newEnvRemote(t, 10)
 	segredo := "segredo-nao-pode-vazar-8k2j91"
 	arq := filepath.Join(a.dir, "senha.txt")
 	if err := os.WriteFile(arq, []byte(segredo+"\n"), 0o600); err != nil {
@@ -374,7 +374,7 @@ func TestSenhaNuncaApareceNaMensagemDeDuasFontesAoMesmoTempo(t *testing.T) {
 	}
 	t.Setenv("NISHIDB_PASSWORD", segredo)
 
-	code := a.roda("status", "--server", a.endereco(), "--user", "chefe", "--password-file", arq)
+	code := a.run("status", "--server", a.endereco(), "--user", "chefe", "--password-file", arq)
 	if code != 1 {
 		t.Fatalf("exit = %d, quer 1: %s", code, a.stderr.String())
 	}
@@ -387,7 +387,7 @@ func TestSenhaNuncaApareceNaMensagemDeDuasFontesAoMesmoTempo(t *testing.T) {
 // ---------------------------------------------------------------- precedência de fontes
 
 func TestRegrasDePrecedenciaDeFontesDeSenha(t *testing.T) {
-	a := novoAmbienteRemoto(t, 10)
+	a := newEnvRemote(t, 10)
 	arq := filepath.Join(a.dir, "senha.txt")
 	if err := os.WriteFile(arq, []byte("abc\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -409,7 +409,7 @@ func TestRegrasDePrecedenciaDeFontesDeSenha(t *testing.T) {
 			if c.withEnv {
 				t.Setenv("NISHIDB_PASSWORD", "abc")
 			}
-			code := a.roda(c.args...)
+			code := a.run(c.args...)
 			if code != 1 {
 				t.Fatalf("exit = %d, quer 1: %s", code, a.stderr.String())
 			}
@@ -424,8 +424,8 @@ func TestRegrasDePrecedenciaDeFontesDeSenha(t *testing.T) {
 // nomeando a flag — não um "servidor inalcançável" genérico, que mandaria o
 // operador investigar a rede em vez do próprio caminho que digitou.
 func TestTLSCAInexistenteFalhaComMensagemClara(t *testing.T) {
-	a := novoAmbienteRemoto(t, 10)
-	code := a.roda("status", "--server", a.endereco(), "--tls-ca", filepath.Join(a.dir, "nao-existe.pem"))
+	a := newEnvRemote(t, 10)
+	code := a.run("status", "--server", a.endereco(), "--tls-ca", filepath.Join(a.dir, "nao-existe.pem"))
 	if code != 1 {
 		t.Fatalf("exit = %d, quer 1: %s", code, a.stderr.String())
 	}
@@ -437,8 +437,8 @@ func TestTLSCAInexistenteFalhaComMensagemClara(t *testing.T) {
 // ---------------------------------------------------------------- --help
 
 func TestOUsoAnunciaCredencialETLS(t *testing.T) {
-	a := novoAmbiente(t)
-	if code := a.roda("--help"); code != 0 {
+	a := newEnv(t)
+	if code := a.run("--help"); code != 0 {
 		t.Fatalf("--help saiu com %d", code)
 	}
 	for _, trecho := range []string{"--user", "--password-file", "NISHIDB_PASSWORD", "--tls-ca"} {

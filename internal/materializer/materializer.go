@@ -51,19 +51,19 @@ type Store interface {
 type Action uint8
 
 const (
-	// ActionCreated: a key não existia; nasceu uma row.
+	// ActionCreated a key não existia; nasceu uma row.
 	ActionCreated Action = iota
-	// ActionUpdated: merge sobre o estado corrente (mesmo rowId).
+	// ActionUpdated merge sobre o estado corrente (mesmo rowId).
 	ActionUpdated
-	// ActionReplaced: o evento substituiu o estado corrente (mode replace).
+	// ActionReplaced o evento substituiu o estado corrente (mode replace).
 	ActionReplaced
-	// ActionStale: sequence menor ou igual à corrente — descartado sem
+	// ActionStale sequence menor ou igual à corrente — descartado sem
 	// nenhuma escrita (§25).
 	ActionStale
-	// ActionSkipped: evento ruim (uma das 5 categorias §101). A ingestão
+	// ActionSkipped evento ruim (uma das 5 categorias §101). A ingestão
 	// segue no próximo evento.
 	ActionSkipped
-	// ActionFailed: falha que NÃO é do evento — writer em modo falho, erro do
+	// ActionFailed falha que NÃO é do evento — writer em modo falho, erro do
 	// store ou inconsistência interna. Exige decisão do caller.
 	ActionFailed
 )
@@ -94,7 +94,7 @@ const (
 	CategoryInvalidKey
 	CategoryInvalidSequence
 	CategoryTypeConversion
-	// CategoryEventTooLarge: alguma parte do evento excedeu um teto de
+	// CategoryEventTooLarge alguma parte do evento excedeu um teto de
 	// FORMATO do storage — valor acima de types.MaxIndexedValueBytes (64 KiB)
 	// num campo com bitmap, key acima de MaxKeySize, record acima de
 	// MaxRecordSize.
@@ -109,16 +109,16 @@ const (
 	// evento envenenado). Aqui a política do §101 governa, como em qualquer
 	// outro evento ruim.
 	CategoryEventTooLarge
-	// CategoryWriterFailed: writer em modo falho (sticky, §14.14). Terminal:
+	// CategoryWriterFailed writer em modo falho (sticky, §14.14). Terminal:
 	// reprocessar o evento é inútil até o dataset ser reaberto.
 	CategoryWriterFailed
-	// CategoryStorage: erro do store que não é modo falho e não é teto de
+	// CategoryStorage erro do store que não é modo falho e não é teto de
 	// formato — argumento inválido, leitura corrompida, falha do dicionário.
 	// Indica bug nosso ou dataset avariado, e por isso NÃO é governado pela
 	// política de evento: quem consome o resultado tem de parar a ingestão,
 	// nunca descartar e seguir.
 	CategoryStorage
-	// CategoryInternal: inconsistência detectada pelo próprio materializer
+	// CategoryInternal inconsistência detectada pelo próprio materializer
 	// (ErrInternalState).
 	CategoryInternal
 	// CategoryFieldsExhausted é o dataset que alcançou schema.maxCols tendo
@@ -201,24 +201,24 @@ type Metrics struct {
 	failed   atomic.Int64
 	byCat    [numCategories]atomic.Int64
 
-	// porRegra conta quantas escritas cada regra de TTL decidiu, e semRegra
+	// byRegra conta quantas escritas cada regra de TTL decidiu, e withoutRegra
 	// as que não casaram com nenhuma. São a resposta para "qual regra está
 	// pegando o quê" — sem eles, um `when` que nunca casa é indistinguível de
 	// um que casa sempre, e os dois são erros de configuração comuns.
-	porRegra []atomic.Int64
-	semRegra atomic.Int64
+	byRegra      []atomic.Int64
+	withoutRegra atomic.Int64
 	// congeladasCapturadas conta a CAPTURA (o valor entrou no patch); a
 	// PRESERVAÇÃO (o merge segurou o anterior) e os efeitos da soma vivem em
 	// efeitos, porque quem os enxerga é o merge. Captura sem preservação é
 	// coluna que nunca congelou.
 	congeladasCapturadas atomic.Int64
-	efeitos              efeitosDoMerge
+	efeitos              efeitosOfMerge
 
-	// histLinhas conta as linhas gravadas na tabela irmã e histDescartadas os
+	// histRows conta as linhas gravadas na tabela irmã e histDescartadas os
 	// eventos que não viraram linha nenhuma. Os dois juntos são o que diz se
 	// o histórico está COMPLETO — e é a pergunta que importa numa tabela cuja
 	// razão de existir é servir de evidência.
-	histLinhas      atomic.Int64
+	histRows        atomic.Int64
 	histDescartadas atomic.Int64
 	histDegradado   atomic.Bool
 
@@ -244,10 +244,10 @@ type MetricsSnapshot struct {
 	FailedTotal int64
 	ByCategory  [numCategories]int64
 
-	// RegrasCasadas é indexada pela ORDEM das regras no YAML, e SemRegra são
+	// RegrasCasadas é indexada pela ORDEM das regras no YAML, e WithoutRegra são
 	// as escritas que não casaram com nenhuma. Vazia num dataset sem regras.
 	RegrasCasadas []int64
-	SemRegra      int64
+	WithoutRegra  int64
 	// CongeladasCapturadas e CongeladasPreservadas contam as duas metades do
 	// congelamento: a entry emitida na ingestão e o valor anterior segurado
 	// pelo merge.
@@ -259,12 +259,12 @@ type MetricsSnapshot struct {
 	Acumuladas int64
 	Saturadas  int64
 
-	// HistoricoLinhas e HistoricoDescartadas contam as duas metades da tabela
-	// irmã; HistoricoDegradado diz se ela parou de receber. Zeradas no dataset
+	// HistoryRows e HistoryDescartadas contam as duas metades da tabela
+	// irmã; HistoryDegradado diz se ela parou de receber. Zeradas no dataset
 	// que não declara `history`.
-	HistoricoLinhas      int64
-	HistoricoDescartadas int64
-	HistoricoDegradado   bool
+	HistoryRows        int64
+	HistoryDescartadas int64
+	HistoryDegradado   bool
 
 	// DecodeSerialTotal são os eventos que o writer teve de decodificar de
 	// novo, pelo caminho completo, porque o decode somente-leitura alcançou uma
@@ -294,7 +294,7 @@ type Materializer struct {
 	// histBuf é reutilizado entre eventos como os demais buffers — o payload
 	// do histórico é montado uma vez por evento, e alocá-lo a cada um
 	// dobraria o custo de GC do caminho quente para a tabela de debug.
-	hist    EscritorDeHistorico
+	hist    EscritorOfHistory
 	histRaw *schema.CompiledField
 	histBuf []byte
 	// histCausa é a degradação STICKY do histórico. Não é atômico porque
@@ -337,12 +337,12 @@ type Materializer struct {
 func New(c *schema.Compiled, s Store) (*Materializer, error) {
 	m := &Materializer{schema: c, store: s, agora: time.Now}
 	if len(c.TTLRules) > 0 {
-		regras, err := predicate.CompilaRegras(c.TTLRules, c)
+		regras, err := predicate.CompileRegras(c.TTLRules, c)
 		if err != nil {
 			return nil, err
 		}
 		m.regras = regras
-		m.metrics.porRegra = make([]atomic.Int64, len(regras))
+		m.metrics.byRegra = make([]atomic.Int64, len(regras))
 		m.slots = make([][]predicate.Slot, len(regras))
 		for i := range regras {
 			m.slots[i] = predicate.NovosSlots(regras[i].Slots.IDs)
@@ -374,20 +374,20 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 	for i := range s.ByCategory {
 		s.ByCategory[i] = m.metrics.byCat[i].Load()
 	}
-	if n := len(m.metrics.porRegra); n > 0 {
+	if n := len(m.metrics.byRegra); n > 0 {
 		s.RegrasCasadas = make([]int64, n)
-		for i := range m.metrics.porRegra {
-			s.RegrasCasadas[i] = m.metrics.porRegra[i].Load()
+		for i := range m.metrics.byRegra {
+			s.RegrasCasadas[i] = m.metrics.byRegra[i].Load()
 		}
 	}
-	s.SemRegra = m.metrics.semRegra.Load()
+	s.WithoutRegra = m.metrics.withoutRegra.Load()
 	s.CongeladasCapturadas = m.metrics.congeladasCapturadas.Load()
 	s.CongeladasPreservadas = m.metrics.efeitos.congeladas.Load()
 	s.Acumuladas = m.metrics.efeitos.acumuladas.Load()
 	s.Saturadas = m.metrics.efeitos.saturadas.Load()
-	s.HistoricoLinhas = m.metrics.histLinhas.Load()
-	s.HistoricoDescartadas = m.metrics.histDescartadas.Load()
-	s.HistoricoDegradado = m.metrics.histDegradado.Load()
+	s.HistoryRows = m.metrics.histRows.Load()
+	s.HistoryDescartadas = m.metrics.histDescartadas.Load()
+	s.HistoryDegradado = m.metrics.histDegradado.Load()
 	s.DecodeSerialTotal = m.metrics.decodeSerial.Load()
 	// events é lido por ÚLTIMO, de propósito: o Aplica o incrementa na ENTRADA
 	// e o desfecho na SAÍDA, então ler events primeiro deixaria o writer
@@ -411,7 +411,7 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 // Failed para o que não é culpa do evento (com Fatal marcando o writer em
 // modo falho, quando o caller precisa parar de vez).
 func (m *Materializer) Apply(event []byte) ApplyResult {
-	m.Decodifica(&m.patch, event)
+	m.Decode(&m.patch, event)
 	return m.Aplica(&m.patch)
 }
 
@@ -423,7 +423,7 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 // vale para o Materializer: pertence à goroutine do writer único (§28) e
 // reutiliza prevBuf, outBuf e histBuf entre eventos.
 //
-// O contador de EVENTOS vive aqui, e não no Decodifica, e isso não é
+// O contador de EVENTOS vive aqui, e não no Decode, e isso não é
 // arrumação. `nishidb_ingest_events_total` é o sinal de progresso que o
 // watchdog da ingestão consulta: contado no decode, um writer morto com N
 // decodificadores ocupados publicaria um contador subindo — e o watchdog, que
@@ -431,8 +431,8 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 // disparia. O contador tem de medir o que ATRAVESSOU o gargalo, não o que
 // entrou nele.
 func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
-	if d.precisaDoWriter {
-		d = m.reprocessa(d.evento)
+	if d.precisaOfWriter {
+		d = m.reprocessa(d.event)
 	}
 	// As contagens por coluna são executadas AQUI, e não dentro do Parse: o
 	// evento reprocessado passa pelo parse duas vezes, e contar lá dobraria as
@@ -444,14 +444,14 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	d.aplicaContagens(&m.metrics)
 	m.metrics.events.Add(1)
 
-	if err := d.erro; err != nil {
+	if err := d.err; err != nil {
 		res := m.failure(err)
 		// Evento RUIM vai para o histórico com `_raw`, se ele existir: é o
 		// ponto cego que a coluna existe para fechar. Falha de INFRA não vai —
 		// não é o evento que está errado, e gravá-lo faria o histórico
 		// registrar como dado ruim o que é problema de disco nosso.
 		if res.Category.BadEvent() {
-			m.apendaEventoRuimNoHistorico(d.evento)
+			m.apendaEventRuimInHistory(d.event)
 		}
 		return res
 	}
@@ -462,7 +462,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	// distintos dentro de uma escrita só, que é o que
 	// TestOInstanteEhOMesmoParaOEventoInteiro trava.
 	d.carimbaRelogio(m.schema, m.agora().UnixMilli())
-	m.apendaNoHistorico(d)
+	m.apendaInHistory(d)
 
 	var (
 		presenca types.Presence
@@ -492,7 +492,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	// estado anterior, que o Parse não tem, e a entry precisa entrar no patch
 	// antes de o payload novo ser montado.
 	if m.schema.TTLField != nil {
-		dur, err := m.duracaoDe(m.prevRec.Payload, d.entries)
+		dur, err := m.durationOf(m.prevRec.Payload, d.entries)
 		if err != nil {
 			return m.failure(err)
 		}

@@ -20,17 +20,17 @@ import (
 // o # HELP. Por isso o teste raspa a saída de verdade em vez de perguntar ao
 // registry, que responderia que a família existe.
 func TestSeriesDeRecusaDeQueryNascemComZero(t *testing.T) {
-	srv := servidorComDados(t, 4, blocoPadrao)
-	amostras := coletaAmostras(t, srv)
+	srv := serverWithData(t, 4, blockPadrao)
+	samples := coletaSamples(t, srv)
 
 	for _, serie := range []string{
 		metrics.MetQueryLongRejectedTotal,
 		metrics.MetQueryBudgetRejectedTotal,
 	} {
 		var achada *amostraExposta
-		for i := range amostras {
-			if amostras[i].Nome == serie {
-				achada = &amostras[i]
+		for i := range samples {
+			if samples[i].Name == serie {
+				achada = &samples[i]
 				break
 			}
 		}
@@ -40,8 +40,8 @@ func TestSeriesDeRecusaDeQueryNascemComZero(t *testing.T) {
 				"confundir 'nunca recusou' com 'o alvo caiu'", serie)
 			continue
 		}
-		if achada.Valor != 0 {
-			t.Errorf("%s = %v num servidor que não recusou nada, quer 0", serie, achada.Valor)
+		if achada.Value != 0 {
+			t.Errorf("%s = %v num servidor que não recusou nada, quer 0", serie, achada.Value)
 		}
 		if achada.Tipo != metrics.TypeCounter {
 			t.Errorf("%s tem de ser contador (só sobe), é %v", serie, achada.Tipo)

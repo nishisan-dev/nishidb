@@ -66,30 +66,30 @@ func (p *sqlPool) MedeVarreduraCompleta() (time.Duration, int64, error) {
 	if p.eng == nil {
 		return 0, 0, nil
 	}
-	saida := &contador{}
+	saida := &counter{}
 	// Orçamento do §80 com os defaults do produto: o benchmark tem de pagar o
 	// MESMO caminho que o servidor paga, senão ele mede um writer que não
 	// existe em produção.
-	w := executor.NewStreamWriter(saida, 8<<10, orcamentoDoBench())
+	w := executor.NewStreamWriter(saida, 8<<10, budgetOfBench())
 	início := time.Now()
 	// A varredura completa usa um predicado que não casa nada de propósito, e
-	// por isso o oráculo dela é ZERO linhas — conferido aqui, já que ela roda
+	// por isso o oráculo dela é ZERO rows — conferido aqui, já que ela roda
 	// fora do rodízio.
-	linhas, err := p.roda(w, varreduraCompleta, nil)
-	if err == nil && linhas != 0 {
-		err = fmt.Errorf("varredura completa devolveu %d linhas; o predicado não casa nada e o oráculo é 0", linhas)
+	rows, err := p.run(w, varreduraCompleta, nil)
+	if err == nil && rows != 0 {
+		err = fmt.Errorf("varredura completa devolveu %d linhas; o predicado não casa nada e o oráculo é 0", rows)
 	}
 	return time.Since(início), saida.bytes, err
 }
 
-// orcamentoDoBench é o orçamento de memória de consulta (§80) nos defaults do
+// budgetOfBench é o orçamento de memória de consulta (§80) nos defaults do
 // produto, um por leitor.
 //
 // Um por leitor, e não um Global compartilhado, porque o benchmark mede
 // LATÊNCIA DE ROTA: com um Global só, a contenção do CAS entre os leitores
 // entraria na medição e seria lida como custo da consulta. O que importa aqui é
 // que o writer pague o mesmo caminho de código que paga em produção.
-func orcamentoDoBench() *budget.PerQuery {
+func budgetOfBench() *budget.PerQuery {
 	p := budget.NewGlobal(512 << 20).Query(4 << 20)
 	// O retorno é IGNORADO de propósito, e o `_ =` diz isso: um Global de
 	// 512 MiB comporta o primeiro Admite de 4 MiB por construção, e o benchmark
@@ -137,8 +137,8 @@ func startSQLReaders(cfg Config, st *storage.Store, c *schema.Compiled, keys [][
 			// Buffer de saída próprio por goroutine: o NDJSON é serializado de
 			// verdade, senão a medição não inclui o encoder — que é parte do
 			// caminho que o usuário paga.
-			saida := &contador{}
-			w := executor.NewStreamWriter(saida, 8<<10, orcamentoDoBench())
+			saida := &counter{}
+			w := executor.NewStreamWriter(saida, 8<<10, budgetOfBench())
 			n := id
 			for {
 				select {
@@ -152,13 +152,13 @@ func startSQLReaders(cfg Config, st *storage.Store, c *schema.Compiled, keys [][
 					params = []types.Value{{Type: types.TypeString, Bytes: keys[n%len(keys)]}}
 				}
 				início := time.Now()
-				linhas, err := p.roda(w, rotasSQL[rota].sql, params)
+				rows, err := p.run(w, rotasSQL[rota].sql, params)
 				p.lat[rota].add(time.Since(início))
 				if err != nil {
 					p.mu.Lock()
 					p.erros++
 					p.mu.Unlock()
-				} else if linhas != rotasSQL[rota].linhas {
+				} else if rows != rotasSQL[rota].linhas {
 					// O ORÁCULO. Contado, e não abortado: uma rodada de
 					// benchmark que morre no primeiro desvio não diz QUANTAS
 					// consultas erraram nem se o erro é sistemático.
@@ -171,25 +171,25 @@ func startSQLReaders(cfg Config, st *storage.Store, c *schema.Compiled, keys [][
 	return p
 }
 
-// roda executa uma consulta e SERIALIZA o resultado, para que a medição
+// run executa uma consulta e SERIALIZA o resultado, para que a medição
 // inclua o encoder.
-func (p *sqlPool) roda(w *executor.StreamWriter, sql string, params []types.Value) (int64, error) {
+func (p *sqlPool) run(w *executor.StreamWriter, sql string, params []types.Value) (int64, error) {
 	it, err := p.eng.Execute(context.Background(), "radius_sessions", sql, params)
 	if err != nil {
 		return 0, err
 	}
 	defer it.Close()
-	var linhas int64
+	var rows int64
 	for it.Next() {
 		if err := w.WriteRow(it.Row()); err != nil {
-			return linhas, err
+			return rows, err
 		}
-		linhas++
+		rows++
 	}
 	if err := w.Flush(); err != nil {
-		return linhas, err
+		return rows, err
 	}
-	return linhas, it.Err()
+	return rows, it.Err()
 }
 
 func (p *sqlPool) stop() ([]QueryStats, int64) {
@@ -208,15 +208,15 @@ func (p *sqlPool) stop() ([]QueryStats, int64) {
 	return out, p.erros
 }
 
-// contador descarta os bytes e conta: o custo do io.Writer não pode entrar na
+// counter descarta os bytes e conta: o custo do io.Writer não pode entrar na
 // medição da query, mas o volume produzido é dado de relatório.
-type contador struct{ bytes int64 }
+type counter struct{ bytes int64 }
 
-func (c *contador) Write(p []byte) (int, error) {
+func (c *counter) Write(p []byte) (int, error) {
 	c.bytes += int64(len(p))
 	return len(p), nil
 }
 
-var _ fmt.Stringer = (*contador)(nil)
+var _ fmt.Stringer = (*counter)(nil)
 
-func (c *contador) String() string { return fmt.Sprintf("%d bytes", c.bytes) }
+func (c *counter) String() string { return fmt.Sprintf("%d bytes", c.bytes) }

@@ -13,8 +13,8 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
 )
 
-// matDoGolden monta um materializer sobre o YAML do golden, com relógio fixo.
-func matDoGolden(t testing.TB) *materializer.Materializer {
+// matOfGolden monta um materializer sobre o YAML do golden, com relógio fixo.
+func matOfGolden(t testing.TB) *materializer.Materializer {
 	t.Helper()
 	spec, err := schema.Parse([]byte(goldenYAML), schema.BuiltinDefaults)
 	if err != nil {
@@ -42,7 +42,7 @@ func matDoGolden(t testing.TB) *materializer.Materializer {
 // no StreamWriter, com o mesmo remédio: soltar o ARRAY, porque comprimento não
 // é o que ocupa memória.
 func TestEventoGrandeNaoPrendeMemoriaNoSlot(t *testing.T) {
-	mat := matDoGolden(t)
+	mat := matOfGolden(t)
 	e := newPipeline(4)
 	ctx := context.Background()
 
@@ -53,7 +53,7 @@ func TestEventoGrandeNaoPrendeMemoriaNoSlot(t *testing.T) {
 	const limiar = 64 << 10
 	aplica := func(seq int64, ev string) {
 		d := e.reserva(seq)
-		mat.Decodifica(d, []byte(ev))
+		mat.Decode(d, []byte(ev))
 		e.publica(seq, &kgo.Record{Offset: seq}, nil)
 		s, ok, _ := e.consome(ctx, nil)
 		if !ok {
@@ -62,14 +62,14 @@ func TestEventoGrandeNaoPrendeMemoriaNoSlot(t *testing.T) {
 		if r := mat.Aplica(&s.dec); r.Err != nil {
 			t.Fatalf("Aplica: %v", r.Err)
 		}
-		e.avanca(limiar)
+		e.advance(limiar)
 	}
 
 	aplica(0, gordo)
-	depoisDoGordo := e.bytesRetidos()
-	if depoisDoGordo > int64(limiar) {
+	depoisOfGordo := e.bytesRetidos()
+	if depoisOfGordo > int64(limiar) {
 		t.Fatalf("o slot ficou com %d bytes depois do evento grande; o limiar é %d — não encolheu",
-			depoisDoGordo, limiar)
+			depoisOfGordo, limiar)
 	}
 
 	// E os eventos pequenos seguintes não reinflam nada.
@@ -100,8 +100,8 @@ func TestOLimiarPorSlotSaiDoOrcamentoDaFila(t *testing.T) {
 	// numa realocação. Abaixo de uma página, soltar o buffer não devolve nada
 	// ao sistema operacional.
 	pequena := &Config{MaxPollRecords: 1000, QueueBytes: 1 << 10}
-	if got := slotThreshold(pequena); got != paginaDoSO {
-		t.Errorf("limiarDeSlot com fila minúscula = %d, quero o piso de %d", got, paginaDoSO)
+	if got := slotThreshold(pequena); got != paginaOfSO {
+		t.Errorf("limiarDeSlot com fila minúscula = %d, quero o piso de %d", got, paginaOfSO)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestOLimiarPorSlotSaiDoOrcamentoDaFila(t *testing.T) {
 // contador de slots encolhidos subindo a cada evento. As duas metades juntas
 // são o que diz que o limiar governa alguma coisa.
 func TestAbaixoDoLimiarOSlotNaoEncolhe(t *testing.T) {
-	mat := matDoGolden(t)
+	mat := matOfGolden(t)
 	e := newPipeline(4)
 	ctx := context.Background()
 
@@ -121,7 +121,7 @@ func TestAbaixoDoLimiarOSlotNaoEncolhe(t *testing.T) {
 	var encolhimentos int
 	for seq := int64(0); seq < 12; seq++ {
 		d := e.reserva(seq)
-		mat.Decodifica(d, []byte(`{"id":"A","sev":1,"doc":{"k":"v"}}`))
+		mat.Decode(d, []byte(`{"id":"A","sev":1,"doc":{"k":"v"}}`))
 		e.publica(seq, &kgo.Record{Offset: seq}, nil)
 		s, ok, _ := e.consome(ctx, nil)
 		if !ok {
@@ -130,7 +130,7 @@ func TestAbaixoDoLimiarOSlotNaoEncolhe(t *testing.T) {
 		if r := mat.Aplica(&s.dec); r.Err != nil {
 			t.Fatalf("Aplica: %v", r.Err)
 		}
-		if e.avanca(limiar) {
+		if e.advance(limiar) {
 			encolhimentos++
 		}
 	}
@@ -151,7 +151,7 @@ func TestAbaixoDoLimiarOSlotNaoEncolhe(t *testing.T) {
 // entre ele e o gauge de arena que separa "memória presa" de "aparada sem
 // parar".
 func TestOContadorDeSlotsEncolhidosAcompanhaOEncolhimento(t *testing.T) {
-	mat := matDoGolden(t)
+	mat := matOfGolden(t)
 	e := newPipeline(4)
 	ctx := context.Background()
 	gordo := `{"id":"A","sev":1,"doc":{"grande":"` + strings.Repeat("x", 256<<10) + `"}}`
@@ -160,7 +160,7 @@ func TestOContadorDeSlotsEncolhidosAcompanhaOEncolhimento(t *testing.T) {
 	var encolhimentos int
 	for seq := int64(0); seq < 3; seq++ {
 		d := e.reserva(seq)
-		mat.Decodifica(d, []byte(gordo))
+		mat.Decode(d, []byte(gordo))
 		e.publica(seq, &kgo.Record{Offset: seq}, nil)
 		s, ok, _ := e.consome(ctx, nil)
 		if !ok {
@@ -169,7 +169,7 @@ func TestOContadorDeSlotsEncolhidosAcompanhaOEncolhimento(t *testing.T) {
 		if r := mat.Aplica(&s.dec); r.Err != nil {
 			t.Fatalf("Aplica: %v", r.Err)
 		}
-		if e.avanca(limiar) {
+		if e.advance(limiar) {
 			encolhimentos++
 		}
 	}

@@ -59,7 +59,7 @@ loop cada decodificador
     end note
   end
   est --> dec : buffer do slot
-  dec -> mat : Decodifica(slot, record.Value)
+  dec -> mat : Decode(slot, record.Value)
   activate mat
   note right of mat
     SOMENTE LEITURA sobre o schema. Coluna nova e

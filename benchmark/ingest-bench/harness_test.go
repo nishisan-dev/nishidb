@@ -94,14 +94,14 @@ func TestSteadyProduzAmostrasEAgregados(t *testing.T) {
 	if rep.Samples[0].Events != 0 {
 		t.Errorf("primeira amostra em %d eventos, want 0 (origem da curva)", rep.Samples[0].Events)
 	}
-	var noLoad int
+	var inLoad int
 	for _, s := range rep.Samples {
 		if s.Phase == "load" {
-			noLoad++
+			inLoad++
 		}
 	}
-	if noLoad < 10 {
-		t.Errorf("só %d pontos na curva do LOAD: resolução insuficiente para ver degrau", noLoad)
+	if inLoad < 10 {
+		t.Errorf("só %d pontos na curva do LOAD: resolução insuficiente para ver degrau", inLoad)
 	}
 	var viuSteady bool
 	for _, s := range rep.Samples {
@@ -268,7 +268,7 @@ func TestAvaliaHeapDoisRegimes(t *testing.T) {
 	}
 	for _, tc := range casos {
 		t.Run(tc.name, func(t *testing.T) {
-			passou, detalhe := avaliaHeap(tc.current, tc.base, tc.entCurrent, tc.entBase)
+			passou, detalhe := evaluateHeap(tc.current, tc.base, tc.entCurrent, tc.entBase)
 			if passou != tc.querPassar {
 				t.Errorf("passou = %v, want %v (detalhe: %s)", passou, tc.querPassar, detalhe)
 			}
@@ -517,11 +517,11 @@ func TestExtractKey(t *testing.T) {
 // única metade que nenhuma implementação degenerada atende.
 func TestGateDeDiscoReprovaCrescimentoLinear(t *testing.T) {
 	linear := []int64{1e9, 2e9, 3e9, 4e9, 5e9, 6e9}
-	if g := avaliaGateDeDisco(linear); g.Status != GateReprovou {
+	if g := evaluateGateOfDisk(linear); g.Status != GateReprovou {
 		t.Errorf("gate = %q para crescimento linear, queria %q: %s", g.Status, GateReprovou, g.Detail)
 	}
 	plateau := []int64{1e9, 1.8e9, 2.1e9, 2.15e9, 2.1e9, 2.2e9}
-	if g := avaliaGateDeDisco(plateau); g.Status != GatePassou {
+	if g := evaluateGateOfDisk(plateau); g.Status != GatePassou {
 		t.Errorf("gate = %q para plateau, queria %q: %s", g.Status, GatePassou, g.Detail)
 	}
 }
@@ -542,13 +542,13 @@ func TestGateDeDiscoSemInsumoFicaNaoAvaliado(t *testing.T) {
 		"primeira metade em queda":       {3e9, 2e9, 1e9, 1e9, 1e9, 1e9},
 		"primeira metade plana com pico": {1e9, 1e9, 1e9, 1e9, 9e9, 9e9},
 	}
-	for nome, serie := range casos {
-		g := avaliaGateDeDisco(serie)
+	for name, serie := range casos {
+		g := evaluateGateOfDisk(serie)
 		if g.Status != GateNaoAvaliado {
-			t.Errorf("%s: Status = %q, want %q (%s)", nome, g.Status, GateNaoAvaliado, g.Detail)
+			t.Errorf("%s: Status = %q, want %q (%s)", name, g.Status, GateNaoAvaliado, g.Detail)
 		}
 		if !g.Hard {
-			t.Errorf("%s: o gate precisa ser DURO, senão não avaliado deixa de custar alguma coisa", nome)
+			t.Errorf("%s: o gate precisa ser DURO, senão não avaliado deixa de custar alguma coisa", name)
 		}
 	}
 }
@@ -564,7 +564,7 @@ func TestGateDeDiscoSemInsumoFicaNaoAvaliado(t *testing.T) {
 // aprovada.
 func TestGateDeDiscoNormalizaPorAmostra(t *testing.T) {
 	serie := []int64{1e9, 1.4e9, 1.7e9, 2e9, 2.15e9, 2.3e9}
-	g := avaliaGateDeDisco(serie)
+	g := evaluateGateOfDisk(serie)
 	if g.Status != GateReprovou {
 		t.Errorf("Status = %q, want %q: %s", g.Status, GateReprovou, g.Detail)
 	}
@@ -578,15 +578,15 @@ func TestGateDeDiscoNormalizaPorAmostra(t *testing.T) {
 // crescimento que a compaction não tem por que absorver, aprovando qualquer
 // coisa por comparação.
 func TestSerieDeDiscoIgnoraOLoad(t *testing.T) {
-	amostras := []Sample{
+	samples := []Sample{
 		{Phase: "load", DiskBytes: 10},
 		{Phase: "load", DiskBytes: 900},
 		{Phase: "steady", DiskBytes: 30},
 		{Phase: "steady", DiskBytes: 31},
 	}
-	got := serieDeDiscoDoSteady(amostras)
+	got := serieOfDiskOfSteady(samples)
 	if want := []int64{30, 31}; !slices.Equal(got, want) {
-		t.Errorf("serieDeDiscoDoSteady = %v, want %v", got, want)
+		t.Errorf("serieOfDiskOfSteady = %v, want %v", got, want)
 	}
 }
 
@@ -615,19 +615,19 @@ func TestGateDeDiscoEntraAvaliadoNaRodadaComSteady(t *testing.T) {
 	if g.Status == GateNaoAvaliado {
 		t.Fatalf("gate NÃO AVALIADO numa rodada com STEADY: %s", g.Detail)
 	}
-	var amostrasSteady int
+	var samplesSteady int
 	for _, s := range rep.Samples {
 		if s.Phase != "steady" {
 			continue
 		}
-		amostrasSteady++
+		samplesSteady++
 		if s.DiskBytes <= 0 {
 			t.Fatalf("amostra do STEADY com disco %d: a série do gate sai daqui", s.DiskBytes)
 		}
 	}
-	if amostrasSteady < amostrasMinimasDeDisco {
+	if samplesSteady < samplesMinimasOfDisk {
 		t.Errorf("%d amostras no STEADY, mínimo %d para o gate ter o que ler",
-			amostrasSteady, amostrasMinimasDeDisco)
+			samplesSteady, samplesMinimasOfDisk)
 	}
 }
 
@@ -691,7 +691,7 @@ func TestDirBytesSomaSubdiretorios(t *testing.T) {
 // e o oráculo dele não pode ser o TEXTO que a rodada imprime.
 //
 // A prova por mutação de que não pode: com a asserção anterior — a linha
-// "COMPACTION: ligada" na saída —, remover a chamada de `st.IniciaCompaction`
+// "COMPACTION: ligada" na saída —, remover a chamada de `st.StartCompaction`
 // e MANTER o Fprintf deixava a suíte inteira verde, e o artefato publicava
 // `compaction_min_live_ratio: 0.50` para uma rodada de append-only puro. É a
 // família do débito 6 na sua forma mais cara, porque o que o instrumento
@@ -734,7 +734,7 @@ func TestCompactionLigadaSobeAGoroutineEChegaVivaAoFim(t *testing.T) {
 		t.Error("compaction_running = false numa rodada com -compaction-ratio 0,50: " +
 			"ou a goroutine do §53-55 não subiu, ou ela morreu no meio — nos dois casos ninguém devolveu disco")
 	}
-	art := compactionNoArtefato(t, rep)
+	art := compactionInArtefato(t, rep)
 	if !art.Rodando {
 		t.Error("o artefato publica compaction_running = false: quem lê o JSON meses depois não tem outra evidência")
 	}
@@ -761,7 +761,7 @@ func TestCompactionDesligadaRegistraQueNinguemEstavaDevolvendoDisco(t *testing.T
 	if rep.StoreStats.CompactionRunning {
 		t.Error("compaction_running = true com -compaction-ratio 0: o campo não está lendo o Store")
 	}
-	art := compactionNoArtefato(t, rep)
+	art := compactionInArtefato(t, rep)
 	if art.Rodando {
 		t.Error("o artefato do controle negativo publica compaction_running = true")
 	}
@@ -864,7 +864,7 @@ func TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade(t *testing.T) {
 	// Run() NÃO espera a primeira passada da compaction antes de colher o
 	// StoreStats: ele lê o snapshot (linha ~567 do harness.go) logo depois do
 	// STEADY e devolve, sem sincronizar com a goroutine de fundo que
-	// IniciaCompaction subiu. A JANELA que essa goroutine tem para ganhar uma
+	// StartCompaction subiu. A JANELA que essa goroutine tem para ganhar uma
 	// fatia de CPU e terminar de varrer é só a duração real do LOAD mais os
 	// 200ms do STEADY acima — e -race, que infla o overhead de sincronização
 	// de 5 a 20x, num runner de DOIS núcleos pode esgotar essa janela inteira
@@ -875,7 +875,7 @@ func TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade(t *testing.T) {
 	// passe localmente com -race -count=3 em 12 vCPUs.
 	//
 	// O retry NÃO é "dar outra chance à MESMA goroutine parada": Run() fecha
-	// o Store no seu defer, e Close chama ParaCompaction, que cancela e
+	// o Store no seu defer, e Close chama ForCompaction, que cancela e
 	// ESPERA a goroutine morrer (D7) antes de devolver. Cada tentativa sobe,
 	// portanto, um Store NOVO com uma goroutine de compaction NOVA — e
 	// reexecuta o LOAD e o STEADY inteiros por cima do que já existe no
@@ -892,8 +892,8 @@ func TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade(t *testing.T) {
 	// sleep fixo: numa máquina rápida a primeira tentativa já basta e o
 	// prazo nunca é consultado; o custo só é pago quando o runner estiver de
 	// fato lento.
-	const prazoPrimeiraPassada = 30 * time.Second
-	limite := time.Now().Add(prazoPrimeiraPassada)
+	const prazoPrimeiraPass = 30 * time.Second
+	limit := time.Now().Add(prazoPrimeiraPass)
 	var rep *Report
 	var tentativas int
 	for {
@@ -911,9 +911,9 @@ func TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade(t *testing.T) {
 		if trabalhou {
 			break
 		}
-		if time.Now().After(limite) {
+		if time.Now().After(limit) {
 			t.Logf("a compaction não fechou uma passada completa em %d tentativa(s) e %s de prazo; "+
-				"seguindo para as asserções abaixo, que nomeiam o sintoma exato", tentativas, prazoPrimeiraPassada)
+				"seguindo para as asserções abaixo, que nomeiam o sintoma exato", tentativas, prazoPrimeiraPass)
 			break
 		}
 	}
@@ -929,7 +929,7 @@ func TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade(t *testing.T) {
 		t.Errorf("compaction_bytes_written = %d contra %d lidos: a varredura copiou tudo para frente e não devolveu disco",
 			rep.StoreStats.CompactionBytesWritten, rep.StoreStats.CompactionBytesRead)
 	}
-	art := compactionNoArtefato(t, rep)
+	art := compactionInArtefato(t, rep)
 	if art.Lidos != rep.StoreStats.CompactionBytesRead || art.Escritos != rep.StoreStats.CompactionBytesWritten {
 		t.Errorf("o artefato publica (%d, %d) contra (%d, %d) do relatório: os contadores não chegam ao JSON",
 			art.Lidos, art.Escritos, rep.StoreStats.CompactionBytesRead, rep.StoreStats.CompactionBytesWritten)
@@ -956,16 +956,16 @@ func TestCompactionRatioForaDaFaixaRecusaARodada(t *testing.T) {
 	}
 }
 
-// artefatoDaCompaction são os quatro campos com que o JSON responde "a
+// artefatoOfCompaction são os quatro campos com que o JSON responde "a
 // compaction rodou nesta rodada, e com que política".
-type artefatoDaCompaction struct {
+type artefatoOfCompaction struct {
 	Ratio    float64
 	Rodando  bool
 	Lidos    int64
 	Escritos int64
 }
 
-// compactionNoArtefato lê esses campos do JSON, e não do struct em memória: o
+// compactionInArtefato lê esses campos do JSON, e não do struct em memória: o
 // que a rodada de aceite deixa para trás é o arquivo, e um campo que não sai
 // no arquivo não existe para quem for conferi-la depois.
 //
@@ -973,7 +973,7 @@ type artefatoDaCompaction struct {
 // campo removido) falha em vez de virar o zero-value — que é exatamente o valor
 // que uma rodada SEM compaction publicaria, ou seja o mutante que mais
 // interessa pegar.
-func compactionNoArtefato(t *testing.T, rep *Report) artefatoDaCompaction {
+func compactionInArtefato(t *testing.T, rep *Report) artefatoOfCompaction {
 	t.Helper()
 	raw, err := json.Marshal(rep)
 	if err != nil {
@@ -996,7 +996,7 @@ func compactionNoArtefato(t *testing.T, rep *Report) artefatoDaCompaction {
 		artefato.StoreStats.Lidos == nil || artefato.StoreStats.Escritos == nil {
 		t.Fatalf("o artefato não publica os quatro campos de compaction: %s", raw)
 	}
-	return artefatoDaCompaction{
+	return artefatoOfCompaction{
 		Ratio:    *artefato.Config.Ratio,
 		Rodando:  *artefato.StoreStats.Rodando,
 		Lidos:    *artefato.StoreStats.Lidos,
@@ -1165,17 +1165,17 @@ func TestSomaDasEntradasSoIgnoraOQueSumiu(t *testing.T) {
 	}{
 		{
 			name:  "arquivo aposentado entre o ReadDir e o stat",
-			entry: entradaDescrita{nome: "seg-9.retired", erroDoInfo: fs.ErrNotExist},
+			entry: entryDescrita{name: "seg-9.retired", errOfInfo: fs.ErrNotExist},
 			want:  77,
 		},
 		{
 			name:  "subdiretório que sumiu durante a recursão",
-			entry: entradaDescrita{nome: "sub-que-sumiu", diretorio: true},
+			entry: entryDescrita{name: "sub-que-sumiu", diretorio: true},
 			want:  77,
 		},
 		{
 			name:    "entrada ilegível: instrumento cego aborta",
-			entry:   entradaDescrita{nome: "seg-10.dat", erroDoInfo: fs.ErrPermission},
+			entry:   entryDescrita{name: "seg-10.dat", errOfInfo: fs.ErrPermission},
 			wantErr: true,
 		},
 		{
@@ -1188,7 +1188,7 @@ func TestSomaDasEntradasSoIgnoraOQueSumiu(t *testing.T) {
 			// trocar aquele `return 0, err` por `continue` sobreviveria em CI
 			// que rode como root, que é o normal em container.
 			name:    "subdiretório que não é diretório: recursão aborta",
-			entry:   entradaDescrita{nome: "vivo.dat", diretorio: true},
+			entry:   entryDescrita{name: "vivo.dat", diretorio: true},
 			wantErr: true,
 		},
 	}
@@ -1212,28 +1212,28 @@ func TestSomaDasEntradasSoIgnoraOQueSumiu(t *testing.T) {
 	}
 }
 
-// entradaDescrita é uma entrada de diretório cujo destino o teste escolhe. Não
+// entryDescrita é uma entrada de diretório cujo destino o teste escolhe. Não
 // é falsificação de medida: o que ela descreve é o estado que o sistema de
 // arquivos entrega quando o arquivo some entre a listagem e o stat — o caso que
 // a aposentadoria do §53-55 produz em toda passada, e que só a corrida real
 // fabrica.
-type entradaDescrita struct {
-	nome       string
-	diretorio  bool
-	erroDoInfo error
+type entryDescrita struct {
+	name      string
+	diretorio bool
+	errOfInfo error
 }
 
-func (e entradaDescrita) Name() string { return e.nome }
-func (e entradaDescrita) IsDir() bool  { return e.diretorio }
+func (e entryDescrita) Name() string { return e.name }
+func (e entryDescrita) IsDir() bool  { return e.diretorio }
 
-func (e entradaDescrita) Type() fs.FileMode {
+func (e entryDescrita) Type() fs.FileMode {
 	if e.diretorio {
 		return fs.ModeDir
 	}
 	return 0
 }
 
-func (e entradaDescrita) Info() (fs.FileInfo, error) { return nil, e.erroDoInfo }
+func (e entryDescrita) Info() (fs.FileInfo, error) { return nil, e.errOfInfo }
 
 func gateByName(t *testing.T, rep *Report, name string) GateResult {
 	t.Helper()

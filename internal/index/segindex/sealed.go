@@ -160,9 +160,9 @@ func newSealed(reg *mmap.Region, path string) (*Sealed, error) {
 	if width != 4 && width != 8 {
 		return nil, fmt.Errorf("%w: %s declara postingWidth %d (só 4 ou 8)", ErrFormat, path, width)
 	}
-	segID := binary.LittleEndian.Uint64(data[8:16])
-	if segID > math.MaxUint32 {
-		return nil, fmt.Errorf("%w: %s declara segmentID %d, acima do teto de u32", ErrFormat, path, segID)
+	secID := binary.LittleEndian.Uint64(data[8:16])
+	if secID > math.MaxUint32 {
+		return nil, fmt.Errorf("%w: %s declara segmentID %d, acima do teto de u32", ErrFormat, path, secID)
 	}
 	base := types.RowID(binary.LittleEndian.Uint64(data[16:24]))
 	maxRow := types.RowID(binary.LittleEndian.Uint64(data[24:32]))
@@ -197,7 +197,7 @@ func newSealed(reg *mmap.Region, path string) (*Sealed, error) {
 		path:      path,
 		data:      data,
 		sections:  sections,
-		segmentID: uint32(segID),
+		segmentID: uint32(secID),
 		baseRowID: base,
 		maxRowID:  maxRow,
 		width:     width,

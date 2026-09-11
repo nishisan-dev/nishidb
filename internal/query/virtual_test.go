@@ -14,13 +14,13 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// tabelaVirtualDeTeste monta um Store virtual com o formato de um contador
+// tableVirtualOfTest monta um Store virtual com o formato de um contador
 // (groupKey, olt, total) sobre o dublê, e o registra no motor sob o namespace
 // dado. O dublê serve porque o motor só precisa de um query.Store.
-func tabelaVirtualDeTeste(t *testing.T, eng *query.Engine, namespace, tabela string) {
+func tableVirtualOfTest(t *testing.T, eng *query.Engine, namespace, table string) {
 	t.Helper()
 	spec, err := schema.Parse([]byte(`version: 1
-name: `+tabela+`
+name: `+table+`
 materialization:
   key:
     field: groupKey
@@ -64,14 +64,14 @@ schema:
 			t.Fatal(err)
 		}
 	}
-	if err := eng.RegisterVirtual(dataset, namespace, tabela, sc, st); err != nil {
+	if err := eng.RegisterVirtual(dataset, namespace, table, sc, st); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestExecuteRoteiaTabelaVirtualRegistrada(t *testing.T) {
-	h := novoHarness(t)
-	tabelaVirtualDeTeste(t, h.engine, "_counters", "autenticados_por_olt")
+	h := newHarness(t)
+	tableVirtualOfTest(t, h.engine, "_counters", "autenticados_por_olt")
 	rows := h.consultaOK("SELECT olt, total FROM _counters.autenticados_por_olt ORDER BY total ASC LIMIT 5")
 	if got := chaves(rows, "olt"); strings.Join(got, ",") != "BR_SPOMO_OLT14,PRCTA_G1M10" {
 		t.Fatalf("olts = %v", got)
@@ -93,7 +93,7 @@ func TestExecuteRoteiaTabelaVirtualRegistrada(t *testing.T) {
 }
 
 func TestNamespaceDesconhecidoListaOsExistentes(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	// A costura declara o namespace mesmo num dataset sem contador: ele existe
 	// como conceito do produto, e a recusa tem de nomeá-lo.
 	if err := h.engine.DeclaraNamespace(dataset, "_counters"); err != nil {
@@ -109,8 +109,8 @@ func TestNamespaceDesconhecidoListaOsExistentes(t *testing.T) {
 }
 
 func TestTabelaVirtualDesconhecidaListaAsDoDataset(t *testing.T) {
-	h := novoHarness(t)
-	tabelaVirtualDeTeste(t, h.engine, "_counters", "servicos_por_olt")
+	h := newHarness(t)
+	tableVirtualOfTest(t, h.engine, "_counters", "servicos_por_olt")
 	_, err := h.consulta("SELECT a FROM _counters.nao_existe")
 	if err == nil || !strings.Contains(err.Error(), "servicos_por_olt") {
 		t.Fatalf("tabela desconhecida tem de listar as que existem no dataset: %v", err)
@@ -130,8 +130,8 @@ func TestTabelaVirtualDesconhecidaListaAsDoDataset(t *testing.T) {
 }
 
 func TestRegistraVirtualRecusaDuplicataEDatasetDesconhecido(t *testing.T) {
-	h := novoHarness(t)
-	tabelaVirtualDeTeste(t, h.engine, "_counters", "x")
+	h := newHarness(t)
+	tableVirtualOfTest(t, h.engine, "_counters", "x")
 	spec, _ := schema.Parse([]byte("version: 1\nname: x\nmaterialization:\n  key:\n    field: k\nschema:\n  fields:\n    k:\n      type: string\n"), schema.BuiltinDefaults)
 	sc, _ := spec.Compile(fakestorage.NewDict())
 	if err := h.engine.RegisterVirtual(dataset, "_counters", "x", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
@@ -146,8 +146,8 @@ func TestRegistraVirtualRecusaDuplicataEDatasetDesconhecido(t *testing.T) {
 }
 
 func TestMetaContinuaRespondendoComORegistroVirtual(t *testing.T) {
-	h := novoHarness(t)
-	tabelaVirtualDeTeste(t, h.engine, "_counters", "x")
+	h := newHarness(t)
+	tableVirtualOfTest(t, h.engine, "_counters", "x")
 	rows := h.consultaOK("SELECT name FROM _meta.fields WHERE name = 'Acct-Status-Type'")
 	if len(rows) != 1 {
 		t.Fatalf("_meta.fields = %v", rows)
@@ -163,7 +163,7 @@ func TestMetaContinuaRespondendoComORegistroVirtual(t *testing.T) {
 // em 05/09/2026 com `SELECT a FROM _meta.nada` (issue #35). A posição aponta o
 // nome DEPOIS do ponto, que é o token ofensor.
 func TestRecusaDeRoteamentoVirtualEhErroDeBind(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	if err := h.engine.DeclaraNamespace(dataset, "_counters"); err != nil {
 		t.Fatal(err)
 	}

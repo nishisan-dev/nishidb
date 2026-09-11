@@ -7,7 +7,7 @@ import "github.com/nishisan-dev/nishidb/internal/query"
 // tomou. Um retrato que vazasse ficaria preso pela vida do processo, e nada
 // no resultado da consulta o denunciaria.
 func RetratosAbertosForTest(st query.Store) int {
-	f, ok := st.(*fonte)
+	f, ok := st.(*source)
 	if !ok {
 		return -1
 	}

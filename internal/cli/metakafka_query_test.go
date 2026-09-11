@@ -9,11 +9,11 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/cli"
 )
 
-// specComKafkaCLI declara a fonte Kafka, LIGADA. O `nishidb query --config`
+// specWithKafkaCLI declara a fonte Kafka, LIGADA. O `nishidb query --config`
 // roda com o servidor parado e sem consumidor nenhum — é justamente o caso em
 // que a tabela tem de responder com o que existe, sem inventar o que não
 // observa.
-const specComKafkaCLI = `version: 1
+const specWithKafkaCLI = `version: 1
 name: eventos
 source:
   type: kafka
@@ -34,7 +34,7 @@ schema:
       type: string
 `
 
-func escreveDatasetComKafka(t *testing.T, a *ambiente, nome, spec string) {
+func writeDatasetWithKafka(t *testing.T, a *env, nome, spec string) {
 	t.Helper()
 	specs := filepath.Join(a.dir, "datasets")
 	if err := os.WriteFile(filepath.Join(specs, nome+".yaml"), []byte(spec), 0o644); err != nil {
@@ -49,19 +49,19 @@ func escreveDatasetComKafka(t *testing.T, a *ambiente, nome, spec string) {
 // não observa ingestão nenhuma, e responder UP, DOWN ou DEGRADED seria inventar
 // um estado a partir de um arquivo de configuração.
 func TestQueryLocalRespondeMetaKafkaComOQueExiste(t *testing.T) {
-	a := novoAmbiente(t)
-	escreveDatasetComKafka(t, a, "eventos", specComKafkaCLI)
+	a := newEnv(t)
+	writeDatasetWithKafka(t, a, "eventos", specWithKafkaCLI)
 
-	code := a.roda("query", "--config", a.config, "--dataset", "eventos",
+	code := a.run("query", "--config", a.config, "--dataset", "eventos",
 		"SELECT id, topic, groupId, bootstrap, enabled, state, queueRecords, appliedOffset FROM _meta.kafka")
 	if code != cli.ExitOK {
 		t.Fatalf("query = %d\n%s", code, a.stderr.String())
 	}
-	linhas := strings.Split(strings.TrimSpace(a.stdout.String()), "\n")
-	if len(linhas) != 1 {
-		t.Fatalf("%d linhas, quero 1 (a de resumo):\n%s", len(linhas), a.stdout.String())
+	rows := strings.Split(strings.TrimSpace(a.stdout.String()), "\n")
+	if len(rows) != 1 {
+		t.Fatalf("%d linhas, quero 1 (a de resumo):\n%s", len(rows), a.stdout.String())
 	}
-	l := linhas[0]
+	l := rows[0]
 	for _, quer := range []string{
 		`"id":"source"`,
 		`"topic":"service-view"`,
@@ -81,10 +81,10 @@ func TestQueryLocalRespondeMetaKafkaComOQueExiste(t *testing.T) {
 // TestQueryLocalMetaKafkaSemKafkaDizDesligado: sem bloco Kafka, o veredito não
 // depende de processo nenhum — o YAML o prova sozinho.
 func TestQueryLocalMetaKafkaSemKafkaDizDesligado(t *testing.T) {
-	a := novoAmbiente(t)
-	escreveDatasetServicos(t, a)
+	a := newEnv(t)
+	writeDatasetServices(t, a)
 
-	code := a.roda("query", "--config", a.config, "--dataset", "servicos",
+	code := a.run("query", "--config", a.config, "--dataset", "servicos",
 		"SELECT id, enabled, state, topic FROM _meta.kafka")
 	if code != cli.ExitOK {
 		t.Fatalf("query = %d\n%s", code, a.stderr.String())

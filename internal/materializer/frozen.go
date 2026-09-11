@@ -35,7 +35,7 @@ func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time) err
 				val:       types.Value{Type: types.TypeTimestamp, I64: agora.UnixMilli()},
 				congelada: true,
 			})
-			b.conta(contaCongelada, cf, types.TypeNull)
+			b.count(countCongelada, cf, types.TypeNull)
 			continue
 		}
 		for i := range b.entries {
@@ -51,7 +51,7 @@ func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time) err
 			// qualquer WHERE.
 			if cf.IsAuto && cf.EffectiveType() == types.TypeNull && e.val.Type != types.TypeNull {
 				if err := b.fixaTipo(c, cf, e.val.Type); err != nil {
-					if errors.Is(err, errPrecisaDoWriter) {
+					if errors.Is(err, errPrecisaOfWriter) {
 						return err
 					}
 					// A classificação é a mesma do laço do Parse, e pela mesma
@@ -65,7 +65,7 @@ func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time) err
 			b.entries = append(b.entries, patchEntry{
 				field: cf, val: e.val, congelada: true,
 			})
-			b.conta(contaCongelada, cf, types.TypeNull)
+			b.count(countCongelada, cf, types.TypeNull)
 			break
 		}
 	}

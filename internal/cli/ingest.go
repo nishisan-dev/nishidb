@@ -27,12 +27,12 @@ const (
 	checkpointTempoPadrao   = 30 * time.Second
 )
 
-// resumoIngest separa os DOIS baldes de erro da §101, e a separação é a razão
+// summaryIngest separa os DOIS baldes de erro da §101, e a separação é a razão
 // de o tipo existir. Evento ruim é decisão tomada: descarta e segue, exit 0.
 // O resto — erro do store, inconsistência interna — significa que a row NÃO
 // entrou por falha nossa ou do dataset: é perda de dado, e sair com 0 dali faz
 // um pipeline que testa $? tratar perda como sucesso.
-type resumoIngest struct {
+type summaryIngest struct {
 	lidos, aplicados, criados, atualizados, substituidos, stale int64
 	descartados                                                 [materializer.NumCategories]int64
 	falhas                                                      [materializer.NumCategories]int64
@@ -120,7 +120,7 @@ func runIngest(args []string, amb Context) int {
 		return ExitUsageError
 	}
 
-	entrada, fechar, err := abreEntrada(*input, amb.Stdin)
+	entry, fechar, err := openEntry(*input, amb.Stdin)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest:", err)
 		return ExitUsageError
@@ -139,7 +139,7 @@ func runIngest(args []string, amb Context) int {
 	// A tabela irmã abre DEPOIS do base e fecha ANTES dele (o defer é LIFO):
 	// ela usa o dicionário do base, e fechá-lo primeiro derrubaria o
 	// checkpoint dela no meio.
-	hist, campoRaw, err := openHistory(cfg, spec, compilado, st.FieldDict())
+	hist, fieldRaw, err := openHistory(cfg, spec, compilado, st.FieldDict())
 	if err != nil {
 		_, _ = fmt.Fprintln(amb.Stderr, "ingest:", err)
 		return errorCode(err)
@@ -165,11 +165,11 @@ func runIngest(args []string, amb Context) int {
 		return errorCode(err)
 	}
 	if hist != nil {
-		mat.LigaHistorico(hist, campoRaw)
+		mat.TurnonHistory(hist, fieldRaw)
 	}
-	var resumo resumoIngest
-	inicio := time.Now()
-	ultimoCP := inicio
+	var summary summaryIngest
+	start := time.Now()
+	ultimoCP := start
 
 	// encerra é o ÚNICO ponto de saída depois que a ingestão começou. Todo
 	// caminho de retorno passa por aqui porque cada retorno antecipado que
@@ -177,8 +177,8 @@ func runIngest(args []string, amb Context) int {
 	// saída que fala de outra coisa. O motivo do encerramento não substitui a
 	// perda: os dois são impressos, e o código devolvido é o MAIS GRAVE.
 	encerra := func(motivo int) int {
-		printSummary(amb.Stderr, resumo, time.Since(inicio))
-		if resumo.falhasTotal == 0 {
+		printSummary(amb.Stderr, summary, time.Since(start))
+		if summary.falhasTotal == 0 {
 			return motivo
 		}
 		// A ingestão pode ter terminado com o dataset íntegro e checkpointado
@@ -187,11 +187,11 @@ func runIngest(args []string, amb Context) int {
 		// (4), onde nada mais entra até reabrir.
 		fmt.Fprintf(amb.Stderr,
 			"ingest: %d eventos NÃO entraram no dataset por falha — investigue antes de considerar a carga completa\n",
-			resumo.falhasTotal)
+			summary.falhasTotal)
 		return mostSevereOutcome(motivo, ExitDataLoss)
 	}
 
-	sc := bufio.NewScanner(entrada)
+	sc := bufio.NewScanner(entry)
 	// Uma linha é um evento, e um record pode ter até 4 MiB: o buffer padrão
 	// de 64 KiB do Scanner cortaria eventos legítimos.
 	sc.Buffer(make([]byte, 0, 1<<20), 8<<20)
@@ -200,28 +200,28 @@ func runIngest(args []string, amb Context) int {
 		if err := amb.Ctx.Err(); err != nil {
 			fmt.Fprintln(amb.Stderr, "ingest: interrompido; gravando checkpoint do que foi aplicado")
 			motivo := ExitInterrupted
-			if cperr := checkpointDoPar(st, hist); cperr != nil {
+			if cperr := checkpointOfPair(st, hist); cperr != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint final:", cperr)
 				motivo = mostSevereOutcome(motivo, errorCode(cperr))
 			}
 			return encerra(motivo)
 		}
-		linha := sc.Bytes()
-		if len(linha) == 0 {
+		row := sc.Bytes()
+		if len(row) == 0 {
 			continue
 		}
-		resumo.lidos++
+		summary.lidos++
 
-		r := mat.Apply(linha)
+		r := mat.Apply(row)
 		switch {
 		case r.Fatal():
 			// Writer em modo falho: continuar é desperdício, porque nenhum
 			// evento seguinte vai ser aceito até o dataset reabrir.
-			fmt.Fprintf(amb.Stderr, "ingest: writer em modo falho no evento %d: %v\n", resumo.lidos, r.Err)
+			fmt.Fprintf(amb.Stderr, "ingest: writer em modo falho no evento %d: %v\n", summary.lidos, r.Err)
 			return encerra(ExitWriter)
 		case r.Category.BadEvent():
-			resumo.descartados[r.Category]++
-			resumo.descartadosTotal++
+			summary.descartados[r.Category]++
+			summary.descartadosTotal++
 			// §101: a política do dataset decide entre seguir e parar. Até o
 			// M2 ela era hardcoded como log-and-skip, e a chave `errors:` do
 			// YAML não era sequer parseada — o operador escrevia `stop` e
@@ -229,29 +229,29 @@ func runIngest(args []string, amb Context) int {
 			if compilado.Errors.InvalidEvent == schema.InvalidEventStop {
 				fmt.Fprintf(amb.Stderr,
 					"ingest: errors.invalidEvent=stop e o evento %d é %v: %v\n",
-					resumo.lidos, r.Category, r.Err)
+					summary.lidos, r.Category, r.Err)
 				return encerra(ExitPolicyStopped)
 			}
 		case r.Err != nil:
 			// Balde 2: a row não entrou e não foi por culpa do evento.
-			resumo.falhas[r.Category]++
-			resumo.falhasTotal++
+			summary.falhas[r.Category]++
+			summary.falhasTotal++
 		default:
-			resumo.aplicados++
+			summary.aplicados++
 			switch r.Action {
 			case materializer.ActionCreated:
-				resumo.criados++
+				summary.criados++
 			case materializer.ActionUpdated:
-				resumo.atualizados++
+				summary.atualizados++
 			case materializer.ActionReplaced:
-				resumo.substituidos++
+				summary.substituidos++
 			case materializer.ActionStale:
-				resumo.stale++
+				summary.stale++
 			}
 		}
 
-		if needsCheckpoint(*everyN, resumo.lidos, ultimoCP, cfg.CheckpointInterval()) {
-			if err := checkpointDoPar(st, hist); err != nil {
+		if needsCheckpoint(*everyN, summary.lidos, ultimoCP, cfg.CheckpointInterval()) {
+			if err := checkpointOfPair(st, hist); err != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint:", err)
 				return encerra(errorCode(err))
 			}
@@ -267,18 +267,18 @@ func runIngest(args []string, amb Context) int {
 	// O que JÁ entrou é durabilizado antes de sair, do mesmo modo que no
 	// caminho do sinal: deixar o delta para o tail scan da recovery seria
 	// trocar um desfecho conhecido por um conserto na próxima abertura.
-	erroLeitura := sc.Err()
-	if erroLeitura != nil {
+	errLeitura := sc.Err()
+	if errLeitura != nil {
 		fmt.Fprintf(amb.Stderr,
 			"ingest: ENTRADA INTERROMPIDA na leitura: %v — o que vinha depois NÃO foi ingerido, a carga está incompleta\n",
-			erroLeitura)
+			errLeitura)
 	}
 
 	motivo := ExitOK
-	if erroLeitura != nil {
+	if errLeitura != nil {
 		motivo = ExitDataLoss
 	}
-	if err := checkpointDoPar(st, hist); err != nil {
+	if err := checkpointOfPair(st, hist); err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest: checkpoint final:", err)
 		motivo = mostSevereOutcome(motivo, errorCode(err))
 	}
@@ -301,21 +301,21 @@ func needsCheckpoint(everyN int, lidos int64, ultimo time.Time, intervalo time.D
 	return time.Since(ultimo) >= intervalo
 }
 
-func abreEntrada(caminho string, stdin io.Reader) (io.Reader, func(), error) {
-	if caminho == "-" || caminho == "" {
+func openEntry(path string, stdin io.Reader) (io.Reader, func(), error) {
+	if path == "-" || path == "" {
 		if stdin == nil {
 			return nil, func() {}, errors.New("--input - exige stdin")
 		}
 		return stdin, func() {}, nil
 	}
-	f, err := os.Open(caminho)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, func() {}, err
 	}
 	return f, func() { f.Close() }, nil
 }
 
-func printSummary(w io.Writer, r resumoIngest, dur time.Duration) {
+func printSummary(w io.Writer, r summaryIngest, dur time.Duration) {
 	taxa := 0.0
 	if dur > 0 {
 		taxa = float64(r.lidos) / dur.Seconds()
@@ -336,28 +336,28 @@ func printSummary(w io.Writer, r resumoIngest, dur time.Duration) {
 // todas elas. A ordem é fixa porque a saída é lida por script; o limite é
 // NumCategories porque escrevê-lo à mão foi o que fez INTERNAL_STATE sair como
 // uma line de contagem sem categoria nenhuma.
-func rowByCategory(w io.Writer, rotulo string, total int64, por [materializer.NumCategories]int64) {
+func rowByCategory(w io.Writer, rotulo string, total int64, by [materializer.NumCategories]int64) {
 	if total == 0 {
 		return
 	}
 	fmt.Fprintf(w, "ingest: %d %s:", total, rotulo)
 	for c := materializer.CategoryInvalidJSON; c < materializer.NumCategories; c++ {
-		if n := por[c]; n > 0 {
+		if n := by[c]; n > 0 {
 			fmt.Fprintf(w, " %v=%d", c, n)
 		}
 	}
 	fmt.Fprintln(w)
 }
 
-// checkpointDoPar durabiliza a tabela irmã ANTES do dataset base.
+// checkpointOfPair durabiliza a tabela irmã ANTES do dataset base.
 //
 // Mesma ordem do §48 aplicada ao servidor, e pela mesma razão: o checkpoint
 // do base é o ponto a partir do qual o trabalho é considerado feito, e um
 // crash entre os dois precisa deixar o histórico à FRENTE, nunca atrás. A
 // falha da irmã não impede o do base — o produto é o dataset materializado.
-func checkpointDoPar(base, hist *storage.Store) error {
+func checkpointOfPair(base, hist *storage.Store) error {
 	if hist == nil {
 		return base.Checkpoint()
 	}
-	return storage.ParComHistorico{Store: base, Hist: hist}.Checkpoint()
+	return storage.PairWithHistory{Store: base, Hist: hist}.Checkpoint()
 }

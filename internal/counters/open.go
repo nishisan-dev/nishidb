@@ -38,7 +38,7 @@ func (c *Compiler) Callback() func(*fielddict.Dict) ([]counter.Definition, error
 			return nil, err
 		}
 		c.compiled = compiled
-		return Compila(c.spec, compiled)
+		return Compile(c.spec, compiled)
 	}
 }
 

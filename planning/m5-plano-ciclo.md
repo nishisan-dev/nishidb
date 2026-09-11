@@ -155,7 +155,7 @@ Reusar `cfg.BindExposed()` ([config.go:297](internal/config/config.go:297)). Or�
 central: `TestAuthSemTLSComBindExpostoRecusaASubida`.
 
 ### B3 — Middleware e papéis
-Wrapper único em torno do mux em `sobeHTTP`
+Wrapper único em torno do mux em `risesHTTP`
 ([server.go:391](internal/server/server.go:391)). **HTTP Basic sobre TLS** (stdlib
 `r.BasicAuth()`, zero dependência; mapeia 1:1 para `DriverManager` do JDBC e
 `basic_auth` de Prometheus). Comparação: `sha256` dos dois lados antes de
@@ -167,7 +167,7 @@ leitura; **ADMIN ⊇ READ** (travado por teste). Ordem do middleware testada: 40
 de ler corpo, antes de tomar vaga, antes de revelar 404. Códigos novos em
 [protocol.go:162](internal/protocol/protocol.go:162): `UNAUTHENTICATED` (401 +
 `WWW-Authenticate`), `FORBIDDEN` (403), `WRITER_FAILED`, `COMPACTION_BUSY`; mapeados
-em `codigoDoProtocolo` ([query_remote.go:124](internal/cli/query_remote.go:124)).
+em `codigoOfProtocolo` ([query_remote.go:124](internal/cli/query_remote.go:124)).
 Observabilidade: `nishidb_auth_failures_total{reason: header|usuario|senha}` (nunca
 label de username — cardinalidade aberta), evento `auth.recusada` sem username cru
 (loga `user` só se casa com um configurado), header `Authorization` nunca logado.
@@ -179,7 +179,7 @@ Cert carregado no `Novo` (erro na subida nomeando o caminho — nunca no primeir
 request); leaf parseado na subida: WARN com <30 dias de validade, **ERRO no log +
 métrica de expiry sem recusar a subida** se expirado (recusar derrubaria as
 consultas). Plano loopback: segundo `http.Server` com o **mesmo mux sem middleware**
-(precedente `sobePprof`, [http.go:133](internal/server/http.go:133)). `ErrorLog` do
+(precedente `risesPprof`, [http.go:133](internal/server/http.go:133)). `ErrorLog` do
 `http.Server` roteado para o logger estruturado (scanners corporativos vão gerar
 ruído de handshake na porta exposta).
 
@@ -288,7 +288,7 @@ Pode começar após o merge da Fase B, em paralelo com a janela de observação 
   ([stream.go:45](internal/protocol/stream.go:45)): linha de schema, dados linha a
   linha, fecho obrigatório — stream sem fecho = `SQLException` de transporte (§128
   vale para o cliente também). Tabela código→`SQLState` derivada de
-  `codigoDoProtocolo`, testada dos dois lados.
+  `codigoOfProtocolo`, testada dos dois lados.
 - `PreparedStatement` com os 4 tipos; `DatabaseMetaData` de `/v1/metadata` +
   `/v1/stats`; método não suportado lança `SQLFeatureNotSupportedException` — com
   teste de que **não** devolve resultado vazio em silêncio.

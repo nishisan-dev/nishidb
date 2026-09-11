@@ -16,33 +16,33 @@ import (
 // tabela é uma linha por partição — e as colunas de dataset repetem em todas,
 // para que "e a fila, está cheia?" não exija uma segunda consulta.
 func TestMetaKafkaUmaLinhaPorParticao(t *testing.T) {
-	c := &consumidorFalso{inst: instantaneoCom(pos(0, 100, 140), pos(1, 50, 50), pos(2, 7, 9))}
-	eng := motorComKafka(t, fonteCom(c))
+	c := &consumidorFake{inst: instantaneoWith(pos(0, 100, 140), pos(1, 50, 50), pos(2, 7, 9))}
+	eng := engineWithKafka(t, sourceWith(c))
 
 	rows := consulta(t, eng, "SELECT partition, appliedOffset, highWatermark, lag, topic, groupId, queueRecords FROM _meta.kafka ORDER BY partition")
 	if len(rows) != 3 {
 		t.Fatalf("%d linhas, quero 3: %v", len(rows), rows)
 	}
-	if got := coluna(rows, "partition"); got != "0,1,2" {
+	if got := column(rows, "partition"); got != "0,1,2" {
 		t.Fatalf("partition = %s", got)
 	}
-	if got := coluna(rows, "appliedOffset"); got != "100,50,7" {
+	if got := column(rows, "appliedOffset"); got != "100,50,7" {
 		t.Fatalf("appliedOffset = %s", got)
 	}
-	if got := coluna(rows, "lag"); got != "40,0,2" {
+	if got := column(rows, "lag"); got != "40,0,2" {
 		t.Fatalf("lag = %s", got)
 	}
 	// As de dataset repetem.
-	if got := coluna(rows, "topic"); got != "service-view,service-view,service-view" {
+	if got := column(rows, "topic"); got != "service-view,service-view,service-view" {
 		t.Fatalf("topic = %s", got)
 	}
-	if got := coluna(rows, "queueRecords"); got != "3,3,3" {
+	if got := column(rows, "queueRecords"); got != "3,3,3" {
 		t.Fatalf("queueRecords = %s", got)
 	}
 	// O bootstrap sai canonizado — ordenado —, na mesma forma que a origem
 	// grava no kafka.offsets. Duas grafias fariam a coluna discordar do
 	// arquivo sem nada estar quebrado.
-	if got := coluna(consulta(t, eng, "SELECT bootstrap FROM _meta.kafka LIMIT 1"), "bootstrap"); got != "kafka01:9092,kafka02:9092" {
+	if got := column(consulta(t, eng, "SELECT bootstrap FROM _meta.kafka LIMIT 1"), "bootstrap"); got != "kafka01:9092,kafka02:9092" {
 		t.Fatalf("bootstrap = %q", got)
 	}
 }
@@ -51,8 +51,8 @@ func TestMetaKafkaUmaLinhaPorParticao(t *testing.T) {
 // lag == highWatermark - appliedOffset. É o invariante que só um instantâneo
 // único sustenta.
 func TestMetaKafkaLagFechaComOHighWatermark(t *testing.T) {
-	c := &consumidorFalso{inst: instantaneoCom(pos(0, 100, 140), pos(1, 3, 900))}
-	rows := consulta(t, motorComKafka(t, fonteCom(c)), "SELECT appliedOffset, highWatermark, lag FROM _meta.kafka")
+	c := &consumidorFake{inst: instantaneoWith(pos(0, 100, 140), pos(1, 3, 900))}
+	rows := consulta(t, engineWithKafka(t, sourceWith(c)), "SELECT appliedOffset, highWatermark, lag FROM _meta.kafka")
 	for _, l := range rows {
 		off, hwm, lag := inteiro(t, l["appliedOffset"]), inteiro(t, l["highWatermark"]), inteiro(t, l["lag"])
 		if hwm-off != lag {
@@ -64,14 +64,14 @@ func TestMetaKafkaLagFechaComOHighWatermark(t *testing.T) {
 // TestMetaKafkaSemKafkaRespondeUmaLinhaDeResumo: dataset que não declara
 // Kafka responde UMA linha, nunca erro. "Não consome" é uma resposta.
 func TestMetaKafkaSemKafkaRespondeUmaLinhaDeResumo(t *testing.T) {
-	eng := motorComKafka(t, metakafka.Fonte{})
+	eng := engineWithKafka(t, metakafka.Source{})
 	rows := consulta(t, eng, "SELECT id, enabled, state, partition, topic, appliedOffset FROM _meta.kafka")
 	if len(rows) != 1 {
 		t.Fatalf("%d linhas, quero 1: %v", len(rows), rows)
 	}
 	l := rows[0]
-	if l["id"] != metakafka.ChaveDoResumo {
-		t.Fatalf("id = %q, quero %q", l["id"], metakafka.ChaveDoResumo)
+	if l["id"] != metakafka.KeyOfSummary {
+		t.Fatalf("id = %q, quero %q", l["id"], metakafka.KeyOfSummary)
 	}
 	if l["enabled"] != "false" {
 		t.Fatalf("enabled = %q; sem bloco Kafka o dataset não consome, e isso é um fato", l["enabled"])
@@ -93,7 +93,7 @@ func TestMetaKafkaSemKafkaRespondeUmaLinhaDeResumo(t *testing.T) {
 func TestMetaKafkaDesligadoTrazOTopicoDoYAML(t *testing.T) {
 	d := declarada()
 	d.Habilitado = false
-	eng := motorComKafka(t, metakafka.Fonte{Declarada: d})
+	eng := engineWithKafka(t, metakafka.Source{Declarada: d})
 	rows := consulta(t, eng, "SELECT id, enabled, state, topic, groupId FROM _meta.kafka")
 	if len(rows) != 1 {
 		t.Fatalf("%d linhas, quero 1", len(rows))
@@ -110,9 +110,9 @@ func TestMetaKafkaDesligadoTrazOTopicoDoYAML(t *testing.T) {
 // TestMetaKafkaSemParticaoAtribuidaRespondeOResumo: consumidor de pé, sem
 // partição ainda — a tabela responde a linha de resumo, e não vazio.
 func TestMetaKafkaSemParticaoAtribuidaRespondeOResumo(t *testing.T) {
-	c := &consumidorFalso{inst: kafka.Instantaneo{Desfecho: kafka.Desfecho{Eventos: 0}}}
-	rows := consulta(t, motorComKafka(t, fonteCom(c)), "SELECT id, partition, events FROM _meta.kafka")
-	if len(rows) != 1 || rows[0]["id"] != metakafka.ChaveDoResumo {
+	c := &consumidorFake{inst: kafka.Instantaneo{Desfecho: kafka.Desfecho{Eventos: 0}}}
+	rows := consulta(t, engineWithKafka(t, sourceWith(c)), "SELECT id, partition, events FROM _meta.kafka")
+	if len(rows) != 1 || rows[0]["id"] != metakafka.KeyOfSummary {
 		t.Fatalf("quero uma linha de resumo: %v", rows)
 	}
 	if rows[0]["partition"] != "<null>" {
@@ -128,8 +128,8 @@ func TestMetaKafkaSemParticaoAtribuidaRespondeOResumo(t *testing.T) {
 // TestMetaKafkaComParticoesNaoTemLinhaDeResumo: o resumo existe SÓ quando não
 // há partição. Com partições, ele seria uma linha a mais no resultado.
 func TestMetaKafkaComParticoesNaoTemLinhaDeResumo(t *testing.T) {
-	c := &consumidorFalso{inst: instantaneoCom(pos(0, 1, 1))}
-	eng := motorComKafka(t, fonteCom(c))
+	c := &consumidorFake{inst: instantaneoWith(pos(0, 1, 1))}
+	eng := engineWithKafka(t, sourceWith(c))
 	if rows := consulta(t, eng, "SELECT id FROM _meta.kafka"); len(rows) != 1 || rows[0]["id"] != "0" {
 		t.Fatalf("quero só a linha da partição 0: %v", rows)
 	}
@@ -142,7 +142,7 @@ func TestMetaKafkaComParticoesNaoTemLinhaDeResumo(t *testing.T) {
 // para observar, fila, desfecho e partições são AUSÊNCIA. Um zero ali diria
 // "medi e deu zero" onde não houve medição.
 func TestMetaKafkaColunasVivasSaoNulasSemConsumidor(t *testing.T) {
-	eng := motorComKafka(t, metakafka.Fonte{Declarada: declarada()})
+	eng := engineWithKafka(t, metakafka.Source{Declarada: declarada()})
 	vivas := []string{"queueRecords", "queueBytes", "events", "applied", "stale",
 		"discarded", "failed", "partitionsAssigned", "partitionsTotal", "lastBatchAt"}
 	rows := consulta(t, eng, "SELECT "+juntar(vivas)+" FROM _meta.kafka")
@@ -167,10 +167,10 @@ func TestMetaKafkaColunasVivasSaoNulasSemConsumidor(t *testing.T) {
 // posição APLICADA continua saindo — ela não depende do broker, e sumir com
 // ela esconderia o progresso justamente quando o broker está fora do ar.
 func TestMetaKafkaOmiteHighWatermarkVencido(t *testing.T) {
-	c := &consumidorFalso{inst: kafka.Instantaneo{
-		Particoes: []kafka.PosicaoDaParticao{{Particao: 0, Aplicado: 42}},
+	c := &consumidorFake{inst: kafka.Instantaneo{
+		Partitions: []kafka.PositionOfPartition{{Partition: 0, Aplicado: 42}},
 	}}
-	rows := consulta(t, motorComKafka(t, fonteCom(c)),
+	rows := consulta(t, engineWithKafka(t, sourceWith(c)),
 		"SELECT appliedOffset, highWatermark, lag, markAt FROM _meta.kafka")
 	if len(rows) != 1 {
 		t.Fatalf("%d linhas, quero 1", len(rows))
@@ -189,11 +189,11 @@ func TestMetaKafkaOmiteHighWatermarkVencido(t *testing.T) {
 // checkpoint durável, que é o que o commit no group publica. Partição fora do
 // arquivo é NULL, não zero.
 func TestMetaKafkaOffsetDuravelVemDoCheckpoint(t *testing.T) {
-	c := &consumidorFalso{inst: instantaneoCom(pos(0, 100, 100), pos(1, 20, 20))}
-	f := fonteCom(c)
-	f.Duraveis = duraveisCom(map[int32]int64{0: 90})
-	rows := consulta(t, motorComKafka(t, f), "SELECT partition, appliedOffset, committedOffset FROM _meta.kafka ORDER BY partition")
-	if got := coluna(rows, "committedOffset"); got != "90,<null>" {
+	c := &consumidorFake{inst: instantaneoWith(pos(0, 100, 100), pos(1, 20, 20))}
+	f := sourceWith(c)
+	f.Duraveis = duraveisWith(map[int32]int64{0: 90})
+	rows := consulta(t, engineWithKafka(t, f), "SELECT partition, appliedOffset, committedOffset FROM _meta.kafka ORDER BY partition")
+	if got := column(rows, "committedOffset"); got != "90,<null>" {
 		t.Fatalf("committedOffset = %s; a partição fora do arquivo é ausência, não zero", got)
 	}
 }
@@ -209,12 +209,12 @@ func TestMetaKafkaOffsetDuravelEhNuloNosDoisRamosDoTriEstado(t *testing.T) {
 			return checkpoint.SourceOffsets{}, false, errors.New("crc inválido")
 		},
 	}
-	for nome, duraveis := range casos {
-		t.Run(nome, func(t *testing.T) {
-			c := &consumidorFalso{inst: instantaneoCom(pos(0, 5, 5))}
-			f := fonteCom(c)
+	for name, duraveis := range casos {
+		t.Run(name, func(t *testing.T) {
+			c := &consumidorFake{inst: instantaneoWith(pos(0, 5, 5))}
+			f := sourceWith(c)
 			f.Duraveis = duraveis
-			rows := consulta(t, motorComKafka(t, f), "SELECT committedOffset FROM _meta.kafka")
+			rows := consulta(t, engineWithKafka(t, f), "SELECT committedOffset FROM _meta.kafka")
 			if rows[0]["committedOffset"] != "<null>" {
 				t.Fatalf("committedOffset = %q, quero NULL", rows[0]["committedOffset"])
 			}
@@ -225,15 +225,15 @@ func TestMetaKafkaOffsetDuravelEhNuloNosDoisRamosDoTriEstado(t *testing.T) {
 // TestMetaKafkaWatchdogEhNuloSemGoroutineDeIngestao: "não há watchdog" e
 // "nunca recriou" são afirmações diferentes.
 func TestMetaKafkaWatchdogEhNuloSemGoroutineDeIngestao(t *testing.T) {
-	c := &consumidorFalso{inst: instantaneoCom(pos(0, 1, 1))}
-	f := fonteCom(c)
-	rows := consulta(t, motorComKafka(t, f), "SELECT watchdogTrips, watchdogGaveUp FROM _meta.kafka")
+	c := &consumidorFake{inst: instantaneoWith(pos(0, 1, 1))}
+	f := sourceWith(c)
+	rows := consulta(t, engineWithKafka(t, f), "SELECT watchdogTrips, watchdogGaveUp FROM _meta.kafka")
 	if rows[0]["watchdogTrips"] != "<null>" || rows[0]["watchdogGaveUp"] != "<null>" {
 		t.Fatalf("sem vigia as duas colunas são ausência: %v", rows[0])
 	}
 
 	f.Vigia = func() (uint64, bool, bool) { return 2, true, true }
-	rows = consulta(t, motorComKafka(t, f), "SELECT watchdogTrips, watchdogGaveUp FROM _meta.kafka")
+	rows = consulta(t, engineWithKafka(t, f), "SELECT watchdogTrips, watchdogGaveUp FROM _meta.kafka")
 	if rows[0]["watchdogTrips"] != "2" || rows[0]["watchdogGaveUp"] != "true" {
 		t.Fatalf("com vigia os números saem: %v", rows[0])
 	}
@@ -242,10 +242,10 @@ func TestMetaKafkaWatchdogEhNuloSemGoroutineDeIngestao(t *testing.T) {
 // TestMetaKafkaEstadoVemDoClassificador: quando há classificador, é ELE que
 // decide — nunca uma segunda leitura do YAML ao lado dele.
 func TestMetaKafkaEstadoVemDoClassificador(t *testing.T) {
-	c := &consumidorFalso{inst: instantaneoCom(pos(0, 1, 1))}
-	f := fonteCom(c)
-	f.Estado = func() (string, string) { return protocol.StateDegraded, "ingestão ainda subindo" }
-	rows := consulta(t, motorComKafka(t, f), "SELECT state, detail FROM _meta.kafka")
+	c := &consumidorFake{inst: instantaneoWith(pos(0, 1, 1))}
+	f := sourceWith(c)
+	f.State = func() (string, string) { return protocol.StateDegraded, "ingestão ainda subindo" }
+	rows := consulta(t, engineWithKafka(t, f), "SELECT state, detail FROM _meta.kafka")
 	if rows[0]["state"] != protocol.StateDegraded || rows[0]["detail"] != "ingestão ainda subindo" {
 		t.Fatalf("state=%q detail=%q", rows[0]["state"], rows[0]["detail"])
 	}
@@ -255,7 +255,7 @@ func TestMetaKafkaEstadoVemDoClassificador(t *testing.T) {
 // observa a ingestão não pode dizer nem UP nem DOWN. Com `enabled: true` e sem
 // classificador — o caminho do `nishidb query --config` — o estado é NULL.
 func TestMetaKafkaSemClassificadorODeclaradoNaoInventaEstado(t *testing.T) {
-	rows := consulta(t, motorComKafka(t, metakafka.Fonte{Declarada: declarada()}), "SELECT state FROM _meta.kafka")
+	rows := consulta(t, engineWithKafka(t, metakafka.Source{Declarada: declarada()}), "SELECT state FROM _meta.kafka")
 	if rows[0]["state"] != "<null>" {
 		t.Fatalf("state = %q; quero NULL, porque este processo não observa ingestão", rows[0]["state"])
 	}
@@ -265,8 +265,8 @@ func TestMetaKafkaSemClassificadorODeclaradoNaoInventaEstado(t *testing.T) {
 // OpenSnapshot, não por linha. Uma ida ao broker por LINHA seria carga
 // multiplicada pelo número de partições.
 func TestMetaKafkaConsultaOConsumidorUmaVezPorConsulta(t *testing.T) {
-	c := &consumidorFalso{inst: instantaneoCom(pos(0, 1, 1), pos(1, 2, 2), pos(2, 3, 3))}
-	eng := motorComKafka(t, fonteCom(c))
+	c := &consumidorFake{inst: instantaneoWith(pos(0, 1, 1), pos(1, 2, 2), pos(2, 3, 3))}
+	eng := engineWithKafka(t, sourceWith(c))
 	if rows := consulta(t, eng, "SELECT partition, lag FROM _meta.kafka"); len(rows) != 3 {
 		t.Fatalf("%d linhas, quero 3", len(rows))
 	}
@@ -281,13 +281,13 @@ func TestMetaKafkaConsultaOConsumidorUmaVezPorConsulta(t *testing.T) {
 func TestMetaKafkaMostraUmInstanteSo(t *testing.T) {
 	c := &consumidorMutante{
 		instantes: []kafka.Instantaneo{
-			instantaneoCom(pos(0, 10, 20), pos(1, 10, 20)),
-			instantaneoCom(pos(0, 999, 999), pos(1, 999, 999)),
+			instantaneoWith(pos(0, 10, 20), pos(1, 10, 20)),
+			instantaneoWith(pos(0, 999, 999), pos(1, 999, 999)),
 		},
 	}
-	eng := motorComKafka(t, fonteCom(c))
+	eng := engineWithKafka(t, sourceWith(c))
 	rows := consulta(t, eng, "SELECT partition, appliedOffset, markAt FROM _meta.kafka ORDER BY partition")
-	if got := coluna(rows, "appliedOffset"); got != "10,10" {
+	if got := column(rows, "appliedOffset"); got != "10,10" {
 		t.Fatalf("appliedOffset = %s; o retrato mudou no meio do resultado", got)
 	}
 	if a, b := rows[0]["markAt"], rows[1]["markAt"]; a != b {
@@ -295,7 +295,7 @@ func TestMetaKafkaMostraUmInstanteSo(t *testing.T) {
 	}
 	// A consulta SEGUINTE vê o retrato novo: o congelamento é por consulta.
 	rows = consulta(t, eng, "SELECT appliedOffset FROM _meta.kafka")
-	if got := coluna(rows, "appliedOffset"); got != "999,999" {
+	if got := column(rows, "appliedOffset"); got != "999,999" {
 		t.Fatalf("a segunda consulta tinha de ver o retrato novo: %s", got)
 	}
 }
@@ -319,18 +319,18 @@ func (c *consumidorMutante) Instantaneo(context.Context) kafka.Instantaneo {
 // `WHERE id = '<id>'` devolve exatamente aquela linha. Point lookup que
 // discordasse do scan seria falso negativo — proibido.
 func TestMetaKafkaPointLookupAcompanhaOScan(t *testing.T) {
-	casos := map[string]metakafka.Fonte{
-		"com partições": fonteCom(&consumidorFalso{inst: instantaneoCom(pos(0, 1, 1), pos(3, 2, 2), pos(17, 3, 3))}),
+	casos := map[string]metakafka.Source{
+		"com partições": sourceWith(&consumidorFake{inst: instantaneoWith(pos(0, 1, 1), pos(3, 2, 2), pos(17, 3, 3))}),
 		"só o resumo":   {Declarada: declarada()},
 	}
-	for nome, f := range casos {
-		t.Run(nome, func(t *testing.T) {
-			eng := motorComKafka(t, f)
-			doScan := consulta(t, eng, "SELECT id, appliedOffset FROM _meta.kafka")
-			if len(doScan) == 0 {
+	for name, f := range casos {
+		t.Run(name, func(t *testing.T) {
+			eng := engineWithKafka(t, f)
+			ofScan := consulta(t, eng, "SELECT id, appliedOffset FROM _meta.kafka")
+			if len(ofScan) == 0 {
 				t.Fatal("o scan não devolveu linha nenhuma")
 			}
-			for _, l := range doScan {
+			for _, l := range ofScan {
 				achado := consulta(t, eng, "SELECT id, appliedOffset FROM _meta.kafka WHERE id = '"+l["id"]+"'")
 				if len(achado) != 1 || achado[0]["id"] != l["id"] {
 					t.Fatalf("point lookup de %q devolveu %v", l["id"], achado)
@@ -355,21 +355,21 @@ func TestMetaKafkaPointLookupAcompanhaOScan(t *testing.T) {
 // deixava a suíte verde, o que é o sinal de que o estado não pagava.
 func TestParticaoNovaEntraSemEmbaralharAsOutras(t *testing.T) {
 	c := &consumidorMutante{instantes: []kafka.Instantaneo{
-		instantaneoCom(pos(3, 30, 30)),
-		instantaneoCom(pos(1, 10, 10), pos(3, 30, 30)),
+		instantaneoWith(pos(3, 30, 30)),
+		instantaneoWith(pos(1, 10, 10), pos(3, 30, 30)),
 	}}
-	eng := motorComKafka(t, fonteCom(c))
+	eng := engineWithKafka(t, sourceWith(c))
 	// Primeira consulta: só a partição 3, que ganha o primeiro rowID.
-	if rows := consulta(t, eng, "SELECT partition FROM _meta.kafka"); coluna(rows, "partition") != "3" {
+	if rows := consulta(t, eng, "SELECT partition FROM _meta.kafka"); column(rows, "partition") != "3" {
 		t.Fatalf("primeira consulta = %v", rows)
 	}
 	// A partição 1 nasce depois. O ORDER BY é do SQL; o que se afere aqui é
 	// que a 3 continua respondendo, com o seu offset.
 	rows := consulta(t, eng, "SELECT partition, appliedOffset FROM _meta.kafka ORDER BY partition")
-	if got := coluna(rows, "partition"); got != "1,3" {
+	if got := column(rows, "partition"); got != "1,3" {
 		t.Fatalf("partition = %s", got)
 	}
-	if got := coluna(rows, "appliedOffset"); got != "10,30" {
+	if got := column(rows, "appliedOffset"); got != "10,30" {
 		t.Fatalf("appliedOffset = %s; a partição que nasceu depois embaralhou as linhas", got)
 	}
 }
@@ -377,8 +377,8 @@ func TestParticaoNovaEntraSemEmbaralharAsOutras(t *testing.T) {
 // TestMetaKafkaNaoRetemRetratoDepoisDoClose: um retrato por consulta que não
 // fosse devolvido ficaria preso pela vida do processo.
 func TestMetaKafkaNaoRetemRetratoDepoisDoClose(t *testing.T) {
-	c := &consumidorFalso{inst: instantaneoCom(pos(0, 1, 1))}
-	f := fonteCom(c)
+	c := &consumidorFake{inst: instantaneoWith(pos(0, 1, 1))}
+	f := sourceWith(c)
 	sc, store, err := metakafka.Table(f)
 	if err != nil {
 		t.Fatal(err)
@@ -397,12 +397,12 @@ func TestMetaKafkaNaoRetemRetratoDepoisDoClose(t *testing.T) {
 // de pareamento, e a leitura tem de ACUSAR. Devolver "não achei" faria a linha
 // sumir do resultado sem nada aparecer.
 func TestMetaKafkaRecusaSnapshotDesconhecido(t *testing.T) {
-	c := &consumidorFalso{inst: instantaneoCom(pos(0, 1, 1))}
-	_, store, err := metakafka.Table(fonteCom(c))
+	c := &consumidorFake{inst: instantaneoWith(pos(0, 1, 1))}
+	_, store, err := metakafka.Table(sourceWith(c))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, err = store.GetByRowID(snapshotDeEpoca(999, 9), 2, nil)
+	_, _, _, err = store.GetByRowID(snapshotOfEpoca(999, 9), 2, nil)
 	if err == nil {
 		t.Fatal("época desconhecida tem de ser erro, não ausência de linha")
 	}
@@ -411,7 +411,7 @@ func TestMetaKafkaRecusaSnapshotDesconhecido(t *testing.T) {
 // TestMetaKafkaRecusaColunaInexistenteComONomeQualificado: a mensagem do
 // binder nomeia `_meta.kafka`, e não o nome interno do schema sintético.
 func TestMetaKafkaRecusaColunaInexistenteComONomeQualificado(t *testing.T) {
-	eng := motorComKafka(t, metakafka.Fonte{Declarada: declarada()})
+	eng := engineWithKafka(t, metakafka.Source{Declarada: declarada()})
 	_, err := eng.Execute(context.Background(), dataset, "SELECT nao_existe FROM _meta.kafka", nil)
 	if err == nil {
 		t.Fatal("coluna inexistente tem de ser recusada")
@@ -423,9 +423,9 @@ func TestMetaKafkaRecusaColunaInexistenteComONomeQualificado(t *testing.T) {
 
 func TestMetaKafkaUltimoLoteSaiComoTimestamp(t *testing.T) {
 	quando := time.Unix(1_757_000_001, 0)
-	c := &consumidorFalso{inst: instantaneoCom(pos(0, 1, 1))}
-	rows := consulta(t, motorComKafka(t, fonteCom(c)), "SELECT lastBatchAt FROM _meta.kafka")
-	if rows[0]["lastBatchAt"] != inteiroTexto(quando.UnixMilli()) {
+	c := &consumidorFake{inst: instantaneoWith(pos(0, 1, 1))}
+	rows := consulta(t, engineWithKafka(t, sourceWith(c)), "SELECT lastBatchAt FROM _meta.kafka")
+	if rows[0]["lastBatchAt"] != inteiroText(quando.UnixMilli()) {
 		t.Fatalf("lastBatchAt = %q", rows[0]["lastBatchAt"])
 	}
 }

@@ -51,12 +51,12 @@ func TestFilaCheiaContaEsperaDoPollerENaoDoWriter(t *testing.T) {
 		t.Fatalf("Envia: %v", err)
 	}
 
-	bloqueado, ocioso := f.Tempos()
+	bloqueado, idle := f.Tempos()
 	if bloqueado <= 0 {
 		t.Fatal("espera do poller não foi contada")
 	}
-	if ocioso != 0 {
-		t.Fatalf("writer contou %v de ociosidade sem nunca ter esperado", ocioso)
+	if idle != 0 {
+		t.Fatalf("writer contou %v de ociosidade sem nunca ter esperado", idle)
 	}
 }
 
@@ -68,15 +68,15 @@ func TestFilaCheiaContaEsperaDoPollerENaoDoWriter(t *testing.T) {
 // decodificadores — daí o nome do teste ter deixado de dizer "writer".
 func TestFilaVaziaContaOciosidadeDeQuemConsomeENaoDoPoller(t *testing.T) {
 	f := NewQueue(4, 1<<20)
-	ctx, cancela := context.WithTimeout(context.Background(), 40*time.Millisecond)
-	defer cancela()
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
 
 	// Nada na fila: quem consome bloqueia até o contexto acabar.
 	if _, ok, _ := f.recebeOuAcorda(ctx, nil); ok {
 		t.Fatal("recebeu item de uma fila vazia")
 	}
-	bloqueado, ocioso := f.Tempos()
-	if ocioso <= 0 {
+	bloqueado, idle := f.Tempos()
+	if idle <= 0 {
 		t.Fatal("ociosidade de quem consome não foi contada")
 	}
 	if bloqueado != 0 {
@@ -149,7 +149,7 @@ func TestDespertadorNaoEEngolidoPelaFilaCheia(t *testing.T) {
 // fim de lote para a revogação.
 func TestEnfileirarEmFilaFechadaEErroENaoPanico(t *testing.T) {
 	f := NewQueue(4, 1<<20)
-	f.Fecha()
+	f.Close()
 
 	defer func() {
 		if v := recover(); v != nil {
@@ -181,8 +181,8 @@ func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
 
 	// Enfileira barreira numa fila que já tem itens à frente dela. Sem ninguém
 	// drenando, o Quiesce tem de ficar esperando.
-	ctx, cancela := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancela()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	for i := 0; i < 8; i++ {
 		if err := fila.Envia(ctx, &kgo.Record{Partition: 0, Offset: int64(i), Value: []byte("x")}); err != nil {
 			t.Fatal(err)

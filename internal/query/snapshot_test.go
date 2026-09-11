@@ -43,8 +43,8 @@ func TestRowNascidaDepoisDoOpenNaoApareceEmPlanoNenhum(t *testing.T) {
 	for _, c := range casos {
 		t.Run(c.name, func(t *testing.T) {
 			ig := &integracao{t: t, dir: filepath.Join(t.TempDir(), "radius"), oracle: oraculo{}}
-			ig.abre()
-			defer ig.fecha()
+			ig.open()
+			defer ig.close()
 
 			mat, err := materializer.New(ig.sch, ig.store)
 			if err != nil {
@@ -104,8 +104,8 @@ func TestRowNascidaDepoisDoOpenNaoApareceEmPlanoNenhum(t *testing.T) {
 // coisas presas pela vida do processo, e nada no resultado dela denuncia isso.
 func TestConsultaFechadaDevolveAsVersoesQueSegurava(t *testing.T) {
 	ig := &integracao{t: t, dir: filepath.Join(t.TempDir(), "radius"), oracle: oraculo{}}
-	ig.abre()
-	defer ig.fecha()
+	ig.open()
+	defer ig.close()
 
 	mat, err := materializer.New(ig.sch, ig.store)
 	if err != nil {

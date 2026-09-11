@@ -19,7 +19,7 @@ import (
 // candidato — isto é, passa com o índice quebrado, provando nada. Candidates=1
 // com Rejected=1 prova que o candidato FOI consultado e FOI rejeitado.
 func TestRevalidacaoDeIndiceStale(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	h.ingere(`{"id":"CMP-0001","_SEQ":1,"Acct-Status-Type":"Start","User-Name":"joao"}`)
 
 	status, _ := h.sch.FieldByName([]byte("Acct-Status-Type"))
@@ -50,7 +50,7 @@ func TestRevalidacaoDeIndiceStale(t *testing.T) {
 // de "achei pela key, devolvo" é maior — e onde ela produziria uma linha que
 // não satisfaz o resto do WHERE.
 func TestPointLookupTambemRevalida(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	h.ingere(`{"id":"CMP-0001","_SEQ":1,"Acct-Status-Type":"Start","User-Name":"joao"}`)
 
 	rows := h.consultaOK(
@@ -79,7 +79,7 @@ func TestPointLookupTambemRevalida(t *testing.T) {
 // estrutural (todo PointLookupPlan tem `key = literal` como conjunct), não
 // invariante. DeadSkipped=1 com Rejected=0 é o que separa os dois.
 func TestPointLookupHonraLiveness(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	h.ingere(`{"id":"CMP-0001","_SEQ":1,"Acct-Status-Type":"Stop"}`)
 	h.store.SetTombstone(h.rowID("CMP-0001"))
 
@@ -99,7 +99,7 @@ func TestPointLookupHonraLiveness(t *testing.T) {
 // Candidato tombstoned: o índice o devolve (as postings não são limpas), o
 // fetch reporta morto, e ele não conta como row. A liveness é do FETCH.
 func TestCandidatoTombstonedNaoSai(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	h.ingere(
 		`{"id":"CMP-0001","_SEQ":1,"Acct-Status-Type":"Stop"}`,
 		`{"id":"CMP-0002","_SEQ":1,"Acct-Status-Type":"Stop"}`,

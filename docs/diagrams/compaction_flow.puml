@@ -3,7 +3,7 @@ title Compaction de segmento: varredura, republicação condicional e aposentado
 
 start
 
-:IniciaCompaction: sobe UMA goroutine
+:StartCompaction: sobe UMA goroutine
 (chamar duas vezes não sobe duas);
 note right
   Duas varreduras concorrentes disputariam o
@@ -27,7 +27,7 @@ repeat
     varredura perseguindo os records que ela acabou
     de apendar.
 
-    O curSegID é lido DENTRO da seção crítica. Lido
+    O curSecID é lido DENTRO da seção crítica. Lido
     antes do Lock, ele descreveria um instante em
     que ninguém o segurava — e a espera pelo lock é
     quase sempre a espera por um CHECKPOINT, que é
@@ -44,7 +44,7 @@ repeat
     por um número inventado.
   end note
 
-  partition "Varredura streaming — compactaSegmento (§54)" {
+  partition "Varredura streaming — compactaSegment (§54)" {
     :ScanFrom(seg, HeaderSize): um record por vez,
     buffer reutilizado, CRC validado;
     note right
@@ -74,7 +74,7 @@ repeat
 
       partition "reapendaSeVivo — MESMA seção crítica de s.wmu (D3)" {
         if (locs.Get(rowID) ainda nomeia (seg, off)?) then (sim — vivo)
-          #D9F2D9:REPUBLICA: segW.Append no segmento
+          #D9F2D9:REPUBLICA: secW.Append no segmento
           corrente pelo applyRecord normal;
           note right
             Verificação e Append na MESMA seção
@@ -144,7 +144,7 @@ repeat
     end note
   }
 
-  partition "Aposentadoria em quatro passos — aposentaSegmento (D5)" {
+  partition "Aposentadoria em quatro passos — aposentaSegment (D5)" {
     :**1.** Checkpoint(): as republicações da varredura
     viram duráveis (overlay -> mmap -> manifest);
     note right
@@ -200,13 +200,13 @@ repeat
 
 repeat while (o Close cancelou o contexto?) is (não — dorme 5s) not (sim)
 
-:ParaCompaction: o Close cancela e AGUARDA a
+:ForCompaction: o Close cancela e AGUARDA a
 goroutine ANTES de tomar o vida.Lock() (D7);
 stop
 
-partition "Open — reparaAposentados: as duas janelas de crash (D5)" {
+partition "Open — repairAposentados: as duas janelas de crash (D5)" {
 start
-:reparaAposentados, ANTES de qualquer conclusão
+:repairAposentados, ANTES de qualquer conclusão
 sobre o conjunto de segmentos (store_recovery.go);
 note right
   Nome aposentado em disco só pode ter sido escrito

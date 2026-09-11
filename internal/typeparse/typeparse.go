@@ -42,7 +42,7 @@ var (
 	errTsFormat      = parseError("formato RFC3339 inválido")
 	errTsRange       = parseError("componente fora de range")
 	errTsFrac        = parseError("fração inválida")
-	errTsNoTZ        = parseError("timezone ausente")
+	errTsInTZ        = parseError("timezone ausente")
 	errTsOffset      = parseError("offset inválido")
 	errTsOffsetRange = parseError("offset fora de range")
 	errTsTZ          = parseError("timezone inválido")
@@ -210,7 +210,7 @@ func RFC3339Millis(raw []byte) (int64, error) {
 	}
 
 	if pos >= len(raw) {
-		return 0, errTsNoTZ
+		return 0, errTsInTZ
 	}
 	offsetSec := 0
 	switch c := raw[pos]; {

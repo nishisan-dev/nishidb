@@ -91,7 +91,7 @@ func TestAgendaEntregaExatamenteOsVencidos(t *testing.T) {
 }
 
 // A visita que devolve false para a descida no meio: é o freio de
-// MaxPorPassada, e ele não pode deixar a estrutura inconsistente.
+// MaxPerSweep, e ele não pode deixar a estrutura inconsistente.
 func TestAgendaParaADescidaQuandoAVisitaPede(t *testing.T) {
 	a := openSchedule(t, 4096)
 	for row := types.RowID(0); row < 500; row++ {

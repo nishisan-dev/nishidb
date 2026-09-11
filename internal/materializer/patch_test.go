@@ -472,14 +472,14 @@ func TestParseReuse(t *testing.T) {
 	}
 }
 
-func replace(t *testing.T, s, old, new string) string {
+func replace(t *testing.T, s, old, nw string) string {
 	t.Helper()
 	if !contains(s, old) {
 		t.Fatalf("%q não contém %q", s, old)
 	}
 	out := ""
 	idx := indexOf(s, old)
-	out = s[:idx] + new + s[idx+len(old):]
+	out = s[:idx] + nw + s[idx+len(old):]
 	return out
 }
 

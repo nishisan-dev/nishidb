@@ -30,7 +30,7 @@
 
 | Arquivo | Responsabilidade |
 |---|---|
-| `internal/predicate/predicate.go` | `Slot`, `Coleta`, `Programa`, `Compila`, `Avalia` — o avaliador, movido do executor |
+| `internal/predicate/predicate.go` | `Slot`, `Coleta`, `Programa`, `Compile`, `Evaluate` — o avaliador, movido do executor |
 | `internal/predicate/predicate_test.go` | Testes do avaliador, movidos de `predicate_prova_test.go` |
 | `internal/schema/frozen.go` | Validação e compilação de `frozenFrom` |
 | `internal/schema/frozen_test.go` | Testes de validação de `frozenFrom` |
@@ -86,12 +86,12 @@ Refatoração pura. Critério de aceite: nenhuma asserção de teste existente m
   func Coleta(slots []Slot, fr *encoding.FieldReader, payload []byte) error
 
   type Programa struct{ /* prog []instr */ }
-  func Compila(e binder.BoundExpr, nSlots int) (*Programa, error)
+  func Compile(e binder.BoundExpr, nSlots int) (*Programa, error)
 
-  // Avalia roda o programa. mismatches é incrementado a cada campo cujo tipo
+  // Evaluate roda o programa. mismatches é incrementado a cada campo cujo tipo
   // físico não bate com o do literal — o executor o publica como métrica, a
   // ingestão o ignora passando nil.
-  func (p *Programa) Avalia(slots []Slot, mismatches *int64) bool
+  func (p *Programa) Evaluate(slots []Slot, mismatches *int64) bool
 
   var ErrProgramaInvalido = errors.New("predicado: programa inválido")
   ```
@@ -112,7 +112,7 @@ tocam os identificadores movidos, e mova SÓ esses.
 
 - [ ] **Passo 2: exportar os identificadores movidos**
 
-Renomeie no pacote novo: `slot`→`Slot` (e os campos `id`/`val`/`present`→`ID`/`Val`/`Present`), `novosSlots`→`NovosSlots`, `coleta`→`Coleta`, `programa`→`Programa`, `compila`→`Compila`, `eval`→`Avalia`. `instr`, `opKind`, `tarefa`, `testa`, `emite`, `ordemInt`, `ordemFloat`, `ordemBytes` continuam privados.
+Renomeie no pacote novo: `slot`→`Slot` (e os campos `id`/`val`/`present`→`ID`/`Val`/`Present`), `novosSlots`→`NovosSlots`, `coleta`→`Coleta`, `programa`→`Programa`, `compila`→`Compile`, `eval`→`Evaluate`. `instr`, `opKind`, `tarefa`, `testa`, `emite`, `ordemInt`, `ordemFloat`, `ordemBytes` continuam privados.
 
 Troque `ErrInvalidPlan` (que ficou no executor) por um erro do próprio pacote:
 
@@ -128,14 +128,14 @@ var ErrProgramaInvalido = errors.New("predicado: programa inválido")
 `contadores` é do executor e a ingestão não tem os mesmos. `testa` só usa `cnt.typeMismatch++`, então a dependência inteira some:
 
 ```go
-// Avalia roda o programa. Sem alocação, sem chamada recursiva, sem pilha.
+// Evaluate roda o programa. Sem alocação, sem chamada recursiva, sem pilha.
 //
 // mismatches conta os campos cujo tipo físico não bate com o do literal —
 // payload heterogêneo na mesma coluna. É ponteiro e aceita nil porque os dois
 // chamadores têm necessidades opostas: o executor o publica como métrica de
 // query, e a ingestão avalia uma regra por evento e não tem onde pendurar um
 // contador por avaliação.
-func (p *Programa) Avalia(slots []Slot, mismatches *int64) bool
+func (p *Programa) Evaluate(slots []Slot, mismatches *int64) bool
 
 func (in *instr) testa(slots []Slot, mismatches *int64) bool {
 	// ...
@@ -522,7 +522,7 @@ import (
 // capturaCongeladas emite as entries das colunas congeladas a partir do que o
 // EVENTO trouxe.
 //
-// Roda depois da extração das derivadas — para que uma congelada possa ter
+// Run depois da extração das derivadas — para que uma congelada possa ter
 // origem numa coluna aninhada, cujo valor só existe depois daquela passada — e
 // antes da ordenação, para que participe do sort e do dedup como qualquer
 // outra entry.
@@ -564,7 +564,7 @@ O `val` aponta para a mesma janela do arena que a entry de origem. É seguro e n
 
 - [ ] **Passo 5: chamar a captura e estender a guarda**
 
-Em `patch.go`, logo depois do bloco `extraiDerivadas()` e **antes** do bloco `if c.WriteInstantField != nil` (linha 208):
+Em `patch.go`, logo depois do bloco `extractDerived()` e **antes** do bloco `if c.WriteInstantField != nil` (linha 208):
 
 ```go
 	// As congeladas entram depois das derivadas e antes da ordenação: podem
@@ -900,7 +900,7 @@ git commit -m "Compila uma condição solta pela mesma gramática do WHERE"
   }
   type TTLRule struct {
       When     string        // "" na regra de fundo
-      Duracao  time.Duration // 0 == never
+      Duration  time.Duration // 0 == never
   }
   const TTLFieldName = "_expiresIn"
   const DurationNever = "never"
@@ -985,12 +985,12 @@ var systemNames = map[string]string{
 // internal/schema/ttl_rule.go
 package schema
 
-// TTLRule é uma regra validada. Duracao zero significa IMORTAL — a regra
+// TTLRule é uma regra validada. Duration zero significa IMORTAL — a regra
 // casou e decidiu que a entidade não expira —, e é distinto de "nenhuma regra
 // casou", que o chamador representa não achando regra nenhuma.
 type TTLRule struct {
 	When    string
-	Duracao time.Duration
+	Duration time.Duration
 }
 
 func validateTTLRules(regras []TTLRuleSpec) ([]TTLRule, error) {
@@ -1024,7 +1024,7 @@ func validateTTLRules(regras []TTLRuleSpec) ([]TTLRule, error) {
 					i, r.ExpireAfterWrite, ExpiryResolution, DurationNever)
 			}
 		}
-		out = append(out, TTLRule{When: r.When, Duracao: d})
+		out = append(out, TTLRule{When: r.When, Duration: d})
 	}
 	return out, nil
 }
@@ -1060,7 +1060,7 @@ git commit -m "Troca o bloco ttl por uma lista de regras condicionais"
 - Test: `internal/schema/ttl_rule_test.go`
 
 **Interfaces:**
-- Consumes: `TTLRule` (Task 8), `binder.BindCondition` (Task 7), `predicado.Compila` (Task 1)
+- Consumes: `TTLRule` (Task 8), `binder.BindCondition` (Task 7), `predicado.Compile` (Task 1)
 - Produces:
   ```go
   // schema.Compiled — guarda a forma VALIDADA, com o `when` ainda em texto
@@ -1071,15 +1071,15 @@ git commit -m "Troca o bloco ttl por uma lista de regras condicionais"
   type RegraCompilada struct {
       Prog    *Programa // nil na regra de fundo (casa com tudo)
       Slots   binder.Slots
-      Duracao time.Duration
+      Duration time.Duration
   }
-  func CompilaRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompilada, error)
+  func CompileRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompilada, error)
   ```
 
 **Por que a regra compilada NÃO mora em `schema`:** compilar exige o `binder`, e o
 `binder` importa `schema` — o ciclo seria imediato. `internal/predicate` é o único ponto
 da árvore que pode importar os dois. O `Compiled` fica com a forma validada em texto, e
-quem chama `CompilaRegras` é o **materializer**, no construtor, que importa os três sem
+quem chama `CompileRegras` é o **materializer**, no construtor, que importa os três sem
 problema.
 
 - [ ] **Passo 1: escrever os testes**
@@ -1133,19 +1133,19 @@ E no laço, ao lado do ramo do `_writtenAt` (`compile.go:503`):
 
 Tire `IsTTL` de `CompiledField` (`compile.go:115`), a atribuição em `:501`, o uso em `:559` e a asserção em `compile_test.go:127`. Confirmado: não há consumidor fora do próprio `schema`.
 
-- [ ] **Passo 5: `predicado.CompilaRegras`**
+- [ ] **Passo 5: `predicado.CompileRegras`**
 
 ```go
-// CompilaRegras transforma as regras validadas em programas avaliáveis.
+// CompileRegras transforma as regras validadas em programas avaliáveis.
 //
 // Mora AQUI, e não em schema, porque compilar exige o binder — e o binder
 // importa schema. Este pacote é o único lugar da árvore que pode importar os
 // dois sem fechar ciclo.
-func CompilaRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompilada, error) {
+func CompileRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompilada, error) {
 	out := make([]RegraCompilada, 0, len(regras))
 	for i, r := range regras {
 		if r.When == "" {
-			out = append(out, RegraCompilada{Duracao: r.Duracao})
+			out = append(out, RegraCompilada{Duration: r.Duration})
 			continue
 		}
 		e, err := parser.ParseCondition(r.When)
@@ -1164,11 +1164,11 @@ func CompilaRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompila
 					i, r.When, f.Name)
 			}
 		}
-		prog, err := Compila(bc.Expr, bc.Slots.Len())
+		prog, err := Compile(bc.Expr, bc.Slots.Len())
 		if err != nil {
 			return nil, fmt.Errorf("ttl[%d]: condição %q: %w", i, r.When, err)
 		}
-		out = append(out, RegraCompilada{Prog: prog, Slots: bc.Slots, Duracao: r.Duracao})
+		out = append(out, RegraCompilada{Prog: prog, Slots: bc.Slots, Duration: r.Duration})
 	}
 	return out, nil
 }
@@ -1196,8 +1196,8 @@ git commit -m "Compila as regras de ttl e registra o campo de prazo"
 - Modify: `internal/materializer/patch.go`, `internal/materializer/materializer.go`
 
 **Interfaces:**
-- Consumes: `predicado.RegraCompilada`, `predicado.CompilaRegras` (Task 9)
-- Produces: `func (m *Materializer) duracaoDe(prevPayload []byte, entries []patchEntry) time.Duration`
+- Consumes: `predicado.RegraCompilada`, `predicado.CompileRegras` (Task 9)
+- Produces: `func (m *Materializer) durationOf(prevPayload []byte, entries []patchEntry) time.Duration`
 
 - [ ] **Passo 1: escrever os testes**
 
@@ -1233,7 +1233,7 @@ Expected: FAIL
 // internal/materializer/deadline.go
 package materializer
 
-// duracaoDe devolve a duração de ociosidade que vale para o estado que ESTA
+// durationOf devolve a duração de ociosidade que vale para o estado que ESTA
 // escrita vai produzir, avaliando as regras sobre o valor PÓS-MERGE de cada
 // campo que elas mencionam:
 //
@@ -1246,18 +1246,18 @@ package materializer
 // propósito — misturar a coleta com o mergeRecords ganharia uma varredura e
 // custaria a clareza do arquivo onde a semântica de null mora. Se o bench
 // acusar, é lá que a otimização entra, com medição na mão.
-func (m *Materializer) duracaoDe(prevPayload []byte, entries []patchEntry) (time.Duration, error) {
+func (m *Materializer) durationOf(prevPayload []byte, entries []patchEntry) (time.Duration, error) {
 	for i := range m.regras {
 		r := &m.regras[i]
 		if r.Prog == nil {
-			return r.Duracao, nil // regra de fundo: casa com tudo
+			return r.Duration, nil // regra de fundo: casa com tudo
 		}
 		slots := m.slots[i]
 		if err := m.preencheSlots(slots, prevPayload, entries); err != nil {
 			return 0, err
 		}
-		if r.Prog.Avalia(slots, nil) {
-			return r.Duracao, nil
+		if r.Prog.Evaluate(slots, nil) {
+			return r.Duration, nil
 		}
 	}
 	return 0, nil
@@ -1269,7 +1269,7 @@ func (m *Materializer) preencheSlots(slots []predicado.Slot, prevPayload []byte,
 	for i := range slots {
 		slots[i].Present = false
 	}
-	// 1. Estado anterior, em uma passada; para quando os slots acabam.
+	// 1. State anterior, em uma passada; para quando os slots acabam.
 	m.fr.Reset(prevPayload)
 	i := 0
 	for i < len(slots) {
@@ -1292,7 +1292,7 @@ func (m *Materializer) preencheSlots(slots []predicado.Slot, prevPayload []byte,
 	// neste ponto (o dedup já rodou), mas o laço não depende disso.
 	for j := range entries {
 		e := &entries[j]
-		k, ok := slotDe(slots, e.field.ID)
+		k, ok := slotOf(slots, e.field.ID)
 		if !ok {
 			continue
 		}
@@ -1306,7 +1306,7 @@ func (m *Materializer) preencheSlots(slots []predicado.Slot, prevPayload []byte,
 }
 ```
 
-`m.slots` é um `[][]predicado.Slot`, um por regra, alocado UMA vez no construtor via `predicado.NovosSlots(r.Slots.IDs)` — a avaliação roda por evento e não pode alocar. `m.fr` é um `encoding.FieldReader` reusado, como todo buffer deste pacote. `slotDe` é uma busca binária sobre `slots` por `ID`.
+`m.slots` é um `[][]predicado.Slot`, um por regra, alocado UMA vez no construtor via `predicado.NovosSlots(r.Slots.IDs)` — a avaliação roda por evento e não pode alocar. `m.fr` é um `encoding.FieldReader` reusado, como todo buffer deste pacote. `slotOf` é uma busca binária sobre `slots` por `ID`.
 
 - [ ] **Passo 4: emitir a entry**
 
@@ -1315,7 +1315,7 @@ Em `patch.go`, o bloco do `_writtenAt` ganha um irmão. Como a duração depende
 ```go
 	// materializer.go, depois de m.patch.Parse e antes do merge
 	if m.schema.TTLField != nil {
-		d, err := m.duracaoDe(prevPayload, m.patch.entries)
+		d, err := m.durationOf(prevPayload, m.patch.entries)
 		if err != nil {
 			return err
 		}
@@ -1521,7 +1521,7 @@ func TestCompactionDescartaRecordVencidoPorRegraCondicional(t *testing.T) {}
 
 `TestLinhaImortalNaoHerdaAFallbackDuration` é o teste do sentinela e o mais importante do conjunto: sem ele, um `Get` que colapse imortal com desconhecido passa despercebido.
 
-**`montaLapide` NÃO muda.** Ela hoje preserva só o `writeFieldId`, e é para continuar
+**`buildLapide` NÃO muda.** Ela hoje preserva só o `writeFieldId`, e é para continuar
 assim: a lápide não precisa de prazo, e não preservar o `_expiresIn` devolve os bytes. A
 entrada em `prazos.idx` fica com o valor antigo, o que é inofensivo — a linha já está
 tombstonada e `Expira` é idempotente. Se você sentir vontade de acrescentá-lo ali, a
@@ -1616,7 +1616,7 @@ Em `store.go:1467`, ao lado do instante:
 - [ ] **Passo 6: a conta do prazo**
 
 ```go
-// duracaoEfetiva devolve por quanto tempo esta linha pode ficar sem escrita.
+// durationEfetiva devolve por quanto tempo esta linha pode ficar sem escrita.
 //
 // Entrada DESCONHECIDA cai na duração de FUNDO, e é isso que faz a adoção das
 // regras num dataset já materializado não mudar comportamento: as entidades
@@ -1626,7 +1626,7 @@ Em `store.go:1467`, ao lado do instante:
 //
 // Zero devolvido COM conhecido=true é a entidade imortal, e ela NÃO cai no
 // fundo — é para essa distinção que o ImmortalTTL existe.
-func (s *Store) duracaoEfetiva(rowID types.RowID) time.Duration {
+func (s *Store) durationEfetiva(rowID types.RowID) time.Duration {
 	if s.prazos == nil {
 		return 0
 	}
@@ -1640,7 +1640,7 @@ func (s *Store) prazoVencido(rowID types.RowID) bool {
 	if s.escritas == nil {
 		return false
 	}
-	d := s.duracaoEfetiva(rowID)
+	d := s.durationEfetiva(rowID)
 	if d <= 0 {
 		return false
 	}
@@ -1698,7 +1698,7 @@ git commit -m "Faz o prazo da linha vir da duração gravada no documento"
 ### Task 13: Pré-filtro de tombstone no coletor
 
 **Files:**
-- Modify: `internal/storage/expiry.go` (`ExpiraUmaPassada`)
+- Modify: `internal/storage/expiry.go` (`ExpiraOnePass`)
 - Test: `internal/storage/expiry_test.go`
 
 - [ ] **Passo 1: escrever o teste**
@@ -1717,7 +1717,7 @@ Expected: FAIL — hoje a linha tombstonada é contada em `Renovadas` a cada pas
 
 - [ ] **Passo 3: acrescentar o pré-filtro**
 
-No laço de `ExpiraUmaPassada`, antes do `switch`:
+No laço de `ExpiraOnePass`, antes do `switch`:
 
 ```go
 		// A lápide preserva o instante de escrita de propósito, então a linha
@@ -1727,7 +1727,7 @@ No laço de `ExpiraUmaPassada`, antes do `switch`:
 		//
 		// Com prazo de dias isso é ruído. Com prazo de MINUTOS, que é o que as
 		// regras condicionais trouxeram, é disputa contínua pelo lock de
-		// escrita com a ingestão — e o freio de MaxPorPassada não protege,
+		// escrita com a ingestão — e o freio de MaxPerSweep não protege,
 		// porque ele conta expirações efetivas, não chamadas.
 		//
 		// A leitura é sem lock, e o pré-filtro é seguro porque tombstone não se
@@ -1771,7 +1771,7 @@ git commit -m "Poupa o lock de escrita pulando linha já tombstonada na varredur
 ```go
 func TestContadoresDeRegraContamPorRegra(t *testing.T) {
 	// 3 eventos: dois casam a regra 0, um cai no fundo
-	// m.Stats(): regra[0]=2, regra[1]=1, semRegra=0
+	// m.Stats(): regra[0]=2, regra[1]=1, withoutRegra=0
 }
 func TestContadorDeCongeladaSeparaCapturaDePreservacao(t *testing.T) {}
 ```
@@ -1782,8 +1782,8 @@ Contadores por dataset, ao lado dos que a expiração já publica:
 
 | Contador | Onde incrementa | Responde |
 |---|---|---|
-| `ttl.regra[i].casou` | `duracaoDe`, no return de cada regra | Qual regra está pegando o quê |
-| `ttl.semRegra` | `duracaoDe`, no return final | Quantas escritas não casaram com nada |
+| `ttl.regra[i].casou` | `durationOf`, no return de cada regra | Qual regra está pegando o quê |
+| `ttl.withoutRegra` | `durationOf`, no return final | Quantas escritas não casaram com nada |
 | `congelada.capturada` | `capturaCongeladas`, ao emitir | Se a captura está acontecendo |
 | `congelada.preservada` | `mergeRecords`, no ramo congelado | Se o congelamento está segurando |
 

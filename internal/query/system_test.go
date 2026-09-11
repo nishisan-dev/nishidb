@@ -11,7 +11,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
 )
 
-const yamlComExpiracao = `
+const yamlWithExpiration = `
 version: 1
 name: alarmes
 materialization:
@@ -30,9 +30,9 @@ schema:
       type: int64
 `
 
-func harnessComExpiracao(t *testing.T) *query.Engine {
+func harnessWithExpiration(t *testing.T) *query.Engine {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yamlComExpiracao), schema.BuiltinDefaults)
+	spec, err := schema.Parse([]byte(yamlWithExpiration), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func harnessComExpiracao(t *testing.T) *query.Engine {
 	return eng
 }
 
-func colunasDe(t *testing.T, eng *query.Engine, sql string) []string {
+func columnsOf(t *testing.T, eng *query.Engine, sql string) []string {
 	t.Helper()
 	it, err := eng.Execute(context.Background(), "alarmes", sql, nil)
 	if err != nil {
@@ -72,8 +72,8 @@ func colunasDe(t *testing.T, eng *query.Engine, sql string) []string {
 // SELECT * é "todos os campos do dado", não "todos os campos do payload": a
 // contabilidade interna do banco não é resposta a essa pergunta.
 func TestSelectEstrelaNaoProjetaOCampoDeSistema(t *testing.T) {
-	eng := harnessComExpiracao(t)
-	cols := colunasDe(t, eng, "SELECT * FROM alarmes")
+	eng := harnessWithExpiration(t)
+	cols := columnsOf(t, eng, "SELECT * FROM alarmes")
 	for _, c := range cols {
 		if c == schema.WriteInstantFieldName {
 			t.Fatalf("SELECT * projetou o campo de sistema: %v", cols)
@@ -86,7 +86,7 @@ func TestSelectEstrelaNaoProjetaOCampoDeSistema(t *testing.T) {
 
 // Oculto no *, não inacessível: pedir pelo nome funciona, como ROWID/xmin.
 func TestSelectNominalDoCampoDeSistemaFunciona(t *testing.T) {
-	eng := harnessComExpiracao(t)
+	eng := harnessWithExpiration(t)
 	sql := "SELECT id, " + schema.WriteInstantFieldName + " FROM alarmes"
 	it, err := eng.Execute(context.Background(), "alarmes", sql, nil)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestSelectNominalDoCampoDeSistemaFunciona(t *testing.T) {
 // Dataset sem expiração declarada não tem o campo, e pedi-lo é erro de coluna
 // inexistente — não uma coluna sempre nula.
 func TestSemExpiracaoOCampoDeSistemaNaoExiste(t *testing.T) {
-	yaml := strings.Replace(yamlComExpiracao, "  ttl:\n    - expireAfterWrite: 2h\n", "", 1)
+	yaml := strings.Replace(yamlWithExpiration, "  ttl:\n    - expireAfterWrite: 2h\n", "", 1)
 	spec, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)

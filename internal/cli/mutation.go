@@ -31,7 +31,7 @@ import (
 func runCompact(args []string, amb Context) int {
 	fs := flag.NewFlagSet("compact", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
-	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	server := fs.String("server", "", "endereço do nishidb server (host:porta)")
 	credFlags := setupRemoteFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return ExitUsageError
@@ -46,7 +46,7 @@ func runCompact(args []string, amb Context) int {
 		notify(amb, "  as flags vêm antes: nishidb compact --server <host:porta> [dataset]\n")
 		return ExitUsageError
 	}
-	if code := requiresServer("compact", *servidor, amb); code != ExitOK {
+	if code := requiresServer("compact", *server, amb); code != ExitOK {
 		return code
 	}
 	dataset := ""
@@ -55,16 +55,16 @@ func runCompact(args []string, amb Context) int {
 	}
 
 	var resp protocol.CompactResponse
-	if code := postMutation("compact", *servidor, "/v1/compact", dataset, cred, &resp, amb); code != ExitOK {
+	if code := postMutation("compact", *server, "/v1/compact", dataset, cred, &resp, amb); code != ExitOK {
 		return code
 	}
-	return writeOutputWithContext("compact", amb, func(w io.Writer) { writeCompact(w, *servidor, resp) })
+	return writeOutputWithContext("compact", amb, func(w io.Writer) { writeCompact(w, *server, resp) })
 }
 
 func runCheckpoint(args []string, amb Context) int {
 	fs := flag.NewFlagSet("checkpoint", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
-	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	server := fs.String("server", "", "endereço do nishidb server (host:porta)")
 	credFlags := setupRemoteFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return ExitUsageError
@@ -79,7 +79,7 @@ func runCheckpoint(args []string, amb Context) int {
 		notify(amb, "  as flags vêm antes: nishidb checkpoint --server <host:porta> [dataset]\n")
 		return ExitUsageError
 	}
-	if code := requiresServer("checkpoint", *servidor, amb); code != ExitOK {
+	if code := requiresServer("checkpoint", *server, amb); code != ExitOK {
 		return code
 	}
 	dataset := ""
@@ -88,28 +88,28 @@ func runCheckpoint(args []string, amb Context) int {
 	}
 
 	var resp protocol.CheckpointResponse
-	if code := postMutation("checkpoint", *servidor, "/v1/checkpoint", dataset, cred, &resp, amb); code != ExitOK {
+	if code := postMutation("checkpoint", *server, "/v1/checkpoint", dataset, cred, &resp, amb); code != ExitOK {
 		return code
 	}
-	return writeOutputWithContext("checkpoint", amb, func(w io.Writer) { writeCheckpoint(w, *servidor, resp) })
+	return writeOutputWithContext("checkpoint", amb, func(w io.Writer) { writeCheckpoint(w, *server, resp) })
 }
 
 // postaMutacao faz o POST de uma rota mutante (compact/checkpoint) e
 // decodifica o corpo de SUCESSO no destino. dataset == "" omite o corpo por
 // completo — não manda "{}" — para exercitar o mesmo caminho "todos os
 // datasets" que um corpo ausente já cobre no servidor (mutations.go,
-// leRequisicaoDataset).
+// readRequisicaoDataset).
 //
 // O tratamento de erro é o do query_remota (recusaRemota, que operation.go
 // já generaliza com um parâmetro `cmd`): ErrorBody decodificado,
-// mensagem no stderr, código traduzido por codigoDoProtocolo — a MESMA
+// mensagem no stderr, código traduzido por codigoOfProtocolo — a MESMA
 // tabela que WRITER_FAILED (→ ExitWriter) e COMPACTION_BUSY (→ ExitUsageError, com
-// justificativa no comentário de codigoDoProtocolo) alimentam.
+// justificativa no comentário de codigoOfProtocolo) alimentam.
 //
 // cred entra pelo MESMO remoteClient/aplicaCredencial que consultaRemota e
 // searchDocument usam (Task B6) — este É o ponto de costura único que a B5
 // já apontava para a credencial entrar.
-func postMutation(cmd, endereco, caminho, dataset string, cred remoteCredential, destino any, amb Context) int {
+func postMutation(cmd, endereco, path, dataset string, cred remoteCredential, dest any, amb Context) int {
 	var corpo io.Reader
 	if dataset != "" {
 		b, err := json.Marshal(protocol.DatasetRequest{Dataset: dataset})
@@ -125,7 +125,7 @@ func postMutation(cmd, endereco, caminho, dataset string, cred remoteCredential,
 		notify(amb, "%s: %v\n", cmd, err)
 		return ExitUsageError
 	}
-	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodPost, normalizeAddress(endereco)+caminho, corpo)
+	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodPost, normalizeAddress(endereco)+path, corpo)
 	if err != nil {
 		notify(amb, "%s: %v\n", cmd, err)
 		return ExitUsageError
@@ -149,7 +149,7 @@ func postMutation(cmd, endereco, caminho, dataset string, cred remoteCredential,
 	if resp.StatusCode != http.StatusOK {
 		return remoteRefusal(cmd, resp, amb)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(destino); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
 		notify(amb, "%s: resposta ilegível de %s: %v\n", cmd, endereco, err)
 		return ExitDataset
 	}

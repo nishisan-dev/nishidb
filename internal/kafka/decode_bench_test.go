@@ -13,14 +13,14 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
-// corpusDeRegime é um lote de eventos SEM descoberta: todas as colunas já
+// corpusOfRegime é um lote de eventos SEM descoberta: todas as colunas já
 // existem quando a medição começa.
 //
 // É o corpus certo para medir vazão porque é o regime do piloto — ~1.700
 // colunas, nenhuma nova — e porque a descoberta paga um parse dobrado que
 // mediria a Fase 4.2, não o paralelismo. O documento tem doze chaves aninhadas,
 // que é o que faz o decode custar o que ele custa.
-func corpusDeRegime(n int) [][]byte {
+func corpusOfRegime(n int) [][]byte {
 	out := make([][]byte, n)
 	for i := range out {
 		var sb strings.Builder
@@ -49,7 +49,7 @@ func corpusDeRegime(n int) [][]byte {
 func BenchmarkDecodeWorkers(b *testing.B) {
 	for _, workers := range []int{1, 2, 4, 8} {
 		b.Run("workers="+strconv.Itoa(workers), func(b *testing.B) {
-			mat := matDoGolden(b)
+			mat := matOfGolden(b)
 			cfg := &Config{
 				Dataset: "eventos", Topic: "eventos", GroupID: "g",
 				Brokers:        []string{"127.0.0.1:9092"},
@@ -62,16 +62,16 @@ func BenchmarkDecodeWorkers(b *testing.B) {
 			w := NewWriter(cfg, mat, storeGolden{}, fila, nil, met,
 				map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
 
-			ctx, cancela := context.WithCancel(context.Background())
-			defer cancela()
-			pool := newDecodePool(workers, fila, w.est, mat, met, w.limiarDeEncolhimento)
-			esperaDecode := pool.Sobe(ctx)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			pool := newDecodePool(workers, fila, w.est, mat, met, w.limiarOfEncolhimento)
+			waitDecode := pool.Rises(ctx)
 			pronto := make(chan error, 1)
 			go func() { pronto <- w.Run(ctx) }()
 
 			// Aquece fora da medição: a primeira passagem cria as colunas, e
 			// medir a descoberta junto mediria a Fase 4.2 no lugar desta.
-			corpus := corpusDeRegime(4096)
+			corpus := corpusOfRegime(4096)
 			for i := 0; i < 256; i++ {
 				if err := fila.Envia(ctx, &kgo.Record{Value: corpus[i]}); err != nil {
 					b.Fatal(err)
@@ -86,8 +86,8 @@ func BenchmarkDecodeWorkers(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
-			fila.Fecha()
-			esperaDecode()
+			fila.Close()
+			waitDecode()
 			if err := <-pronto; err != nil {
 				b.Fatal(err)
 			}

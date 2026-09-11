@@ -120,7 +120,7 @@ func BenchmarkApplyStaleNullStore(b *testing.B) {
 // O mesmo dataset do patchYAML, sem sequence: repetir o MESMO evento num
 // dataset com sequence vira stale da segunda iteração em diante, e o
 // benchmark mediria o caminho de descarte em vez do merge.
-const benchNoSeqYAML = `
+const benchInSeqYAML = `
 version: 1
 name: radius_bench
 materialization:
@@ -153,7 +153,7 @@ schema:
 // e mantém mapas de postings, e é daí que vêm as alocações.
 func newFakeMaterializer(tb testing.TB) (*Materializer, *schema.Compiled) {
 	tb.Helper()
-	s, err := schema.Parse([]byte(benchNoSeqYAML), schema.BuiltinDefaults)
+	s, err := schema.Parse([]byte(benchInSeqYAML), schema.BuiltinDefaults)
 	if err != nil {
 		tb.Fatal(err)
 	}

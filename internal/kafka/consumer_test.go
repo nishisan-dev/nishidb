@@ -94,17 +94,17 @@ func TestAoAtribuirEsperaAdmProntoAntesDeTocarAdm(t *testing.T) {
 // O franz-go chama onAssigned (aoAtribuir) e SÓ DEPOIS, numa goroutine
 // própria disparada assim que aoAtribuir retorna, busca os offsets do group e
 // invoca AdjustFetchOffsetsFn (ajustaOffsets). admPronto (débito 60) fecha
-// logo depois de kgo.NewClient devolver — bem ANTES de resolveOrigemEPosicao
+// logo depois de kgo.NewClient devolver — bem ANTES de resolveSourceEPosition
 // terminar de escrever c.offsetsIniciais, que faz I/O de rede (metadata) e de
 // disco (checkpoint local). Isso deixa uma janela em que aoAtribuir já
 // retornou — e a goroutine de fetchOffsets já pode estar chamando
-// ajustaOffsets — enquanto resolveOrigemEPosicao ainda está no meio da
+// ajustaOffsets — enquanto resolveSourceEPosition ainda está no meio da
 // escrita do mapa: leitura concorrente com mapassign, capturada ao vivo pelo
 // -race no CI (run 32601376137, TestSpec105DuplicateDelivery), não hipótese.
 //
 // O oráculo é o mesmo desenho do 60: determinístico, sem depender de timing
 // de broker nem do detector de corrida. A goroutine chama `ajustaOffsets` com
-// `c.offsetsPronto` ainda ABERTO (simulando resolveOrigemEPosicao no meio do
+// `c.offsetsPronto` ainda ABERTO (simulando resolveSourceEPosition no meio do
 // caminho) e o teste exige que ela fique BLOQUEADA por um intervalo razoável
 // — sem tocar o mapa, que aqui está deliberadamente nil, o estado real antes
 // da escrita. Só depois o teste escreve o mapa e fecha `offsetsPronto` (como
@@ -117,20 +117,20 @@ func TestAjustaOffsetsEsperaOffsetsProntoAntesDeLerOMapa(t *testing.T) {
 		offsetsPronto: make(chan struct{}),
 	}
 
-	doGroup := map[string]map[int32]kgo.Offset{
+	ofGroup := map[string]map[int32]kgo.Offset{
 		"topico-teste": {0: kgo.NewOffset().At(5)},
 	}
 
-	type resultado struct {
+	type result struct {
 		saida map[string]map[int32]kgo.Offset
 		err   error
 		panic any
 	}
-	terminou := make(chan resultado, 1)
+	terminou := make(chan result, 1)
 	go func() {
-		var r resultado
+		var r result
 		defer func() { r.panic = recover(); terminou <- r }()
-		r.saida, r.err = c.ajustaOffsets(context.Background(), doGroup)
+		r.saida, r.err = c.ajustaOffsets(context.Background(), ofGroup)
 	}()
 
 	// Antes da liberação, ajustaOffsets tem de estar BLOQUEADA. c.offsetsIniciais
@@ -170,7 +170,7 @@ func TestAjustaOffsetsEsperaOffsetsProntoAntesDeLerOMapa(t *testing.T) {
 // da família 60/69, achado pela varredura que a revisão do fechamento do 69
 // pediu sobre os demais callbacks.
 //
-// c.w só é atribuído ao FIM de Abre, depois de resolveOrigemEPosicao e de
+// c.w só é atribuído ao FIM de Abre, depois de resolveSourceEPosition e de
 // NovaFila. O loop do group nasce assíncrono no metadata loop (mesma raiz do
 // 60) e pode completar join→assign→heartbeat→revoke antes disso —
 // `manageFailWait` do franz-go chama onRevoked (aoRevogar) incondicionalmente

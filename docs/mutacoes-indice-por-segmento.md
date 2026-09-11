@@ -158,9 +158,9 @@ que espalhadas pelos relatórios.
 |---|---|---|
 | a reconstrução decide liveness pela location | `TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP`, `TestAReconstrucaoNaoConsultaAsLocations` | `selagem e reconstrução produziram arquivos diferentes: 6724 bytes contra 5628` |
 | remover a classificação do nome ilegível | `TestNomeIlegivelNoEspacoDoWIPSaiComoDatasetIlegivel` | `quero ErrDatasetCorrupt (exit 4); sem a sentinela isto vira exit 1` |
-| desligar a guarda do segmento corrente | `TestConstruirOIndiceDoSegmentoCorrenteEhRecusado` | `ConstroiIndiceDoSegmento(corrente) = <nil>, quero ErrInvalidArgument` |
+| desligar a guarda do segmento corrente | `TestConstruirOIndiceDoSegmentoCorrenteEhRecusado` | `ConstroiIndexOfSegment(corrente) = <nil>, quero ErrInvalidArgument` |
 | aceitar subconjunto de campos na reconstrução | à época, o teste de recusa; hoje `TestConstruirComCampoNaoIndexadoEhRecusado` e `TestReconstruirSoOsCamposQueFaltamPreservaOsQueJaEstavam` | `= <nil>, quero ErrInvalidArgument` |
-| `aplicaIndiceSets` pula o campo não alterado | `TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado`, `TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart` | `a posting do campo inalterado não migrou com o record` |
+| `aplicaIndexSets` pula o campo não alterado | `TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado`, `TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart` | `a posting do campo inalterado não migrou com o record` |
 | `Close` desmonta o mapeamento incondicionalmente | `TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo` | `fatal error: fault [signal SIGSEGV]` em `sealedIter.Next → readDelta` |
 | o pread não trata `ErrNotExist` do segmento aposentado | `TestSegmentoAposentadoEntreAListagemEOPreadViraFonteVazia` | consulta abortada |
 | `limparIndicesGlobaisLegados` inerte | `TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco` | `IndexBytes 21.037.056 ≥ 20.996.096`, os dois diretórios sobrevivem |
@@ -178,16 +178,16 @@ que espalhadas pelos relatórios.
 | cobrar pelo `maior .sidx` em disco (o furo do desenho aprovado) | `TestAJanelaConvergeEmVezDeMoer` | `pendentes = [1] logo depois da expulsão` |
 | remover a guarda de bootstrap | `TestAJanelaConvergeEmVezDeMoer` | `pendentes = [1 2 3 4 5], quer só o mais novo selado` |
 | orçamento caminhando do mais velho para o mais novo | idem | `pendente = 1, quer o mais novo selado (5)` |
-| `noPontoFixo` sempre `false` | `TestSegmentoSemCampoIndexadoNaoVoltaParaAFila`, `TestOPontoFixoCaiQuandoOIndiceSaiDeDisco` | `uma passada seguinte reconstruiu 2 segmentos que já estavam no ponto fixo` |
+| `inPontoFixo` sempre `false` | `TestSegmentoSemCampoIndexadoNaoVoltaParaAFila`, `TestOPontoFixoCaiQuandoOIndiceSaiDeDisco` | `uma passada seguinte reconstruiu 2 segmentos que já estavam no ponto fixo` |
 | ponto fixo como booleano "já tentei" | `TestOPontoFixoCaiQuandoOIndiceSaiDeDisco` | `a passada depois da expulsão reconstruiu 0 segmentos, quero 1` |
 | teto de 1 segmento por passada | `TestAReconstrucaoConvergeEDeixaAFilaVazia`, `TestOLacoDeReconstrucaoDrenaAFilaSozinho` | fila não esgota |
 | temporário de nome fixo | `TestCadaEscritaUsaUmTemporarioProprio`, `TestDoisEscritoresConcorrentesNaoPublicamArquivoRasgado` | crc divergente de verdade |
-| `Close` sem `ParaReconstrucao` | `TestCloseCancelaEEsperaAReconstrucao` | goroutine órfã |
-| `ParaReconstrucao` sem `Wait` | `TestSegundaPartidaDaReconstrucaoNaoSobeSegundaGoroutine` | o `Para` nunca volta |
+| `Close` sem `ForRebuild` | `TestCloseCancelaEEsperaAReconstrucao` | goroutine órfã |
+| `ForRebuild` sem `Wait` | `TestSegundaPartidaDaReconstrucaoNaoSobeSegundaGoroutine` | o `Para` nunca volta |
 | `oSegmentoSaiuDoDataset` sempre `false` | `TestOSegmentoAposentadoNoMeioDaPassadaNaoDerrubaOLaco`, `TestOErroDoSegmentoSumidoEhOQueOLacoTolera` | o laço para de vez |
-| `publicaSelado` sem conferir a geração | `TestOMapeamentoAbertoAntesDaReescritaNaoEhPublicado` | o cache serve o arquivo antigo |
+| `publicaSealed` sem conferir a geração | `TestOMapeamentoAbertoAntesDaReescritaNaoEhPublicado` | o cache serve o arquivo antigo |
 | uma chamada de `Construi` por campo | `TestAReconstrucaoResolveTodosOsCamposPendentesNaMesmaLeitura` | `o segmento foi varrido 2 vezes` |
-| `janelaDoDataset` sem a guarda do materializado | `TestAReconstrucaoSobeNosDoisModosComAJanelaCerta` | janela finita no materializado |
+| `windowOfDataset` sem a guarda do materializado | `TestAReconstrucaoSobeNosDoisModosComAJanelaCerta` | janela finita no materializado |
 | primeira passada não imediata | `TestOLacoDeReconstrucaoDrenaAFilaSozinho` | a fila só drena no segundo ciclo |
 | **laço com janela infinita, expulsão com 6 h** | **nada — VERDE** | ver seção 4 |
 | o coletor só emite o estado quando a contagem ≠ 0 | `TestAsSeriesDeIndiceExistemAntesDoPrimeiroEvento`, `TestOsLabelsDeIndiceSaoConjuntosFechados` | `a fila que nasce vazia é indistinguível da fila que nunca foi publicada` |
@@ -205,12 +205,12 @@ que espalhadas pelos relatórios.
 | `index_bytes` perde o filtro e soma os `.dat` | `TestOsBytesDeIndiceContamExatamenteOsArquivosDeIndice` | `index_bytes = 81920 e os arquivos de índice em data/ somam 57344 blocos` |
 | `index_bytes` devolve zero | idem | `nishidb_index_bytes = 0 num dataset com .sidx e .widx em disco` |
 | `history_index_bytes` lê o próprio base | `TestOsBytesDeIndiceVivemNoRotuloDaIrma` | `= 1.68e+07 e o índice em disco da IRMÃ soma 106496 blocos` |
-| `historicoStats` lê `base.st` em vez de `base.irma.st` | idem | as três asserções falam |
-| publicar os estados no caminho de erro | `TestAPassadaQueFalhaPreservaORetratoAnterior` | `a passada interrompida publicou {Selado:4 …} por cima de {Selado:5 …}` |
+| `historyStats` lê `base.st` em vez de `base.irma.st` | idem | as três asserções falam |
+| publicar os estados no caminho de erro | `TestAPassadaQueFalhaPreservaORetratoAnterior` | `a passada interrompida publicou {Sealed:4 …} por cima de {Sealed:5 …}` |
 | `reconstrucoes` conta passadas em vez de segmentos publicados | `TestAsReconstrucoesSaoContadasPorSegmentoPublicado` | `reconstrucoes subiu 1 e a passada publicou 5 segmento(s)` |
 | `recFeitas` volta a contar a visita | idem | `subiu 2 para 2 segmento(s) que foram varridos e NÃO publicaram arquivo nenhum` |
-| `reconstrucao_ativa` ecoa `segCorrentes` | `TestOMedidorDaReconstrucaoNaoEhOContadorDeCorrentes` | `= true num Store cujo laço nunca subiu, com corrente = 1` |
-| `reconstrucao_ativa` **e** `RebuildRunning` ecoam `Estados.Corrente` (os dois lados) | `TestASerieDaReconstrucaoDesceQuandoOLacoMorre` | `nishidb_index_reconstrucao_ativa = 1 com o laço MORTO e corrente = 1` |
+| `reconstrucao_ativa` ecoa `secCorrentes` | `TestOMedidorDaReconstrucaoNaoEhOContadorDeCorrentes` | `= true num Store cujo laço nunca subiu, com corrente = 1` |
+| `reconstrucao_ativa` **e** `RebuildRunning` ecoam `States.Current` (os dois lados) | `TestASerieDaReconstrucaoDesceQuandoOLacoMorre` | `nishidb_index_reconstrucao_ativa = 1 com o laço MORTO e corrente = 1` |
 | a `Ajuda` volta a prometer taxa | `TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina` | `ainda afirma que a falha não é memorizada` |
 | `Family` vazia de volta | `TestOsCabecalhosSaemNomeadosParaCadaFamilia` | `cabeçalho com nome de métrica VAZIO: "# HELP  Linhas gravadas…"` |
 | citação morta plantada em `indices_metrics.go` | `TestAsCitacoesDeTesteNosComentariosExistem` | nomeia arquivo e nome |
@@ -241,7 +241,7 @@ Mesma família: a primeira versão do teste de rótulo de `history_index_bytes`
 comparava as duas séries **entre si** — as duas alimentadas pela mesma
 proveniência errada. E a comparação `/metrics` × `/v1/stats` não vê a mutação
 quando ela alimenta os **dois lados** da mesma fonte: foi assim que
-`reconstrucao_ativa` ecoando `Estados.Corrente` passou verde nos dois canos.
+`reconstrucao_ativa` ecoando `States.Current` passou verde nos dois canos.
 
 > **Pergunta:** de onde vem o número que eu chamo de "certo"? Se ele vem do código
 > em julgamento — direta ou indiretamente —, o teste é um espelho. O oráculo tem de
@@ -314,7 +314,7 @@ ficou sem regressão para a invariante mais dura do produto ("erro nunca vira
 resultado menor"). Hoje há um teste por caminho.
 
 Igual: a metade "falha no meio do laço" do teste de retrato de estados nunca era
-exercitada, porque nada no teste fazia `segmentoPendente` falhar; e o teste de
+exercitada, porque nada no teste fazia `segmentPendente` falhar; e o teste de
 migração de índice legado plantava os diretórios sob um dataset **v3**, sem nunca
 abrir um legado de verdade.
 
@@ -329,7 +329,7 @@ O teste do moinho da janela calculava o teto sobre `info.Size()` — tamanho
 aparente — enquanto o produto conta **blocos alocados**. Um `.sidx` de teste tem
 centenas de bytes e ocupa um bloco inteiro, então o teto ficava abaixo do custo de
 um único índice e **tudo** era expulso nas duas implementações. A mutação só ficou
-vermelha depois de o helper passar a usar `blocosDe`.
+vermelha depois de o helper passar a usar `blocosOf`.
 
 > **Pergunta:** o número que o helper calcula é o **mesmo** que o produto calcula,
 > pela mesma via? Bytes contra blocos, aparente contra alocado, e "o que o teste
@@ -393,11 +393,11 @@ teste — uma série nova entra na proibição sozinha.
 *Os dois fios que o teste compara são estruturalmente iguais no cenário testado.*
 
 O caso mais fino do ciclo, e ele merece nome próprio porque nenhuma das perguntas
-acima o pega. Num servidor saudável, `reconstrucao_ativa` e `Estados.Corrente` são
+acima o pega. Num servidor saudável, `reconstrucao_ativa` e `States.Current` são
 sempre iguais: existe um segmento corrente, o laço sobe sempre que há campo
-indexado, e `Corrente` só é publicado quando há campo indexado. Nenhuma bancada
+indexado, e `Current` só é publicado quando há campo indexado. Nenhuma bancada
 **saudável** separa os dois — e o cenário que o revisor sugeriu para separá-los não
-existe no código (sem campo indexado, `Corrente` é 0, não 1).
+existe no código (sem campo indexado, `Current` é 0, não 1).
 
 O cenário que discrimina é o **laço morto**: sabotar o `.sidx` depois da subida, de
 modo que a passada seguinte falhe, o laço morra e o retrato anterior fique de pé —

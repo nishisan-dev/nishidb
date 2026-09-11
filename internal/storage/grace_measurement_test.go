@@ -13,13 +13,13 @@ import (
 // "_writtenAt IS NULL" continua devolvendo a entidade depois da carência, e
 // isso NÃO significa que o coletor não rodou.
 func TestCarenciaGravaNoIndiceENaoNoPayload(t *testing.T) {
-	s, _ := storeComExpiracao(t, t.TempDir(), 90*24*time.Hour)
-	id, _ := mustPut(t, s, "legada", 1, payloadSemEscrita(t, s, "legada"), nil)
+	s, _ := storeWithExpiration(t, t.TempDir(), 90*24*time.Hour)
+	id, _ := mustPut(t, s, "legada", 1, payloadWithoutWrite(t, s, "legada"), nil)
 
 	if _, conhecido := s.writes.Get(id); conhecido {
 		t.Fatal("nasceu com prazo")
 	}
-	r, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	r, err := s.ExpiraOnePass(context.Background(), limitesOfTest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestCarenciaGravaNoIndiceENaoNoPayload(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
-	if _, tem := writeInstant(rec.Payload, s.writeFieldID); tem {
+	if _, has := writeInstant(rec.Payload, s.writeFieldID); has {
 		t.Fatal("a carência escreveu no payload; ela deve escrever só no índice")
 	}
 	_ = types.RowID(0)

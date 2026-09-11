@@ -41,7 +41,7 @@ type esteira struct {
 	mu     sync.Mutex
 	slots  []slot
 	mask   int64
-	janela int64
+	window int64
 
 	// proxima é o seq que o writer quer consumir agora. Tudo abaixo dela já
 	// foi aplicado; o slot de proxima-janela já pode ser reusado.
@@ -58,7 +58,7 @@ type esteira struct {
 	// sinal não pode se perder entre a checagem e o bloqueio.
 	pronto chan struct{}
 
-	// ocioso acumula NANOSSEGUNDOS que o WRITER passou esperando trabalho, e
+	// idle acumula NANOSSEGUNDOS que o WRITER passou esperando trabalho, e
 	// desdeOcio marca o início da espera em curso.
 	//
 	// A contabilidade migrou da Fila para cá junto com o writer. Enquanto ele
@@ -72,12 +72,12 @@ type esteira struct {
 	// O trecho em curso é somado na leitura pela mesma razão que na Fila: o caso
 	// que mais importa é aquele em que a espera NÃO termina, e um contador que
 	// só soma no fim fica imóvel exatamente aí.
-	ocioso    atomic.Int64
+	idle      atomic.Int64
 	desdeOcio atomic.Int64
 
-	// semMais marca que nenhum decodificador vai publicar de novo. O writer
+	// withoutMais marca que nenhum decodificador vai publicar de novo. O writer
 	// drena o que sobrou, em ordem, e só então encerra.
-	semMais bool
+	withoutMais bool
 	// abandonada marca que o writer foi embora. Quem espera vaga desiste em
 	// vez de esperar para sempre — o evento não aplicado não avança offset,
 	// então o reinício o reprocessa.
@@ -115,20 +115,20 @@ type slot struct {
 // de ENTRADA, que existe para absorver rajada, e não pelo trabalho em voo, que
 // é o que o anel de fato guarda. Um lote de poll é o que o pipeline processa de
 // uma vez.
-func newPipeline(janela int) *esteira {
-	n := powerOfTwo(janela)
+func newPipeline(window int) *esteira {
+	n := powerOfTwo(window)
 	e := &esteira{
 		slots:  make([]slot, n),
 		mask:   n - 1,
-		janela: n,
+		window: n,
 		pronto: make(chan struct{}, 1),
 	}
 	e.livre = sync.NewCond(&e.mu)
 	return e
 }
 
-// tamanho é a janela efetiva do anel, já arredondada.
-func (e *esteira) tamanho() int { return int(e.janela) }
+// size é a janela efetiva do anel, já arredondada.
+func (e *esteira) size() int { return int(e.window) }
 
 // Reserva espera a vaga do seq e devolve o Decodificado daquele slot para o
 // worker preencher.
@@ -143,7 +143,7 @@ func (e *esteira) tamanho() int { return int(e.janela) }
 func (e *esteira) reserva(seq int64) *materializer.Decodificado {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for seq-e.proxima >= e.janela && !e.abandonada {
+	for seq-e.proxima >= e.window && !e.abandonada {
 		e.livre.Wait()
 	}
 	if e.abandonada {
@@ -193,11 +193,11 @@ func (e *esteira) consome(ctx context.Context, acorda <-chan time.Time) (*slot, 
 			e.mu.Unlock()
 			return s, true, false
 		}
-		fim := e.semMais
+		end := e.withoutMais
 		e.mu.Unlock()
-		if fim {
+		if end {
 			// Os seq são contíguos e todo worker publica o que reservou, então
-			// slot de proxima vazio com semMais ligado só pode significar que
+			// slot de proxima vazio com withoutMais ligado só pode significar que
 			// não há mais nada. Não existe buraco a pular.
 			return nil, false, false
 		}
@@ -205,15 +205,15 @@ func (e *esteira) consome(ctx context.Context, acorda <-chan time.Time) (*slot, 
 		// acima já não achou trabalho. O relógio só é lido QUANDO HOUVE espera,
 		// como na Fila — um time.Now() por evento no caminho rápido seria
 		// instrumentação mudando o que ela mede.
-		fecha := markWait(&e.desdeOcio, &e.ocioso)
+		close := markWait(&e.desdeOcio, &e.idle)
 		select {
 		case <-e.pronto:
-			fecha()
+			close()
 		case <-acorda:
-			fecha()
+			close()
 			return nil, false, true
 		case <-ctx.Done():
-			fecha()
+			close()
 			return nil, false, false
 		}
 	}
@@ -225,7 +225,7 @@ func (e *esteira) consome(ctx context.Context, acorda <-chan time.Time) (*slot, 
 // que o slot está comprovadamente ocioso: o writer terminou e o próximo dono
 // dele só chega daqui a `janela` eventos. Encolher no decode devolveria a
 // memória e a retomaria no evento seguinte, que é churn, não economia.
-func (e *esteira) avanca(limiarDeEncolhimento int) bool {
+func (e *esteira) advance(limiarOfEncolhimento int) bool {
 	e.mu.Lock()
 	s := &e.slots[e.proxima&e.mask]
 	s.pronto, s.rec, s.barreira = false, nil, nil
@@ -233,8 +233,8 @@ func (e *esteira) avanca(limiarDeEncolhimento int) bool {
 	// primeira solta memória de outro dono (o buffer de fetch de que o evento é
 	// janela), e segurá-la num slot ocioso mantém vivo o lote inteiro; a segunda
 	// devolve os buffers que são nossos, ao preço de o próximo evento realocar.
-	s.dec.Libera()
-	encolheu := s.dec.Encolhe(limiarDeEncolhimento)
+	s.dec.Release()
+	encolheu := s.dec.Shrink(limiarOfEncolhimento)
 	s.retidos.Store(int64(s.dec.BytesRetidos()))
 	e.proxima++
 	e.mu.Unlock()
@@ -263,10 +263,10 @@ func (e *esteira) bytesRetidos() int64 {
 	return n
 }
 
-// Ocioso é o tempo que o writer passou esperando trabalho, INCLUINDO a espera
+// IDle é o tempo que o writer passou esperando trabalho, INCLUINDO a espera
 // que ainda está em curso.
-func (e *esteira) Ocioso() time.Duration {
-	return time.Duration(e.ocioso.Load() + inProgress(&e.desdeOcio))
+func (e *esteira) IDle() time.Duration {
+	return time.Duration(e.idle.Load() + inProgress(&e.desdeOcio))
 }
 
 // SemMaisEventos declara que nenhum decodificador vai publicar de novo.
@@ -274,9 +274,9 @@ func (e *esteira) Ocioso() time.Duration {
 // Chamado depois que TODOS os workers saíram — antes disso, um slot vazio no
 // meio do anel seria indistinguível de um decode em curso, e o writer
 // encerraria com evento por aplicar.
-func (e *esteira) semMaisEventos() {
+func (e *esteira) withoutMaisEventos() {
 	e.mu.Lock()
-	e.semMais = true
+	e.withoutMais = true
 	e.mu.Unlock()
 	select {
 	case e.pronto <- struct{}{}:
@@ -297,7 +297,7 @@ func (e *esteira) abandona() {
 	e.livre.Broadcast()
 }
 
-// janelaMaxima é o teto do anel, em slots.
+// windowMaxima é o teto do anel, em slots.
 //
 // Existe porque `maxPollRecords` é um inteiro positivo sem teto declarado, e o
 // arredondamento para potência de dois é um laço de deslocamento: com um valor
@@ -310,28 +310,28 @@ func (e *esteira) abandona() {
 // disso o anel deixa de comprar sobreposição — o trabalho em voo é limitado
 // pela velocidade dos decodificadores, não pelo tamanho do anel — e passa a ser
 // só memória.
-const janelaMaxima = 1 << 16
+const windowMaxima = 1 << 16
 
-// potenciaDeDois arredonda a janela para cima até a potência de dois, limitada
-// a janelaMaxima.
-func powerOfTwo(janela int) int64 {
-	if janela >= janelaMaxima {
-		return janelaMaxima
+// powerOfTwo arredonda a janela para cima até a potência de dois, limitada
+// a windowMaxima.
+func powerOfTwo(window int) int64 {
+	if window >= windowMaxima {
+		return windowMaxima
 	}
 	n := int64(1)
-	for n < int64(janela) {
+	for n < int64(window) {
 		n <<= 1
 	}
 	return n
 }
 
-// paginaDoSO é o piso do limiar de encolhimento.
+// paginaOfSO é o piso do limiar de encolhimento.
 //
 // Abaixo de uma página, soltar o buffer não devolve memória ao sistema
 // operacional — devolve ao alocador do Go, que a guarda —, então o limiar
 // pequeno só compraria realocação. É o mesmo raciocínio do débito 28: o que
 // ocupa memória é o array, e devolvê-lo só vale quando ele é grande.
-const paginaDoSO = 4096
+const paginaOfSO = 4096
 
 // limiarDeSlot é quanta memória um slot pode reter antes de ser encolhido.
 //
@@ -362,10 +362,10 @@ const paginaDoSO = 4096
 // O piso de uma página impede que uma fila declarada pequena transforme cada
 // evento numa realocação.
 func slotThreshold(cfg *Config) int {
-	janela := powerOfTwo(cfg.MaxPollRecords)
-	limiar := cfg.QueueBytes / janela
-	if limiar < paginaDoSO {
-		return paginaDoSO
+	window := powerOfTwo(cfg.MaxPollRecords)
+	limiar := cfg.QueueBytes / window
+	if limiar < paginaOfSO {
+		return paginaOfSO
 	}
 	return int(limiar)
 }

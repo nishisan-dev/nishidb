@@ -46,10 +46,10 @@ func (s *voidStore) Put(key []byte, seq int64, flags uint8, payload []byte, prev
 	return s.rowID, !s.found, nil
 }
 
-// estadoDeReferencia devolve o estado materializado de uma entidade real,
+// stateOfReference devolve o estado materializado de uma entidade real,
 // tirado do PRÓPRIO pipeline. Montá-lo à mão arriscaria medir o merge contra
 // um payload que a ingestão nunca produziria.
-func estadoDeReferencia(b *testing.B, events [][]byte) (key, payload []byte) {
+func stateOfReference(b *testing.B, events [][]byte) (key, payload []byte) {
 	b.Helper()
 	m, st, _ := fakeSetup(b)
 	r := m.Apply(events[0])
@@ -104,7 +104,7 @@ func BenchmarkApplyCreate(b *testing.B) {
 // o caminho de 85% do tráfego.
 func BenchmarkApplyMergePatch(b *testing.B) {
 	events := corpusPatch(b, 8, 4096)
-	key, payload := estadoDeReferencia(b, corpusCheio(b, 8, 1))
+	key, payload := stateOfReference(b, corpusCheio(b, 8, 1))
 	// Sequence corrente baixa: todo patch do corpus é mais novo e aplica.
 	m, err := materializer.New(compiledSetup(b), &voidStore{
 		rowID: 42, seq: 1, key: key, payload: payload, found: true,
@@ -124,7 +124,7 @@ func BenchmarkApplyMergePatch(b *testing.B) {
 // ser barato porque numa reentrega de Kafka ele é a maioria.
 func BenchmarkApplyStale(b *testing.B) {
 	events := corpusPatch(b, 9, 4096)
-	key, payload := estadoDeReferencia(b, corpusCheio(b, 9, 1))
+	key, payload := stateOfReference(b, corpusCheio(b, 9, 1))
 	m, err := materializer.New(compiledSetup(b), &voidStore{
 		rowID: 42, seq: 1 << 40, key: key, payload: payload, found: true,
 	})

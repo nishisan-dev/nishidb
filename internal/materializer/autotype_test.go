@@ -274,27 +274,27 @@ func TestConversaoDeValorNaoAcusaConflitoDeDicionario(t *testing.T) {
 	}
 }
 
-// dictFalhaAoFixar persiste nomes normalmente, mas falha ao gravar o TIPO — o
+// dictFailAoFixar persiste nomes normalmente, mas falha ao gravar o TIPO — o
 // que o fielddict real faz quando o WriteAt/fsync do registro de hint falha
 // (disco cheio, EIO, EFBIG).
-type dictFalhaAoFixar struct {
+type dictFailAoFixar struct {
 	inner *fakestorage.Dict
 	err   error
 }
 
-func (d dictFalhaAoFixar) LookupOrCreate(name []byte) (types.FieldID, error) {
+func (d dictFailAoFixar) LookupOrCreate(name []byte) (types.FieldID, error) {
 	return d.inner.LookupOrCreate(name)
 }
 
-func (d dictFalhaAoFixar) TypeHint(id types.FieldID) (types.FieldType, bool) {
+func (d dictFailAoFixar) TypeHint(id types.FieldID) (types.FieldType, bool) {
 	return d.inner.TypeHint(id)
 }
 
-func (d dictFalhaAoFixar) SetTypeHint(types.FieldID, types.FieldType) error { return d.err }
+func (d dictFailAoFixar) SetTypeHint(types.FieldID, types.FieldType) error { return d.err }
 
-func (d dictFalhaAoFixar) Len() int { return d.inner.Len() }
+func (d dictFailAoFixar) Len() int { return d.inner.Len() }
 
-func (d dictFalhaAoFixar) Name(id types.FieldID) (string, bool) { return d.inner.Name(id) }
+func (d dictFailAoFixar) Name(id types.FieldID) (string, bool) { return d.inner.Name(id) }
 
 // Falha de I/O ao PERSISTIR o tipo fixado vem do dataset, não do evento.
 // Contabilizá-la como TYPE_CONVERSION faria o pipeline pular, em silêncio e
@@ -307,7 +307,7 @@ func TestFalhaDeIODoDicionarioAoFixarTipoEhFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	eio := errors.New(`fielddict: fsync do tipo de "X": input/output error`)
-	c, err := s.Compile(dictFalhaAoFixar{inner: fakestorage.NewDict(), err: eio})
+	c, err := s.Compile(dictFailAoFixar{inner: fakestorage.NewDict(), err: eio})
 	if err != nil {
 		t.Fatal(err)
 	}

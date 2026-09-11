@@ -13,7 +13,7 @@ import (
 )
 
 // Um dataset com maxRows baixo, para provocar o truncamento.
-const yamlTetoBaixo = `
+const yamlCeilingBaixo = `
 version: 1
 name: pequeno
 materialization:
@@ -43,18 +43,18 @@ query:
   timeout: 30s
 `
 
-func comDatasetPequeno(t *testing.T) *ambiente {
+func withDatasetSmall(t *testing.T) *env {
 	t.Helper()
-	a := novoAmbiente(t)
-	caminho := filepath.Join(a.dir, "datasets", "pequeno.yaml")
-	if err := os.WriteFile(caminho, []byte(yamlTetoBaixo), 0o644); err != nil {
+	a := newEnv(t)
+	path := filepath.Join(a.dir, "datasets", "pequeno.yaml")
+	if err := os.WriteFile(path, []byte(yamlCeilingBaixo), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var sb strings.Builder
 	for i := 0; i < 20; i++ {
 		fmt.Fprintf(&sb, `{"id":"K%02d","_SEQ":1,"status":"Stop"}`+"\n", i)
 	}
-	if code := a.rodaComEntrada(sb.String(),
+	if code := a.runWithEntry(sb.String(),
 		"ingest", "--config", a.config, "--dataset", "pequeno", "--input", "-"); code != cli.ExitOK {
 		t.Fatalf("ingest = %d\n%s", code, a.stderr.String())
 	}
@@ -65,9 +65,9 @@ func comDatasetPequeno(t *testing.T) *ambiente {
 // e o cliente precisa saber que o resultado não está completo. Truncar em
 // silêncio entrega resposta parcial com cara de resposta completa.
 func TestTruncamentoPorMaxRowsTemExitCodeProprio(t *testing.T) {
-	a := comDatasetPequeno(t)
+	a := withDatasetSmall(t)
 
-	code := a.roda("query", "--config", a.config, "--dataset", "pequeno",
+	code := a.run("query", "--config", a.config, "--dataset", "pequeno",
 		"SELECT id FROM pequeno")
 	if code != cli.ExitResultTruncated {
 		t.Fatalf("code = %d, want %d\n%s", code, cli.ExitResultTruncated, a.stderr.String())
@@ -75,12 +75,12 @@ func TestTruncamentoPorMaxRowsTemExitCodeProprio(t *testing.T) {
 	if !strings.Contains(a.stderr.String(), "truncado") {
 		t.Errorf("stderr = %q", a.stderr.String())
 	}
-	// As linhas já emitidas continuam válidas e são exatamente o teto.
-	linhas := strings.Split(strings.TrimSuffix(a.stdout.String(), "\n"), "\n")
-	if len(linhas) != 3 {
-		t.Fatalf("%d linhas, want 3 (o maxRows do dataset)", len(linhas))
+	// As rows já emitidas continuam válidas e são exatamente o teto.
+	rows := strings.Split(strings.TrimSuffix(a.stdout.String(), "\n"), "\n")
+	if len(rows) != 3 {
+		t.Fatalf("%d linhas, want 3 (o maxRows do dataset)", len(rows))
 	}
-	for i, l := range linhas {
+	for i, l := range rows {
 		if !json.Valid([]byte(l)) {
 			t.Errorf("linha %d inválida: %s", i, l)
 		}
@@ -89,8 +89,8 @@ func TestTruncamentoPorMaxRowsTemExitCodeProprio(t *testing.T) {
 
 // LIMIT explícito abaixo do teto NÃO é truncamento.
 func TestLimitExplicitoNaoTrunca(t *testing.T) {
-	a := comDatasetPequeno(t)
-	if code := a.roda("query", "--config", a.config, "--dataset", "pequeno",
+	a := withDatasetSmall(t)
+	if code := a.run("query", "--config", a.config, "--dataset", "pequeno",
 		"SELECT id FROM pequeno LIMIT 2"); code != cli.ExitOK {
 		t.Fatalf("code = %d\n%s", code, a.stderr.String())
 	}
@@ -102,9 +102,9 @@ func TestLimitExplicitoNaoTrunca(t *testing.T) {
 // A flag --limit sobrepõe o LIMIT escrito na query: é o que o operador espera
 // de uma flag explícita.
 func TestFlagLimitSobrepoeOLimitDaQuery(t *testing.T) {
-	a := comDatasetPequeno(t)
+	a := withDatasetSmall(t)
 
-	if code := a.roda("query", "--config", a.config, "--dataset", "pequeno",
+	if code := a.run("query", "--config", a.config, "--dataset", "pequeno",
 		"--limit", "1", "SELECT id FROM pequeno LIMIT 3"); code != cli.ExitOK {
 		t.Fatalf("code = %d\n%s", code, a.stderr.String())
 	}
@@ -113,7 +113,7 @@ func TestFlagLimitSobrepoeOLimitDaQuery(t *testing.T) {
 	}
 
 	// Também funciona quando a query não tem LIMIT, e com ponto e vírgula.
-	if code := a.roda("query", "--config", a.config, "--dataset", "pequeno",
+	if code := a.run("query", "--config", a.config, "--dataset", "pequeno",
 		"--limit", "2", "SELECT id FROM pequeno;"); code != cli.ExitOK {
 		t.Fatalf("code = %d\n%s", code, a.stderr.String())
 	}
@@ -126,13 +126,13 @@ func TestFlagLimitSobrepoeOLimitDaQuery(t *testing.T) {
 // cláusula: cortar ali produziria uma query diferente da que o usuário
 // escreveu.
 func TestFlagLimitNaoCortaDentroDeLiteral(t *testing.T) {
-	a := comDatasetPequeno(t)
-	if code := a.rodaComEntrada(`{"id":"L1","_SEQ":1,"status":"sem limit aqui"}`+"\n",
+	a := withDatasetSmall(t)
+	if code := a.runWithEntry(`{"id":"L1","_SEQ":1,"status":"sem limit aqui"}`+"\n",
 		"ingest", "--config", a.config, "--dataset", "pequeno", "--input", "-"); code != cli.ExitOK {
 		t.Fatalf("ingest = %d\n%s", code, a.stderr.String())
 	}
 
-	code := a.roda("query", "--config", a.config, "--dataset", "pequeno",
+	code := a.run("query", "--config", a.config, "--dataset", "pequeno",
 		"--limit", "5", `SELECT id FROM pequeno WHERE status = 'sem limit aqui'`)
 	if code != cli.ExitOK {
 		t.Fatalf("code = %d\n%s", code, a.stderr.String())
@@ -147,13 +147,13 @@ func TestFlagLimitNaoCortaDentroDeLiteral(t *testing.T) {
 // `SELECT id, "no LIMIT 2` — texto que o usuário nunca escreveu, com erro de
 // sintaxe numa posição inventada.
 func TestFlagLimitNaoCortaDentroDeIdentificadorCitado(t *testing.T) {
-	a := comDatasetPequeno(t)
-	if code := a.rodaComEntrada(`{"id":"Q1","_SEQ":1,"no limit aqui":"ok"}`+"\n",
+	a := withDatasetSmall(t)
+	if code := a.runWithEntry(`{"id":"Q1","_SEQ":1,"no limit aqui":"ok"}`+"\n",
 		"ingest", "--config", a.config, "--dataset", "pequeno", "--input", "-"); code != cli.ExitOK {
 		t.Fatalf("ingest = %d\n%s", code, a.stderr.String())
 	}
 
-	code := a.roda("query", "--config", a.config, "--dataset", "pequeno",
+	code := a.run("query", "--config", a.config, "--dataset", "pequeno",
 		"--limit", "2", `SELECT id, "no limit aqui" FROM pequeno`)
 	if code != cli.ExitOK {
 		t.Fatalf("code = %d\n%s", code, a.stderr.String())
@@ -166,7 +166,7 @@ func TestFlagLimitNaoCortaDentroDeIdentificadorCitado(t *testing.T) {
 // Interrupção durante a ingestão: o processo sai com o código de sinal, e o
 // que já foi aplicado ATÉ ALI sobrevive — o dataset reabre íntegro.
 func TestIngestInterrompidoPreservaOQueFoiAplicado(t *testing.T) {
-	a := novoAmbiente(t)
+	a := newEnv(t)
 
 	var sb strings.Builder
 	for i := 0; i < 5000; i++ {
@@ -175,8 +175,8 @@ func TestIngestInterrompidoPreservaOQueFoiAplicado(t *testing.T) {
 
 	// Contexto já cancelado: o comando encerra na primeira verificação, grava
 	// o checkpoint do que aplicou e sai com o código de interrupção.
-	ctx, cancela := context.WithCancel(context.Background())
-	cancela()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	code := cli.Run([]string{"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"},
 		cli.Context{
 			Stdin: strings.NewReader(sb.String()), Stdout: &a.stdout, Stderr: &a.stderr, Ctx: ctx,
@@ -190,7 +190,7 @@ func TestIngestInterrompidoPreservaOQueFoiAplicado(t *testing.T) {
 
 	// O dataset reabre — o Close com quiesce devolveu o lock corretamente
 	// mesmo no caminho de interrupção.
-	if code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
+	if code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 		"SELECT id FROM radius_sessions"); code != cli.ExitOK {
 		t.Fatalf("o dataset não reabriu após a interrupção: %d\n%s", code, a.stderr.String())
 	}
@@ -199,14 +199,14 @@ func TestIngestInterrompidoPreservaOQueFoiAplicado(t *testing.T) {
 // O ingest fecha o dataset ao terminar, e o comando seguinte assume o lock.
 // Sem o quiesce do Close (F-1), esta sequência era uma corrida.
 func TestComandosSequenciaisReabremODataset(t *testing.T) {
-	a := novoAmbiente(t)
+	a := newEnv(t)
 	for i := 0; i < 5; i++ {
-		entrada := fmt.Sprintf(`{"id":"K%d","_SEQ":1,"Acct-Status-Type":"Stop"}`+"\n", i)
-		if code := a.rodaComEntrada(entrada,
+		entry := fmt.Sprintf(`{"id":"K%d","_SEQ":1,"Acct-Status-Type":"Stop"}`+"\n", i)
+		if code := a.runWithEntry(entry,
 			"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != cli.ExitOK {
 			t.Fatalf("ingest %d = %d\n%s", i, code, a.stderr.String())
 		}
-		if code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
+		if code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 			"SELECT id FROM radius_sessions"); code != cli.ExitOK {
 			t.Fatalf("query %d = %d\n%s", i, code, a.stderr.String())
 		}
@@ -218,13 +218,13 @@ func TestComandosSequenciaisReabremODataset(t *testing.T) {
 
 // A ingestão lê de ARQUIVO, não só de stdin.
 func TestIngestDeArquivo(t *testing.T) {
-	a := novoAmbiente(t)
-	caminho := filepath.Join(a.dir, "eventos.ndjson")
-	if err := os.WriteFile(caminho, []byte(corpus(t, 100)), 0o644); err != nil {
+	a := newEnv(t)
+	path := filepath.Join(a.dir, "eventos.ndjson")
+	if err := os.WriteFile(path, []byte(corpus(t, 100)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if code := a.roda("ingest", "--config", a.config, "--dataset", "radius_sessions",
-		"--input", caminho); code != cli.ExitOK {
+	if code := a.run("ingest", "--config", a.config, "--dataset", "radius_sessions",
+		"--input", path); code != cli.ExitOK {
 		t.Fatalf("code = %d\n%s", code, a.stderr.String())
 	}
 	if !strings.Contains(a.stderr.String(), "100 lidos") {
@@ -233,7 +233,7 @@ func TestIngestDeArquivo(t *testing.T) {
 }
 
 // Um dataset com uma grafia de índice que a D5 aposentou.
-const yamlGrafiaDeIndiceObsoleta = `
+const yamlGrafiaOfIndexObsoleta = `
 version: 1
 name: grafiaantiga
 materialization:
@@ -257,12 +257,12 @@ schema:
 // isso o código certo é o 3 (ExitDataset) — não o 4 (ExitWriter, que é writer
 // em modo falho, categoria diferente), nem o 1 do default.
 func TestDatasetComGrafiaDeIndiceObsoletaSaiComExitDataset(t *testing.T) {
-	a := novoAmbiente(t)
-	caminho := filepath.Join(a.dir, "datasets", "grafiaantiga.yaml")
-	if err := os.WriteFile(caminho, []byte(yamlGrafiaDeIndiceObsoleta), 0o644); err != nil {
+	a := newEnv(t)
+	path := filepath.Join(a.dir, "datasets", "grafiaantiga.yaml")
+	if err := os.WriteFile(path, []byte(yamlGrafiaOfIndexObsoleta), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	code := a.roda("query", "--config", a.config, "--dataset", "grafiaantiga",
+	code := a.run("query", "--config", a.config, "--dataset", "grafiaantiga",
 		"SELECT id FROM grafiaantiga")
 	if code != cli.ExitDataset {
 		t.Fatalf("code = %d, want %d (ExitDataset)\n%s", code, cli.ExitDataset, a.stderr.String())
@@ -281,12 +281,12 @@ func TestDatasetComGrafiaDeIndiceObsoletaSaiComExitDataset(t *testing.T) {
 // roteia pelo MESMO codigoDoErro que "query" — o teste conta com isso, não
 // com um caminho de erro próprio do server.
 func TestServidorComGrafiaDeIndiceObsoletaSaiComExitDataset(t *testing.T) {
-	a := novoAmbiente(t)
-	caminho := filepath.Join(a.dir, "datasets", "grafiaantiga.yaml")
-	if err := os.WriteFile(caminho, []byte(yamlGrafiaDeIndiceObsoleta), 0o644); err != nil {
+	a := newEnv(t)
+	path := filepath.Join(a.dir, "datasets", "grafiaantiga.yaml")
+	if err := os.WriteFile(path, []byte(yamlGrafiaOfIndexObsoleta), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	code := a.roda("server", "--config", a.config)
+	code := a.run("server", "--config", a.config)
 	if code != cli.ExitDataset {
 		t.Fatalf("code = %d, want %d (ExitDataset)\n%s", code, cli.ExitDataset, a.stderr.String())
 	}
@@ -297,7 +297,7 @@ func TestServidorComGrafiaDeIndiceObsoletaSaiComExitDataset(t *testing.T) {
 
 // Um dataset cuja janela de indexação é ambígua: `window: 0` não escolhe entre
 // não indexar nada e indexar tudo.
-const yamlJanelaAmbigua = `
+const yamlWindowAmbigua = `
 version: 1
 name: janelaruim
 materialization:
@@ -319,12 +319,12 @@ schema:
 // default (ExitUsageError, 1) — o código que manda o operador olhar a linha de comando
 // em vez do YAML.
 func TestDatasetComJanelaInvalidaSaiComExitDataset(t *testing.T) {
-	a := novoAmbiente(t)
-	caminho := filepath.Join(a.dir, "datasets", "janelaruim.yaml")
-	if err := os.WriteFile(caminho, []byte(yamlJanelaAmbigua), 0o644); err != nil {
+	a := newEnv(t)
+	path := filepath.Join(a.dir, "datasets", "janelaruim.yaml")
+	if err := os.WriteFile(path, []byte(yamlWindowAmbigua), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	code := a.roda("server", "--config", a.config)
+	code := a.run("server", "--config", a.config)
 	if code != cli.ExitDataset {
 		t.Fatalf("code = %d, want %d (ExitDataset)\n%s", code, cli.ExitDataset, a.stderr.String())
 	}

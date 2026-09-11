@@ -190,7 +190,7 @@ func (s Slots) Index(id types.FieldID) (int, bool) {
 // observados. É comportamento, não bug.
 func Bind(stmt *parser.SelectStmt, sc *schema.Compiled, params []types.Value) (*BoundQuery, error) {
 	if stmt == nil || sc == nil {
-		return nil, errNoPos("bind sem statement ou schema")
+		return nil, errInPos("bind sem statement ou schema")
 	}
 	// Case-sensitive: identificadores são case-sensitive em toda a v1.
 	if stmt.Dataset != sc.Name {
@@ -198,7 +198,7 @@ func Bind(stmt *parser.SelectStmt, sc *schema.Compiled, params []types.Value) (*
 			stmt.Dataset, sc.Name)
 	}
 	if len(params) != stmt.ParamCount {
-		return nil, errNoPos("a query tem %d parâmetros, foram fornecidos %d",
+		return nil, errInPos("a query tem %d parâmetros, foram fornecidos %d",
 			stmt.ParamCount, len(params))
 	}
 	if stmt.HasLimit && stmt.Limit < 0 {
@@ -284,7 +284,7 @@ func (b *binder) run() (*BoundQuery, error) {
 	// Defesa contra bug do PARSER, não contra o usuário: cada '?' aparece em
 	// exatamente uma comparação, então as contagens têm de bater.
 	if b.nParams != b.stmt.ParamCount {
-		return nil, errNoPos("parser inconsistente: ParamCount=%d, comparações com parâmetro=%d",
+		return nil, errInPos("parser inconsistente: ParamCount=%d, comparações com parâmetro=%d",
 			b.stmt.ParamCount, b.nParams)
 	}
 
@@ -509,7 +509,7 @@ func (b *binder) expr(e parser.Expr) (BoundExpr, error) {
 
 func (b *binder) exprAtDepth(e parser.Expr, depth int) (BoundExpr, error) {
 	if depth > MaxBindDepth {
-		return nil, errNoPos("expressão aninhada demais no WHERE (máximo %d níveis à direita)", MaxBindDepth)
+		return nil, errInPos("expressão aninhada demais no WHERE (máximo %d níveis à direita)", MaxBindDepth)
 	}
 
 	var spine []*parser.LogicalExpr
@@ -558,7 +558,7 @@ func (b *binder) leaf(e parser.Expr) (BoundExpr, error) {
 
 	default:
 		// Nó novo na AST tem de falhar ALTO, não ser ignorado.
-		return nil, errNoPos("expressão não suportada: %T", e)
+		return nil, errInPos("expressão não suportada: %T", e)
 	}
 }
 
@@ -627,7 +627,7 @@ func (b *binder) like(n *parser.LikeExpr) (BoundExpr, error) {
 		}
 		idx := n.Pattern.ParamIdx
 		if idx < 0 || idx >= len(b.params) {
-			return nil, errNoPos("parser inconsistente: ParamIdx=%d fora de [0,%d)", idx, len(b.params))
+			return nil, errInPos("parser inconsistente: ParamIdx=%d fora de [0,%d)", idx, len(b.params))
 		}
 		b.nParams++
 		if b.params[idx].Type != types.TypeString {
@@ -666,7 +666,7 @@ func (b *binder) comparison(n *parser.Comparison) (BoundExpr, error) {
 		}
 		idx := n.Operand.ParamIdx
 		if idx < 0 || idx >= len(b.params) {
-			return nil, errNoPos("parser inconsistente: ParamIdx=%d fora de [0,%d)", idx, len(b.params))
+			return nil, errInPos("parser inconsistente: ParamIdx=%d fora de [0,%d)", idx, len(b.params))
 		}
 		b.nParams++
 		cmp.IsParam = true
@@ -725,25 +725,25 @@ func (b *binder) paramError(idx int, f *schema.CompiledField, n *parser.Comparis
 	t := f.EffectiveType()
 	switch cerr {
 	case errParamNull:
-		return errNoPos("parâmetro %d: NULL não é suportado; use IS NULL", num)
+		return errInPos("parâmetro %d: NULL não é suportado; use IS NULL", num)
 	case errParamType:
-		return errNoPos("parâmetro %d: tipo %s não suportado (use string, int64, double ou boolean)",
+		return errInPos("parâmetro %d: tipo %s não suportado (use string, int64, double ou boolean)",
 			num, b.params[idx].Type)
 	case errAutoWithoutType:
-		return errNoPos("parâmetro %d: coluna %q é auto e nunca foi observada neste dataset, "+
+		return errInPos("parâmetro %d: coluna %q é auto e nunca foi observada neste dataset, "+
 			"então ainda não tem tipo; só admite IS NULL / IS NOT NULL", num, f.Name)
 	case errNotComparable:
-		return errNoPos("parâmetro %d: coluna %q (%s) só admite IS NULL / IS NOT NULL", num, f.Name, t)
+		return errInPos("parâmetro %d: coluna %q (%s) só admite IS NULL / IS NOT NULL", num, f.Name, t)
 	case errIncompatibleLiteral:
-		return errNoPos("parâmetro %d: coluna %q (%s) não é comparável com literal do tipo %s",
+		return errInPos("parâmetro %d: coluna %q (%s) não é comparável com literal do tipo %s",
 			num, f.Name, t, b.params[idx].Type)
 	case errOperatorNotAdmitted:
-		return errNoPos("parâmetro %d: operador %q não é permitido para a coluna %q (%s); use = ou !=",
+		return errInPos("parâmetro %d: operador %q não é permitido para a coluna %q (%s); use = ou !=",
 			num, n.Op.String(), f.Name, t)
 	case errInvalidLiteral:
-		return errNoPos("parâmetro %d: valor inválido para a coluna %q (%s)", num, f.Name, describeType(f, t))
+		return errInPos("parâmetro %d: valor inválido para a coluna %q (%s)", num, f.Name, describeType(f, t))
 	default:
-		return errNoPos("parâmetro %d: %v", num, cerr)
+		return errInPos("parâmetro %d: %v", num, cerr)
 	}
 }
 

@@ -20,15 +20,15 @@ import (
 // consumidor em dia.
 
 const (
-	// intervaloOcioso é curto de propósito. O que se afirma aqui é que EXISTE
+	// intervaloIDle é curto de propósito. O que se afirma aqui é que EXISTE
 	// disparo por tempo, não qual é o valor de produção; esperar os 30s do
 	// §78 deixaria a suíte inútil sem provar nada a mais.
-	intervaloOcioso = 100 * time.Millisecond
+	intervaloIDle = 100 * time.Millisecond
 
-	// prazoOcioso é o teto do consumo. Generoso porque é prazo de FALHA: o
+	// prazoIDle é o teto do consumo. Generoso porque é prazo de FALHA: o
 	// caminho verde sai em ~um intervalo, e quem espera os cinco segundos
 	// inteiros é o teste que está reprovando.
-	prazoOcioso = 5 * time.Second
+	prazoIDle = 5 * time.Second
 
 	eventosOciosos = 10
 )
@@ -36,7 +36,7 @@ const (
 // cadenciaOciosa isola o disparo por TEMPO: a contagem está uma ordem de
 // grandeza acima dos eventos produzidos, então um checkpoint durável só pode
 // ter vindo do relógio.
-var cadenciaOciosa = kafka.Cadencia{Eventos: 1000, Intervalo: intervaloOcioso}
+var cadenciaOciosa = kafka.Cadencia{Eventos: 1000, Intervalo: intervaloIDle}
 
 // TestCheckpointPorTempoDestravaOLagComIngestaoOciosa reproduz o débito 56:
 // com a fila seca, o disparo por contagem nunca vem e o writer dorme no
@@ -47,18 +47,18 @@ var cadenciaOciosa = kafka.Cadencia{Eventos: 1000, Intervalo: intervaloOcioso}
 // checkpoint de encerramento grava o kafka.offsets de qualquer jeito, e uma
 // asserção feita depois do consumo ficaria verde com o débito aberto.
 func TestCheckpointPorTempoDestravaOLagComIngestaoOciosa(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 	produzOciosos(t, b)
 
 	var destravou bool
-	if _, err := b.consomeComCadencia(prazoOcioso, cadenciaOciosa, func(d kafka.Desfecho) bool {
+	if _, err := b.consomeWithCadencia(prazoIDle, cadenciaOciosa, func(d kafka.Desfecho) bool {
 		if d.Eventos < eventosOciosos {
 			return false
 		}
 		// Daqui em diante a ingestão está ociosa: tudo o que havia no tópico
 		// já foi decidido e nada novo é produzido.
-		_, destravou = b.leOffsets()
+		_, destravou = b.readOffsets()
 		return destravou
 	}); err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestCheckpointPorTempoDestravaOLagComIngestaoOciosa(t *testing.T) {
 	if !destravou {
 		t.Errorf("kafka.offsets não apareceu em %s de ingestão ociosa, com %d eventos decididos e "+
 			"cadência por contagem em %d: o checkpoint por tempo não disparou e o lag fica congelado",
-			prazoOcioso, eventosOciosos, cadenciaOciosa.Eventos)
+			prazoIDle, eventosOciosos, cadenciaOciosa.Eventos)
 	}
 }
 
@@ -80,46 +80,46 @@ func TestCheckpointPorTempoDestravaOLagComIngestaoOciosa(t *testing.T) {
 // num dataset que não recebeu um único byte, e o §78 põe o intervalo padrão
 // em 30s justamente porque o checkpoint não é barato.
 func TestCheckpointPorTempoNaoRepeteSemEventoNovo(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 	produzOciosos(t, b)
 
 	// A ociosidade é medida em intervalos, não em relógio de parede: é o
 	// número de despertares que teriam checkpointado indevidamente.
 	const intervalosOciosos = 5
 
-	var naQuiescencia, aoFim int
-	var marca time.Time
-	if _, err := b.consomeComCadencia(prazoOcioso, cadenciaOciosa, func(d kafka.Desfecho) bool {
+	var naQuiescencia, aoEnd int
+	var mark time.Time
+	if _, err := b.consomeWithCadencia(prazoIDle, cadenciaOciosa, func(d kafka.Desfecho) bool {
 		if d.Eventos < eventosOciosos {
 			return false
 		}
-		if marca.IsZero() {
+		if mark.IsZero() {
 			// A contagem só começa quando não há mais evento decidido
 			// esperando checkpoint. Ver `quiescente`.
 			if !quiescente(t, b, eventosOciosos) {
 				return false
 			}
-			naQuiescencia, marca = contaCheckpoints(t, b), time.Now()
+			naQuiescencia, mark = countCheckpoints(t, b), time.Now()
 			return false
 		}
-		if time.Since(marca) < intervalosOciosos*intervaloOcioso {
+		if time.Since(mark) < intervalosOciosos*intervaloIDle {
 			return false
 		}
-		aoFim = contaCheckpoints(t, b)
+		aoEnd = countCheckpoints(t, b)
 		return true
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	if marca.IsZero() {
+	if mark.IsZero() {
 		t.Fatalf("a posição durável não alcançou os %d eventos consumidos em %s: o checkpoint por "+
 			"tempo não disparou, e sem ele este teste não tem o que afirmar",
-			eventosOciosos, prazoOcioso)
+			eventosOciosos, prazoIDle)
 	}
-	if aoFim != naQuiescencia {
+	if aoEnd != naQuiescencia {
 		t.Errorf("checkpoints = %d após %d intervalos ociosos, quer %d: o despertar por tempo está "+
-			"checkpointando sem evento novo", aoFim, intervalosOciosos, naQuiescencia)
+			"checkpointando sem evento novo", aoEnd, intervalosOciosos, naQuiescencia)
 	}
 }
 
@@ -142,9 +142,9 @@ func TestCheckpointPorTempoNaoRepeteSemEventoNovo(t *testing.T) {
 // não lê o despertador enquanto está dentro do checkpoint — quando o arquivo
 // mostra a posição final, o `desdeCP` já está zerado para o tique seguinte, e
 // não há janela entre gravar o arquivo e zerar o contador.
-func quiescente(t *testing.T, b *bancada, eventos int64) bool {
+func quiescente(t *testing.T, b *bench, eventos int64) bool {
 	t.Helper()
-	o, ok := b.leOffsets()
+	o, ok := b.readOffsets()
 	if !ok {
 		return false // nenhum checkpoint durável ainda
 	}
@@ -157,7 +157,7 @@ func quiescente(t *testing.T, b *bancada, eventos int64) bool {
 
 // TestDespertarPorTempoNaoEncerraOLacoDoWriter cobra a única consequência
 // observável da distinção entre DESPERTAR e FIM DE FILA — o terceiro retorno
-// do recebeOuAcorda, e a cláusula que o consome no Roda.
+// do recebeOuAcorda, e a cláusula que o consome no Run.
 //
 // Os dois testes acima não conseguem cobrá-la, por construção: eles afirmam
 // sobre artefatos que o ENCERRAMENTO também produz. O kafka.offsets é gravado
@@ -184,23 +184,23 @@ func TestDespertarPorTempoNaoEncerraOLacoDoWriter(t *testing.T) {
 		intervalosOciosos = 4
 	)
 
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 	produzLeva(t, b, "A", primeiraLeva)
 
-	var marca time.Time
+	var mark time.Time
 	var produziu bool
-	d, err := b.consomeComCadencia(prazoOcioso, cadenciaOciosa, func(d kafka.Desfecho) bool {
+	d, err := b.consomeWithCadencia(prazoIDle, cadenciaOciosa, func(d kafka.Desfecho) bool {
 		switch {
 		case d.Eventos < primeiraLeva:
 			return false
-		case marca.IsZero():
+		case mark.IsZero():
 			// A primeira leva acabou e nada mais é produzido: daqui em diante
 			// o writer só é acordado pelo relógio.
-			marca = time.Now()
+			mark = time.Now()
 			return false
 		case !produziu:
-			if time.Since(marca) < intervalosOciosos*intervaloOcioso {
+			if time.Since(mark) < intervalosOciosos*intervaloIDle {
 				return false
 			}
 			produzLeva(t, b, "B", segundaLeva)
@@ -223,7 +223,7 @@ func TestDespertarPorTempoNaoEncerraOLacoDoWriter(t *testing.T) {
 
 // produzOciosos publica menos eventos que o limiar por contagem de
 // cadenciaOciosa. É essa desproporção que faz o teste falar do relógio.
-func produzOciosos(t *testing.T, b *bancada) {
+func produzOciosos(t *testing.T, b *bench) {
 	t.Helper()
 	produzLeva(t, b, "S", eventosOciosos)
 }
@@ -231,19 +231,19 @@ func produzOciosos(t *testing.T, b *bancada) {
 // produzLeva publica n eventos de entidades distintas. O prefixo separa as
 // levas: chaves repetidas entre elas cairiam na regra de sequência do §37 e a
 // segunda leva viraria stale, decidida sem ter sido aplicada.
-func produzLeva(t *testing.T, b *bancada, prefixo string, n int) {
+func produzLeva(t *testing.T, b *bench, prefixo string, n int) {
 	t.Helper()
 	recs := make([]*kgo.Record, 0, n)
 	for i := 0; i < n; i++ {
-		recs = append(recs, evento(fmt.Sprintf("%s%02d", prefixo, i), 1, "Start"))
+		recs = append(recs, event(fmt.Sprintf("%s%02d", prefixo, i), 1, "Start"))
 	}
 	b.produz(recs...)
 }
 
-// contaCheckpoints lê a contagem de checkpoints BEM-SUCEDIDOS pela série do
+// countCheckpoints lê a contagem de checkpoints BEM-SUCEDIDOS pela série do
 // §92 que o store já publica. É o contador que existe — inventar um segundo
 // só para o teste mediria outra coisa, e é a série que o operador olha.
-func contaCheckpoints(t *testing.T, b *bancada) int {
+func countCheckpoints(t *testing.T, b *bench) int {
 	t.Helper()
 	var sb strings.Builder
 	if _, err := b.reg.WriteTo(&sb); err != nil {
@@ -251,13 +251,13 @@ func contaCheckpoints(t *testing.T, b *bancada) int {
 	}
 	const prefixo = `nishidb_checkpoint_duration_seconds_count{dataset="radius_sessions"} `
 	for _, l := range strings.Split(sb.String(), "\n") {
-		valor, ok := strings.CutPrefix(l, prefixo)
+		value, ok := strings.CutPrefix(l, prefixo)
 		if !ok {
 			continue
 		}
-		n, err := strconv.Atoi(strings.TrimSpace(valor))
+		n, err := strconv.Atoi(strings.TrimSpace(value))
 		if err != nil {
-			t.Fatalf("contagem de checkpoints %q não é inteiro: %v", valor, err)
+			t.Fatalf("contagem de checkpoints %q não é inteiro: %v", value, err)
 		}
 		return n
 	}
@@ -277,21 +277,21 @@ func contaCheckpoints(t *testing.T, b *bancada) int {
 // deixa a suíte inteira verde. É por isso que o comentário do despertador
 // argumenta pelo ticker, e é isto que sustenta o argumento.
 func TestCheckpointPorTempoVoltaADispararDepoisDeNovaLeva(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 	produzLeva(t, b, "A", eventosOciosos)
 
-	base := contaCheckpoints(t, b)
+	base := countCheckpoints(t, b)
 	var aposA, aposB int
 
-	if _, err := b.consomeComCadencia(prazoOcioso, cadenciaOciosa, func(d kafka.Desfecho) bool {
+	if _, err := b.consomeWithCadencia(prazoIDle, cadenciaOciosa, func(d kafka.Desfecho) bool {
 		if aposA == 0 {
 			// Primeira ociosidade: espera a leva A ser decidida inteira e o
 			// relógio disparar pela primeira vez.
 			if d.Eventos < eventosOciosos {
 				return false
 			}
-			if n := contaCheckpoints(t, b); n > base {
+			if n := countCheckpoints(t, b); n > base {
 				aposA = n
 				// A segunda leva usa prefixo próprio: chave repetida cairia na
 				// regra de sequência do §37 e sairia como stale, decidida sem
@@ -305,7 +305,7 @@ func TestCheckpointPorTempoVoltaADispararDepoisDeNovaLeva(t *testing.T) {
 		if d.Eventos < 2*eventosOciosos {
 			return false
 		}
-		if n := contaCheckpoints(t, b); n > aposA {
+		if n := countCheckpoints(t, b); n > aposA {
 			aposB = n
 			return true
 		}

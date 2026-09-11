@@ -180,7 +180,7 @@ instalar nada); novo `test-python-it` chama `scripts/python-it.sh`. Ausência de
 `exige-java`.
 
 **`.gitignore`:** `clients/python/dist/`, `.mypy_cache/`, `__pycache__/` escopados — nunca
-soltos. E acrescentar os diretórios à lista que `testesDoRepositorio`
+soltos. E acrescentar os diretórios à lista que `testesOfRepositorio`
 ([evidence_test.go:55](internal/cli/evidence_test.go:55)) pula.
 
 **`internal/gates/python_test.go`** — novo, no molde exato de
@@ -394,7 +394,7 @@ rodam os alvos do Makefile, e a `python-version` do workflow **bate com o `requi
 - `docs/aceite-client-python.md`, **acrescentado à lista de
   [evidence_test.go:30](internal/cli/evidence_test.go:30) no mesmo commit** — senão o
   documento nasce fora do único verificador que o projeto tem, com liberdade de citar teste
-  inexistente. E **estender `testesDoRepositorio` para indexar `def test_*` de arquivos Python**,
+  inexistente. E **estender `testesOfRepositorio` para indexar `def test_*` de arquivos Python**,
   como já foi feito para os métodos Java, para que o aceite possa citar evidência Python com
   honestidade.
 - `docs/architecture.md` e `docs/diagrams/c4_container.puml`: o client Python entra ao lado do

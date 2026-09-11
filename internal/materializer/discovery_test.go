@@ -131,7 +131,7 @@ func TestListaDescobertaViraColunaJson(t *testing.T) {
 // passada quando ele tinha extração declarada, então a descoberta sozinha
 // nunca rodava. O YAML dos testes acima traz um `extract` junto e mascarava o
 // defeito; foi a verificação com o binário que o pegou.
-const soDescobreYAML = `version: 1
+const onlyDescobreYAML = `version: 1
 name: eventos
 materialization:
   key:
@@ -148,7 +148,7 @@ schema:
 `
 
 func TestDescobertaSemNenhumExtractDeclarado(t *testing.T) {
-	h := newHarness(t, soDescobreYAML)
+	h := newHarness(t, onlyDescobreYAML)
 	h.apply(`{"id":"A","doc":{"tlCause":"LOS","perceivedSeverity":3}}`)
 	st := h.state("A")
 	h.wantString(st, "doc.tlCause", "LOS")
@@ -184,8 +184,8 @@ func TestValorIncompativelEContado(t *testing.T) {
 func TestValorIncompativelAvisaUmaVezComOsDoisTipos(t *testing.T) {
 	h := newHarness(t, descobreYAML)
 	var avisos []string
-	h.c.OnIncompatibleValue(func(coluna, fixado, veio string) {
-		avisos = append(avisos, coluna+": fixado="+fixado+" veio="+veio)
+	h.c.OnIncompatibleValue(func(column, fixado, veio string) {
+		avisos = append(avisos, column+": fixado="+fixado+" veio="+veio)
 	})
 	h.apply(`{"id":"A","doc":{"podName":"texto"}}`)
 	h.apply(`{"id":"B","doc":{"podName":{"a":1}}}`)
@@ -274,7 +274,7 @@ func TestFalhaDeIODoDicionarioNoCaminhoANINHADOEhFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	eio := errors.New(`fielddict: fsync do tipo de "doc.podName": input/output error`)
-	c, err := s.Compile(dictFalhaAoFixar{inner: fakestorage.NewDict(), err: eio})
+	c, err := s.Compile(dictFailAoFixar{inner: fakestorage.NewDict(), err: eio})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestFalhaDeIODoDicionarioNoCaminhoANINHADOEhFailed(t *testing.T) {
 func TestConflitoDeTipoNoCaminhoAninhadoRemoveAColunaSemDerrubarOEvento(t *testing.T) {
 	h := newHarness(t, descobreYAML)
 	h.apply(`{"id":"A","doc":{"podName":"texto"}}`)
-	antes := h.c.IncompatibleValueCount()
+	before := h.c.IncompatibleValueCount()
 
 	// O tipo já está fixado como string; um objeto no mesmo caminho diverge.
 	r := h.m.Apply([]byte(`{"id":"A","doc":{"podName":{"a":1}}}`))
@@ -318,7 +318,7 @@ func TestConflitoDeTipoNoCaminhoAninhadoRemoveAColunaSemDerrubarOEvento(t *testi
 		t.Fatalf("o evento caiu por causa de uma chave interna: %v", r.Err)
 	}
 	h.wantAbsent(h.state("A"), "doc.podName")
-	if got := h.c.IncompatibleValueCount() - antes; got != 1 {
+	if got := h.c.IncompatibleValueCount() - before; got != 1 {
 		t.Errorf("contador subiu %d, quer 1", got)
 	}
 }
@@ -337,18 +337,18 @@ func TestConflitoDeTipoNoCaminhoAninhadoRemoveAColunaSemDerrubarOEvento(t *testi
 func TestNullExplicitoNaoContaComoTipoIncompativel(t *testing.T) {
 	h := newHarness(t, descobreYAML)
 	h.apply(`{"id":"A","doc":{"podName":"pod-1"}}`)
-	antes := h.c.IncompatibleValueCount()
+	before := h.c.IncompatibleValueCount()
 
 	h.apply(`{"id":"A","doc":{"podName":null}}`)
-	if got := h.c.IncompatibleValueCount() - antes; got != 0 {
+	if got := h.c.IncompatibleValueCount() - before; got != 0 {
 		t.Errorf("contador subiu %d com um null explícito, quer 0", got)
 	}
 
 	// E a divergência de verdade continua contando, no mesmo dataset e na
 	// mesma coluna — sem isto o teste acima passaria com o contador quebrado.
-	antes = h.c.IncompatibleValueCount()
+	before = h.c.IncompatibleValueCount()
 	h.apply(`{"id":"A","doc":{"podName":{"a":1}}}`)
-	if got := h.c.IncompatibleValueCount() - antes; got != 1 {
+	if got := h.c.IncompatibleValueCount() - before; got != 1 {
 		t.Errorf("contador subiu %d com tipo divergente, quer 1", got)
 	}
 }

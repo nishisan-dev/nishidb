@@ -27,7 +27,7 @@ import (
 // # Por que isto é DETERMINÍSTICO por construção, sem gate nenhum
 //
 // Uma primeira tentativa desta task semeava garbage por fora (como
-// semeiaGarbage) e tentava "pular" a primeira passada do laço deixando
+// seedGarbage) e tentava "pular" a primeira passada do laço deixando
 // segSize desconhecido. Não funciona: Store.Open() SEMPRE checkpointa no
 // fim da recovery (storage/store.go, "Checkpoint imediato"), então segSize
 // já está populado no INSTANTE em que o servidor abre o diretório — o laço
@@ -36,7 +36,7 @@ import (
 // que paga uma viagem de rede) não é determinístico.
 //
 // A saída é usar um dataset KAFKA, vazio até a ingestão aplicar alguma
-// coisa — e Roda() (server.go) chama ligaCompaction() ANTES de subir as
+// coisa — e Run() (server.go) chama turnonCompaction() ANTES de subir as
 // goroutines de ingestão, nessa ORDEM FIXA do código-fonte, não por sorte
 // de agendador. Isso GARANTE que a primeira passada do laço automático
 // aconteça sobre um dataset com ZERO rows (candidatos() não acha nada
@@ -51,18 +51,18 @@ import (
 //
 // A folga de 5s é grande, mas não infinita: sob pressão de CPU real (suíte
 // inteira em paralelo, `-race`, CI compartilhado) o tempo entre
-// esperaIngestaoAplicarPeloMenos retornar e o POST chegar ao servidor pode
+// waitIngestionAplicarPeloMenos retornar e o POST chegar ao servidor pode
 // esticar o bastante para flakear uma tentativa seca. O POST ganhou o mesmo
 // retry curto e sem sleep dos vizinhos de "config default"
 // (TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo, aqui perto, e
 // TestCompactRemotoNaConfigDefaultEventualmenteSai0, internal/cli): a
-// determinística continua sendo a estrutura (ordem fixa de Roda(), não
+// determinística continua sendo a estrutura (ordem fixa de Run(), não
 // sorte), o retry só absorve o jitter de agendador que a estrutura sozinha
 // não cobre.
 func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) {
-	const topico = "b5-compact-default-kafka"
+	const topic = "b5-compact-default-kafka"
 	cluster, err := kfake.NewCluster(
-		kfake.SeedTopics(1, topico),
+		kfake.SeedTopics(1, topic),
 		kfake.NumBrokers(1),
 		kfake.ClusterID("b5-compact-default"),
 	)
@@ -72,14 +72,14 @@ func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) 
 	t.Cleanup(cluster.Close)
 	broker := cluster.ListenAddrs()[0]
 
-	a := novoAmbienteComStorage(t, blocoPadrao, "  segmentSize: 8KiB\n  checkpoint:\n    interval: 200ms\n")
-	a.escreveDataset("d", fmt.Sprintf(specKafkaParaCompactDefault, broker, topico))
+	a := newEnvWithStorage(t, blockPadrao, "  segmentSize: 8KiB\n  checkpoint:\n    interval: 200ms\n")
+	a.writeDataset("d", fmt.Sprintf(specKafkaForCompactDefault, broker, topic))
 
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 
 	produtor, err := kgo.NewClient(kgo.SeedBrokers(broker))
 	if err != nil {
@@ -94,18 +94,18 @@ func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) 
 		recs := make([]*kgo.Record, 0, keys)
 		for i := 0; i < keys; i++ {
 			id := fmt.Sprintf("k-%04d", i)
-			valor := fmt.Sprintf(`{"id":%q,"seq":%d,"peso":%q}`, id, r, peso)
-			recs = append(recs, &kgo.Record{Topic: topico, Key: []byte(id), Value: []byte(valor)})
+			value := fmt.Sprintf(`{"id":%q,"seq":%d,"peso":%q}`, id, r, peso)
+			recs = append(recs, &kgo.Record{Topic: topic, Key: []byte(id), Value: []byte(value)})
 		}
-		ctx, cancela := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		err := produtor.ProduceSync(ctx, recs...).FirstErr()
-		cancela()
+		cancel()
 		if err != nil {
 			t.Fatalf("produzir a rodada %d: %v", r, err)
 		}
 	}
 
-	esperaIngestaoAplicarPeloMenos(t, srv, "d", keys*rodadas, 30*time.Second)
+	waitIngestionAplicarPeloMenos(t, srv, "d", keys*rodadas, 30*time.Second)
 
 	// Retry curto, sem sleep entre tentativas — o mesmo padrão de
 	// TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo
@@ -121,7 +121,7 @@ func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) 
 	const tentativas = 200
 	var resp *http.Response
 	for i := 0; i < tentativas; i++ {
-		resp = postComAuth(t, srv, "/v1/compact", "", "", "")
+		resp = postWithAuth(t, srv, "/v1/compact", "", "", "")
 		if resp.StatusCode == http.StatusOK {
 			break
 		}
@@ -151,11 +151,11 @@ func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) 
 		ds.SegmentsRetired, ds.BytesRead, ds.BytesWritten)
 }
 
-// specKafkaParaCompactDefault é um dataset Kafka mínimo, no molde do
+// specKafkaForCompactDefault é um dataset Kafka mínimo, no molde do
 // e2eSpecYAML (internal/cli/compaction_e2e_test.go): mode merge + sequence
 // "greater" fazem cada rodada tornar garbage a anterior inteira sobre o
 // MESMO key set — a forma do dataset do §86.
-const specKafkaParaCompactDefault = `version: 1
+const specKafkaForCompactDefault = `version: 1
 name: d
 source:
   type: kafka
@@ -192,15 +192,15 @@ query:
   timeout: 30s
 `
 
-// esperaIngestaoAplicarPeloMenos bloqueia até Ingestion.Applied alcançar
+// waitIngestionAplicarPeloMenos bloqueia até Ingestion.Applied alcançar
 // alvo para o dataset nomeado, raspando /v1/stats pela porta — nunca por
 // dentro do processo. É o mesmo oráculo do e2e do internal/cli
-// (esperaIngestaoAlcancar), adaptado para não precisar decodificar rows: o
+// (waitIngestionAlcancar), adaptado para não precisar decodificar rows: o
 // contador de aplicados já basta para saber que o corpus inteiro chegou ao
 // writer.
-func esperaIngestaoAplicarPeloMenos(t *testing.T, srv *server.Servidor, dataset string, alvo int64, prazo time.Duration) {
+func waitIngestionAplicarPeloMenos(t *testing.T, srv *server.Server, dataset string, target int64, prazo time.Duration) {
 	t.Helper()
-	limite := time.Now().Add(prazo)
+	limit := time.Now().Add(prazo)
 	for {
 		resp, err := http.Get("http://" + srv.Endereco() + "/v1/stats")
 		if err == nil {
@@ -209,14 +209,14 @@ func esperaIngestaoAplicarPeloMenos(t *testing.T, srv *server.Servidor, dataset 
 			_ = resp.Body.Close()
 			if decErr == nil {
 				for _, d := range e.Datasets {
-					if d.Name == dataset && d.Ingestion.Applied >= alvo {
+					if d.Name == dataset && d.Ingestion.Applied >= target {
 						return
 					}
 				}
 			}
 		}
-		if time.Now().After(limite) {
-			t.Fatalf("a ingestão do dataset %q não alcançou %d eventos aplicados em %v", dataset, alvo, prazo)
+		if time.Now().After(limit) {
+			t.Fatalf("a ingestão do dataset %q não alcançou %d eventos aplicados em %v", dataset, target, prazo)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

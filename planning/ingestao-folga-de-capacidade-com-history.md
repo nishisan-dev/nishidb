@@ -48,7 +48,7 @@ Profile de CPU de 45 s em produção (13,64 s de amostras):
 | `PatchBuffer.Parse` (parse JSON + descoberta) | 33% | 298 |
 | `Store.ExpiraOnePass` (varredura de TTL, fundo) | **19%** | 171 |
 | `Store.Put` (tabela base) | 16% | 144 |
-| `apendaNoHistorico` → `Store.Apenda` | **11%** | 99 |
+| `apendaInHistory` → `Store.Apenda` | **11%** | 99 |
 | Kafka, métricas, GC, resto | 21% | 190 |
 
 O history custa **~17% a mais no caminho de ingestão** — real, mas não é o dominante. O
@@ -80,8 +80,8 @@ uma volta completa nas 4,57M linhas a cada ~2,5 minutos para achar as ~0,4% venc
 ### 4. O documento é varrido 25 vezes por evento
 
 Dentro dos 33% do parse há uma redundância pura, que não é trade-off de nada.
-`extraiDerivadas` ([extract.go:66](internal/materializer/extract.go:66)) chama
-`buscaCaminho` **uma vez por chave declarada em `extract`**, e `buscaCaminho`
+`extractDerived` ([extract.go:66](internal/materializer/extract.go:66)) chama
+`buscaPath` **uma vez por chave declarada em `extract`**, e `buscaPath`
 ([extract.go:158-201](internal/materializer/extract.go:158)) faz `Reset(doc)` e varre o
 documento **inteiro até o fim** — não pode parar cedo porque implementa *last-wins* dentro
 do documento.
@@ -90,7 +90,7 @@ O piloto declara **25 paths em `extract`** no campo `persistent`, todos de níve
 sob o mesmo pai. O documento é varrido 25 vezes por evento. O profile confirma:
 
 ```
-buscaCaminho           2,94s   21,55% cum   ← 100% chamado por extraiDerivadas
+buscaPath           2,94s   21,55% cum   ← 100% chamado por extractDerived
   └─ jsonp.Parser.Next 2,75s   93,54%       ← é tudo re-parse
 ```
 
@@ -101,7 +101,7 @@ verdade custa 1,76%, e dois terços do bloco são a mesma varredura repetida.
 
 | Dentro de `PatchBuffer.Parse` (32,55% do CPU) | % do total |
 |---|---:|
-| `buscaCaminho` — as 25 varreduras redundantes | **21,55%** |
+| `buscaPath` — as 25 varreduras redundantes | **21,55%** |
 | `SortStableFunc` das entries do patch | 3,23% |
 | `Convert` | 2,27% |
 | `descobreAninhados` | 1,83% |
@@ -216,7 +216,7 @@ de vida — com o lag real ele fica pequeno e constante, e pode não cair. O dis
 
 Sem isto, nenhum número de laboratório vale:
 
-- **67 (o `ingest-bench` trava para sempre).** `fonteKafka.Next` bloqueia em
+- **67 (o `ingest-bench` trava para sempre).** `sourceKafka.Next` bloqueia em
   `fila.Recebe(context.Background())` — contexto sem prazo — e a checagem de duração roda
   *antes* do `Next`, nunca sendo reavaliada. A fase de aceite do M4 publicou
   `duration_sec` de **1.327,6 s para 600 s** de ingestão. Correção: a interface `fonte`
@@ -284,7 +284,7 @@ Nenhum contrato muda, nenhuma concorrência é tocada.
 
 ### Estado atual
 
-`extraiDerivadas` ([extract.go:42](internal/materializer/extract.go:42)) faz, por pai visto:
+`extractDerived` ([extract.go:42](internal/materializer/extract.go:42)) faz, por pai visto:
 
 1. `descobreAninhados(p)` ([extract.go:221](internal/materializer/extract.go:221)) — **uma**
    varredura completa, com parser próprio (`b.descobridor`), que para cada chave chama
@@ -401,7 +401,7 @@ rebuild explícito, logado e com custo medido.
 
 **Mudança de comportamento a declarar:** hoje a carência das linhas legadas escorre ao longo
 de várias passadas; com a agenda, todas afloram de uma vez na primeira. O freio é o
-`MaxPorPassada` que já existe mais o `daCarencia` em lote. Medir numa cópia do dataset do
+`MaxPerSweep` que já existe mais o `ofCarencia` em lote. Medir numa cópia do dataset do
 piloto antes do rollout.
 
 ### Redução da disputa pelo `wmu`
@@ -508,7 +508,7 @@ folgado, mas tem de estar no doc e observado por `OnPartitionsCallbackBlocked`);
 Quebrada em três subfases, sendo as duas primeiras **preservadoras de comportamento** — é
 isso que torna a terceira segura.
 
-**4.1 — Partir `Apply` em `Decodifica` + `Aplica`, ainda numa goroutine.** Novo tipo
+**4.1 — Partir `Apply` em `Decode` + `Aplica`, ainda numa goroutine.** Novo tipo
 `Decodificado`, dono dos buffers que o parse reusa, para que N deles coexistam. Dois
 cuidados que a divisão obriga e que quebram coisas em silêncio se esquecidos:
 
@@ -576,7 +576,7 @@ Fases 3+4 já entregam a meta; a Fase 5 só se justifica com medição.
   e `BuildRecord` são funções puras de `(key, payload)` e podem sair de dentro do `wmu`.
   Semanticamente no-op, mensurável no `benchmark/micro`.
 - **5.2** Batchar o lock do coletor de TTL — em boa parte tornado desnecessário pela Fase 2.
-- **5.3** `Put` e `Apenda` em paralelo. **Podem**: são `Store` distintos, com `wmu`, `segW` e
+- **5.3** `Put` e `Apenda` em paralelo. **Podem**: são `Store` distintos, com `wmu`, `secW` e
   índices distintos; o único mutável compartilhado é o dicionário, que já tem lock próprio.
   Não por fork/join por evento (o join reserializa), mas por goroutine própria do histórico
   com anel ordenado. Duas coisas exigem decisão antes: a política de anel cheio muda a

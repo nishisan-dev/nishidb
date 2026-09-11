@@ -12,8 +12,8 @@ import (
 // ConfigColeta reúne os parâmetros de uma rodada de medição.
 type ConfigColeta struct {
 	Brokers []string
-	Topico  string
-	Campo   string
+	Topic   string
+	Field   string
 	// ReportEvery é o intervalo, em mensagens, entre chamadas a Progresso.
 	// Zero desliga o progresso (só o Progresso final ainda é chamado).
 	ReportEvery int64
@@ -39,22 +39,22 @@ type Progresso func(lidos, alvo int64, decorrido time.Duration)
 // nenhuma para commitar — a leitura é estritamente somativa, sem side
 // effect no cluster.
 func Coleta(ctx context.Context, cfg ConfigColeta, prog Progresso) (*Histograma, error) {
-	alvos, err := capturaAlvos(ctx, cfg.Brokers, cfg.Topico)
+	alvos, err := capturaAlvos(ctx, cfg.Brokers, cfg.Topic)
 	if err != nil {
 		return nil, err
 	}
 
 	partOffsets := make(map[int32]kgo.Offset, len(alvos))
 	restante := make(map[int32]int64, len(alvos))
-	var alvoTotal int64
+	var targetTotal int64
 	for p, a := range alvos {
-		partOffsets[p] = kgo.NewOffset().At(a.inicio)
-		restante[p] = a.fim - a.inicio
-		alvoTotal += restante[p]
+		partOffsets[p] = kgo.NewOffset().At(a.start)
+		restante[p] = a.end - a.start
+		targetTotal += restante[p]
 	}
 
-	hist := NovoHistograma()
-	if alvoTotal <= 0 {
+	hist := NewHistograma()
+	if targetTotal <= 0 {
 		if prog != nil {
 			prog(0, 0, 0)
 		}
@@ -63,14 +63,14 @@ func Coleta(ctx context.Context, cfg ConfigColeta, prog Progresso) (*Histograma,
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(cfg.Brokers...),
-		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{cfg.Topico: partOffsets}),
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{cfg.Topic: partOffsets}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("identifier-len: cliente de consumo: %w", err)
 	}
 	defer cl.Close()
 
-	inicioRodada := time.Now()
+	startRodada := time.Now()
 	var lidos, desdeOUltimoReport int64
 	for !tudoConsumido(restante) {
 		if ctx.Err() != nil {
@@ -80,14 +80,14 @@ func Coleta(ctx context.Context, cfg ConfigColeta, prog Progresso) (*Histograma,
 		if fetches.IsClientClosed() {
 			break
 		}
-		var erroFetch error
-		fetches.EachError(func(topico string, particao int32, err error) {
-			if erroFetch == nil {
-				erroFetch = fmt.Errorf("identifier-len: fetch %s/%d: %w", topico, particao, err)
+		var errFetch error
+		fetches.EachError(func(topic string, partition int32, err error) {
+			if errFetch == nil {
+				errFetch = fmt.Errorf("identifier-len: fetch %s/%d: %w", topic, partition, err)
 			}
 		})
-		if erroFetch != nil {
-			return hist, erroFetch
+		if errFetch != nil {
+			return hist, errFetch
 		}
 
 		fetches.EachRecord(func(r *kgo.Record) {
@@ -98,19 +98,19 @@ func Coleta(ctx context.Context, cfg ConfigColeta, prog Progresso) (*Histograma,
 				// capturado — é essa borda que impede perseguir o tail.
 				return
 			}
-			valor, resultado := ExtraiCampo(r.Value, cfg.Campo)
-			hist.Registra(resultado, len(valor))
+			value, result := ExtractField(r.Value, cfg.Field)
+			hist.Register(result, len(value))
 			restante[r.Partition]--
 			lidos++
 			desdeOUltimoReport++
 			if prog != nil && cfg.ReportEvery > 0 && desdeOUltimoReport >= cfg.ReportEvery {
-				prog(lidos, alvoTotal, time.Since(inicioRodada))
+				prog(lidos, targetTotal, time.Since(startRodada))
 				desdeOUltimoReport = 0
 			}
 		})
 	}
 	if prog != nil {
-		prog(lidos, alvoTotal, time.Since(inicioRodada))
+		prog(lidos, targetTotal, time.Since(startRodada))
 	}
 	return hist, nil
 }
@@ -128,11 +128,11 @@ func tudoConsumido(restante map[int32]int64) bool {
 	return true
 }
 
-// janela é o par [earliest, high-watermark) de uma partição no instante da
+// window é o par [earliest, high-watermark) de uma partição no instante da
 // captura.
-type janela struct {
-	inicio int64
-	fim    int64
+type window struct {
+	start int64
+	end   int64
 }
 
 // capturaAlvos lê earliest e high-watermark de cada partição do tópico com
@@ -140,7 +140,7 @@ type janela struct {
 // cliente antes de devolver. É a separação que torna "capturado na partida"
 // verdade: o consumo real, aberto depois por Coleta, começa de um alvo já
 // fixo, e nada entre a captura e o primeiro fetch pode movê-lo.
-func capturaAlvos(ctx context.Context, brokers []string, topico string) (map[int32]janela, error) {
+func capturaAlvos(ctx context.Context, brokers []string, topic string) (map[int32]window, error) {
 	cl, err := kgo.NewClient(kgo.SeedBrokers(brokers...))
 	if err != nil {
 		return nil, fmt.Errorf("identifier-len: cliente administrativo: %w", err)
@@ -148,34 +148,34 @@ func capturaAlvos(ctx context.Context, brokers []string, topico string) (map[int
 	defer cl.Close()
 	adm := kadm.NewClient(cl)
 
-	inicio, err := adm.ListStartOffsets(ctx, topico)
+	start, err := adm.ListStartOffsets(ctx, topic)
 	if err != nil {
 		return nil, fmt.Errorf("identifier-len: offsets de início: %w", err)
 	}
-	if err := inicio.Error(); err != nil {
+	if err := start.Error(); err != nil {
 		return nil, fmt.Errorf("identifier-len: offsets de início: %w", err)
 	}
-	fim, err := adm.ListEndOffsets(ctx, topico)
+	end, err := adm.ListEndOffsets(ctx, topic)
 	if err != nil {
 		return nil, fmt.Errorf("identifier-len: high-watermark: %w", err)
 	}
-	if err := fim.Error(); err != nil {
+	if err := end.Error(); err != nil {
 		return nil, fmt.Errorf("identifier-len: high-watermark: %w", err)
 	}
 
-	porInicio, ok := inicio[topico]
-	if !ok || len(porInicio) == 0 {
-		return nil, fmt.Errorf("identifier-len: tópico %q sem partições", topico)
+	byStart, ok := start[topic]
+	if !ok || len(byStart) == 0 {
+		return nil, fmt.Errorf("identifier-len: tópico %q sem partições", topic)
 	}
-	porFim := fim[topico]
+	byEnd := end[topic]
 
-	alvos := make(map[int32]janela, len(porInicio))
-	for p, ini := range porInicio {
-		f, ok := porFim[p]
+	alvos := make(map[int32]window, len(byStart))
+	for p, ini := range byStart {
+		f, ok := byEnd[p]
 		if !ok {
 			return nil, fmt.Errorf("identifier-len: partição %d sem high-watermark", p)
 		}
-		alvos[p] = janela{inicio: ini.Offset, fim: f.Offset}
+		alvos[p] = window{start: ini.Offset, end: f.Offset}
 	}
 	return alvos, nil
 }

@@ -24,7 +24,7 @@ import (
 // par (status, protocolo) só assume as combinações que o writer escreveu).
 func TestConcorrenciaWriterELeitoresPeloSQL(t *testing.T) {
 	ig := &integracao{t: t, dir: t.TempDir() + "/conc", oracle: oraculo{}}
-	ig.abre()
+	ig.open()
 
 	const (
 		entidades = 400
@@ -49,21 +49,21 @@ func TestConcorrenciaWriterELeitoresPeloSQL(t *testing.T) {
 	}
 
 	var (
-		wg       sync.WaitGroup
-		pararLer atomic.Bool
-		lidas    atomic.Int64
+		wg      sync.WaitGroup
+		stopLer atomic.Bool
+		lidas   atomic.Int64
 	)
 
 	// Writer: um só, como manda o contrato do Store (writer único).
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer pararLer.Store(true)
+		defer stopLer.Store(true)
 		for r := 1; r <= rodadas; r++ {
-			par := pares[r%len(pares)]
+			pair := pares[r%len(pares)]
 			for i := 0; i < entidades; i++ {
 				ev := fmt.Sprintf(`{"id":"K%04d","_SEQ":%d,"Acct-Status-Type":%q,"Framed-Protocol":%q}`,
-					i, r+1, par[0], par[1])
+					i, r+1, pair[0], pair[1])
 				if res := mat.Apply([]byte(ev)); res.Err != nil {
 					t.Errorf("ingestão concorrente: %v", res.Err)
 					return
@@ -89,7 +89,7 @@ func TestConcorrenciaWriterELeitoresPeloSQL(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for !pararLer.Load() {
+			for !stopLer.Load() {
 				it, err := ig.engine.Execute(context.Background(), dataset,
 					`SELECT id, status, protocol FROM radius_sessions LIMIT 100`, nil)
 				if err != nil {
@@ -146,7 +146,7 @@ func TestConcorrenciaWriterELeitoresPeloSQL(t *testing.T) {
 // estado anterior, ou o novo — nunca um meio-termo.
 func TestPointLookupConcorrenteComEscritaDaMesmaKey(t *testing.T) {
 	ig := &integracao{t: t, dir: t.TempDir() + "/conc2", oracle: oraculo{}}
-	ig.abre()
+	ig.open()
 
 	mat, err := materializer.New(ig.sch, ig.store)
 	if err != nil {
@@ -157,13 +157,13 @@ func TestPointLookupConcorrenteComEscritaDaMesmaKey(t *testing.T) {
 	}
 
 	var (
-		wg    sync.WaitGroup
-		parar atomic.Bool
+		wg   sync.WaitGroup
+		stop atomic.Bool
 	)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer parar.Store(true)
+		defer stop.Store(true)
 		for seq := 2; seq <= 300; seq++ {
 			ev := fmt.Sprintf(`{"id":"K","_SEQ":%d,"User-Name":"v%d"}`, seq, seq)
 			if r := mat.Apply([]byte(ev)); r.Err != nil {
@@ -176,18 +176,18 @@ func TestPointLookupConcorrenteComEscritaDaMesmaKey(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for !parar.Load() {
-			linhas := ig.consulta(`SELECT id, username, status FROM radius_sessions WHERE id = ?`,
+		for !stop.Load() {
+			rows := ig.consulta(`SELECT id, username, status FROM radius_sessions WHERE id = ?`,
 				types.Value{Type: types.TypeString, Bytes: []byte("K")})
-			if len(linhas) != 1 {
-				t.Errorf("point lookup devolveu %d linhas durante a escrita", len(linhas))
+			if len(rows) != 1 {
+				t.Errorf("point lookup devolveu %d linhas durante a escrita", len(rows))
 				return
 			}
 			// O status vem do primeiro evento e nunca é reescrito: se ele
 			// sumir ou mudar, a leitura pegou um estado parcial do merge.
-			if linhas[0]["status"] != "Start" {
+			if rows[0]["status"] != "Start" {
 				t.Errorf("status = %q durante a escrita, want Start preservado pelo merge",
-					linhas[0]["status"])
+					rows[0]["status"])
 				return
 			}
 		}

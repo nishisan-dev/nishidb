@@ -11,9 +11,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// alvoComIndiceYAML declara dois campos com `index: true` — a única grafia
+// targetWithIndexYAML declara dois campos com `index: true` — a única grafia
 // desde a D5 — para o teste abaixo verificar a coluna `indexed`.
-const alvoComIndiceYAML = `version: 1
+const targetWithIndexYAML = `version: 1
 name: eventos
 materialization:
   key:
@@ -46,7 +46,7 @@ schema:
 // entram no mesmo conjunto indexado. As asserções abaixo são as MESMAS, valor
 // por valor, incluindo o vocabulário de wire da coluna `index`.
 func TestIndexedRefleteACapacidadeDoMotor(t *testing.T) {
-	spec, err := schema.Parse([]byte(alvoComIndiceYAML), schema.BuiltinDefaults)
+	spec, err := schema.Parse([]byte(targetWithIndexYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestIndexedRefleteACapacidadeDoMotor(t *testing.T) {
 	})
 
 	visto := map[string][2]string{}
-	for _, l := range linhasCom(t, `SELECT name, index, indexed FROM _meta.fields`, c, st) {
+	for _, l := range rowsWith(t, `SELECT name, index, indexed FROM _meta.fields`, c, st) {
 		visto[l["name"]] = [2]string{l["index"], l["indexed"]}
 	}
 
@@ -92,18 +92,18 @@ func TestIndexedRefleteACapacidadeDoMotor(t *testing.T) {
 	}
 }
 
-// linhasCom é o `linhas` com Capacidades de verdade. O helper original passa
+// rowsWith é o `linhas` com Capacidades de verdade. O helper original passa
 // nil de propósito — ele testa a tabela sem storage —, e um teste sobre a
 // coluna `indexed` precisa exatamente do contrário.
-func linhasCom(t *testing.T, sql string, c *schema.Compiled, caps meta.Capacidades) []map[string]string {
+func rowsWith(t *testing.T, sql string, c *schema.Compiled, caps meta.Capacidades) []map[string]string {
 	t.Helper()
 	stmt, err := parser.Parse(sql)
 	if err != nil {
 		t.Fatalf("Parse(%q): %v", sql, err)
 	}
-	it, err := meta.Abre(context.Background(), stmt, c, caps, nil)
+	it, err := meta.Open(context.Background(), stmt, c, caps, nil)
 	if err != nil {
-		t.Fatalf("Abre: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() {
 		if err := it.Close(); err != nil {
@@ -118,7 +118,7 @@ func linhasCom(t *testing.T, sql string, c *schema.Compiled, caps meta.Capacidad
 				m[col.Name] = ""
 				continue
 			}
-			m[col.Name] = texto(col.Val)
+			m[col.Name] = text(col.Val)
 		}
 		out = append(out, m)
 	}

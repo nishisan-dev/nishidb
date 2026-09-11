@@ -38,28 +38,28 @@ func newDecodePool(n int, fila *Fila, est *esteira, mat *materializer.Materializ
 	return &decodificadores{fila: fila, est: est, mat: mat, met: met, n: n, limiar: limiar}
 }
 
-// Sobe lança as goroutines e devolve a função que espera todas encerrarem e
+// Rises lança as goroutines e devolve a função que espera todas encerrarem e
 // declara a esteira sem mais eventos.
 //
 // A DECLARAÇÃO VEM DEPOIS DO WaitGroup, e a ordem é a correção: enquanto um
 // decodificador estiver vivo, um slot vazio no meio do anel é indistinguível de
 // um decode em curso, e o writer encerraria com evento por aplicar — perda
 // silenciosa exatamente na janela em que o produto promete não perder nada.
-func (d *decodificadores) Sobe(ctx context.Context) func() {
+func (d *decodificadores) Rises(ctx context.Context) func() {
 	for i := 0; i < d.n; i++ {
 		d.esperar.Add(1)
 		go func() {
 			defer d.esperar.Done()
-			d.roda(ctx)
+			d.run(ctx)
 		}()
 	}
 	return func() {
 		d.esperar.Wait()
-		d.est.semMaisEventos()
+		d.est.withoutMaisEventos()
 	}
 }
 
-// roda é o laço de um decodificador.
+// run é o laço de um decodificador.
 //
 // A ORDEM RESERVA→DECODE→PUBLICA é o que faz o arena morar no anel: reservar
 // primeiro devolve o buffer do próprio slot, e o decode escreve direto nele.
@@ -72,7 +72,7 @@ func (d *decodificadores) Sobe(ctx context.Context) func() {
 // cancelamento. O writer consome por seq contíguo: um seq reservado e nunca
 // publicado o deixaria esperando para sempre, e o encerramento morreria no meio
 // de um checkpoint.
-func (d *decodificadores) roda(ctx context.Context) {
+func (d *decodificadores) run(ctx context.Context) {
 	for {
 		it, ok := d.fila.Recebe(ctx)
 		if !ok {
@@ -85,7 +85,7 @@ func (d *decodificadores) roda(ctx context.Context) {
 			return
 		}
 		if it.Barreira == nil {
-			d.mat.Decodifica(dec, it.Rec.Value)
+			d.mat.Decode(dec, it.Rec.Value)
 		}
 		d.est.publica(it.seq, it.Rec, it.Barreira)
 	}

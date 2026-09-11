@@ -9,8 +9,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func rec(valor string) *kgo.Record {
-	return &kgo.Record{Value: []byte(valor)}
+func rec(value string) *kgo.Record {
+	return &kgo.Record{Value: []byte(value)}
 }
 
 // §128: NO unbounded queues. O gate de registros é a capacidade do channel.
@@ -23,8 +23,8 @@ func TestFilaBloqueiaNoGateDeRegistros(t *testing.T) {
 		}
 	}
 
-	ctxCurto, cancela := context.WithTimeout(ctx, 50*time.Millisecond)
-	defer cancela()
+	ctxCurto, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
 	if err := f.Envia(ctxCurto, rec("x")); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("erro = %v, quer DeadlineExceeded: a fila aceitou além da capacidade", err)
 	}
@@ -45,8 +45,8 @@ func TestFilaBloqueiaNoGateDeBytes(t *testing.T) {
 		t.Fatalf("bytes = %d, quer 100", bytes)
 	}
 
-	ctxCurto, cancela := context.WithTimeout(ctx, 50*time.Millisecond)
-	defer cancela()
+	ctxCurto, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
 	if err := f.Envia(ctxCurto, rec("x")); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("erro = %v, quer DeadlineExceeded: a fila estourou o teto de bytes", err)
 	}
@@ -56,8 +56,8 @@ func TestFilaBloqueiaNoGateDeBytes(t *testing.T) {
 // ingestão travaria para sempre — num deadlock que nenhuma métrica explicaria.
 func TestRecordMaiorQueOTetoPassaSozinho(t *testing.T) {
 	f := NewQueue(10, 100)
-	ctx, cancela := context.WithTimeout(context.Background(), time.Second)
-	defer cancela()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
 	grande := rec(string(make([]byte, 5000)))
 	if err := f.Envia(ctx, grande); err != nil {
@@ -73,8 +73,8 @@ func TestRecordMaiorQueOTetoPassaSozinho(t *testing.T) {
 // para depois de N eventos, sem erro nenhum.
 func TestReceberLiberaOOrcamentoDeBytes(t *testing.T) {
 	f := NewQueue(10, 100)
-	ctx, cancela := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancela()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
 	for i := 0; i < 50; i++ {
 		if err := f.Envia(ctx, rec(string(make([]byte, 40)))); err != nil {
@@ -94,8 +94,8 @@ func TestReceberLiberaOOrcamentoDeBytes(t *testing.T) {
 // o intake exatamente quando o sistema está saturado.
 func TestConsumidorAcordaOProdutorBloqueado(t *testing.T) {
 	f := NewQueue(1, 50)
-	ctx, cancela := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancela()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
 	if err := f.Envia(ctx, rec(string(make([]byte, 50)))); err != nil {
 		t.Fatal(err)
@@ -128,8 +128,8 @@ func TestConsumidorAcordaOProdutorBloqueado(t *testing.T) {
 // dependente de quantas revogações aconteceram.
 func TestBarreiraNaoConsomeOrcamento(t *testing.T) {
 	f := NewQueue(10, 100)
-	ctx, cancela := context.WithTimeout(context.Background(), time.Second)
-	defer cancela()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
 	b := newBarrier()
 	if err := f.EnviaBarreira(ctx, b); err != nil {
@@ -146,8 +146,8 @@ func TestBarreiraNaoConsomeOrcamento(t *testing.T) {
 
 func TestFilaRespeitaCancelamento(t *testing.T) {
 	f := NewQueue(1, 10)
-	ctx, cancela := context.WithCancel(context.Background())
-	cancela()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
 	if _, ok := f.Recebe(ctx); ok {
 		t.Error("Recebe devolveu item com contexto cancelado")

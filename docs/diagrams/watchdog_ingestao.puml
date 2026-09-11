@@ -85,7 +85,7 @@ note right
   encerramento limpo que ninguém tentaria de novo.
 end note
 
-:o poll acorda e o Roda devolve ErrSemProgresso;
+:o poll acorda e o Roda devolve ErrWithoutProgresso;
 
 if (tentativas consecutivas esgotadas?) then (sim)
   :ingestao.desistiu, watchdog_desistiu = 1;

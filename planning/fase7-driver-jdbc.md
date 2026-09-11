@@ -149,7 +149,7 @@ está lá "serve a metadados (ResultSetMetaData), não à formatação"); propag
 `TestMetadataEConsultaConcordamSobreNullable`, e o que **sustenta a afirmação**:
 `TestOMaterializerRecusaEventoComChaveNulaEComSequenceNula` (ou citar cobertura equivalente
 existente em `internal/materializer`).
-*Gate:* rodar `TestScanAllocsIndependenteDoNumeroDeRows` antes e depois — `tetoPorQuery = 38`
+*Gate:* rodar `TestScanAllocsIndependenteDoNumeroDeRows` antes e depois — `ceilingByQuery = 38`
 é colado, sem folga.
 *A verificar durante a implementação:* se o binder resolve `_writtenAt` numa projeção
 explícita. Se resolver, ele também é NOT NULL (sempre gravado,
@@ -175,7 +175,7 @@ reprova. Não consertar nada de passagem.
 `TestMetricsComMetodoErradoNoPlanoLoopbackTambemSaiComCorpoErro`.
 *Armadilhas:* (1) a checagem de método é a **primeira** linha de `handleMetrics`, antes do
 laço de `AtualizaLag` — senão cada POST inválido dispara chamada ao broker com 5 s de
-timeout; (2) `papelDaRota` passa a devolver `existe=true` para esses padrões — ler
+timeout; (2) `roleOfRota` passa a devolver `existe=true` para esses padrões — ler
 `auth_internal_test.go` antes; (3) mudança observável: método errado em `/metrics`
 passa a incrementar o contador de erro exposto pelo próprio `/metrics`. Não é bug, mas vai
 para o comentário e para o aceite, não para a descoberta de alguém olhando um gráfico do
@@ -184,7 +184,7 @@ piloto.
 ### A7 — `UNSUPPORTED_CLAUSE` (D7)
 `lexer.SyntaxError` ganha `Clause string`; novo `internal/query/parser/clauses.go`;
 `protocol.CodeUnsupportedClause`; `traduzErroDeAbertura`
-([server/query.go:387](internal/server/query.go:387)); `codigoDoProtocolo`
+([server/query.go:387](internal/server/query.go:387)); `codigoOfProtocolo`
 ([query_remote.go:175](internal/cli/query_remote.go:175)) → `ExitQuery`, **não** o vala-comum
 `ExitUso` do `default`.
 
@@ -272,7 +272,7 @@ suíte Go não pode passar a exigir JVM. Ausência de JDK 21 **falha alto e nome
 instalar**, nunca vira SKIP (doutrina do [Makefile:61-71](Makefile:61)).
 
 `.gitignore`: `clients/jdbc/target/` (escopado, nunca `target/` solto), e acrescentar `target`
-à lista de diretórios que `testesDoRepositorio`
+à lista de diretórios que `testesOfRepositorio`
 ([evidence_test.go:55](internal/cli/evidence_test.go:55)) pula junto de `.git` e `.claude`.
 
 **Gate D9** — `internal/gates/jdbc_test.go` lê `clients/jdbc/pom.xml` **como dado** (mesma
@@ -561,7 +561,7 @@ nasce fora do único verificador que o projeto tem, com liberdade de citar teste
 **Duas armadilhas de gate existentes:**
 - `TestEvidenciasCitadasNosDocumentosExistem` indexa só `*_test.go` e casa o regexp
   `\bTest[A-Z]`. Convenção: classes Java **sufixadas** `*Test.java`/`*IT.java` (default do
-  surefire, não casa o regexp), **e** estender `testesDoRepositorio` para indexar métodos Java,
+  surefire, não casa o regexp), **e** estender `testesOfRepositorio` para indexar métodos Java,
   para que o aceite possa citar evidência Java com honestidade.
 - `TestQuickstartDoREADMEExecuta` ([readme_test.go:74](internal/cli/readme_test.go:74))
   **executa** os blocos ```yaml``` e ```console``` do README **por índice**. A seção JDBC tem de
@@ -581,7 +581,7 @@ ignorado em `getTimestamp`). Errata da spec: §71 (D3) e §98 (coordenadas do m�
 | **58** (`--param`) | **DENTRO** (A8) | É o único caminho de parâmetros sem prova ponta a ponta pelo próprio produto. Sem ele, testar o Java contra um caminho Go nunca exercitado por um cliente Go é testar duas coisas de uma vez |
 | **29** (teto exato) | **Decisão no driver**, sem código Go | O sintoma é pior que o registrado: sai como moldura de **erro** `MAX_ROWS_EXCEEDED`, não como flag. Distinguir exige varrer até a próxima linha viva que casa — potencialmente o dataset inteiro. Resolvido virando `SQLWarning` (Fase E) |
 | **30** (grafia `'g'`) | **FORA**, e o comentário pode ser fechado | Não é risco de corretude: `ParseFloat` e `Double.parseDouble` são ambos corretamente arredondados por IEEE-754. Vira uma linha de doutrina no driver ("nunca comparar double como texto") + teste de round-trip de bits |
-| **34** (`Stats` engole `ErrDatasetClosed`) | **FORA** — mas **corrigir a justificativa do débito** | O `debitos.md` o adia por tamanho ("arrasta todos os chamadores"); são só 3 chamadores não-teste. A razão de verdade é melhor: o sintoma é **inalcançável pela superfície pública** — `encerra()` faz `http.Shutdown` (que drena as requisições em voo) **antes** de `fechaDatasets()`. A justificativa fraca é por que o item já rolou M4→M5→M6 por inércia |
+| **34** (`Stats` engole `ErrDatasetClosed`) | **FORA** — mas **corrigir a justificativa do débito** | O `debitos.md` o adia por tamanho ("arrasta todos os chamadores"); são só 3 chamadores não-teste. A razão de verdade é melhor: o sintoma é **inalcançável pela superfície pública** — `encerra()` faz `http.Shutdown` (que drena as requisições em voo) **antes** de `closeDatasets()`. A justificativa fraca é por que o item já rolou M4→M5→M6 por inércia |
 | **15/28** (`StreamWriter`, `maxBufferPerQuery`) | **FORA** | O pior caso do 28 não vale no servidor: o `StreamWriter` é criado **por requisição** e morre com ela. O "N × maior linha" do 15 é bounded por `maxConcurrent` (honrado) e `MaxRecordSize` (4 MiB). Assunto de M6 |
 | **19** (índice hash físico) | **FORA** | Fase 8/M6. Consequência a documentar: consulta por `node` no piloto é full scan, e um usuário de DBeaver vai sentir |
 
@@ -597,7 +597,7 @@ ignorado em `getTimestamp`). Errata da spec: §71 (D3) e §98 (coordenadas do m�
    ```
    A baseline é re-medida e atualizada **no mesmo PR**. *(Nota: o arquivo tem `389`, mas
    `Makefile:58` e o débito 53 ainda dizem `390` — corrigir a prosa na A1.)*
-3. `TestScanAllocsIndependenteDoNumeroDeRows` com `tetoPorQuery` **inalterado** em 38;
+3. `TestScanAllocsIndependenteDoNumeroDeRows` com `ceilingByQuery` **inalterado** em 38;
    `TestParseAllocsTripwire` sob 64.
 4. **Gate de não-divergência:** `/v1/metadata` e a linha de schema de `/v1/query` publicam
    `type`, `jdbc`, `nullable`, `precision`, `scale`, `displaySize` idênticos para a mesma coluna.

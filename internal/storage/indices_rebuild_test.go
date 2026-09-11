@@ -15,34 +15,34 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// datasetComPendencias monta o estado que o débito 22 descreve: um dataset
+// datasetWithPendencias monta o estado que o débito 22 descreve: um dataset
 // POVOADO em que o índice é declarado depois, de modo que todo segmento selado
 // entra na fila de reconstrução.
 //
 // É o gatilho 1 da §2.4 (dataset gravado por um binário que não escrevia índice)
 // e o 4 (campo acrescentado ao schema) na mesma montagem — eles são o mesmo
 // estado em disco, e é isso que faz os quatro gatilhos serem um mecanismo só.
-func datasetComPendencias(t *testing.T, segmentos int, campos []string) (*Store, string) {
+func datasetWithPendencias(t *testing.T, segmentos int, fields []string) (*Store, string) {
 	t.Helper()
 	dir := t.TempDir()
-	s := abreStoreIndexadoEm(t, dir, nil, 64<<10) // sem campo indexado nenhum
+	s := openStoreIndexedIn(t, dir, nil, 64<<10) // sem campo indexado nenhum
 	for range segmentos {
-		poeLinhasAteRotacionar(t, s, s.curSegID.Load())
+		poeRowsUntilRotacionar(t, s, s.curSecID.Load())
 	}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close da montagem: %v", err)
 	}
-	return abreStoreIndexadoEm(t, dir, campos, 64<<10), dir
+	return openStoreIndexedIn(t, dir, fields, 64<<10), dir
 }
 
-// passadaDeReconstrucao roda uma passada e devolve quantos segmentos ela varreu
+// passOfRebuild roda uma passada e devolve quantos segmentos ela varreu
 // — o número que o laço loga e o único observável que distingue "não há o que
 // fazer" de "está tudo sendo refeito de novo".
-func passadaDeReconstrucao(t *testing.T, s *Store) int {
+func passOfRebuild(t *testing.T, s *Store) int {
 	t.Helper()
-	feitos, err := s.passadaDeReconstrucao(t.Context(), JanelaDeIndice{})
+	feitos, err := s.passOfRebuild(t.Context(), WindowOfIndex{})
 	if err != nil {
-		t.Fatalf("passadaDeReconstrucao: %v", err)
+		t.Fatalf("passOfRebuild: %v", err)
 	}
 	return feitos
 }
@@ -56,29 +56,29 @@ func passadaDeReconstrucao(t *testing.T, s *Store) int {
 // fila, todas as vezes. Só "a segunda passada não varreu nada" também não: uma
 // passada que não fizesse nada nunca satisfaria a primeira.
 func TestAReconstrucaoConvergeEDeixaAFilaVazia(t *testing.T) {
-	s, _ := datasetComPendencias(t, 3, []string{"node"})
-	fila := pendentes(t, s, JanelaDeIndice{})
+	s, _ := datasetWithPendencias(t, 3, []string{"node"})
+	fila := pendentes(t, s, WindowOfIndex{})
 	if len(fila) < 2 {
 		t.Fatalf("montagem: %d segmento(s) pendente(s); com menos de dois a passada não exercita a fila", len(fila))
 	}
 
-	antes := s.varreduras.Load()
-	if feitos := passadaDeReconstrucao(t, s); feitos != len(fila) {
+	before := s.varreduras.Load()
+	if feitos := passOfRebuild(t, s); feitos != len(fila) {
 		t.Fatalf("a primeira passada reconstruiu %d de %d segmentos pendentes", feitos, len(fila))
 	}
-	if lidas := s.varreduras.Load() - antes; lidas != int64(len(fila)) {
+	if lidas := s.varreduras.Load() - before; lidas != int64(len(fila)) {
 		t.Errorf("a primeira passada varreu %d segmentos para %d pendentes: a leitura sequencial é o custo inteiro "+
 			"da operação, e pagá-la mais de uma vez por segmento é pagar o dobro", lidas, len(fila))
 	}
-	if resto := pendentes(t, s, JanelaDeIndice{}); len(resto) != 0 {
+	if resto := pendentes(t, s, WindowOfIndex{}); len(resto) != 0 {
 		t.Fatalf("a fila não esvaziou: %v continuam pendentes depois de uma passada completa", resto)
 	}
 
-	antes = s.varreduras.Load()
-	if feitos := passadaDeReconstrucao(t, s); feitos != 0 {
+	before = s.varreduras.Load()
+	if feitos := passOfRebuild(t, s); feitos != 0 {
 		t.Errorf("a segunda passada reconstruiu %d segmentos sobre uma fila vazia", feitos)
 	}
-	if lidas := s.varreduras.Load() - antes; lidas != 0 {
+	if lidas := s.varreduras.Load() - before; lidas != 0 {
 		t.Errorf("a segunda passada varreu %d segmentos sobre uma fila vazia: o laço não convergiu", lidas)
 	}
 }
@@ -97,30 +97,30 @@ func TestAReconstrucaoConvergeEDeixaAFilaVazia(t *testing.T) {
 // A pré-condição é a metade que impede o teste de passar por vacuidade: se a
 // fila esvaziasse, ele não estaria medindo moinho nenhum.
 func TestSegmentoSemCampoIndexadoNaoVoltaParaAFila(t *testing.T) {
-	s, _ := datasetComPendencias(t, 2, []string{"campo-que-nenhum-record-tem"})
-	fila := pendentes(t, s, JanelaDeIndice{})
+	s, _ := datasetWithPendencias(t, 2, []string{"campo-que-nenhum-record-tem"})
+	fila := pendentes(t, s, WindowOfIndex{})
 	if len(fila) == 0 {
 		t.Fatal("montagem: a fila nasceu vazia, e um segmento sem campo indexado tem de nascer pendente")
 	}
 
-	antes := s.varreduras.Load()
-	if feitos := passadaDeReconstrucao(t, s); feitos != len(fila) {
+	before := s.varreduras.Load()
+	if feitos := passOfRebuild(t, s); feitos != len(fila) {
 		t.Fatalf("a primeira passada reconstruiu %d de %d segmentos", feitos, len(fila))
 	}
-	if lidas := s.varreduras.Load() - antes; lidas != int64(len(fila)) {
+	if lidas := s.varreduras.Load() - before; lidas != int64(len(fila)) {
 		t.Fatalf("a primeira passada varreu %d segmentos para %d pendentes", lidas, len(fila))
 	}
-	if depois := pendentes(t, s, JanelaDeIndice{}); !slices.Equal(depois, fila) {
+	if depois := pendentes(t, s, WindowOfIndex{}); !slices.Equal(depois, fila) {
 		t.Fatalf("a fila mudou de %v para %v: este teste só mede o moinho enquanto o segmento CONTINUA pendente", fila, depois)
 	}
 
-	antes = s.varreduras.Load()
+	before = s.varreduras.Load()
 	for range 3 {
-		if feitos := passadaDeReconstrucao(t, s); feitos != 0 {
+		if feitos := passOfRebuild(t, s); feitos != 0 {
 			t.Fatalf("uma passada seguinte reconstruiu %d segmentos que já estavam no ponto fixo", feitos)
 		}
 	}
-	if lidas := s.varreduras.Load() - antes; lidas != 0 {
+	if lidas := s.varreduras.Load() - before; lidas != 0 {
 		t.Errorf("três passadas seguintes varreram %d segmentos sem publicar nada: o laço está moendo, e cada volta "+
 			"custa a leitura sequencial de todo o segmento", lidas)
 	}
@@ -141,29 +141,29 @@ func TestSegmentoSemCampoIndexadoNaoVoltaParaAFila(t *testing.T) {
 // O que se anota, por isso, é o conjunto de seções que o arquivo tem — a memória
 // se invalida sozinha quando o disco muda por baixo dela.
 func TestOPontoFixoCaiQuandoOIndiceSaiDeDisco(t *testing.T) {
-	s, dir := datasetComPendencias(t, 1, []string{"node", "campo-que-nenhum-record-tem"})
-	alvo := pendentes(t, s, JanelaDeIndice{})[0]
-	if feitos := passadaDeReconstrucao(t, s); feitos != 1 {
+	s, dir := datasetWithPendencias(t, 1, []string{"node", "campo-que-nenhum-record-tem"})
+	target := pendentes(t, s, WindowOfIndex{})[0]
+	if feitos := passOfRebuild(t, s); feitos != 1 {
 		t.Fatalf("a primeira passada reconstruiu %d segmentos, quero 1", feitos)
 	}
-	if campos := camposDoSelado(t, dir, alvo); len(campos) != 1 {
-		t.Fatalf("montagem: o .sidx cobre %v; o teste precisa de um arquivo que EXISTA e continue incompleto", campos)
+	if fields := fieldsOfSealed(t, dir, target); len(fields) != 1 {
+		t.Fatalf("montagem: o .sidx cobre %v; o teste precisa de um arquivo que EXISTA e continue incompleto", fields)
 	}
-	if feitos := passadaDeReconstrucao(t, s); feitos != 0 {
+	if feitos := passOfRebuild(t, s); feitos != 0 {
 		t.Fatalf("a segunda passada refez %d segmentos: sem ponto fixo, este teste não mede a invalidação dele", feitos)
 	}
 
 	// A expulsão da janela em forma mínima: o .sidx sai de disco e o segmento
 	// continua no dataset.
-	if err := os.Remove(segindex.SealedPath(dir+"/data", alvo)); err != nil {
-		t.Fatalf("remover o índice do segmento %d: %v", alvo, err)
+	if err := os.Remove(segindex.SealedPath(dir+"/data", target)); err != nil {
+		t.Fatalf("remover o índice do segmento %d: %v", target, err)
 	}
-	if feitos := passadaDeReconstrucao(t, s); feitos != 1 {
+	if feitos := passOfRebuild(t, s); feitos != 1 {
 		t.Fatalf("a passada depois da expulsão reconstruiu %d segmentos, quero 1: o índice expulso não voltou, e "+
 			"alargar a janela seria um botão de mão única", feitos)
 	}
-	if fields := camposDoSelado(t, dir, alvo); len(fields) != 1 {
-		t.Errorf("o índice do segmento %d voltou cobrindo %v", alvo, fields)
+	if fields := fieldsOfSealed(t, dir, target); len(fields) != 1 {
+		t.Errorf("o índice do segmento %d voltou cobrindo %v", target, fields)
 	}
 }
 
@@ -177,27 +177,27 @@ func TestOPontoFixoCaiQuandoOIndiceSaiDeDisco(t *testing.T) {
 // selado —, e o oráculo é o contador de varreduras: uma, para os dois campos.
 func TestAReconstrucaoResolveTodosOsCamposPendentesNaMesmaLeitura(t *testing.T) {
 	dir := t.TempDir()
-	s := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
+	s := openStoreIndexedIn(t, dir, []string{"node"}, 64<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close da montagem: %v", err)
 	}
-	s2 := abreStoreIndexadoEm(t, dir, []string{"node", "type"}, 64<<10)
-	if campos := camposDoSelado(t, dir, alvo); len(campos) != 1 {
+	s2 := openStoreIndexedIn(t, dir, []string{"node", "type"}, 64<<10)
+	if fields := fieldsOfSealed(t, dir, target); len(fields) != 1 {
 		t.Fatalf("montagem: o .sidx do segmento %d cobre %v; o teste precisa de um campo presente e outro faltando",
-			alvo, campos)
+			target, fields)
 	}
 
-	antes := s2.varreduras.Load()
-	if feitos := passadaDeReconstrucao(t, s2); feitos != 1 {
+	before := s2.varreduras.Load()
+	if feitos := passOfRebuild(t, s2); feitos != 1 {
 		t.Fatalf("a passada reconstruiu %d segmentos, quero 1", feitos)
 	}
-	if lidas := s2.varreduras.Load() - antes; lidas != 1 {
+	if lidas := s2.varreduras.Load() - before; lidas != 1 {
 		t.Errorf("o segmento foi varrido %d vezes para resolver dois campos pendentes: a leitura sequencial é o "+
 			"custo inteiro da operação, e uma por campo a duplica", lidas)
 	}
-	if fields := camposDoSelado(t, dir, alvo); len(fields) != 2 {
+	if fields := fieldsOfSealed(t, dir, target); len(fields) != 2 {
 		t.Errorf("o .sidx reconstruído cobre %v, quero os dois campos indexados: reescrever só o campo que faltava "+
 			"apagaria a seção que já estava lá", fields)
 	}
@@ -212,17 +212,17 @@ func TestAReconstrucaoResolveTodosOsCamposPendentesNaMesmaLeitura(t *testing.T) 
 // exige que a passada termine assim mesmo. Uma implementação que o tomasse
 // (mesmo "só no rename") ficaria presa aqui e o teste falharia por prazo.
 func TestAPassadaDeReconstrucaoNaoTomaOWmu(t *testing.T) {
-	s, _ := datasetComPendencias(t, 2, []string{"node"})
-	if len(pendentes(t, s, JanelaDeIndice{})) == 0 {
+	s, _ := datasetWithPendencias(t, 2, []string{"node"})
+	if len(pendentes(t, s, WindowOfIndex{})) == 0 {
 		t.Fatal("montagem: sem pendência a passada não tomaria lock nenhum e a asserção passaria por vacuidade")
 	}
 
 	s.wmu.Lock()
 	pronto := make(chan int, 1)
 	go func() {
-		feitos, err := s.passadaDeReconstrucao(context.Background(), JanelaDeIndice{})
+		feitos, err := s.passOfRebuild(context.Background(), WindowOfIndex{})
 		if err != nil {
-			t.Errorf("passadaDeReconstrucao com o wmu na mão: %v", err)
+			t.Errorf("passOfRebuild com o wmu na mão: %v", err)
 		}
 		pronto <- feitos
 	}()
@@ -250,8 +250,8 @@ func TestAPassadaDeReconstrucaoNaoTomaOWmu(t *testing.T) {
 // à passada uma fila que descreve um instante que já passou — exatamente o que
 // ela recebe em produção — e exige que o segmento sobrevivente seja reconstruído.
 func TestOSegmentoAposentadoNoMeioDaPassadaNaoDerrubaOLaco(t *testing.T) {
-	s, dir := datasetComPendencias(t, 3, []string{"node"})
-	fila := pendentes(t, s, JanelaDeIndice{})
+	s, dir := datasetWithPendencias(t, 3, []string{"node"})
+	fila := pendentes(t, s, WindowOfIndex{})
 	if len(fila) < 2 {
 		t.Fatalf("montagem: %d pendente(s); o teste precisa de um segmento que some e outro que sobreviva", len(fila))
 	}
@@ -266,8 +266,8 @@ func TestOSegmentoAposentadoNoMeioDaPassadaNaoDerrubaOLaco(t *testing.T) {
 	if feitos != len(fila)-1 {
 		t.Errorf("a passada reconstruiu %d de %d segmentos vivos", feitos, len(fila)-1)
 	}
-	if campos := camposDoSelado(t, dir, sobrevivente); len(campos) != 1 {
-		t.Errorf("o segmento %d, que não sumiu, ficou com o índice cobrindo %v", sobrevivente, campos)
+	if fields := fieldsOfSealed(t, dir, sobrevivente); len(fields) != 1 {
+		t.Errorf("o segmento %d, que não sumiu, ficou com o índice cobrindo %v", sobrevivente, fields)
 	}
 }
 
@@ -279,10 +279,10 @@ func TestOSegmentoAposentadoNoMeioDaPassadaNaoDerrubaOLaco(t *testing.T) {
 // devolve os bytes certos — foi assim que a primeira versão deste teste
 // reconstruiu com sucesso o índice de um segmento que já não existia. O erro que
 // o laço precisa tolerar só aparece depois do CloseSegment.
-func aposenta(t *testing.T, s *Store, dir string, seg uint32) {
+func aposenta(t *testing.T, s *Store, dir string, sec uint32) {
 	t.Helper()
-	if err := s.fechaODescritorEApaga(seg, caminhoCanonicoDoSegmento(dir+"/data", seg)); err != nil {
-		t.Fatalf("aposentar o segmento %d: %v", seg, err)
+	if err := s.closeODescritorEDelete(sec, pathCanonicoOfSegment(dir+"/data", sec)); err != nil {
+		t.Fatalf("aposentar o segmento %d: %v", sec, err)
 	}
 }
 
@@ -292,10 +292,10 @@ func aposenta(t *testing.T, s *Store, dir string, seg uint32) {
 // casar no dia em que o segment.Reader embrulhasse o erro de outro jeito, e o
 // laço voltaria a parar de vez numa corrida benigna.
 func TestOErroDoSegmentoSumidoEhOQueOLacoTolera(t *testing.T) {
-	s, dir := datasetComPendencias(t, 2, []string{"node"})
-	alvo := pendentes(t, s, JanelaDeIndice{})[0]
-	aposenta(t, s, dir, alvo)
-	_, err := s.reconstroiUmSegmento(t.Context(), alvo)
+	s, dir := datasetWithPendencias(t, 2, []string{"node"})
+	target := pendentes(t, s, WindowOfIndex{})[0]
+	aposenta(t, s, dir, target)
+	_, err := s.reconstroiUmSegment(t.Context(), target)
 	if err == nil {
 		t.Fatal("reconstruir um segmento que já não existe devolveu nil")
 	}
@@ -311,16 +311,16 @@ func TestOErroDoSegmentoSumidoEhOQueOLacoTolera(t *testing.T) {
 // falso negativo petrificado, que é a única coisa que a revalidação do §44 não
 // sabe consertar.
 func TestAReconstrucaoInterrompidaNaoPublicaIndiceParcial(t *testing.T) {
-	s, dir := datasetComPendencias(t, 2, []string{"node"})
-	alvo := pendentes(t, s, JanelaDeIndice{})[0]
-	ctx, cancela := context.WithCancel(context.Background())
-	cancela()
+	s, dir := datasetWithPendencias(t, 2, []string{"node"})
+	target := pendentes(t, s, WindowOfIndex{})[0]
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	err := s.ConstroiIndiceDoSegmento(ctx, alvo, s.CamposIndexados())
+	err := s.ConstroiIndexOfSegment(ctx, target, s.FieldsIndexados())
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("ConstroiIndiceDoSegmento com ctx cancelado: err = %v, quero context.Canceled", err)
+		t.Fatalf("ConstroiIndexOfSegment com ctx cancelado: err = %v, quero context.Canceled", err)
 	}
-	if _, err := os.Stat(segindex.SealedPath(dir+"/data", alvo)); !os.IsNotExist(err) {
+	if _, err := os.Stat(segindex.SealedPath(dir+"/data", target)); !os.IsNotExist(err) {
 		t.Errorf("Stat do .sidx depois de uma varredura cancelada = %v, quero IsNotExist: um índice de varredura "+
 			"parcial é imutável e falso negativo para sempre", err)
 	}
@@ -328,94 +328,94 @@ func TestAReconstrucaoInterrompidaNaoPublicaIndiceParcial(t *testing.T) {
 
 // TestOMedidorDaReconstrucaoSobeAntesDaGoroutine é a regra do §92: quem chamou
 // tem direito de ver o estado que acabou de instalar. Subir o medidor DENTRO da
-// goroutine deixa uma janela em que IniciaReconstrucao já voltou e
-// ReconstrucaoAtiva ainda diz false.
+// goroutine deixa uma janela em que StartRebuild já voltou e
+// RebuildActive ainda diz false.
 func TestOMedidorDaReconstrucaoSobeAntesDaGoroutine(t *testing.T) {
-	s, _ := datasetComPendencias(t, 2, []string{"node"})
-	if s.ReconstrucaoAtiva() {
+	s, _ := datasetWithPendencias(t, 2, []string{"node"})
+	if s.RebuildActive() {
 		t.Fatal("montagem: o medidor já dizia 1 antes de alguém iniciar a reconstrução")
 	}
-	s.IniciaReconstrucao(context.Background(), JanelaDeIndice{})
-	if !s.ReconstrucaoAtiva() {
-		t.Error("ReconstrucaoAtiva = false logo depois do Inicia: quem ligou o laço lê no painel o mesmo número de " +
+	s.StartRebuild(context.Background(), WindowOfIndex{})
+	if !s.RebuildActive() {
+		t.Error("RebuildActive = false logo depois do Inicia: quem ligou o laço lê no painel o mesmo número de " +
 			"quem não o tem")
 	}
-	s.ParaReconstrucao()
-	if s.ReconstrucaoAtiva() {
-		t.Error("ReconstrucaoAtiva = true depois do Para, que CANCELA e AGUARDA: série presa em 1 é alerta que nunca dispara")
+	s.ForRebuild()
+	if s.RebuildActive() {
+		t.Error("RebuildActive = true depois do Para, que CANCELA e AGUARDA: série presa em 1 é alerta que nunca dispara")
 	}
 }
 
 // TestOLacoDeReconstrucaoDrenaAFilaSozinho é o que separa "o mecanismo existe" de
 // "o produto resolve", e é o que fecha o débito 22: sem esta goroutine a fila só
-// era drenada por quem chamasse o ConstroiIndiceDoSegmento na mão.
+// era drenada por quem chamasse o ConstroiIndexOfSegment na mão.
 //
 // A primeira passada é IMEDIATA, então a fila esvazia sem esperar o cochilo — o
 // teste falharia por prazo se ela fosse agendada para depois do intervalo.
 func TestOLacoDeReconstrucaoDrenaAFilaSozinho(t *testing.T) {
-	s, dir := datasetComPendencias(t, 3, []string{"node"})
-	fila := pendentes(t, s, JanelaDeIndice{})
+	s, dir := datasetWithPendencias(t, 3, []string{"node"})
+	fila := pendentes(t, s, WindowOfIndex{})
 	if len(fila) == 0 {
 		t.Fatal("montagem: a fila nasceu vazia")
 	}
 
-	s.IniciaReconstrucao(context.Background(), JanelaDeIndice{})
-	defer s.ParaReconstrucao()
-	esperaAte(t, func() bool { return len(pendentes(t, s, JanelaDeIndice{})) == 0 },
+	s.StartRebuild(context.Background(), WindowOfIndex{})
+	defer s.ForRebuild()
+	waitUntil(t, func() bool { return len(pendentes(t, s, WindowOfIndex{})) == 0 },
 		"o laço de fundo não drenou a fila: o operador declara index e o campo continua enumerando indefinidamente")
-	for _, seg := range fila {
-		if campos := camposDoSelado(t, dir, seg); len(campos) != 1 {
-			t.Errorf("o segmento %d saiu da fila com o índice cobrindo %v", seg, campos)
+	for _, sec := range fila {
+		if fields := fieldsOfSealed(t, dir, sec); len(fields) != 1 {
+			t.Errorf("o segmento %d saiu da fila com o índice cobrindo %v", sec, fields)
 		}
 	}
 }
 
 // TestCloseCancelaEEsperaAReconstrucao é a decisão de sempre, na quarta
 // goroutine: o Close cancela e AGUARDA antes do quiesce. Sem o join, ou o Close
-// espera a varredura inteira, ou — pior — vence a corrida e fecha o segR sob os
+// espera a varredura inteira, ou — pior — vence a corrida e fecha o secR sob os
 // pés de quem está lendo 512 MiB.
 //
 // O oráculo é o WaitGroup: depois do Close nenhuma goroutine de reconstrução
 // pode continuar contada. Um Close que só cancelasse devolveria o controle com a
 // varredura ainda em voo.
 func TestCloseCancelaEEsperaAReconstrucao(t *testing.T) {
-	s, _ := datasetComPendencias(t, 3, []string{"node"})
-	s.IniciaReconstrucao(context.Background(), JanelaDeIndice{})
+	s, _ := datasetWithPendencias(t, 3, []string{"node"})
+	s.StartRebuild(context.Background(), WindowOfIndex{})
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close com a reconstrução no ar: %v", err)
 	}
-	if s.ReconstrucaoAtiva() {
-		t.Error("ReconstrucaoAtiva = true depois do Close: a goroutine ficou órfã sobre um dataset fechado")
+	if s.RebuildActive() {
+		t.Error("RebuildActive = true depois do Close: a goroutine ficou órfã sobre um dataset fechado")
 	}
 	terminou := make(chan struct{})
-	go func() { s.recEmVoo.Wait(); close(terminou) }()
+	go func() { s.recInVoo.Wait(); close(terminou) }()
 	select {
 	case <-terminou:
 	case <-time.After(30 * time.Second):
-		t.Fatal("o Close devolveu o controle com a passada de reconstrução ainda em voo: ela lê pelo segR, que o " +
+		t.Fatal("o Close devolveu o controle com a passada de reconstrução ainda em voo: ela lê pelo secR, que o " +
 			"Close acabou de fechar")
 	}
 }
 
 // TestSegundaPartidaDaReconstrucaoNaoSobeSegundaGoroutine é a guarda de dupla
 // partida. O estrago dela não é contagem: a segunda partida SOBRESCREVE o
-// recCancela, de modo que o ParaReconstrucao do Close cancelaria só a última
+// recCancel, de modo que o ForRebuild do Close cancelaria só a última
 // goroutine e ficaria esperando para sempre pela primeira — o processo não
 // encerra.
 func TestSegundaPartidaDaReconstrucaoNaoSobeSegundaGoroutine(t *testing.T) {
-	s, _ := datasetComPendencias(t, 2, []string{"node"})
-	s.IniciaReconstrucao(context.Background(), JanelaDeIndice{})
-	s.IniciaReconstrucao(context.Background(), JanelaDeIndice{})
+	s, _ := datasetWithPendencias(t, 2, []string{"node"})
+	s.StartRebuild(context.Background(), WindowOfIndex{})
+	s.StartRebuild(context.Background(), WindowOfIndex{})
 
 	parou := make(chan struct{})
-	go func() { s.ParaReconstrucao(); close(parou) }()
+	go func() { s.ForRebuild(); close(parou) }()
 	select {
 	case <-parou:
 	case <-time.After(30 * time.Second):
-		t.Fatal("o ParaReconstrucao não voltou: a segunda partida subiu outra goroutine e sobrescreveu o cancelamento " +
+		t.Fatal("o ForRebuild não voltou: a segunda partida subiu outra goroutine e sobrescreveu o cancelamento " +
 			"da primeira, que ninguém mais alcança")
 	}
-	if s.ReconstrucaoAtiva() {
+	if s.RebuildActive() {
 		t.Error("sobrou goroutine de reconstrução de pé depois do Para")
 	}
 }
@@ -425,32 +425,32 @@ func TestSegundaPartidaDaReconstrucaoNaoSobeSegundaGoroutine(t *testing.T) {
 // coisa é readdir por nada. É também o que permite ao servidor ligá-la sobre a
 // lista inteira de datasets sem perguntar quais têm índice.
 func TestReconstrucaoNaoSobeSemCampoIndexado(t *testing.T) {
-	s := abreStoreIndexadoEm(t, t.TempDir(), nil, 64<<10)
-	s.IniciaReconstrucao(context.Background(), JanelaDeIndice{})
-	defer s.ParaReconstrucao()
-	if s.ReconstrucaoAtiva() {
+	s := openStoreIndexedIn(t, t.TempDir(), nil, 64<<10)
+	s.StartRebuild(context.Background(), WindowOfIndex{})
+	defer s.ForRebuild()
+	if s.RebuildActive() {
 		t.Error("a reconstrução subiu num dataset sem campo indexado")
 	}
 }
 
 // TestReconstrucaoRecusaJanelaFinitaNoMaterializado fecha a porta que a
 // assinatura deixa aberta: ela obriga a passar ALGUMA janela, e o compilador não
-// sabe qual é a certa. Janela finita sobre um materializado é erro de quem monta
+// sabe qual é a certa. Window finita sobre um materializado é erro de quem monta
 // os limites — lá a linha vive no segmento corrente independente da idade dela —,
 // e deixar o laço subir faria cada passada falhar e o ERROR de parada aparecer
 // como se o mecanismo tivesse quebrado.
 func TestReconstrucaoRecusaJanelaFinitaNoMaterializado(t *testing.T) {
-	s, _ := datasetComPendencias(t, 1, []string{"node"})
-	s.IniciaReconstrucao(context.Background(), JanelaDeIndice{Duracao: time.Hour})
-	defer s.ParaReconstrucao()
-	if s.ReconstrucaoAtiva() {
+	s, _ := datasetWithPendencias(t, 1, []string{"node"})
+	s.StartRebuild(context.Background(), WindowOfIndex{Duration: time.Hour})
+	defer s.ForRebuild()
+	if s.RebuildActive() {
 		t.Error("a reconstrução subiu com janela finita num dataset materializado, onde a janela é infinita por construção")
 	}
 }
 
 // TestOMapeamentoAbertoAntesDaReescritaNaoEhPublicado é a TERCEIRA aresta do
 // cache de selados, e ela deixou de ser teórica no instante em que este laço
-// subiu: o garanteSelado abre o arquivo fora de lock nenhum (o crc32c de um
+// subiu: o garanteSealed abre o arquivo fora de lock nenhum (o crc32c de um
 // índice grande não pode rodar sob o selMu, que é o lock da rotação), então entre
 // abrir e publicar cabe uma reescrita inteira da reconstrução.
 //
@@ -461,76 +461,76 @@ func TestReconstrucaoRecusaJanelaFinitaNoMaterializado(t *testing.T) {
 // lugar de onde a janela é visível.
 func TestOMapeamentoAbertoAntesDaReescritaNaoEhPublicado(t *testing.T) {
 	dir := t.TempDir()
-	s := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
+	s := openStoreIndexedIn(t, dir, []string{"node"}, 64<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close da montagem: %v", err)
 	}
-	s2 := abreStoreIndexadoEm(t, dir, []string{"node", "type"}, 64<<10)
+	s2 := openStoreIndexedIn(t, dir, []string{"node", "type"}, 64<<10)
 
 	// O que uma consulta concorrente teria em mãos: a geração lida e o arquivo
 	// VELHO já aberto, ainda não publicado.
 	s2.selMu.RLock()
-	geracao := s2.selGeracao
+	generation := s2.selGeneration
 	s2.selMu.RUnlock()
-	velho, err := segindex.OpenSealed(segindex.SealedPath(dir+"/data", alvo))
+	velho, err := segindex.OpenSealed(segindex.SealedPath(dir+"/data", target))
 	if err != nil {
 		t.Fatalf("OpenSealed do índice antigo: %v", err)
 	}
-	if campos := velho.Fields(); len(campos) != 1 {
-		t.Fatalf("montagem: o mapeamento antigo cobre %v; o teste precisa dele SEM a seção do campo novo", campos)
+	if fields := velho.Fields(); len(fields) != 1 {
+		t.Fatalf("montagem: o mapeamento antigo cobre %v; o teste precisa dele SEM a seção do campo novo", fields)
 	}
 
-	if feitos := passadaDeReconstrucao(t, s2); feitos != 1 {
+	if feitos := passOfRebuild(t, s2); feitos != 1 {
 		t.Fatalf("a passada reconstruiu %d segmentos, quero 1", feitos)
 	}
-	s2.publicaSelado(alvo, velho, geracao)
+	s2.publicaSealed(target, velho, generation)
 
 	s2.selMu.RLock()
-	publicado := s2.selados[alvo]
+	publicado := s2.selados[target]
 	s2.selMu.RUnlock()
 	if publicado == velho {
 		t.Fatal("o mapeamento aberto ANTES da reescrita foi publicado DEPOIS dela: o segmento responde pelo índice " +
 			"velho — sem a seção do campo novo, portanto enumerando — até a próxima abertura do dataset, e ainda " +
 			"prende o inode substituído")
 	}
-	if fields := camposDoSeladoEmCache(t, s2, alvo); len(fields) != 2 {
+	if fields := fieldsOfSealedInCache(t, s2, target); len(fields) != 2 {
 		t.Errorf("o cache serve um índice que cobre %v depois da reconstrução, quero os dois campos", fields)
 	}
 }
 
-// camposDoSeladoEmCache resolve o segmento pelo caminho da CONSULTA (o
-// garanteSelado) e devolve o que o mapeamento em cache cobre. É o oráculo do que
+// fieldsOfSealedInCache resolve o segmento pelo caminho da CONSULTA (o
+// garanteSealed) e devolve o que o mapeamento em cache cobre. É o oráculo do que
 // a query enxerga, que é diferente do que está em disco quando o cache guarda um
 // mapeamento velho.
-func camposDoSeladoEmCache(t *testing.T, s *Store, seg uint32) []types.FieldID {
+func fieldsOfSealedInCache(t *testing.T, s *Store, sec uint32) []types.FieldID {
 	t.Helper()
-	s.garanteSelado(seg)
+	s.garanteSealed(sec)
 	s.selMu.RLock()
 	defer s.selMu.RUnlock()
-	sel := s.selados[seg]
+	sel := s.selados[sec]
 	if sel == nil {
-		t.Fatalf("o segmento %d não tem índice em cache depois do garanteSelado", seg)
+		t.Fatalf("o segmento %d não tem índice em cache depois do garanteSealed", sec)
 	}
 	return sel.Fields()
 }
 
 // TestOSegmentoQueVirouCorrenteEntreAFotografiaEAVarreduraNaoMataOLaco fecha a
 // corrida simétrica à do segmento aposentado: o .dat do segmento novo nasce
-// dentro do Append, ANTES de o aposAppend trocar o curSegID, então a fotografia
+// dentro do Append, ANTES de o aposAppend trocar o curSecID, então a fotografia
 // da fila pode listá-lo enquanto o Load ainda devolve o anterior — e quando o
 // laço o alcança, ele JÁ é o corrente. A guarda de imutabilidade recusa (certo),
 // mas sem a sentinela a recusa subia como falha da passada, o laço logava
 // reconstrucao.parou e NÃO voltava até a reabertura do dataset: uma janela de
 // milissegundos que se resolve sozinha matava a cura da §2.4 inteira.
 func TestOSegmentoQueVirouCorrenteEntreAFotografiaEAVarreduraNaoMataOLaco(t *testing.T) {
-	s, _ := abreStoreIndexadoComSegmentoPequeno(t, []string{"node"}, 1<<20)
-	poeLinhas(t, s, 5)
-	corrente := s.curSegID.Load()
+	s, _ := openStoreIndexedWithSegmentSmall(t, []string{"node"}, 1<<20)
+	poeRows(t, s, 5)
+	current := s.curSecID.Load()
 
 	// A fila fotografada com o corrente dentro — o estado que a corrida produz.
-	feitos, err := s.reconstroiOsPendentes(context.Background(), []uint32{corrente})
+	feitos, err := s.reconstroiOsPendentes(context.Background(), []uint32{current})
 	if err != nil {
 		t.Fatalf("a passada morreu com o corrente na fila: %v — o laço pararia de vez por uma corrida benigna", err)
 	}
@@ -540,9 +540,9 @@ func TestOSegmentoQueVirouCorrenteEntreAFotografiaEAVarreduraNaoMataOLaco(t *tes
 
 	// A recusa DIRETA continua classificada para o chamador externo: pular no
 	// laço não pode afrouxar o contrato de quem pede a reconstrução na mão.
-	err = s.ConstroiIndiceDoSegmento(context.Background(), corrente, s.camposIndexados)
+	err = s.ConstroiIndexOfSegment(context.Background(), current, s.fieldsIndexados)
 	if !errors.Is(err, ErrInvalidArgument) {
-		t.Errorf("ConstroiIndiceDoSegmento(corrente) = %v, quero ErrInvalidArgument", err)
+		t.Errorf("ConstroiIndexOfSegment(corrente) = %v, quero ErrInvalidArgument", err)
 	}
 }
 
@@ -560,8 +560,8 @@ func TestOSegmentoQueVirouCorrenteEntreAFotografiaEAVarreduraNaoMataOLaco(t *tes
 func TestAReconstrucaoRecusaSegmentoSeladoComCorrupcaoNoMeio(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
 	// O checkpoint avança o ponto S do manifest para DEPOIS do segmento alvo:
 	// é o estado normal de qualquer segmento selado em regime, e é o que deixa
 	// a corrupção dele INVISÍVEL para a recovery — o replay da abertura varre
@@ -575,16 +575,16 @@ func TestAReconstrucaoRecusaSegmentoSeladoComCorrupcaoNoMeio(t *testing.T) {
 
 	// O segmento selado perde o índice (fica pendente) e ganha um byte podre no
 	// MEIO do dado — depois do header do segmento, longe do fim.
-	caminhoSidx := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
-	if err := os.Remove(caminhoSidx); err != nil {
+	pathSidx := segindex.SealedPath(filepath.Join(dir, "data"), target)
+	if err := os.Remove(pathSidx); err != nil {
 		t.Fatal(err)
 	}
-	caminhoDat := filepath.Join(dir, "data", fmt.Sprintf("segment-%08d.dat", alvo))
-	info, err := os.Stat(caminhoDat)
+	pathDat := filepath.Join(dir, "data", fmt.Sprintf("segment-%08d.dat", target))
+	info, err := os.Stat(pathDat)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := os.OpenFile(caminhoDat, os.O_RDWR, 0)
+	f, err := os.OpenFile(pathDat, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,12 +597,12 @@ func TestAReconstrucaoRecusaSegmentoSeladoComCorrupcaoNoMeio(t *testing.T) {
 	}
 
 	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})
-	err = s2.ConstroiIndiceDoSegmento(context.Background(), alvo, s2.camposIndexados)
+	err = s2.ConstroiIndexOfSegment(context.Background(), target, s2.fieldsIndexados)
 	if !errors.Is(err, ErrDatasetCorrupt) {
-		t.Fatalf("ConstroiIndiceDoSegmento sobre segmento podre = %v, quero ErrDatasetCorrupt: "+
+		t.Fatalf("ConstroiIndexOfSegment sobre segmento podre = %v, quero ErrDatasetCorrupt: "+
 			"a varredura parou no meio e o índice sairia sem as rows posteriores", err)
 	}
-	if _, statErr := os.Stat(caminhoSidx); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(pathSidx); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("um .sidx foi publicado (%v) a partir de uma varredura incompleta: "+
 			"ele declararia completo um índice com falso negativo permanente", statErr)
 	}
@@ -616,10 +616,10 @@ func TestAReconstrucaoRecusaSegmentoSeladoComCorrupcaoNoMeio(t *testing.T) {
 // como ErrDatasetCorrupt: o laço morria de vez por uma sobreposição com a
 // aposentadoria que ele próprio declara tolerar.
 func TestOSegmentoAusenteNaGuardaDeTamanhoEhCorridaBenigna(t *testing.T) {
-	s, _ := abreStoreIndexadoComSegmentoPequeno(t, []string{"node"}, 1<<20)
-	poeLinhas(t, s, 3)
+	s, _ := openStoreIndexedWithSegmentSmall(t, []string{"node"}, 1<<20)
+	poeRows(t, s, 3)
 
-	_, err := s.constroiIndiceDoSegmento(context.Background(), 999, s.camposIndexados)
+	_, err := s.constroiIndexOfSegment(context.Background(), 999, s.fieldsIndexados)
 	if !segmentLeftDataset(err) {
 		t.Fatalf("segmento ausente classificado como %v: tem de ser a corrida benigna (os.ErrNotExist), "+
 			"senão a aposentadoria concorrente mata o laço", err)

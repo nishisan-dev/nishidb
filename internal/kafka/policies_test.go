@@ -14,13 +14,13 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-func eventoRuim() *kgo.Record {
+func eventRuim() *kgo.Record {
 	return &kgo.Record{Key: []byte("X"), Value: []byte(`{isso nao e json}`)}
 }
 
-// eventoGigante viola o teto de FORMATO num campo com bitmap. É culpa do
+// eventGigante viola o teto de FORMATO num campo com bitmap. É culpa do
 // evento (EVENT_TOO_LARGE) e por isso governado pela política do §101.
-func eventoGigante() *kgo.Record {
+func eventGigante() *kgo.Record {
 	return &kgo.Record{
 		Key: []byte("G"),
 		Value: []byte(`{"id":"G","_SEQ":1,"status":"` +
@@ -31,18 +31,18 @@ func eventoGigante() *kgo.Record {
 // D6/§101 — log-and-skip descarta e AVANÇA o offset. Não avançar aqui seria
 // livelock: o mesmo evento voltaria para sempre.
 func TestLogAndSkipDescartaEAvancaOOffset(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(evento("A", 1, "Start"), eventoRuim(), evento("B", 1, "Start"))
-	d, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 })
+	b.produz(event("A", 1, "Start"), eventRuim(), event("B", 1, "Start"))
+	d, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.Descartados != 1 || d.Aplicados != 2 {
 		t.Errorf("desfecho = %+v, quer 1 descarte e 2 aplicados", d)
 	}
-	offsets, _ := b.leOffsets()
+	offsets, _ := b.readOffsets()
 	if offsets[0] != 3 {
 		t.Errorf("offset = %d, quer 3: o descarte tem de avançar, senão o evento ruim volta para sempre", offsets[0])
 	}
@@ -52,11 +52,11 @@ func TestLogAndSkipDescartaEAvancaOOffset(t *testing.T) {
 // isso era STORAGE_ERROR, e num daemon a escolha seria entre perda invisível
 // e livelock.
 func TestEventoAcimaDoTetoSegueAPolitica(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(evento("A", 1, "Start"), eventoGigante(), evento("B", 1, "Start"))
-	d, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 })
+	b.produz(event("A", 1, "Start"), eventGigante(), event("B", 1, "Start"))
+	d, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestEventoAcimaDoTetoSegueAPolitica(t *testing.T) {
 	if d.Descartados != 1 {
 		t.Errorf("descartados = %d, quer 1", d.Descartados)
 	}
-	if offsets, _ := b.leOffsets(); offsets[0] != 3 {
+	if offsets, _ := b.readOffsets(); offsets[0] != 3 {
 		t.Errorf("offset = %d, quer 3", offsets[0])
 	}
 }
@@ -77,11 +77,11 @@ func TestEventoAcimaDoTetoSegueAPolitica(t *testing.T) {
 // bytes — docs/piloto-events.md) ficava indistinguível de INVALID_JSON dentro
 // do mesmo total, e nem o painel nem um alerta tinham como nomear a causa.
 func TestInvalidosContamPorMotivoEmMetrics(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(eventoRuim(), eventoGigante())
-	if _, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 2 }); err != nil {
+	b.produz(eventRuim(), eventGigante())
+	if _, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 2 }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,12 +90,12 @@ func TestInvalidosContamPorMotivoEmMetrics(t *testing.T) {
 		t.Fatalf("WriteTo: %v", err)
 	}
 	saida := buf.String()
-	for _, linha := range []string{
+	for _, row := range []string{
 		`nishidb_ingest_invalid_total{dataset="radius_sessions",motivo="EVENT_TOO_LARGE"} 1`,
 		`nishidb_ingest_invalid_total{dataset="radius_sessions",motivo="INVALID_JSON"} 1`,
 	} {
-		if !strings.Contains(saida, linha) {
-			t.Errorf("linha %q não apareceu em /metrics:\n%s", linha, saida)
+		if !strings.Contains(saida, row) {
+			t.Errorf("linha %q não apareceu em /metrics:\n%s", row, saida)
 		}
 	}
 }
@@ -104,19 +104,19 @@ func TestInvalidosContamPorMotivoEmMetrics(t *testing.T) {
 // exatamente o evento problemático. E não encerra o processo: o §51 põe as
 // consultas antes da ingestão, e o §82 permite vários datasets por instância.
 func TestStopParaAIngestaoSemAvancarOOffset(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 	b.cfg.InvalidEventPolicy = schema.InvalidEventStop
 
-	b.produz(evento("A", 1, "Start"), eventoRuim(), evento("B", 1, "Start"))
+	b.produz(event("A", 1, "Start"), eventRuim(), event("B", 1, "Start"))
 
-	_, err := b.consomeAte(prazo, func(kafka.Desfecho) bool { return false })
+	_, err := b.consomeUntil(prazo, func(kafka.Desfecho) bool { return false })
 	if !errors.Is(err, kafka.ErrPausado) {
 		t.Fatalf("erro = %v, quer ErrPausado", err)
 	}
 
-	offsets, existe := b.leOffsets()
-	if !existe {
+	offsets, exists := b.readOffsets()
+	if !exists {
 		t.Fatal("kafka.offsets não foi criado; o que já entrou tem de ficar durável")
 	}
 	// O primeiro evento entrou (offset 0), o segundo parou tudo: a posição
@@ -134,11 +134,11 @@ func TestStopParaAIngestaoSemAvancarOOffset(t *testing.T) {
 // autoOffsetReset aqui reprocessaria o tópico retido inteiro (earliest) ou
 // pularia tudo (latest), os dois em silêncio.
 func TestDatasetComLinhasESemOffsetsRecusaASubida(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(evento("A", 1, "Start"))
-	if _, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 1 }); err != nil {
+	b.produz(event("A", 1, "Start"))
+	if _, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 1 }); err != nil {
 		t.Fatal(err)
 	}
 	if b.st.RowCount() == 0 {
@@ -146,11 +146,11 @@ func TestDatasetComLinhasESemOffsetsRecusaASubida(t *testing.T) {
 	}
 
 	// Apaga a posição, como um restore parcial faria.
-	b.apagaOffsets()
+	b.deleteOffsets()
 
-	_, err := b.abreConsumidor()
-	if !errors.Is(err, kafka.ErrPosicaoDesconhecida) {
-		t.Fatalf("erro = %v, quer ErrPosicaoDesconhecida", err)
+	_, err := b.openConsumidor()
+	if !errors.Is(err, kafka.ErrPositionDesconhecida) {
+		t.Fatalf("erro = %v, quer ErrPositionDesconhecida", err)
 	}
 	if !strings.Contains(err.Error(), "nishidb offsets") {
 		t.Errorf("a mensagem não aponta a saída: %v", err)
@@ -159,32 +159,32 @@ func TestDatasetComLinhasESemOffsetsRecusaASubida(t *testing.T) {
 
 // Dataset VAZIO e sem posição é o caso normal da primeira subida.
 func TestDatasetVazioSemOffsetsSobeNormalmente(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	cons, err := b.abreConsumidor()
+	cons, err := b.openConsumidor()
 	if err != nil {
 		t.Fatalf("dataset vazio deveria subir: %v", err)
 	}
-	cons.Fecha()
+	cons.Close()
 }
 
 // D14 — offset é número sem significado fora do seu fluxo. Apontar o dataset
 // para outro tópico faria seek num offset alheio: o consumo começaria no
 // meio, sem erro em camada nenhuma.
 func TestTrocaDeTopicoRecusaASubida(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(evento("A", 1, "Start"))
-	if _, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 1 }); err != nil {
+	b.produz(event("A", 1, "Start"))
+	if _, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 1 }); err != nil {
 		t.Fatal(err)
 	}
 
 	b.cfg.Topic = "outro-topico"
-	_, err := b.abreConsumidor()
-	if !errors.Is(err, kafka.ErrOrigemDivergente) {
-		t.Fatalf("erro = %v, quer ErrOrigemDivergente", err)
+	_, err := b.openConsumidor()
+	if !errors.Is(err, kafka.ErrSourceDivergente) {
+		t.Fatalf("erro = %v, quer ErrSourceDivergente", err)
 	}
 	if !strings.Contains(err.Error(), "topic") {
 		t.Errorf("a mensagem não nomeia o campo que mudou: %v", err)
@@ -192,18 +192,18 @@ func TestTrocaDeTopicoRecusaASubida(t *testing.T) {
 }
 
 func TestTrocaDeGroupIdRecusaASubida(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(evento("A", 1, "Start"))
-	if _, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 1 }); err != nil {
+	b.produz(event("A", 1, "Start"))
+	if _, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 1 }); err != nil {
 		t.Fatal(err)
 	}
 
 	b.cfg.GroupID = "outro-group"
-	_, err := b.abreConsumidor()
-	if !errors.Is(err, kafka.ErrOrigemDivergente) {
-		t.Fatalf("erro = %v, quer ErrOrigemDivergente", err)
+	_, err := b.openConsumidor()
+	if !errors.Is(err, kafka.ErrSourceDivergente) {
+		t.Fatalf("erro = %v, quer ErrSourceDivergente", err)
 	}
 	if !strings.Contains(err.Error(), "groupId") {
 		t.Errorf("a mensagem não nomeia o campo que mudou: %v", err)
@@ -274,12 +274,12 @@ func TestCredencialVaziaEhRecusada(t *testing.T) {
 // O encerramento gracioso torna durável o que entrou; sem isso, uma parada
 // normal jogaria fora até um intervalo inteiro de checkpoint.
 func TestEncerramentoGraciosoCheckpointaOQueEntrou(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(evento("A", 1, "Start"), evento("B", 1, "Start"))
+	b.produz(event("A", 1, "Start"), event("B", 1, "Start"))
 	// Cadência larga: sem o checkpoint de encerramento, nada seria durável.
-	d, err := b.consomeComCadencia(prazo, kafka.Cadencia{Eventos: 1_000_000, Intervalo: time.Hour},
+	d, err := b.consomeWithCadencia(prazo, kafka.Cadencia{Eventos: 1_000_000, Intervalo: time.Hour},
 		func(d kafka.Desfecho) bool { return d.Eventos >= 2 })
 	if err != nil {
 		t.Fatal(err)
@@ -287,9 +287,9 @@ func TestEncerramentoGraciosoCheckpointaOQueEntrou(t *testing.T) {
 	if d.Aplicados != 2 {
 		t.Fatalf("aplicados = %d, quer 2", d.Aplicados)
 	}
-	offsets, existe := b.leOffsets()
-	if !existe || offsets[0] != 2 {
-		t.Errorf("offsets = %v (existe=%v), quer {0:2} pelo checkpoint de encerramento", offsets, existe)
+	offsets, exists := b.readOffsets()
+	if !exists || offsets[0] != 2 {
+		t.Errorf("offsets = %v (existe=%v), quer {0:2} pelo checkpoint de encerramento", offsets, exists)
 	}
 }
 
@@ -300,11 +300,11 @@ func TestEncerramentoGraciosoCheckpointaOQueEntrou(t *testing.T) {
 // operador vê tudo verde com o dataset parado. A guarda de assignment não
 // pega o caso, porque ela compara atribuídas com total e 0 == 0.
 func TestTopicoInexistenteRecusaASubida(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
 	b.cfg.Topic = "topico-que-nao-existe"
-	_, err := b.abreConsumidor()
+	_, err := b.openConsumidor()
 	if !errors.Is(err, kafka.Open) {
 		t.Fatalf("erro = %v, quer ErrTopicoAusente", err)
 	}

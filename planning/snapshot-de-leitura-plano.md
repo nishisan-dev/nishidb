@@ -157,7 +157,7 @@ portas para a mesma pergunta é o que o repositório condena em toda parte. E
 em `Lookup`.
 
 - `executor.Store` ganha o `Snapshot` nos três métodos de leitura.
-- `executor.Open` abre o snapshot **antes** de `fonteDoPlano`
+- `executor.Open` abre o snapshot **antes** de `sourceOfPlano`
   ([executor.go:231](internal/query/executor/executor.go:231)); o `Close` do
   iterador o fecha, em todos os caminhos de saída.
 - `ScanLive` perde o cálculo do teto — quem o fixa passa a ser o snapshot, para
@@ -242,7 +242,7 @@ paridade dos clients.
 
 ### E5 — Observabilidade e documentação
 
-`consultaEmVoo` ([inflight.go:31](internal/server/inflight.go:31)) ganha a época e o
+`consultaInVoo` ([inflight.go:31](internal/server/inflight.go:31)) ganha a época e o
 instante do snapshot, alimentando `/v1/stats` e o `nishidb status`. Métricas
 novas, todas por constante em `internal/metrics/names.go`, nascendo com zero na
 subida: `nishidb_query_snapshot_oldest_seconds` (prevista no M6 e nunca criada),

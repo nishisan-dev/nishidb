@@ -46,7 +46,7 @@ func TestCodigoDoProtocoloTraduzATabelaInteira(t *testing.T) {
 		{"CODIGO_QUE_NAO_EXISTE", ExitUsageError, "código desconhecido cai no vala-comum, nunca em zero"},
 	}
 	for _, c := range casos {
-		if got := codigoDoProtocolo(c.codigo); got != c.quer {
+		if got := codigoOfProtocolo(c.codigo); got != c.quer {
 			t.Errorf("%s → exit %d, queria %d: %s", c.codigo, got, c.quer, c.porque)
 		}
 	}

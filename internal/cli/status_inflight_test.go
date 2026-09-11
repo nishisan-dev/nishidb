@@ -29,8 +29,8 @@ func statusContra(t *testing.T, e protocol.Stats) string {
 	}))
 	defer srv.Close()
 
-	a := novoAmbiente(t)
-	if code := a.roda("status", "--server", srv.URL); code != 0 {
+	a := newEnv(t)
+	if code := a.run("status", "--server", srv.URL); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}
 	return a.stdout.String()
@@ -55,28 +55,28 @@ func TestStatusMostraAConsultaEmVooComIdadeEMarcaDeLonga(t *testing.T) {
 		},
 	})
 
-	cabecalho, linhas := tabelaDaSaida(t, saida, "DATASET")
-	if len(linhas) != 2 {
-		t.Fatalf("a tabela saiu com %d linhas, quer 2:\n%s", len(linhas), saida)
+	cabecalho, rows := tableOfSaida(t, saida, "DATASET")
+	if len(rows) != 2 {
+		t.Fatalf("a tabela saiu com %d linhas, quer 2:\n%s", len(rows), saida)
 	}
 
 	// A ORDEM é a que o servidor mandou — da mais antiga para a mais nova. É a
 	// linha que interessa, e ela tem de ser a primeira: uma lista reordenada
 	// por dataset faria o operador procurar a consulta presa em vez de vê-la.
-	if linhas[0][0] != "radius_sessions" {
-		t.Errorf("a primeira linha é %q, quer a consulta MAIS ANTIGA (radius_sessions): %v", linhas[0][0], linhas)
+	if rows[0][0] != "radius_sessions" {
+		t.Errorf("a primeira linha é %q, quer a consulta MAIS ANTIGA (radius_sessions): %v", rows[0][0], rows)
 	}
 
-	longa := linhaDaTabela(t, linhas, "radius_sessions")
-	conferePorCelula(t, "consulta longa em voo", cabecalho, longa, map[string]string{
+	longa := rowOfTable(t, rows, "radius_sessions")
+	confereByCelula(t, "consulta longa em voo", cabecalho, longa, map[string]string{
 		"DATASET": "radius_sessions",
 		"SQL":     "aaaaaaaaaaaa",
 		"HÁ":      "8m3s",
 		"LONGA":   "sim",
 	})
 
-	curta := linhaDaTabela(t, linhas, "cdr")
-	conferePorCelula(t, "consulta curta em voo", cabecalho, curta, map[string]string{
+	curta := rowOfTable(t, rows, "cdr")
+	confereByCelula(t, "consulta curta em voo", cabecalho, curta, map[string]string{
 		"DATASET": "cdr",
 		"SQL":     "bbbbbbbbbbbb",
 		"HÁ":      "12ms",
@@ -93,9 +93,9 @@ func TestStatusMostraAConsultaEmVooComIdadeEMarcaDeLonga(t *testing.T) {
 func TestStatusNaoImprimeBlocoDeConsultaEmVooQuandoNaoHaNenhuma(t *testing.T) {
 	saida := statusContra(t, protocol.Stats{})
 
-	for _, marca := range []string{"consultas em voo", "LONGA"} {
-		if strings.Contains(saida, marca) {
-			t.Errorf("a saída traz %q sem nenhuma consulta em voo:\n%s", marca, saida)
+	for _, mark := range []string{"consultas em voo", "LONGA"} {
+		if strings.Contains(saida, mark) {
+			t.Errorf("a saída traz %q sem nenhuma consulta em voo:\n%s", mark, saida)
 		}
 	}
 }

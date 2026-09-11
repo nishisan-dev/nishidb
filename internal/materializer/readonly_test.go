@@ -18,19 +18,19 @@ import (
 // cresceu, e o evento voltou marcado como pendente do writer.
 func TestODecodeNaoCriaColuna(t *testing.T) {
 	h := newHarness(t, descobreYAML)
-	antes := h.c.KnownFieldCount()
+	before := h.c.KnownFieldCount()
 
 	var d Decodificado
-	h.m.Decodifica(&d, []byte(`{"id":"A","doc":{"chaveNova":1}}`))
+	h.m.Decode(&d, []byte(`{"id":"A","doc":{"chaveNova":1}}`))
 
-	if got := h.c.KnownFieldCount(); got != antes {
-		t.Errorf("o decode criou coluna: %d → %d", antes, got)
+	if got := h.c.KnownFieldCount(); got != before {
+		t.Errorf("o decode criou coluna: %d → %d", before, got)
 	}
-	if !d.precisaDoWriter {
+	if !d.precisaOfWriter {
 		t.Error("o decode não marcou o evento como pendente do writer")
 	}
-	if d.erro != nil {
-		t.Errorf("a pendência virou erro de evento: %v", d.erro)
+	if d.err != nil {
+		t.Errorf("a pendência virou erro de evento: %v", d.err)
 	}
 	if _, ok := h.c.FieldByName([]byte("doc.chaveNova")); ok {
 		t.Error("a coluna existe no schema depois de um decode somente-leitura")
@@ -64,8 +64,8 @@ func TestOTipoSaiDoMenorOffsetEnaoDeQuemDecodificouPrimeiro(t *testing.T) {
 	evN1 := []byte(`{"id":"B","doc":{"quantidade":"texto"}}`)
 
 	var dN, dN1 Decodificado
-	h.m.Decodifica(&dN1, evN1) // o worker do offset MAIOR terminou antes
-	h.m.Decodifica(&dN, evN)
+	h.m.Decode(&dN1, evN1) // o worker do offset MAIOR terminou antes
+	h.m.Decode(&dN, evN)
 
 	if r := h.m.Aplica(&dN); r.Err != nil {
 		t.Fatalf("Aplica(N): %v", r.Err)
@@ -136,13 +136,13 @@ func TestEventoRuimContaOQueOParseAlcancou(t *testing.T) {
 	if !ok {
 		t.Fatal("doc.x não foi criada")
 	}
-	antes := f.OccurrenceCount()
+	before := f.OccurrenceCount()
 
 	r := h.m.Apply([]byte(`{"doc":{"x":2}}`)) // sem `id`: INVALID_KEY no fim do Parse
 	if r.Category != CategoryInvalidKey {
 		t.Fatalf("categoria = %v, quero INVALID_KEY", r.Category)
 	}
-	if got := f.OccurrenceCount() - antes; got != 1 {
+	if got := f.OccurrenceCount() - before; got != 1 {
 		t.Errorf("ocorrências de doc.x no evento ruim = %d, quero 1: a chave "+
 			"APARECEU no documento, e o contador sempre contou a aparição", got)
 	}
@@ -172,13 +172,13 @@ func TestDecodeSerialContaSoOsEventosDeDescoberta(t *testing.T) {
 	}
 	var querSerial int64
 	for _, c := range corpus {
-		antes := h.m.Metrics().DecodeSerialTotal
+		before := h.m.Metrics().DecodeSerialTotal
 		h.apply(c.event)
 		depois := h.m.Metrics().DecodeSerialTotal
 		if c.descobriu {
 			querSerial++
 		}
-		if subiu := depois > antes; subiu != c.descobriu {
+		if subiu := depois > before; subiu != c.descobriu {
 			t.Errorf("%s (%s): reprocessou=%v, quero %v",
 				c.event, c.porqueNota, subiu, c.descobriu)
 		}
@@ -208,21 +208,21 @@ func TestReprocessoImprodutivoAvisaUmaVez(t *testing.T) {
 	// Uma coluna nova zera a contagem, e é isso que separa descoberta em curso
 	// de reprocesso que não produz nada.
 	h.apply(`{"id":"a","doc":{"x":1}}`)
-	for i := 0; i < reprocessosInuteisParaAvisar-1; i++ {
-		h.m.avaliaReprocessoInutil(false)
+	for i := 0; i < reprocessosInuteisForAvisar-1; i++ {
+		h.m.evaluateReprocessoInutil(false)
 	}
 	if avisos != 0 {
-		t.Fatalf("avisou com %d reprocessos improdutivos, antes do limiar", reprocessosInuteisParaAvisar-1)
+		t.Fatalf("avisou com %d reprocessos improdutivos, antes do limiar", reprocessosInuteisForAvisar-1)
 	}
-	h.m.avaliaReprocessoInutil(false)
+	h.m.evaluateReprocessoInutil(false)
 	if avisos != 1 {
 		t.Fatalf("avisos = %d no limiar, quero 1", avisos)
 	}
-	if seguidos != reprocessosInuteisParaAvisar {
-		t.Errorf("o aviso reportou %d seguidos, quero %d", seguidos, reprocessosInuteisParaAvisar)
+	if seguidos != reprocessosInuteisForAvisar {
+		t.Errorf("o aviso reportou %d seguidos, quero %d", seguidos, reprocessosInuteisForAvisar)
 	}
-	for i := 0; i < reprocessosInuteisParaAvisar; i++ {
-		h.m.avaliaReprocessoInutil(false)
+	for i := 0; i < reprocessosInuteisForAvisar; i++ {
+		h.m.evaluateReprocessoInutil(false)
 	}
 	if avisos != 1 {
 		t.Errorf("avisos = %d; o aviso é de uma vez só", avisos)
@@ -233,7 +233,7 @@ func TestReprocessoImprodutivoAvisaUmaVez(t *testing.T) {
 // decode correu à frente do writer.
 //
 // É a armadilha que a esteira abriu, e ela é a mais silenciosa das que a Fase 4
-// podia abrir. `removeAsColunasDoPai` enumera as colunas do pai para emitir uma
+// podia abrir. `removeAsColumnsOfPai` enumera as colunas do pai para emitir uma
 // remoção por coluna — sem isso, no modo merge, a coluna fica com o valor de um
 // evento passado enquanto o documento da MESMA linha é um array. O conjunto de
 // colunas CRESCE com os eventos que o writer ainda não aplicou, e um
@@ -245,13 +245,13 @@ func TestReprocessoImprodutivoAvisaUmaVez(t *testing.T) {
 // roda até uma janela inteira à frente. E o desfecho tem de ser o mesmo da
 // execução serial, que a segunda metade do teste fixa como oráculo.
 func TestDocumentoQueViraArrayApagaColunaDescobertaAindaQueODecodeSeAdiante(t *testing.T) {
-	comEsteira := func(t *testing.T) map[string]types.Value {
+	withEsteira := func(t *testing.T) map[string]types.Value {
 		h := newHarness(t, descobreYAML)
 		var d1, d2 Decodificado
-		h.m.Decodifica(&d1, []byte(`{"id":"A","doc":{"novo":1}}`))
+		h.m.Decode(&d1, []byte(`{"id":"A","doc":{"novo":1}}`))
 		// O decode de E2 acontece ANTES de E1 ser aplicado: neste instante a
 		// coluna `doc.novo` ainda não existe no schema.
-		h.m.Decodifica(&d2, []byte(`{"id":"A","doc":[1,2,3]}`))
+		h.m.Decode(&d2, []byte(`{"id":"A","doc":[1,2,3]}`))
 		if r := h.m.Aplica(&d1); r.Err != nil {
 			t.Fatalf("E1: %v", r.Err)
 		}
@@ -270,7 +270,7 @@ func TestDocumentoQueViraArrayApagaColunaDescobertaAindaQueODecodeSeAdiante(t *t
 	if v, ok := serial(t)["doc.novo"]; ok {
 		t.Fatalf("o ORÁCULO já está errado: doc.novo sobreviveu na execução serial (%+v)", v)
 	}
-	if v, ok := comEsteira(t)["doc.novo"]; ok {
+	if v, ok := withEsteira(t)["doc.novo"]; ok {
 		t.Errorf("doc.novo = %+v depois de doc=[1,2,3]: o decode adiantado enumerou "+
 			"as colunas do pai com o schema de antes, e a remoção ficou de fora", v)
 	}

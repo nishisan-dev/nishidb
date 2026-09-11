@@ -66,7 +66,7 @@ func runStatus(args []string, amb Context) int {
 func runDatasets(args []string, amb Context) int {
 	fs := flag.NewFlagSet("datasets", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
-	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	server := fs.String("server", "", "endereço do nishidb server (host:porta)")
 	credFlags := setupRemoteFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return ExitUsageError
@@ -80,21 +80,21 @@ func runDatasets(args []string, amb Context) int {
 		notify(amb, "datasets: não recebe argumentos posicionais\n")
 		return ExitUsageError
 	}
-	if code := requiresServer("datasets", *servidor, amb); code != ExitOK {
+	if code := requiresServer("datasets", *server, amb); code != ExitOK {
 		return code
 	}
 
 	var m protocol.Metadata
-	if code := searchDocument("datasets", *servidor, "/v1/metadata", cred, &m, amb); code != ExitOK {
+	if code := searchDocument("datasets", *server, "/v1/metadata", cred, &m, amb); code != ExitOK {
 		return code
 	}
-	return writeOutputWithContext("datasets", amb, func(w io.Writer) { writeDatasetMetadata(w, *servidor, m) })
+	return writeOutputWithContext("datasets", amb, func(w io.Writer) { writeDatasetMetadata(w, *server, m) })
 }
 
 func runInspect(args []string, amb Context) int {
 	fs := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
-	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	server := fs.String("server", "", "endereço do nishidb server (host:porta)")
 	credFlags := setupRemoteFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return ExitUsageError
@@ -113,21 +113,21 @@ func runInspect(args []string, amb Context) int {
 		notify(amb, "  as flags vêm antes: nishidb inspect --server <host:porta> <dataset>\n")
 		return ExitUsageError
 	}
-	if code := requiresServer("inspect", *servidor, amb); code != ExitOK {
+	if code := requiresServer("inspect", *server, amb); code != ExitOK {
 		return code
 	}
-	nome := fs.Arg(0)
+	name := fs.Arg(0)
 
 	var m protocol.Metadata
-	caminho := "/v1/metadata?dataset=" + url.QueryEscape(nome)
-	if code := searchDocument("inspect", *servidor, caminho, cred, &m, amb); code != ExitOK {
+	path := "/v1/metadata?dataset=" + url.QueryEscape(name)
+	if code := searchDocument("inspect", *server, path, cred, &m, amb); code != ExitOK {
 		return code
 	}
 	// O filtro do §67 responde a MESMA forma com um elemento. Zero elementos
 	// não é resposta legítima — o servidor recusa dataset desconhecido com 404
 	// —, então chegar aqui vazio é o protocolo tendo mudado sob o comando.
 	if len(m.Datasets) != 1 {
-		notify(amb, "inspect: o servidor respondeu %d datasets para %q; esperava exatamente um\n", len(m.Datasets), nome)
+		notify(amb, "inspect: o servidor respondeu %d datasets para %q; esperava exatamente um\n", len(m.Datasets), name)
 		return ExitDataset
 	}
 	return writeOutputWithContext("inspect", amb, func(w io.Writer) { writeDatasetInfo(w, m.Datasets[0]) })
@@ -161,13 +161,13 @@ func requiresServer(cmd, endereco string, amb Context) int {
 // cred entra pelo MESMO remoteClient/aplicaCredencial que consultaRemota e
 // postaMutacao usam (Task B6) — o client HTTP compartilhado com Proxy: nil e
 // o CertPool de --tls-ca, e o Authorization quando --user foi dado.
-func searchDocument(cmd, endereco, caminho string, cred remoteCredential, destino any, amb Context) int {
+func searchDocument(cmd, endereco, path string, cred remoteCredential, dest any, amb Context) int {
 	client, err := remoteClient(cred)
 	if err != nil {
 		notify(amb, "%s: %v\n", cmd, err)
 		return ExitUsageError
 	}
-	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodGet, normalizeAddress(endereco)+caminho, nil)
+	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodGet, normalizeAddress(endereco)+path, nil)
 	if err != nil {
 		notify(amb, "%s: %v\n", cmd, err)
 		return ExitUsageError
@@ -187,7 +187,7 @@ func searchDocument(cmd, endereco, caminho string, cred remoteCredential, destin
 	if resp.StatusCode != http.StatusOK {
 		return remoteRefusal(cmd, resp, amb)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(destino); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
 		// Corpo 200 que não decodifica é falha de TRANSPORTE, não de uso: o
 		// comando estava certo e a resposta veio quebrada. É a mesma distinção
 		// que o leStream faz, e o mesmo código.
@@ -213,7 +213,7 @@ func remoteRefusal(cmd string, resp *http.Response, amb Context) int {
 		return ExitUsageError
 	}
 	notify(amb, "%s: %s\n", cmd, corpo.Error.Message)
-	return codigoDoProtocolo(corpo.Error.Code)
+	return codigoOfProtocolo(corpo.Error.Code)
 }
 
 // writeOutputWithContext monta a saída inteira em memória e a entrega ao stdout num
@@ -373,12 +373,12 @@ func bytesToReadableString(n int64) string {
 		return strconv.FormatInt(n, 10) + " B"
 	}
 	unidades := []string{"KiB", "MiB", "GiB", "TiB", "PiB"}
-	valor, i := float64(n)/1024, 0
-	for valor >= 1024 && i < len(unidades)-1 {
-		valor /= 1024
+	value, i := float64(n)/1024, 0
+	for value >= 1024 && i < len(unidades)-1 {
+		value /= 1024
 		i++
 	}
-	return fmt.Sprintf("%d B (%.1f %s)", n, valor, unidades[i])
+	return fmt.Sprintf("%d B (%.1f %s)", n, value, unidades[i])
 }
 
 func duration(ms int64) string { return (time.Duration(ms) * time.Millisecond).String() }

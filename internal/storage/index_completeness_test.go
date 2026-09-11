@@ -10,7 +10,7 @@ package storage
 // formato antigo teria feito a remoção do motor levar junto a rede de proteção
 // do motor novo, sem que nada acusasse.
 //
-// A fonte do conjunto indexado é o camposIndexados, e não um mapa por motor: com
+// A fonte do conjunto indexado é o fieldsIndexados, e não um mapa por motor: com
 // um motor só, "campo com bitmap" e "campo com hash" viraram a mesma pergunta.
 
 import (
@@ -38,8 +38,8 @@ func exigeBitmapCompleto(t *testing.T, s *Store) {
 	// Sem índice declarado o guarda não verifica nada. Falhar aqui evita que
 	// ele vire um no-op invisível se algum cenário perder a configuração de
 	// índice — uma rede que passa sempre é pior que rede nenhuma.
-	if len(s.camposIndexados) == 0 {
-		t.Fatal("guarda de bitmap chamado num Store sem índice: o cenário precisa declarar CamposIndexados, senão a asserção não verifica nada")
+	if len(s.fieldsIndexados) == 0 {
+		t.Fatal("guarda de bitmap chamado num Store sem índice: o cenário precisa declarar FieldsIndexados, senão a asserção não verifica nada")
 	}
 	it := s.ScanLive(s.presente())
 	defer it.Close()
@@ -61,7 +61,7 @@ func exigeBitmapCompleto(t *testing.T, s *Store) {
 			if !ok {
 				break
 			}
-			if !slices.Contains(s.camposIndexados, fid) {
+			if !slices.Contains(s.fieldsIndexados, fid) {
 				continue
 			}
 			postings, err := s.Lookup(fid, v)

@@ -142,23 +142,23 @@ const (
 	// e2ePesoBytes deixa cada evento em torno de meio kilobyte, que com
 	// segmentos de 256 KiB sela um arquivo a cada ~500 eventos.
 	e2ePesoBytes = 400
-	// e2eIntervaloDaRodada dá ao fluxo o ritmo do §86: 200 eventos a cada
+	// e2eIntervaloOfRodada dá ao fluxo o ritmo do §86: 200 eventos a cada
 	// 500ms são 400 ev/s, praticamente a carga que motiva este milestone. A
 	// cadência também é o que faz o teste DURAR o suficiente para haver mais
 	// de uma passada da compaction — despejar tudo de uma vez mediria a
 	// vazão do kfake e devolveria o veredito antes de a goroutine acordar.
-	e2eIntervaloDaRodada = 500 * time.Millisecond
+	e2eIntervaloOfRodada = 500 * time.Millisecond
 )
 
-type bancadaE2E struct {
+type benchE2E struct {
 	t        *testing.T
 	raiz     string
 	config   string
-	dados    string
+	data     string
 	porta    int
 	binario  string
 	broker   string
-	topico   string
+	topic    string
 	produtor *kgo.Client
 
 	cmd    *exec.Cmd
@@ -167,29 +167,29 @@ type bancadaE2E struct {
 	rodada int
 }
 
-// novaBancadaE2E monta o mundo do teste: um broker kfake de verdade (TCP, não
+// newBenchE2E monta o mundo do teste: um broker kfake de verdade (TCP, não
 // dublê de interface), os dois YAMLs do produto e o binário compilado.
 //
 // O kfake é o mesmo broker em memória que a suíte do §105 usa na camada de
 // unidade, e ele escuta numa porta real — é o que permite ao processo FILHO,
 // que é o binário de produção sem nenhum seam de teste dentro, consumir de um
 // tópico sem exigir daemon externo nem container.
-func novaBancadaE2E(t *testing.T) *bancadaE2E {
+func newBenchE2E(t *testing.T) *benchE2E {
 	t.Helper()
-	return novaBancadaE2EComConfig(t, e2eConfigYAML)
+	return newBenchE2EWithConfig(t, e2eConfigYAML)
 }
 
-// novaBancadaE2EComConfig é o novaBancadaE2E de baixo, parametrizado pelo
+// newBenchE2EWithConfig é o newBenchE2E de baixo, parametrizado pelo
 // nishidb.yaml (Task B5, Fase 11): o compact MANUAL do §96 precisa da MESMA
 // montagem — broker kfake, spec do dataset, binário compilado — com
 // storage.compaction.enabled: false, o caso de usage central da rota (o
 // operador desligou o laço automático). Sem esta separação, o e2e do compact
 // manual duplicaria a montagem inteira em vez de trocar só o YAML.
-func novaBancadaE2EComConfig(t *testing.T, configYAML string) *bancadaE2E {
+func newBenchE2EWithConfig(t *testing.T, configYAML string) *benchE2E {
 	t.Helper()
-	const topico = "e2e-compaction"
+	const topic = "e2e-compaction"
 	cluster, err := kfake.NewCluster(
-		kfake.SeedTopics(1, topico),
+		kfake.SeedTopics(1, topic),
 		kfake.NumBrokers(1),
 		kfake.ClusterID("bancada-de-compaction"),
 	)
@@ -200,20 +200,20 @@ func novaBancadaE2EComConfig(t *testing.T, configYAML string) *bancadaE2E {
 	broker := cluster.ListenAddrs()[0]
 
 	raiz := t.TempDir()
-	dados := filepath.Join(raiz, "dados")
+	data := filepath.Join(raiz, "dados")
 	specs := filepath.Join(raiz, "datasets")
-	for _, d := range []string{dados, specs} {
+	for _, d := range []string{data, specs} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := os.WriteFile(filepath.Join(specs, e2eDataset+".yaml"),
-		[]byte(fmt.Sprintf(e2eSpecYAML, broker, topico)), 0o644); err != nil {
+		[]byte(fmt.Sprintf(e2eSpecYAML, broker, topic)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	porta := portaLivre(t)
 	cfg := filepath.Join(raiz, "nishidb.yaml")
-	if err := os.WriteFile(cfg, []byte(fmt.Sprintf(configYAML, dados, specs, porta)), 0o644); err != nil {
+	if err := os.WriteFile(cfg, []byte(fmt.Sprintf(configYAML, data, specs, porta)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -229,22 +229,22 @@ func novaBancadaE2EComConfig(t *testing.T, configYAML string) *bancadaE2E {
 	}
 	t.Cleanup(produtor.Close)
 
-	return &bancadaE2E{
-		t: t, raiz: raiz, config: cfg, dados: dados, porta: porta,
-		binario: binario, broker: broker, topico: topico, produtor: produtor,
+	return &benchE2E{
+		t: t, raiz: raiz, config: cfg, data: data, porta: porta,
+		binario: binario, broker: broker, topic: topic, produtor: produtor,
 	}
 }
 
-func (b *bancadaE2E) endereco() string { return "127.0.0.1:" + strconv.Itoa(b.porta) }
+func (b *benchE2E) endereco() string { return "127.0.0.1:" + strconv.Itoa(b.porta) }
 
-func (b *bancadaE2E) dirDoDataset() string { return filepath.Join(b.dados, e2eDataset) }
+func (b *benchE2E) dirOfDataset() string { return filepath.Join(b.data, e2eDataset) }
 
-// sobe roda o binário como o operador o roda e espera o /v1/health responder.
+// rises roda o binário como o operador o roda e espera o /v1/health responder.
 //
-// O stderr é capturado e devolvido em toda falha: um servidor que não sobe por
+// O stderr é capturado e devolvido em toda falha: um servidor que não rises por
 // causa da configuração explica o motivo lá, e sem isso o teste falharia
 // dizendo apenas que a porta não respondeu.
-func (b *bancadaE2E) sobe() {
+func (b *benchE2E) rises() {
 	b.t.Helper()
 	b.saida = &bytes.Buffer{}
 	b.cmd = exec.Command(b.binario, "server", "--config", b.config, "--log-format", "texto")
@@ -277,25 +277,25 @@ func (b *bancadaE2E) sobe() {
 // produzRodada publica um update de TODA key do corpus. O key set é fixo: a
 // rodada seguinte torna garbage a anterior inteira, que é exatamente o dataset
 // do §86 e a razão de o disco crescer 30-43 GB/dia contra 5,6-8 GB vivos.
-func (b *bancadaE2E) produzRodada() int64 {
+func (b *benchE2E) produzRodada() int64 {
 	b.t.Helper()
 	b.rodada++
 	peso := strings.Repeat("p", e2ePesoBytes)
 	recs := make([]*kgo.Record, 0, e2eKeys)
 	for i := 0; i < e2eKeys; i++ {
 		id := fmt.Sprintf("s-%04d", i)
-		valor := fmt.Sprintf(`{"id":%q,"seq":%d,"peso":%q}`, id, b.rodada, peso)
-		recs = append(recs, &kgo.Record{Topic: b.topico, Key: []byte(id), Value: []byte(valor)})
+		value := fmt.Sprintf(`{"id":%q,"seq":%d,"peso":%q}`, id, b.rodada, peso)
+		recs = append(recs, &kgo.Record{Topic: b.topic, Key: []byte(id), Value: []byte(value)})
 	}
-	ctx, cancela := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancela()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	if err := b.produtor.ProduceSync(ctx, recs...).FirstErr(); err != nil {
 		b.t.Fatalf("produzir a rodada %d: %v", b.rodada, err)
 	}
 	return int64(b.rodada)
 }
 
-// produzSemParar mantém a carga em voo até que o `parar` devolvido seja
+// produzWithoutStop mantém a carga em voo até que o `parar` devolvido seja
 // chamado, e ele espera a goroutine terminar antes de voltar.
 //
 // Existe porque os dois desfechos deste teste — o SIGTERM e o kill -9 — só
@@ -310,12 +310,12 @@ func (b *bancadaE2E) produzRodada() int64 {
 // goroutine do teste (t.Fatalf de fora dela é usage indevido do testing), e o que
 // interessa aqui é manter pressão, não auditar cada lote. A falha de verdade
 // aparece no oráculo — o processo que não encerra, a row que não volta.
-func (b *bancadaE2E) produzSemParar() (parar func()) {
+func (b *benchE2E) produzWithoutStop() (stop func()) {
 	pedido := make(chan struct{})
-	fim := make(chan struct{})
+	end := make(chan struct{})
 	peso := strings.Repeat("p", e2ePesoBytes)
 	go func() {
-		defer close(fim)
+		defer close(end)
 		for {
 			select {
 			case <-pedido:
@@ -327,18 +327,18 @@ func (b *bancadaE2E) produzSemParar() (parar func()) {
 			for i := 0; i < e2eKeys; i++ {
 				id := fmt.Sprintf("s-%04d", i)
 				recs = append(recs, &kgo.Record{
-					Topic: b.topico, Key: []byte(id),
+					Topic: b.topic, Key: []byte(id),
 					Value: []byte(fmt.Sprintf(`{"id":%q,"seq":%d,"peso":%q}`, id, b.rodada, peso)),
 				})
 			}
-			ctx, cancela := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			_ = b.produtor.ProduceSync(ctx, recs...).FirstErr()
-			cancela()
+			cancel()
 		}
 	}()
 	return sync.OnceFunc(func() {
 		close(pedido)
-		<-fim
+		<-end
 	})
 }
 
@@ -362,43 +362,43 @@ func (b *bancadaE2E) produzSemParar() (parar func()) {
 // que `escritoNaSegundaMetade/4`, o pico não pode alcançar `produzido/3`), de
 // modo que um produzido menor que o real APERTA as duas. O erro para baixo
 // reprova compaction boa; ele nunca aprova compaction que não devolveu disco.
-func (b *bancadaE2E) bytesProduzidos() int64 {
+func (b *benchE2E) bytesProduzidos() int64 {
 	return int64(b.rodada) * e2eKeys * (e2ePesoBytes + encoding.RecordHeaderSize)
 }
 
-// esperaIngestaoAlcancar bloqueia até TODA key responder com sequence >= alvo.
+// waitIngestionAlcancar bloqueia até TODA key responder com sequence >= alvo.
 //
 // Sem isto, cada medida de disco compararia um diretório que ainda não
 // absorveu o que foi produzido — o teste mediria o lag do consumidor e
 // chamaria o resultado de plateau.
-func (b *bancadaE2E) esperaIngestaoAlcancar(alvo int64, prazo time.Duration) map[string]int64 {
+func (b *benchE2E) waitIngestionAlcancar(target int64, prazo time.Duration) map[string]int64 {
 	b.t.Helper()
-	limite := time.Now().Add(prazo)
+	limit := time.Now().Add(prazo)
 	for {
-		linhas := b.consulta("SELECT id, seq FROM " + e2eDataset)
-		if len(linhas) == e2eKeys {
+		rows := b.consulta("SELECT id, seq FROM " + e2eDataset)
+		if len(rows) == e2eKeys {
 			menor := int64(-1)
-			for _, seq := range linhas {
+			for _, seq := range rows {
 				if menor < 0 || seq < menor {
 					menor = seq
 				}
 			}
-			if menor >= alvo {
-				return linhas
+			if menor >= target {
+				return rows
 			}
 		}
-		if time.Now().After(limite) {
+		if time.Now().After(limit) {
 			b.t.Fatalf("a ingestão não alcançou a rodada %d em %v (%d de %d keys materializadas)\n%s",
-				alvo, prazo, len(linhas), e2eKeys, b.saida.String())
+				target, prazo, len(rows), e2eKeys, b.saida.String())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 }
 
-// esperaCompactionCreditarBytesEscritos bloqueia até nishidb_compaction_bytes_written
+// waitCompactionCreditarBytesEscritos bloqueia até nishidb_compaction_bytes_written
 // subir acima de `partida`, produzindo rodada nova a cada volta.
 //
-// O crédito (compactaSegmento, storage/compaction.go) é por SEGMENTO e não
+// O crédito (compactaSegment, storage/compaction.go) é por SEGMENTO e não
 // por passada inteira — o defer soma `escritos` assim que UMA varredura
 // termina, sem esperar os demais candidatos da eleição —, mas ele só é
 // MAIOR QUE ZERO quando essa varredura encontra pelo menos um record que a
@@ -418,19 +418,19 @@ func (b *bancadaE2E) esperaIngestaoAlcancar(alvo int64, prazo time.Duration) map
 // nova a cada volta para dar à corrida uma chance por rodada, e um prazo
 // generoso o bastante para não morder a corrida normal — ele só é pago no
 // runner lento.
-func (b *bancadaE2E) esperaCompactionCreditarBytesEscritos(partida float64, prazo time.Duration) float64 {
+func (b *benchE2E) waitCompactionCreditarBytesEscritos(partida float64, prazo time.Duration) float64 {
 	b.t.Helper()
-	limite := time.Now().Add(prazo)
+	limit := time.Now().Add(prazo)
 	for {
 		agora := b.metrica(metrics.MetCompactionBytesWritten)
 		if agora > partida {
 			return agora
 		}
-		if time.Now().After(limite) {
+		if time.Now().After(limit) {
 			return agora
 		}
 		b.produzRodada()
-		time.Sleep(e2eIntervaloDaRodada)
+		time.Sleep(e2eIntervaloOfRodada)
 	}
 }
 
@@ -441,25 +441,25 @@ func (b *bancadaE2E) esperaCompactionCreditarBytesEscritos(partida float64, praz
 // é a única forma de ler o dataset enquanto a compaction reescreve locations
 // por baixo. E ela é o item 4 do critério: a promessa do §51 é que a consulta
 // responde o certo durante a compaction, não apesar dela.
-func (b *bancadaE2E) consulta(sql string) map[string]int64 {
+func (b *benchE2E) consulta(sql string) map[string]int64 {
 	b.t.Helper()
-	var saida, erro bytes.Buffer
+	var saida, err bytes.Buffer
 	code := cli.Run([]string{"query", "--server", b.endereco(), "--dataset", e2eDataset, sql},
-		cli.Context{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
+		cli.Context{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &err, Ctx: context.Background()})
 	if code != 0 {
-		b.t.Fatalf("a consulta remota %q saiu com %d: %s", sql, code, erro.String())
+		b.t.Fatalf("a consulta remota %q saiu com %d: %s", sql, code, err.String())
 	}
-	return decodificaLinhas(b.t, saida.String())
+	return decodeRows(b.t, saida.String())
 }
 
-func decodificaLinhas(t *testing.T, ndjson string) map[string]int64 {
+func decodeRows(t *testing.T, ndjson string) map[string]int64 {
 	t.Helper()
 	out := map[string]int64{}
-	texto := strings.TrimSpace(ndjson)
-	if texto == "" {
+	text := strings.TrimSpace(ndjson)
+	if text == "" {
 		return out
 	}
-	for i, l := range strings.Split(texto, "\n") {
+	for i, l := range strings.Split(text, "\n") {
 		var row struct {
 			ID  string `json:"id"`
 			Seq int64  `json:"seq"`
@@ -478,7 +478,7 @@ func decodificaLinhas(t *testing.T, ndjson string) map[string]int64 {
 // metrica raspa o /metrics pela porta HTTP e devolve o valor da série do
 // dataset. É a leitura do OPERADOR — nenhum field Go, nenhum atalho por dentro
 // do processo, que é o que o item 3 do critério exige.
-func (b *bancadaE2E) metrica(nome string) float64 {
+func (b *benchE2E) metrica(name string) float64 {
 	b.t.Helper()
 	resp, err := http.Get("http://" + b.endereco() + "/metrics")
 	if err != nil {
@@ -489,28 +489,28 @@ func (b *bancadaE2E) metrica(nome string) float64 {
 	if err != nil {
 		b.t.Fatalf("ler /metrics: %v", err)
 	}
-	prefixo := nome + `{dataset="` + e2eDataset + `"} `
-	for _, linha := range strings.Split(string(corpo), "\n") {
-		if !strings.HasPrefix(linha, prefixo) {
+	prefixo := name + `{dataset="` + e2eDataset + `"} `
+	for _, row := range strings.Split(string(corpo), "\n") {
+		if !strings.HasPrefix(row, prefixo) {
 			continue
 		}
-		v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(linha, prefixo)), 64)
+		v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(row, prefixo)), 64)
 		if err != nil {
-			b.t.Fatalf("a série %s saiu com valor ilegível %q: %v", nome, linha, err)
+			b.t.Fatalf("a série %s saiu com valor ilegível %q: %v", name, row, err)
 		}
 		return v
 	}
-	b.t.Fatalf("a série %s não foi publicada para o dataset %q:\n%s", nome, e2eDataset, corpo)
+	b.t.Fatalf("a série %s não foi publicada para o dataset %q:\n%s", name, e2eDataset, corpo)
 	return 0
 }
 
-// discoDosSegmentos é o `du` do operador sobre os segmentos: um os.Stat por
+// diskOfSegmentos é o `du` do operador sobre os segmentos: um os.Stat por
 // arquivo, sem perguntar nada ao processo. É a medida que responde à pergunta
 // do §86 — o volume para de encher? — e a única que uma métrica errada não
 // consegue maquiar.
-func (b *bancadaE2E) discoDosSegmentos() int64 {
+func (b *benchE2E) diskOfSegmentos() int64 {
 	b.t.Helper()
-	entradas, err := filepath.Glob(filepath.Join(b.dirDoDataset(), "data", "segment-*.dat"))
+	entradas, err := filepath.Glob(filepath.Join(b.dirOfDataset(), "data", "segment-*.dat"))
 	if err != nil {
 		b.t.Fatalf("glob dos segmentos: %v", err)
 	}
@@ -527,18 +527,18 @@ func (b *bancadaE2E) discoDosSegmentos() int64 {
 	return total
 }
 
-// exigeSemAposentadoEmDisco é a reprovação do D5 que a Task 6 já fixava e que
+// exigeWithoutAposentadoInDisk é a reprovação do D5 que a Task 6 já fixava e que
 // aqui vale sobre o produto: um `.retired` sobrevivente significa que o ciclo
 // parou no meio e que os bytes ficaram presos num arquivo que ninguém lista.
-func (b *bancadaE2E) exigeSemAposentadoEmDisco(quando string) {
+func (b *benchE2E) exigeWithoutAposentadoInDisk(quando string) {
 	b.t.Helper()
-	sobreviventes := b.aposentadosEmDisco()
+	sobreviventes := b.aposentadosInDisk()
 	if len(sobreviventes) != 0 {
 		b.t.Errorf("%s: sobraram %d arquivo(s) aposentado(s): %v", quando, len(sobreviventes), sobreviventes)
 	}
 }
 
-// esperaJanelaDaAposentadoria bloqueia até um `.retired` existir em disco e
+// waitWindowOfRetirement bloqueia até um `.retired` existir em disco e
 // devolve o caminho dele. É o único instrumento deste teste que olha para
 // dentro do diretório em vez de perguntar ao processo, e ele existe porque a
 // janela é curta demais para ser acertada por sorteio: entre o rename e o
@@ -557,28 +557,28 @@ func (b *bancadaE2E) exigeSemAposentadoEmDisco(quando string) {
 // nesta bancada, de modo que o cochilo não estreita a janela que o laço existe
 // para apanhar. São pouco menos de duas ordens de grandeza, e não as duas que
 // esta frase afirmava — duas seriam 100x, e o número aqui é o que foi medido.
-func (b *bancadaE2E) esperaJanelaDaAposentadoria(prazo time.Duration) string {
+func (b *benchE2E) waitWindowOfRetirement(prazo time.Duration) string {
 	b.t.Helper()
-	limite := time.Now().Add(prazo)
+	limit := time.Now().Add(prazo)
 	for {
-		if achados := b.aposentadosEmDisco(); len(achados) > 0 {
+		if achados := b.aposentadosInDisk(); len(achados) > 0 {
 			return achados[0]
 		}
-		if time.Now().After(limite) {
+		if time.Now().After(limit) {
 			b.t.Fatalf("nenhuma aposentadoria em voo em %v: a compaction parou de eleger candidatos e o kill -9 cairia num processo ocioso\n%s",
 				prazo, b.saida.String())
 		}
-		time.Sleep(e2eResolucaoDaJanela)
+		time.Sleep(e2eResolucaoOfWindow)
 	}
 }
 
-// e2eResolucaoDaJanela é o passo de amostragem do laço acima. Não é chave de
+// e2eResolucaoOfWindow é o passo de amostragem do laço acima. Não é chave de
 // nada: é o intervalo entre dois readdir, escolhido para ficar muito abaixo da
 // janela observada e muito acima do custo de um syscall.
-const e2eResolucaoDaJanela = time.Millisecond
+const e2eResolucaoOfWindow = time.Millisecond
 
-func (b *bancadaE2E) aposentadosEmDisco() []string {
-	achados, err := filepath.Glob(filepath.Join(b.dirDoDataset(), "data", "*.retired"))
+func (b *benchE2E) aposentadosInDisk() []string {
+	achados, err := filepath.Glob(filepath.Join(b.dirOfDataset(), "data", "*.retired"))
 	if err != nil {
 		b.t.Fatalf("glob dos aposentados: %v", err)
 	}
@@ -588,16 +588,16 @@ func (b *bancadaE2E) aposentadosEmDisco() []string {
 // consultaLocal reabre o dataset pelo binário, com o processo já fora do ar.
 // É o Open com recovery de verdade — e é ele que recusaria o dataset se a
 // compaction tivesse deixado location apontando para arquivo removido.
-func (b *bancadaE2E) consultaLocal() map[string]int64 {
+func (b *benchE2E) consultaLocal() map[string]int64 {
 	b.t.Helper()
-	var saida, erro bytes.Buffer
+	var saida, err bytes.Buffer
 	code := cli.Run([]string{"query", "--config", b.config, "--dataset", e2eDataset,
 		"SELECT id, seq FROM " + e2eDataset},
-		cli.Context{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
+		cli.Context{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &err, Ctx: context.Background()})
 	if code != 0 {
-		b.t.Fatalf("a consulta após a reabertura saiu com %d: %s", code, erro.String())
+		b.t.Fatalf("a consulta após a reabertura saiu com %d: %s", code, err.String())
 	}
-	return decodificaLinhas(b.t, saida.String())
+	return decodeRows(b.t, saida.String())
 }
 
 // extremos devolve o menor e o maior de uma série. O par é o instrumento do
@@ -649,15 +649,15 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compila o binário, sobe um broker e roda uma carga de dezenas de segundos")
 	}
-	b := novaBancadaE2E(t)
-	b.sobe()
+	b := newBenchE2E(t)
+	b.rises()
 
 	const rodadas = 60
 	metade := rodadas / 2
-	amostras := make([]int64, 0, rodadas)
+	samples := make([]int64, 0, rodadas)
 	var quedaNaSerie bool
 	serieAnterior := b.metrica(metrics.MetStorageBytes)
-	picoDaSerie := serieAnterior
+	picoOfSerie := serieAnterior
 	// A série de bytes escritos é CONTADOR: a largada é lida antes da primeira
 	// rodada justamente para que a asserção seja sobre o MOVIMENTO dela e não
 	// sobre o valor absoluto — um processo reiniciado começa do zero, e o que o
@@ -665,42 +665,42 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	escritosNaLargada := b.metrica(metrics.MetCompactionBytesWritten)
 	escritosAgora := escritosNaLargada
 	var primeiraLeitura, ultimaLeitura map[string]int64
-	var produzidoAteAMetade int64
+	var produzidoUntilAMetade int64
 
 	for r := 1; r <= rodadas; r++ {
-		alvo := b.produzRodada()
-		time.Sleep(e2eIntervaloDaRodada)
-		linhas := b.esperaIngestaoAlcancar(alvo, 60*time.Second)
+		target := b.produzRodada()
+		time.Sleep(e2eIntervaloOfRodada)
+		rows := b.waitIngestionAlcancar(target, 60*time.Second)
 
 		serie := b.metrica(metrics.MetStorageBytes)
 		escritosAgora = b.metrica(metrics.MetCompactionBytesWritten)
 		if serie < serieAnterior {
 			quedaNaSerie = true
 		}
-		if serie > picoDaSerie {
-			picoDaSerie = serie
+		if serie > picoOfSerie {
+			picoOfSerie = serie
 		}
 		serieAnterior = serie
-		amostras = append(amostras, b.discoDosSegmentos())
+		samples = append(samples, b.diskOfSegmentos())
 
 		switch r {
 		case 1:
-			primeiraLeitura = linhas
+			primeiraLeitura = rows
 		case metade:
-			produzidoAteAMetade = b.bytesProduzidos()
+			produzidoUntilAMetade = b.bytesProduzidos()
 		case rodadas:
-			ultimaLeitura = linhas
+			ultimaLeitura = rows
 		}
 	}
 
 	produzido := b.bytesProduzidos()
-	escritoNaSegundaMetade := produzido - produzidoAteAMetade
-	pisoA, picoA := extremos(amostras[:metade])
-	pisoB, picoB := extremos(amostras[metade:])
-	t.Logf("disco em segment-*.dat, rodada a rodada: %v", amostras)
+	escritoNaSegundaMetade := produzido - produzidoUntilAMetade
+	pisoA, picoA := extremos(samples[:metade])
+	pisoB, picoB := extremos(samples[metade:])
+	t.Logf("disco em segment-*.dat, rodada a rodada: %v", samples)
 	t.Logf("primeira metade: piso %d, pico %d — segunda metade: piso %d, pico %d", pisoA, picoA, pisoB, picoB)
 	t.Logf("volume produzido: %d bytes no total, %d só na segunda metade", produzido, escritoNaSegundaMetade)
-	t.Logf("nishidb_storage_bytes: pico de %.0f pela porta HTTP, com queda observada = %v", picoDaSerie, quedaNaSerie)
+	t.Logf("nishidb_storage_bytes: pico de %.0f pela porta HTTP, com queda observada = %v", picoOfSerie, quedaNaSerie)
 	t.Logf("nishidb_compaction_bytes_written: %.0f na largada, %.0f na última raspagem do laço de %d rodadas", escritosNaLargada, escritosAgora, rodadas)
 
 	// Item 2, e a medida é o PISO da serra, não uma amostra solta.
@@ -730,7 +730,7 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	// isto o operador só descobriria a compaction pelo `du`.
 	if !quedaNaSerie {
 		t.Errorf("nishidb_storage_bytes nunca caiu em %d raspagens de /metrics (pico %.0f): "+
-			"o disco voltou e o painel do M4 não mostrou nada", rodadas, picoDaSerie)
+			"o disco voltou e o painel do M4 não mostrou nada", rodadas, picoOfSerie)
 	}
 	// Item 3, a metade que a errata passou para a Task 8, e ela não é a
 	// anterior dita de outro jeito: a série de disco cai quando o diretório
@@ -748,12 +748,12 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	// hora se `escritosAgora` já passou de `escritosNaLargada`) não custa
 	// nada na corrida normal — só o runner lento paga o prazo extra, e o
 	// oráculo continua o mesmo: o contador tem de subir.
-	const prazoDoCreditoDaCompaction = 60 * time.Second
-	escritosAgora = b.esperaCompactionCreditarBytesEscritos(escritosNaLargada, prazoDoCreditoDaCompaction)
+	const prazoOfCreditoOfCompaction = 60 * time.Second
+	escritosAgora = b.waitCompactionCreditarBytesEscritos(escritosNaLargada, prazoOfCreditoOfCompaction)
 	if escritosAgora <= escritosNaLargada {
 		t.Errorf("nishidb_compaction_bytes_written saiu de %.0f para %.0f em %d raspagens de /metrics e mais %s de espera pelo crédito, "+
 			"com o disco em serra (piso %d→%d) e %d bytes produzidos: o operador vê o diretório encolher e não tem série que diga que foi a compaction",
-			escritosNaLargada, escritosAgora, rodadas, prazoDoCreditoDaCompaction, pisoA, pisoB, produzido)
+			escritosNaLargada, escritosAgora, rodadas, prazoOfCreditoOfCompaction, pisoA, pisoB, produzido)
 	}
 	// E o medidor do §92 diz que o laço está de pé. Com a chave ligada no YAML
 	// e o processo respondendo, 0 aqui é a compaction que morreu sem avisar —
@@ -766,13 +766,13 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	// materialização correta. Uma cópia do payload antigo publicada por cima
 	// do novo aparece aqui, e só aqui — o record copiado é durável e tem CRC
 	// válido, então nenhuma outra camada o distingue de uma escrita legítima.
-	for id, antes := range primeiraLeitura {
+	for id, before := range primeiraLeitura {
 		depois, presente := ultimaLeitura[id]
 		if !presente {
 			t.Fatalf("a key %q sumiu do resultado durante a compaction", id)
 		}
-		if depois < antes {
-			t.Errorf("a key %q voltou no tempo durante a compaction: seq %d na primeira leitura, %d na última", id, antes, depois)
+		if depois < before {
+			t.Errorf("a key %q voltou no tempo durante a compaction: seq %d na primeira leitura, %d na última", id, before, depois)
 		}
 	}
 	if len(ultimaLeitura) != e2eKeys {
@@ -794,27 +794,27 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	// ali. O que o Close tem de fazer nesse ponto é a decisão D7 — cancelar a
 	// goroutine e AGUARDÁ-LA, em vez de esperar a passada inteira ou de
 	// desmapear o índice sob os pés de quem está renomeando arquivo.
-	pararCarga := b.produzSemParar()
-	apanhado := b.esperaJanelaDaAposentadoria(90 * time.Second)
+	stopCarga := b.produzWithoutStop()
+	apanhado := b.waitWindowOfRetirement(90 * time.Second)
 	t.Logf("SIGTERM disparado com %s em disco: a compaction está no meio de uma passada, não ociosa", filepath.Base(apanhado))
 	if err := b.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		pararCarga()
+		stopCarga()
 		t.Fatalf("SIGTERM: %v", err)
 	}
-	esperado := make(chan error, 1)
-	go func() { esperado <- b.cmd.Wait() }()
+	expected := make(chan error, 1)
+	go func() { expected <- b.cmd.Wait() }()
 	select {
-	case err := <-esperado:
+	case err := <-expected:
 		b.morto = true
-		pararCarga()
+		stopCarga()
 		if err != nil {
 			t.Fatalf("o servidor saiu com erro após o SIGTERM: %v\n%s", err, b.saida.String())
 		}
 	case <-time.After(60 * time.Second):
-		pararCarga()
+		stopCarga()
 		t.Fatalf("o servidor não encerrou em 60s após o SIGTERM: o Close ficou preso atrás da compaction\n%s", b.saida.String())
 	}
-	b.exigeSemAposentadoEmDisco("após o SIGTERM")
+	b.exigeWithoutAposentadoInDisk("após o SIGTERM")
 	// O laço é FALHO STICKY: a primeira falha o encerra e ele não volta
 	// sozinho. Sem esta asserção, uma compaction que morresse no meio da
 	// corrida ainda deixaria o plateau verde — o garbage já recolhido não
@@ -841,7 +841,7 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 			t.Errorf("a key %q reabriu com seq %d, atrás dos %d que o servidor já respondia antes do SIGTERM", id, depois, seq)
 		}
 	}
-	b.exigeSemAposentadoEmDisco("após a reabertura")
+	b.exigeWithoutAposentadoInDisk("após a reabertura")
 }
 
 // TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows é o item 6, e é o
@@ -862,8 +862,8 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compila o binário, sobe um broker e mata um processo")
 	}
-	b := novaBancadaE2E(t)
-	b.sobe()
+	b := newBenchE2E(t)
+	b.rises()
 
 	// Carga até a compaction estar comprovadamente em ciclo: a série tem de
 	// CAIR pela porta HTTP. Matar o processo antes disso exercitaria um
@@ -872,9 +872,9 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	var compactou bool
 	var ultimaLeitura map[string]int64
 	for r := 1; r <= 60 && !compactou; r++ {
-		alvo := b.produzRodada()
-		time.Sleep(e2eIntervaloDaRodada)
-		ultimaLeitura = b.esperaIngestaoAlcancar(alvo, 60*time.Second)
+		target := b.produzRodada()
+		time.Sleep(e2eIntervaloOfRodada)
+		ultimaLeitura = b.waitIngestionAlcancar(target, 60*time.Second)
 		serie := b.metrica(metrics.MetStorageBytes)
 		compactou = serie < serieAnterior
 		serieAnterior = serie
@@ -891,7 +891,7 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	// O estado CONFIRMADO, lido do manifest antes do sinal. É contra ele que
 	// a recovery é medida: o kill -9 pode custar o que ainda não foi
 	// checkpointado, nunca o que já foi.
-	man := filepath.Join(b.dirDoDataset(), "checkpoint", "manifest.bin")
+	man := filepath.Join(b.dirOfDataset(), "checkpoint", "manifest.bin")
 	m, err := checkpoint.Load(man)
 	if err != nil {
 		t.Fatalf("carregar o manifest antes do kill -9: %v", err)
@@ -904,7 +904,7 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	// A carga CONTINUA durante a morte: o processo é morto com o consumidor
 	// aplicando eventos e a compaction em ciclo, que é a situação em que a
 	// aposentadoria pode estar no meio de qualquer um dos quatro passos do D5.
-	pararCarga := b.produzSemParar()
+	stopCarga := b.produzWithoutStop()
 
 	// O instante da morte não é sorteado: o teste espera o `.retired` APARECER
 	// no diretório e mata o processo ali. É a janela mais estreita e mais cara
@@ -913,22 +913,22 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	// LISTADO e AUSENTE e recusaria o dataset inteiro (store_recovery.go).
 	// Matar num instante qualquer quase sempre acerta o cochilo entre duas
 	// passadas, e exercitaria um processo parado.
-	apanhado := b.esperaJanelaDaAposentadoria(90 * time.Second)
+	apanhado := b.waitWindowOfRetirement(90 * time.Second)
 	if err := b.cmd.Process.Signal(syscall.SIGKILL); err != nil {
-		pararCarga()
+		stopCarga()
 		t.Fatalf("SIGKILL: %v", err)
 	}
-	estado, err := b.cmd.Process.Wait()
-	pararCarga()
+	state, err := b.cmd.Process.Wait()
+	stopCarga()
 	b.morto = true
 	if err != nil {
 		t.Fatalf("aguardar o processo morto: %v", err)
 	}
-	if estado.ExitCode() != -1 {
-		t.Fatalf("o processo saiu com %d em vez de morrer pelo sinal", estado.ExitCode())
+	if state.ExitCode() != -1 {
+		t.Fatalf("o processo saiu com %d em vez de morrer pelo sinal", state.ExitCode())
 	}
 	t.Logf("kill -9 disparado com %s em disco; sobreviventes ao sinal: %v",
-		filepath.Base(apanhado), b.aposentadosEmDisco())
+		filepath.Base(apanhado), b.aposentadosInDisk())
 
 	// O reparo do D5 é do Open, e ele acontece na reabertura abaixo: se o
 	// SIGKILL parou entre o rename e o checkpoint, o `.retired` é RESTAURADO;
@@ -936,7 +936,7 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	// nenhum dos dois o dataset pode ser recusado, e em nenhum dos dois pode
 	// sobrar arquivo aposentado depois.
 	rows := b.consultaLocal()
-	b.exigeSemAposentadoEmDisco("após o kill -9 e a reabertura")
+	b.exigeWithoutAposentadoInDisk("após o kill -9 e a reabertura")
 	t.Logf("kill -9 com %d rows confirmadas no manifest; %d rows de volta após o recovery", confirmadas, len(rows))
 	if uint64(len(rows)) < confirmadas {
 		t.Errorf("%d rows após o kill -9, mas o checkpoint já confirmava %d", len(rows), confirmadas)
@@ -993,8 +993,8 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	// entre as keys que entraram antes do corte e as que não entraram. Duas
 	// rodadas de folga cobrem esse corte com margem; dezenas não são corte, são
 	// record antigo ressuscitado.
-	const bandaDoRecovery = 2
-	if maior-menor > bandaDoRecovery {
+	const bandaOfRecovery = 2
+	if maior-menor > bandaOfRecovery {
 		t.Errorf("as sequences do recovery se espalham por %d rodadas (de %d a %d) nas %d keys: a carga atualiza todas elas a cada "+
 			"rodada, então essa dispersão não é o corte do kill -9 — é row voltando de um record que a compaction copiou do passado",
 			maior-menor, menor, maior, e2eKeys)
@@ -1019,50 +1019,50 @@ func TestCompactManualPeloCLIReduzDiscoNumaBancadaPequena(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compila o binário e sobe um broker")
 	}
-	b := novaBancadaE2EComConfig(t, e2eConfigManualYAML)
-	b.sobe()
+	b := newBenchE2EWithConfig(t, e2eConfigManualYAML)
+	b.rises()
 
 	const rodadas = 12
 	for r := 1; r <= rodadas; r++ {
-		alvo := b.produzRodada()
-		b.esperaIngestaoAlcancar(alvo, 30*time.Second)
+		target := b.produzRodada()
+		b.waitIngestionAlcancar(target, 30*time.Second)
 	}
 	// O checkpoint automático (500ms) precisa ter rodado ao menos uma vez
 	// DEPOIS da última rodada para que segSize — o que a eleição do §53
 	// divide — reflita os segmentos recém-selados.
 	time.Sleep(600 * time.Millisecond)
 
-	antes := b.discoDosSegmentos()
-	if antes == 0 {
+	before := b.diskOfSegmentos()
+	if before == 0 {
 		t.Fatal("disco em segment-*.dat é zero antes do compact: o teste não teria o que reduzir")
 	}
 
-	var saida, erro bytes.Buffer
+	var saida, err bytes.Buffer
 	code := cli.Run([]string{"compact", "--server", b.endereco()},
-		cli.Context{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
+		cli.Context{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &err, Ctx: context.Background()})
 	if code != 0 {
-		t.Fatalf("compact saiu %d: %s", code, erro.String())
+		t.Fatalf("compact saiu %d: %s", code, err.String())
 	}
-	depois := b.discoDosSegmentos()
-	t.Logf("disco em segment-*.dat: %d antes, %d depois do compact manual", antes, depois)
+	depois := b.diskOfSegmentos()
+	t.Logf("disco em segment-*.dat: %d antes, %d depois do compact manual", before, depois)
 	t.Logf("saída do comando:\n%s", saida.String())
-	if depois >= antes {
-		t.Errorf("compact não reduziu o disco: antes=%d depois=%d", antes, depois)
+	if depois >= before {
+		t.Errorf("compact não reduziu o disco: antes=%d depois=%d", before, depois)
 	}
 	if !strings.Contains(saida.String(), e2eDataset) {
 		t.Errorf("a saída do comando não nomeia o dataset:\n%s", saida.String())
 	}
-	b.exigeSemAposentadoEmDisco("após o compact manual")
+	b.exigeWithoutAposentadoInDisk("após o compact manual")
 
 	// E o dataset segue íntegro: SIGTERM, e nenhuma row perdida na
 	// reabertura — o mesmo oráculo da Task 6/7 aplicado ao caminho manual.
 	if err := b.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("SIGTERM: %v", err)
 	}
-	esperado := make(chan error, 1)
-	go func() { esperado <- b.cmd.Wait() }()
+	expected := make(chan error, 1)
+	go func() { expected <- b.cmd.Wait() }()
 	select {
-	case err := <-esperado:
+	case err := <-expected:
 		b.morto = true
 		if err != nil {
 			t.Fatalf("o servidor saiu com erro após o SIGTERM: %v\n%s", err, b.saida.String())
@@ -1074,5 +1074,5 @@ func TestCompactManualPeloCLIReduzDiscoNumaBancadaPequena(t *testing.T) {
 	if len(reaberto) != e2eKeys {
 		t.Fatalf("após a reabertura o dataset devolveu %d rows, queria %d", len(reaberto), e2eKeys)
 	}
-	b.exigeSemAposentadoEmDisco("após a reabertura")
+	b.exigeWithoutAposentadoInDisk("após a reabertura")
 }

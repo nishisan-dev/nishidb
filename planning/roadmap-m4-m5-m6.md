@@ -148,7 +148,7 @@ Três restrições estruturais encontradas na varredura governam o desenho:
    `openNew` usa `O_EXCL`.
 2. **Reescrita in-place é fatal:** segmento menor que o registrado no manifest é erro de
    recovery ([store_recovery.go:67](internal/storage/store_recovery.go:67)).
-3. **`Publish`, `ApplyOverlay` e `segTally` são writer-only por contrato explícito**
+3. **`Publish`, `ApplyOverlay` e `secTally` são writer-only por contrato explícito**
    ([rowindex.go:170](internal/storage/rowindex/rowindex.go:170)) — uma goroutine
    própria republicando locations viola a invariante.
 

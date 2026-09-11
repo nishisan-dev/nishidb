@@ -22,7 +22,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
-// familiasDeIndice são as seis famílias da §6.6, na ordem da tabela da spec.
+// familiasOfIndex são as seis famílias da §6.6, na ordem da tabela da spec.
 //
 // São SEIS e não sete: a janela efetiva não pertence a esta família e continua em
 // nishidb_history_index_window_seconds, rotulada pelo dataset BASE, onde o
@@ -30,7 +30,7 @@ import (
 // internal/metrics/names.go, e repetir a lista aqui à mão é de propósito — se
 // alguém acrescentar uma sétima série sem decidir o que ela responde, este teste
 // é onde a decisão volta a ser cobrada.
-var familiasDeIndice = []string{
+var familiasOfIndex = []string{
 	metrics.MetIndexSegments,
 	metrics.MetIndexBytes,
 	metrics.MetIndexRebuildsTotal,
@@ -45,7 +45,7 @@ var familiasDeIndice = []string{
 // Ele já se chamou "NascemComZero", e o nome era mais forte que o teste: uma das
 // seis — nishidb_index_reconstrucao_ativa — nasce legitimamente em UM num dataset
 // com campo indexado, porque o §92 manda o medidor subir ANTES da goroutine, e
-// quem chamou IniciaReconstrucao tem direito de ver o estado que acabou de
+// quem chamou StartRebuild tem direito de ver o estado que acabou de
 // instalar. Um gauge que reportasse zero para caber num nome de teste estaria
 // mentindo sobre o estado, e um nome que promete mais do que o corpo confere é a
 // semente do próximo teste que aprova código quebrado.
@@ -63,27 +63,27 @@ var familiasDeIndice = []string{
 // próprio teste: um oráculo que raspasse depois de ingerir passaria com as séries
 // nascendo tarde, que é precisamente o defeito.
 func TestAsSeriesDeIndiceExistemAntesDoPrimeiroEvento(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
-	amostras := coletaAmostras(t, srv)
+	srv := serverWithHistory(t, specWithHistory)
+	samples := coletaSamples(t, srv)
 
 	// A premissa, conferida e não presumida: sem esta guarda o teste continuaria
 	// verde se a bancada passasse a semear dado, e aí ele estaria provando que as
 	// séries existem DEPOIS do primeiro evento — o oposto do que o nome diz.
 	for _, ds := range []string{"eventos", "eventos_history"} {
-		linhas, ok := achaSerie(amostras, metrics.MetMaterializedRows, map[string]string{metrics.LabelDataset: ds})
+		rows, ok := achaSerie(samples, metrics.MetMaterializedRows, map[string]string{metrics.LabelDataset: ds})
 		if !ok {
 			t.Fatalf("montagem: %s não saiu para %q", metrics.MetMaterializedRows, ds)
 		}
-		if linhas.Valor != 0 {
+		if rows.Value != 0 {
 			t.Fatalf("montagem: %q já tem %v linha(s); a bancada precisa ser um processo que não processou evento nenhum",
-				ds, linhas.Valor)
+				ds, rows.Value)
 		}
 	}
 
 	for _, ds := range []string{"eventos", "eventos_history"} {
 		rotulo := map[string]string{metrics.LabelDataset: ds}
-		for _, familia := range familiasDeIndice {
-			if _, ok := achaSerie(amostras, familia, rotulo); !ok {
+		for _, familia := range familiasOfIndex {
+			if _, ok := achaSerie(samples, familia, rotulo); !ok {
 				t.Errorf("%s não saiu para %q antes do primeiro evento: buraco no gráfico não se distingue de alvo fora do ar, "+
 					"e absent() dispara sobre um processo saudável", familia, ds)
 			}
@@ -93,21 +93,21 @@ func TestAsSeriesDeIndiceExistemAntesDoPrimeiroEvento(t *testing.T) {
 		// `estado="corrente"` e mais nada, e o painel do operador nasceria sem a
 		// série `pendente` — que é justamente a que ele vai olhar durante a
 		// migração para saber se o laço está avançando.
-		for _, estado := range metrics.IndexStates {
-			a, ok := achaSerie(amostras, metrics.MetIndexSegments,
-				map[string]string{metrics.LabelDataset: ds, metrics.LabelState: estado})
+		for _, state := range metrics.IndexStates {
+			a, ok := achaSerie(samples, metrics.MetIndexSegments,
+				map[string]string{metrics.LabelDataset: ds, metrics.LabelState: state})
 			if !ok {
 				t.Errorf("%s{dataset=%q,estado=%q} não saiu: a fila que nasce vazia é indistinguível da fila que nunca foi publicada",
-					metrics.MetIndexSegments, ds, estado)
+					metrics.MetIndexSegments, ds, state)
 				continue
 			}
 			if a.Tipo != metrics.TypeGauge {
 				t.Errorf("%s{estado=%q} saiu como %v, queria medidor: é contagem corrente, não acumulado",
-					metrics.MetIndexSegments, estado, a.Tipo)
+					metrics.MetIndexSegments, state, a.Tipo)
 			}
 		}
 		for _, modo := range metrics.IndexLookupModes {
-			a, ok := achaSerie(amostras, metrics.MetIndexSegmentsLookedUpTotal,
+			a, ok := achaSerie(samples, metrics.MetIndexSegmentsLookedUpTotal,
 				map[string]string{metrics.LabelDataset: ds, metrics.LabelMode: modo})
 			if !ok {
 				t.Errorf("%s{dataset=%q,modo=%q} não saiu antes da primeira consulta",
@@ -118,23 +118,23 @@ func TestAsSeriesDeIndiceExistemAntesDoPrimeiroEvento(t *testing.T) {
 				t.Errorf("%s{modo=%q} saiu como %v, queria contador: o painel lê a TAXA de segmentos enumerados, "+
 					"e taxa não se calcula sobre medidor", metrics.MetIndexSegmentsLookedUpTotal, modo, a.Tipo)
 			}
-			if a.Valor != 0 {
+			if a.Value != 0 {
 				t.Errorf("%s{dataset=%q,modo=%q} = %v antes da primeira consulta, queria 0: "+
 					"contador que já nasce andado faz o primeiro rate() inventar tráfego",
-					metrics.MetIndexSegmentsLookedUpTotal, ds, modo, a.Valor)
+					metrics.MetIndexSegmentsLookedUpTotal, ds, modo, a.Value)
 			}
 		}
 		for _, familia := range []string{metrics.MetIndexRebuildsTotal, metrics.MetIndexCRCFailuresTotal} {
-			a, ok := achaSerie(amostras, familia, rotulo)
+			a, ok := achaSerie(samples, familia, rotulo)
 			if !ok {
 				continue // já reportado acima
 			}
 			if a.Tipo != metrics.TypeCounter {
 				t.Errorf("%s saiu como %v, queria contador", familia, a.Tipo)
 			}
-			if a.Valor != 0 {
+			if a.Value != 0 {
 				t.Errorf("%s{dataset=%q} = %v num processo que não processou evento nenhum, queria 0",
-					familia, ds, a.Valor)
+					familia, ds, a.Value)
 			}
 		}
 	}
@@ -143,24 +143,24 @@ func TestAsSeriesDeIndiceExistemAntesDoPrimeiroEvento(t *testing.T) {
 	// metades deste par são o que separa "sobe antes da goroutine" de "constante
 	// disfarçada de medidor": a irmã declara `index: true` e o laço subiu; o base
 	// não declara campo indexado nenhum e não tem o que reconstruir.
-	ativa, ok := achaSerie(amostras, metrics.MetIndexRebuildActive,
+	active, ok := achaSerie(samples, metrics.MetIndexRebuildActive,
 		map[string]string{metrics.LabelDataset: "eventos_history"})
 	if !ok {
 		t.Fatalf("%s não saiu para a tabela irmã", metrics.MetIndexRebuildActive)
 	}
-	if ativa.Valor != 1 {
+	if active.Value != 1 {
 		t.Errorf("%s{dataset=\"eventos_history\"} = %v logo depois da subida, queria 1: o §92 manda o medidor subir ANTES "+
 			"da goroutine, e uma leitura entre a chamada e o primeiro escalonamento não pode dizer que nada subiu",
-			metrics.MetIndexRebuildActive, ativa.Valor)
+			metrics.MetIndexRebuildActive, active.Value)
 	}
-	base, ok := achaSerie(amostras, metrics.MetIndexRebuildActive,
+	base, ok := achaSerie(samples, metrics.MetIndexRebuildActive,
 		map[string]string{metrics.LabelDataset: "eventos"})
 	if !ok {
 		t.Fatalf("%s não saiu para o dataset base", metrics.MetIndexRebuildActive)
 	}
-	if base.Valor != 0 {
+	if base.Value != 0 {
 		t.Errorf("%s{dataset=\"eventos\"} = %v num dataset sem campo indexado, queria 0: um medidor que responde 1 sempre "+
-			"não distingue laço vivo de laço morto", metrics.MetIndexRebuildActive, base.Valor)
+			"não distingue laço vivo de laço morto", metrics.MetIndexRebuildActive, base.Value)
 	}
 }
 
@@ -171,7 +171,7 @@ func TestAsSeriesDeIndiceExistemAntesDoPrimeiroEvento(t *testing.T) {
 // mandado tudo que sabe mandar — consultas com valor arbitrário no WHERE, nome de
 // dataset inexistente, coluna inexistente. Ela pega o valor que vaza. O que ela
 // NÃO pega é o vazamento que depende de um dado que o teste não pensou em mandar:
-// um `Valor: nomeDoCampo` continuaria emitindo `estado="status"` só quando o
+// um `Value: nomeDoCampo` continuaria emitindo `estado="status"` só quando o
 // campo se chamasse assim.
 //
 // A metade de ORIGEM fecha isso pelo go/ast: no único arquivo que publica estas
@@ -180,7 +180,7 @@ func TestAsSeriesDeIndiceExistemAntesDoPrimeiroEvento(t *testing.T) {
 // não campo de struct — e a lista fica escrita uma vez, onde os dois leitores (o
 // coletor e este teste) a encontram.
 func TestOsLabelsDeIndiceSaoConjuntosFechados(t *testing.T) {
-	srv, _ := servidorComDadosDiretorioEStorage(t, 400, blocoPadrao, "  segmentSize: 8KiB\n")
+	srv, _ := serverWithDataDiretorioEStorage(t, 400, blockPadrao, "  segmentSize: 8KiB\n")
 
 	// Entrada de cliente, das três formas que o produto aceita: valor no WHERE,
 	// dataset desconhecido e coluna desconhecida. Nenhuma pode virar rótulo.
@@ -194,11 +194,11 @@ func TestOsLabelsDeIndiceSaoConjuntosFechados(t *testing.T) {
 		fecha(t, resp)
 	}
 
-	amostras := coletaAmostras(t, srv)
-	confereConjuntoFechado(t, amostras, metrics.MetIndexSegments, metrics.LabelState, metrics.IndexStates)
-	confereConjuntoFechado(t, amostras, metrics.MetIndexSegmentsLookedUpTotal, metrics.LabelMode, metrics.IndexLookupModes)
+	samples := coletaSamples(t, srv)
+	confereConjuntoFechado(t, samples, metrics.MetIndexSegments, metrics.LabelState, metrics.IndexStates)
+	confereConjuntoFechado(t, samples, metrics.MetIndexSegmentsLookedUpTotal, metrics.LabelMode, metrics.IndexLookupModes)
 
-	confereOrigemFechadaDosLabels(t)
+	confereSourceFechadaOfLabels(t)
 }
 
 // confereConjuntoFechado exige que os valores do rótulo no scrape sejam
@@ -208,11 +208,11 @@ func TestOsLabelsDeIndiceSaoConjuntosFechados(t *testing.T) {
 // cliente virando cardinalidade sem teto, que é a doutrina do datasetDesconhecido.
 // Um valor A MENOS é a série que só aparece quando tem o que mostrar, e aí o
 // painel do operador nasce sem a linha que ele foi olhar.
-func confereConjuntoFechado(t *testing.T, amostras []amostraExposta, familia, rotulo string, fechado []string) {
+func confereConjuntoFechado(t *testing.T, samples []amostraExposta, familia, rotulo string, fechado []string) {
 	t.Helper()
 	vistos := map[string]bool{}
-	for _, a := range amostras {
-		if a.Nome != familia {
+	for _, a := range samples {
+		if a.Name != familia {
 			continue
 		}
 		v, ok := a.Labels[rotulo]
@@ -222,17 +222,17 @@ func confereConjuntoFechado(t *testing.T, amostras []amostraExposta, familia, ro
 		}
 		vistos[v] = true
 	}
-	esperado := map[string]bool{}
+	expected := map[string]bool{}
 	for _, v := range fechado {
-		esperado[v] = true
+		expected[v] = true
 	}
 	for v := range vistos {
-		if !esperado[v] {
+		if !expected[v] {
 			t.Errorf("%s trouxe %s=%q, que não está na enumeração fechada %v: label alimentado por fora da enumeração "+
 				"é cardinalidade sem teto no primeiro dia em que a fonte for entrada do cliente", familia, rotulo, v, fechado)
 		}
 	}
-	for v := range esperado {
+	for v := range expected {
 		if !vistos[v] {
 			t.Errorf("%s não trouxe %s=%q: as combinações saem TODAS, sempre — zero é uma resposta, ausência não é",
 				familia, rotulo, v)
@@ -240,7 +240,7 @@ func confereConjuntoFechado(t *testing.T, amostras []amostraExposta, familia, ro
 	}
 }
 
-// confereOrigemFechadaDosLabels lê metrics_index.go pelo go/ast e exige que o
+// confereSourceFechadaOfLabels lê metrics_index.go pelo go/ast e exige que o
 // valor de `estado` e de `modo` venha SÓ da enumeração exportada.
 //
 // Config e código são lidos como DADO neste repositório, nunca por grep em prosa:
@@ -250,7 +250,7 @@ func confereConjuntoFechado(t *testing.T, amostras []amostraExposta, familia, ro
 // A conferência tem uma porta só de propósito — o withLabel. Um segundo caminho
 // (um metrics.Label{} montado à mão com LabelState) passaria por baixo desta
 // checagem, e por isso ele também é recusado abaixo.
-func confereOrigemFechadaDosLabels(t *testing.T) {
+func confereSourceFechadaOfLabels(t *testing.T) {
 	t.Helper()
 	const arquivo = "metrics_index.go"
 	fset := token.NewFileSet()
@@ -295,7 +295,7 @@ func confereOrigemFechadaDosLabels(t *testing.T) {
 		if sel, ok := n.(*ast.SelectorExpr); ok {
 			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "metrics" &&
 				(sel.Sel.Name == "LabelState" || sel.Sel.Name == "LabelMode") {
-				if !dentroDeComRotulo(f, sel) {
+				if !dentroOfWithRotulo(f, sel) {
 					t.Errorf("%s usa metrics.%s fora de uma chamada a withLabel: uma segunda porta para o rótulo "+
 						"é uma porta que esta conferência não enxerga", arquivo, sel.Sel.Name)
 				}
@@ -310,22 +310,22 @@ func confereOrigemFechadaDosLabels(t *testing.T) {
 			return true
 		}
 		conferidas++
-		nome, ok := chamada.Args[1].(*ast.SelectorExpr)
-		if !ok || nome.Sel.Name != "LabelState" && nome.Sel.Name != "LabelMode" {
+		name, ok := chamada.Args[1].(*ast.SelectorExpr)
+		if !ok || name.Sel.Name != "LabelState" && name.Sel.Name != "LabelMode" {
 			t.Errorf("%s: withLabel recebeu um nome de rótulo que não é constante do pacote de métricas", arquivo)
 			return true
 		}
-		valor, ok := chamada.Args[2].(*ast.Ident)
+		value, ok := chamada.Args[2].(*ast.Ident)
 		if !ok {
 			t.Errorf("%s: o VALOR de %s não é identificador — só a variável de um range sobre a enumeração exportada "+
 				"pode alimentá-lo, e qualquer outra expressão é uma fonte que ninguém auditou",
-				arquivo, nome.Sel.Name)
+				arquivo, name.Sel.Name)
 			return true
 		}
-		if _, fechado := fechadas[valor.Name]; !fechado {
+		if _, fechado := fechadas[value.Name]; !fechado {
 			t.Errorf("%s: o valor de %s vem de %q, que não é a variável de um range sobre metrics.IndexStates "+
 				"nem sobre metrics.IndexLookupModes; label nunca vem de entrada do cliente",
-				arquivo, nome.Sel.Name, valor.Name)
+				arquivo, name.Sel.Name, value.Name)
 		}
 		return true
 	})
@@ -335,10 +335,10 @@ func confereOrigemFechadaDosLabels(t *testing.T) {
 	}
 }
 
-// dentroDeComRotulo responde se o selector está entre os argumentos de uma
+// dentroOfWithRotulo responde se o selector está entre os argumentos de uma
 // chamada a withLabel. É o que impede a checagem de aprovar um segundo caminho
 // de publicação escrito ao lado.
-func dentroDeComRotulo(raiz ast.Node, alvo ast.Node) bool {
+func dentroOfWithRotulo(raiz ast.Node, target ast.Node) bool {
 	achou := false
 	ast.Inspect(raiz, func(n ast.Node) bool {
 		chamada, ok := n.(*ast.CallExpr)
@@ -350,7 +350,7 @@ func dentroDeComRotulo(raiz ast.Node, alvo ast.Node) bool {
 		}
 		for _, arg := range chamada.Args {
 			ast.Inspect(arg, func(m ast.Node) bool {
-				if m == alvo {
+				if m == target {
 					achou = true
 				}
 				return !achou
@@ -373,7 +373,7 @@ func dentroDeComRotulo(raiz ast.Node, alvo ast.Node) bool {
 // `SegmentsByScan` porque nada os produz. Cinco comparações de 0 contra 0 — que é
 // o defeito que o próprio godoc dizia estar impedindo. Medido: publicar
 // `modo="enumeracao"`, `crc_falhas` ou `reconstrucoes` como CONSTANTE ZERO passava
-// verde, e trocar os rótulos `pendente` e `fora` no mapa de amostrasDeIndice
+// verde, e trocar os rótulos `pendente` e `fora` no mapa de samplesOfIndex
 // também.
 //
 // A troca de rótulos é o pior modo de falha possível desta família. Durante a
@@ -386,38 +386,38 @@ func dentroDeComRotulo(raiz ast.Node, alvo ast.Node) bool {
 // índices corrompidos: os dez números saem diferentes de zero e diferentes entre
 // si, e aí qualquer troca de fio ou de rótulo fica vermelha sozinha.
 func TestStatsEMetricsLeemAMesmaEstrutura(t *testing.T) {
-	srv, _, _ := bancadaDeIndice(t)
-	idx := indiceDoDataset(t, srv, tabelaDaBancada)
+	srv, _, _ := benchOfIndex(t)
+	idx := indexOfDataset(t, srv, tableOfBench)
 	exigeDezNumerosDistintos(t, idx)
 
-	amostras := coletaAmostras(t, srv)
-	rotulo := map[string]string{metrics.LabelDataset: tabelaDaBancada}
-	porEstado := map[string]int64{
+	samples := coletaSamples(t, srv)
+	rotulo := map[string]string{metrics.LabelDataset: tableOfBench}
+	byState := map[string]int64{
 		metrics.StateSealed:  idx.Sealed,
 		metrics.StateCurrent: idx.Current,
 		metrics.StatePending: idx.Pending,
 		metrics.StateOutside: idx.OutOfWindow,
 	}
-	for _, estado := range metrics.IndexStates {
-		confereIgual(t, amostras, metrics.MetIndexSegments,
-			map[string]string{metrics.LabelDataset: tabelaDaBancada, metrics.LabelState: estado}, porEstado[estado])
+	for _, state := range metrics.IndexStates {
+		confereIgual(t, samples, metrics.MetIndexSegments,
+			map[string]string{metrics.LabelDataset: tableOfBench, metrics.LabelState: state}, byState[state])
 	}
-	porModo := map[string]int64{
+	byModo := map[string]int64{
 		metrics.ModeIndex:       idx.SegmentsByIndex,
 		metrics.ModeEnumeration: idx.SegmentsByScan,
 	}
 	for _, modo := range metrics.IndexLookupModes {
-		confereIgual(t, amostras, metrics.MetIndexSegmentsLookedUpTotal,
-			map[string]string{metrics.LabelDataset: tabelaDaBancada, metrics.LabelMode: modo}, porModo[modo])
+		confereIgual(t, samples, metrics.MetIndexSegmentsLookedUpTotal,
+			map[string]string{metrics.LabelDataset: tableOfBench, metrics.LabelMode: modo}, byModo[modo])
 	}
-	confereIgual(t, amostras, metrics.MetIndexBytes, rotulo, idx.Bytes)
-	confereIgual(t, amostras, metrics.MetIndexRebuildsTotal, rotulo, idx.Rebuilds)
-	confereIgual(t, amostras, metrics.MetIndexCRCFailuresTotal, rotulo, idx.CRCFailures)
-	var ativa int64
+	confereIgual(t, samples, metrics.MetIndexBytes, rotulo, idx.Bytes)
+	confereIgual(t, samples, metrics.MetIndexRebuildsTotal, rotulo, idx.Rebuilds)
+	confereIgual(t, samples, metrics.MetIndexCRCFailuresTotal, rotulo, idx.CRCFailures)
+	var active int64
 	if idx.RebuildRunning {
-		ativa = 1
+		active = 1
 	}
-	confereIgual(t, amostras, metrics.MetIndexRebuildActive, rotulo, ativa)
+	confereIgual(t, samples, metrics.MetIndexRebuildActive, rotulo, active)
 }
 
 // exigeDezNumerosDistintos é a guarda de não-trivialidade, e ela cobre os DEZ
@@ -427,7 +427,7 @@ func TestStatsEMetricsLeemAMesmaEstrutura(t *testing.T) {
 // distinção entre os dois requisitos importa: não-zero mata o fio congelado em
 // constante, e a distinção mútua mata a troca de fio ou de rótulo, que é
 // invisível quando dois números coincidem. O décimo campo, RebuildRunning, é 0/1
-// por natureza — o par dele com `Corrente` (que é estruturalmente 1, porque só há
+// por natureza — o par dele com `Current` (que é estruturalmente 1, porque só há
 // um segmento corrente) é o único que esta bancada não consegue separar, e quem o
 // separa é TestOMedidorDaReconstrucaoNaoEhOContadorDeCorrentes, no storage, onde
 // existe um Store com segmento corrente e sem laço de pé.
@@ -472,26 +472,26 @@ func exigeDezNumerosDistintos(t *testing.T, idx protocol.IndexStats) {
 }
 
 // confereIgual casa uma série do scrape com o número que o /v1/stats publicou.
-func confereIgual(t *testing.T, amostras []amostraExposta, familia string, rotulos map[string]string, quer int64) {
+func confereIgual(t *testing.T, samples []amostraExposta, familia string, rotulos map[string]string, quer int64) {
 	t.Helper()
-	a, ok := achaSerie(amostras, familia, rotulos)
+	a, ok := achaSerie(samples, familia, rotulos)
 	if !ok {
 		t.Errorf("%s%v não saiu no /metrics, mas o /v1/stats publicou %d: o JSON e o painel deixaram de ler a mesma estrutura",
 			familia, rotulos, quer)
 		return
 	}
-	if int64(a.Valor) != quer {
+	if int64(a.Value) != quer {
 		t.Errorf("%s%v: /metrics diz %d e /v1/stats diz %d — duas fontes para o mesmo fato divergem, e em produção "+
-			"alguém lê o errado", familia, rotulos, int64(a.Valor), quer)
+			"alguém lê o errado", familia, rotulos, int64(a.Value), quer)
 	}
 }
 
-// tabelaDaBancada é a tabela irmã em que os dez números da bancada vivem. O
+// tableOfBench é a tabela irmã em que os dez números da bancada vivem. O
 // índice por segmento é do STORE, então quem tem os números é a irmã — não o
 // dataset base, que só declara a política.
-const tabelaDaBancada = "eventos_history"
+const tableOfBench = "eventos_history"
 
-// specDaBancadaDeIndice é o dataset da bancada rica.
+// specOfBenchOfIndex é o dataset da bancada rica.
 //
 // Cada chave está aqui por um dos dez números:
 //
@@ -504,7 +504,7 @@ const tabelaDaBancada = "eventos_history"
 //   - `node` indexado é o campo sobre o qual as consultas resolvem por índice, e é
 //     a AUSÊNCIA dele em parte dos eventos que produz os segmentos permanentemente
 //     pendentes.
-const specDaBancadaDeIndice = `version: 1
+const specOfBenchOfIndex = `version: 1
 name: eventos
 materialization:
   key:
@@ -534,14 +534,14 @@ schema:
 // distintos. Mexer em qualquer um muda o empacotamento dos segmentos, e o
 // exigeDezNumerosDistintos reprova dizendo quais colidiram.
 const (
-	eventosComNode = 950
-	eventosSemNode = 220
+	eventosWithNode    = 950
+	eventosWithoutNode = 220
 )
 
 var (
-	// segmentosSemIndice têm o .sidx APAGADO antes da subida: eles entram na fila
+	// segmentosWithoutIndex têm o .sidx APAGADO antes da subida: eles entram na fila
 	// por ausência e a reconstrução os publica de volta — é daí que sai Rebuilds.
-	segmentosSemIndice = []uint32{6, 7, 8, 9, 10, 11, 12}
+	segmentosWithoutIndex = []uint32{6, 7, 8, 9, 10, 11, 12}
 	// segmentosCorrompidos têm o ÚLTIMO byte trocado, que é onde o crc32c mora.
 	//
 	// É deliberadamente o FIM do arquivo, e não o começo: a tabela de seções
@@ -553,61 +553,61 @@ var (
 	segmentosCorrompidos = []uint32{13, 14}
 )
 
-// bancadaDeIndice sobe um servidor cuja tabela histórica tem os quatro estados de
+// benchOfIndex sobe um servidor cuja tabela histórica tem os quatro estados de
 // segmento povoados, reconstruções feitas e índices reprovados no crc.
 //
-// A semeadura acontece ANTES da subida e reproduz a ordem do abreHistorico —
+// A semeadura acontece ANTES da subida e reproduz a ordem do openHistory —
 // dicionário compartilhado, spec derivada compilada contra ele, espelho, e só
 // então o materializer com o histórico ligado. Reproduzir em vez de importar é o
 // preço de não haver rota HTTP de ingestão; o que não pode é DIVERGIR, e por isso
 // os campos indexados saem de schema.IndexedFieldNames, como no servidor.
-func bancadaDeIndice(t *testing.T) (*server.Servidor, string, string) {
+func benchOfIndex(t *testing.T) (*server.Server, string, string) {
 	t.Helper()
-	a := novoAmbienteCom(t, blocoPadrao)
-	a.escreveDataset("eventos", specDaBancadaDeIndice)
-	dirIrma := semeiaHistorico(t, a, "eventos", eventosComNode, eventosSemNode)
+	a := newEnvWith(t, blockPadrao)
+	a.writeDataset("eventos", specOfBenchOfIndex)
+	dirIrma := seedHistory(t, a, "eventos", eventosWithNode, eventosWithoutNode)
 	dir := filepath.Join(dirIrma, "data")
 
-	for _, seg := range segmentosSemIndice {
-		if err := os.Remove(segindex.SealedPath(dir, seg)); err != nil {
-			t.Fatalf("montagem: apagar o índice do segmento %d: %v", seg, err)
+	for _, sec := range segmentosWithoutIndex {
+		if err := os.Remove(segindex.SealedPath(dir, sec)); err != nil {
+			t.Fatalf("montagem: apagar o índice do segmento %d: %v", sec, err)
 		}
 	}
 	for _, sec := range segmentosCorrompidos {
-		corrompeOFimDoIndice(t, segindex.SealedPath(dir, sec))
+		corruptOEndOfIndex(t, segindex.SealedPath(dir, sec))
 	}
 
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
-	esperaOsEstadosAssentarem(t, srv)
+	run(t, srv)
+	waitOsStatesAssentarem(t, srv)
 
 	// Uma consulta pelo campo indexado: é ela que faz os dois contadores de
 	// caminho e o de crc saírem de zero. Vem DEPOIS do assentamento, para que os
 	// segmentos que a reconstrução ia publicar já tenham índice — senão os
 	// números de caminho descreveriam um estado que já não existe.
-	resp := consulta(t, srv, `{"dataset":"`+tabelaDaBancada+`","sql":"SELECT id FROM `+tabelaDaBancada+` WHERE node = 'n1'"}`)
+	resp := consulta(t, srv, `{"dataset":"`+tableOfBench+`","sql":"SELECT id FROM `+tableOfBench+` WHERE node = 'n1'"}`)
 	if resp.StatusCode != http.StatusOK {
 		fecha(t, resp)
 		t.Fatalf("a consulta indexada da bancada devolveu %d", resp.StatusCode)
 	}
 	fecha(t, resp)
-	return srv, a.carrega().DatasetDir("eventos"), dirIrma
+	return srv, a.load().DatasetDir("eventos"), dirIrma
 }
 
-// esperaOsEstadosAssentarem bloqueia até o retrato parar de mudar.
+// waitOsStatesAssentarem bloqueia até o retrato parar de mudar.
 //
 // O critério é uma leitura ESTÁVEL por mais de uma passada do laço, e não "a fila
 // esvaziou": nesta bancada ela nunca esvazia — os segmentos sem o campo indexado
 // ficam pendentes de propósito (§2.4), e esperar pelo zero travaria para sempre.
 //
-// A espera existe porque o SegmentosPendentesDeReconstrucao publica o retrato no
+// A espera existe porque o SegmentosPendentesOfRebuild publica o retrato no
 // INÍCIO da passada, antes do trabalho dela: a primeira leitura descreve o
 // dataset antes das reconstruções, e comparar contra ela mediria um instante que
 // já passou.
-func esperaOsEstadosAssentarem(t *testing.T, srv *server.Servidor) {
+func waitOsStatesAssentarem(t *testing.T, srv *server.Server) {
 	t.Helper()
 	var (
 		anterior protocol.IndexStats
@@ -615,7 +615,7 @@ func esperaOsEstadosAssentarem(t *testing.T, srv *server.Servidor) {
 		prazo    = time.Now().Add(90 * time.Second)
 	)
 	for time.Now().Before(prazo) {
-		atual := indiceDoDataset(t, srv, tabelaDaBancada)
+		atual := indexOfDataset(t, srv, tableOfBench)
 		switch {
 		case atual != anterior:
 			anterior, desde = atual, time.Now()
@@ -627,34 +627,34 @@ func esperaOsEstadosAssentarem(t *testing.T, srv *server.Servidor) {
 	t.Fatalf("os estados de segmento não assentaram em 90s; último retrato: %+v", anterior)
 }
 
-// indiceDoDataset lê o bloco `index` de um dataset no /v1/stats.
-func indiceDoDataset(t *testing.T, srv *server.Servidor, nome string) protocol.IndexStats {
+// indexOfDataset lê o bloco `index` de um dataset no /v1/stats.
+func indexOfDataset(t *testing.T, srv *server.Server, name string) protocol.IndexStats {
 	t.Helper()
-	for _, ds := range leJSON[protocol.Stats](t, srv, "/v1/stats").Datasets {
-		if ds.Name == nome {
+	for _, ds := range readJSON[protocol.Stats](t, srv, "/v1/stats").Datasets {
+		if ds.Name == name {
 			return ds.Index
 		}
 	}
-	t.Fatalf("o dataset %q não apareceu no /v1/stats", nome)
+	t.Fatalf("o dataset %q não apareceu no /v1/stats", name)
 	return protocol.IndexStats{}
 }
 
-// corrompeOFimDoIndice troca o último byte do arquivo, que é onde o crc32c mora.
-func corrompeOFimDoIndice(t *testing.T, caminho string) {
+// corruptOEndOfIndex troca o último byte do arquivo, que é onde o crc32c mora.
+func corruptOEndOfIndex(t *testing.T, path string) {
 	t.Helper()
-	fi, err := os.Stat(caminho)
+	fi, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("montagem: stat de %s: %v", caminho, err)
+		t.Fatalf("montagem: stat de %s: %v", path, err)
 	}
-	f, err := os.OpenFile(caminho, os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o644)
 	if err != nil {
-		t.Fatalf("montagem: abrir %s: %v", caminho, err)
+		t.Fatalf("montagem: abrir %s: %v", path, err)
 	}
 	if _, err := f.WriteAt([]byte{0xAA}, fi.Size()-1); err != nil {
-		t.Fatalf("montagem: corromper %s: %v", caminho, err)
+		t.Fatalf("montagem: corromper %s: %v", path, err)
 	}
 	if err := f.Close(); err != nil {
-		t.Fatalf("montagem: fechar %s: %v", caminho, err)
+		t.Fatalf("montagem: fechar %s: %v", path, err)
 	}
 }
 
@@ -667,19 +667,19 @@ func corrompeOFimDoIndice(t *testing.T, caminho string) {
 // estados sai idêntico entre um dataset saudável e um com .sidx podres, e a
 // enumeração sobe no mesmo balde de um segmento fora da janela.
 //
-// A lista de proibidos sai de `familiasDeIndice`, e não de nomes escritos aqui:
+// A lista de proibidos sai de `familiasOfIndex`, e não de nomes escritos aqui:
 // uma série NOVA que alguém acrescente entra na proibição sozinha, e é ela que
 // alguém tentaria apontar. Foi exatamente essa a redação que este ciclo já
 // escreveu duas vezes — primeiro "leia rate()", depois "olhe a enumeração" —, e
 // as duas passariam por um oráculo de substring.
 func TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
-	a, ok := achaSerie(coletaAmostras(t, srv), metrics.MetIndexCRCFailuresTotal,
+	srv := serverWithHistory(t, specWithHistory)
+	a, ok := achaSerie(coletaSamples(t, srv), metrics.MetIndexCRCFailuresTotal,
 		map[string]string{metrics.LabelDataset: "eventos_history"})
 	if !ok {
 		t.Fatalf("%s não saiu no scrape", metrics.MetIndexCRCFailuresTotal)
 	}
-	for _, familia := range familiasDeIndice {
+	for _, familia := range familiasOfIndex {
 		if familia == metrics.MetIndexCRCFailuresTotal {
 			continue // ela pode falar de si mesma
 		}
@@ -699,7 +699,7 @@ func TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina(t *testing.T) {
 		}
 	}
 	if strings.Contains(a.Ajuda, "não é memorizada") {
-		t.Errorf("a ajuda de %s voltou a afirmar que a falha não é memorizada: o garanteSelado publica o mapeamento "+
+		t.Errorf("a ajuda de %s voltou a afirmar que a falha não é memorizada: o garanteSealed publica o mapeamento "+
 			"reprovado no cache, então o contador é DEGRAU. Ajuda = %q", metrics.MetIndexCRCFailuresTotal, a.Ajuda)
 	}
 }
@@ -720,8 +720,8 @@ func TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina(t *testing.T) {
 // vale trivialmente e o cruzamento é invisível.
 //
 // Ele cobre os DOIS lados do cano — o /metrics e o /v1/stats — porque a
-// proveniência é escolhida em duas funções diferentes (amostrasDeHistorico e
-// historicoStats), e apontar UMA delas para o Store errado passava verde na suíte
+// proveniência é escolhida em duas funções diferentes (samplesOfHistory e
+// historyStats), e apontar UMA delas para o Store errado passava verde na suíte
 // inteira. É o mesmo defeito que originou a correção de prosa, do outro lado.
 //
 // E as asserções de PROSA moram aqui, coladas na medição, em vez de num teste de
@@ -729,19 +729,19 @@ func TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina(t *testing.T) {
 // acabaram de medir — se a parcela deixar de viver noutro rótulo, a exigência de
 // que o texto qualifique por rótulo cai junto.
 func TestOsBytesDeIndiceVivemNoRotuloDaIrma(t *testing.T) {
-	srv, dirBase, dirIrma := bancadaDeIndice(t)
-	amostras := coletaAmostras(t, srv)
+	srv, dirBase, dirIrma := benchOfIndex(t)
+	samples := coletaSamples(t, srv)
 
-	valor := func(familia, ds string) float64 {
+	value := func(familia, ds string) float64 {
 		t.Helper()
-		a, ok := achaSerie(amostras, familia, map[string]string{metrics.LabelDataset: ds})
+		a, ok := achaSerie(samples, familia, map[string]string{metrics.LabelDataset: ds})
 		if !ok {
 			t.Fatalf("%s{dataset=%q} não saiu no scrape", familia, ds)
 		}
-		return a.Valor
+		return a.Value
 	}
-	totalNoBase := valor(metrics.MetHistoryIndexBytes, "eventos")
-	parcelaNaIrma := valor(metrics.MetIndexBytes, tabelaDaBancada)
+	totalInBase := value(metrics.MetHistoryIndexBytes, "eventos")
+	parcelaNaIrma := value(metrics.MetIndexBytes, tableOfBench)
 
 	// O ORÁCULO É O DISCO, medido por fora do processo em cada um dos dois
 	// diretórios. Comparar as duas SÉRIES entre si não bastava: a do base soma
@@ -749,54 +749,54 @@ func TestOsBytesDeIndiceVivemNoRotuloDaIrma(t *testing.T) {
 	// por isso "a parcela é menor que o total" continuava verdadeiro mesmo com o
 	// history_index_bytes lendo o Store ERRADO. O que discrimina é de QUAL
 	// diretório o número saiu.
-	deDisco := func(dir string) float64 {
+	ofDisk := func(dir string) float64 {
 		t.Helper()
-		return float64(blocosDeIndiceEm(t, dir))
+		return float64(blocosOfIndexIn(t, dir))
 	}
-	if quer := deDisco(dirIrma); totalNoBase != quer {
+	if quer := ofDisk(dirIrma); totalInBase != quer {
 		t.Errorf("%s{dataset=\"eventos\"} = %v e o índice em disco da IRMÃ soma %v blocos: a série do bloco `history` "+
 			"descreve a tabela irmã e sai no rótulo do BASE — se ela passar a descrever o próprio base, toda a prosa "+
-			"sobre a parcela vira mentira de novo", metrics.MetHistoryIndexBytes, totalNoBase, quer)
+			"sobre a parcela vira mentira de novo", metrics.MetHistoryIndexBytes, totalInBase, quer)
 	}
-	if doBase := deDisco(dirBase); totalNoBase == doBase {
+	if ofBase := ofDisk(dirBase); totalInBase == ofBase {
 		t.Errorf("%s{dataset=\"eventos\"} = %v é igual ao índice em disco do PRÓPRIO base: com os dois iguais este "+
 			"oráculo não distingue de qual Store o número veio, e a bancada precisa ser retunada",
-			metrics.MetHistoryIndexBytes, totalNoBase)
+			metrics.MetHistoryIndexBytes, totalInBase)
 	}
 	// E a contenção, agora sabendo que os dois lados descrevem a mesma tabela por
 	// rótulos diferentes.
-	if parcelaNaIrma <= 0 || parcelaNaIrma >= totalNoBase {
+	if parcelaNaIrma <= 0 || parcelaNaIrma >= totalInBase {
 		t.Errorf("%s{dataset=%q} = %v contra o total %v: a parcela por segmento tem de ser positiva e estritamente "+
 			"menor que o total, que soma também indexes/ e checkpoint/ da MESMA tabela",
-			metrics.MetIndexBytes, tabelaDaBancada, parcelaNaIrma, totalNoBase)
+			metrics.MetIndexBytes, tableOfBench, parcelaNaIrma, totalInBase)
 	}
 	// A conta que o texto antigo induzia, escrita como asserção: no rótulo do BASE
 	// a série por segmento descreve o PRÓPRIO base, então subtraí-la ali não
 	// cancela parcela nenhuma.
-	if parcelaNoBase := valor(metrics.MetIndexBytes, "eventos"); parcelaNoBase == parcelaNaIrma {
+	if parcelaInBase := value(metrics.MetIndexBytes, "eventos"); parcelaInBase == parcelaNaIrma {
 		t.Errorf("%s vale %v tanto em {dataset=\"eventos\"} quanto em {dataset=%q}: se os dois rótulos publicassem o "+
 			"MESMO número, o cruzamento que esta prosa corrige não existiria",
-			metrics.MetIndexBytes, parcelaNoBase, tabelaDaBancada)
+			metrics.MetIndexBytes, parcelaInBase, tableOfBench)
 	}
 
 	// O MESMO oráculo do outro lado do cano. O bloco `history` do /v1/stats sai de
-	// historicoStats, uma função diferente da que emite as séries, e ela escolhe a
+	// historyStats, uma função diferente da que emite as séries, e ela escolhe a
 	// proveniência por conta própria: trocar base.irma.st por base.st ali passava
 	// verde na suíte inteira.
-	hist := historicoDoDataset(t, srv, "eventos")
-	if quer := deDisco(dirIrma); hist.IndexBytes != int64(quer) {
+	hist := historyOfDataset(t, srv, "eventos")
+	if quer := ofDisk(dirIrma); hist.IndexBytes != int64(quer) {
 		t.Errorf("/v1/stats: history.indexBytes de \"eventos\" = %d e o índice em disco da IRMÃ soma %v blocos: "+
 			"o bloco `history` descreve a tabela irmã, e lê-lo do Store do base publica o dataset errado sob o "+
 			"rótulo certo", hist.IndexBytes, quer)
 	}
-	if ofBase := deDisco(dirBase); hist.IndexBytes == int64(ofBase) {
+	if ofBase := ofDisk(dirBase); hist.IndexBytes == int64(ofBase) {
 		t.Errorf("/v1/stats: history.indexBytes = %d é igual ao índice em disco do PRÓPRIO base: com os dois iguais "+
 			"este oráculo não distingue de qual Store o número veio", hist.IndexBytes)
 	}
 	// E o /metrics e o /v1/stats têm de concordar, porque leem a mesma estrutura.
-	if hist.IndexBytes != int64(totalNoBase) {
+	if hist.IndexBytes != int64(totalInBase) {
 		t.Errorf("/v1/stats diz %d e /metrics diz %v para o índice da tabela histórica: duas fontes para o mesmo "+
-			"fato divergem", hist.IndexBytes, totalNoBase)
+			"fato divergem", hist.IndexBytes, totalInBase)
 	}
 
 	// A PROSA, derivada do que acabou de ser medido. As duas séries carregam
@@ -804,7 +804,7 @@ func TestOsBytesDeIndiceVivemNoRotuloDaIrma(t *testing.T) {
 	// relaciona só é útil se qualificar por rótulo — e não pode reinstaurar a
 	// afirmação de que a purga não devolve os bytes, que foi o outro erro deste
 	// mesmo texto.
-	ajuda, ok := achaSerie(amostras, metrics.MetHistoryIndexBytes, map[string]string{metrics.LabelDataset: "eventos"})
+	ajuda, ok := achaSerie(samples, metrics.MetHistoryIndexBytes, map[string]string{metrics.LabelDataset: "eventos"})
 	if !ok {
 		t.Fatalf("%s não saiu no scrape", metrics.MetHistoryIndexBytes)
 	}
@@ -816,38 +816,38 @@ func TestOsBytesDeIndiceVivemNoRotuloDaIrma(t *testing.T) {
 		t.Errorf("a ajuda de %s relaciona as duas séries sem qualificar por RÓTULO (%q): as linhas acima acabaram de "+
 			"medir que a parcela vive em {dataset=%q} e este número em {dataset=\"eventos\"}, então um texto que "+
 			"não diga isso induz a subtração no mesmo rótulo — que subtrai a série errada",
-			metrics.MetHistoryIndexBytes, ajuda.Ajuda, tabelaDaBancada)
+			metrics.MetHistoryIndexBytes, ajuda.Ajuda, tableOfBench)
 	}
 }
 
-// historicoDoDataset lê o bloco `history` de um dataset no /v1/stats.
-func historicoDoDataset(t *testing.T, srv *server.Servidor, nome string) protocol.HistoryStats {
+// historyOfDataset lê o bloco `history` de um dataset no /v1/stats.
+func historyOfDataset(t *testing.T, srv *server.Server, name string) protocol.HistoryStats {
 	t.Helper()
-	for _, ds := range leJSON[protocol.Stats](t, srv, "/v1/stats").Datasets {
-		if ds.Name == nome {
+	for _, ds := range readJSON[protocol.Stats](t, srv, "/v1/stats").Datasets {
+		if ds.Name == name {
 			if ds.History == nil {
-				t.Fatalf("o dataset %q não publicou o bloco history", nome)
+				t.Fatalf("o dataset %q não publicou o bloco history", name)
 			}
 			return *ds.History
 		}
 	}
-	t.Fatalf("o dataset %q não apareceu no /v1/stats", nome)
+	t.Fatalf("o dataset %q não apareceu no /v1/stats", name)
 	return protocol.HistoryStats{}
 }
 
-// blocosDeIndiceEm é o `du` do operador sobre tudo que conta como índice de um
+// blocosOfIndexIn é o `du` do operador sobre tudo que conta como índice de um
 // dataset: indexes/, checkpoint/ e os arquivos de índice que moram em data/.
 //
 // Medido em BLOCOS, como a produção mede, e por fora do processo — é a única
 // forma de dizer de QUAL diretório um número publicado saiu.
-func blocosDeIndiceEm(t *testing.T, dir string) int64 {
+func blocosOfIndexIn(t *testing.T, dir string) int64 {
 	t.Helper()
 	var total int64
 	for _, sub := range []string{"indexes", "checkpoint"} {
 		total += somaBlocos(t, filepath.Join(dir, sub), nil)
 	}
-	total += somaBlocos(t, filepath.Join(dir, "data"), func(nome string) bool {
-		return strings.HasSuffix(nome, ".sidx") || strings.HasSuffix(nome, ".widx") || strings.HasSuffix(nome, ".tmp")
+	total += somaBlocos(t, filepath.Join(dir, "data"), func(name string) bool {
+		return strings.HasSuffix(name, ".sidx") || strings.HasSuffix(name, ".widx") || strings.HasSuffix(name, ".tmp")
 	})
 	return total
 }
@@ -902,24 +902,24 @@ func somaBlocos(t *testing.T, dir string, aceita func(string) bool) int64 {
 // é de outro pacote e de outra tarefa; aqui fica o registro de que este oráculo
 // NÃO o alcança.
 func TestOsCabecalhosSaemNomeadosParaCadaFamilia(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
-	corpo := pega(t, srv, "/metrics")
+	srv := serverWithHistory(t, specWithHistory)
+	corpo := fetch(t, srv, "/metrics")
 
-	comCabecalho := map[string]bool{}
-	for _, linha := range strings.Split(corpo, "\n") {
-		depois, achou := strings.CutPrefix(linha, "# HELP ")
+	withCabecalho := map[string]bool{}
+	for _, row := range strings.Split(corpo, "\n") {
+		depois, achou := strings.CutPrefix(row, "# HELP ")
 		if !achou {
-			if depois, achou = strings.CutPrefix(linha, "# TYPE "); !achou {
+			if depois, achou = strings.CutPrefix(row, "# TYPE "); !achou {
 				continue
 			}
 		}
 		familia, _, _ := strings.Cut(depois, " ")
 		if familia == "" {
 			t.Errorf("cabeçalho com nome de métrica VAZIO: %q — é o sintoma de amostras publicadas sem o campo "+
-				"Familia, e o Prometheus recusa o scrape inteiro por causa dele, não só a linha", linha)
+				"Familia, e o Prometheus recusa o scrape inteiro por causa dele, não só a linha", row)
 			continue
 		}
-		comCabecalho[familia] = true
+		withCabecalho[familia] = true
 	}
 
 	// Todas as famílias do histórico e do índice, que são as que esta tarefa
@@ -928,19 +928,19 @@ func TestOsCabecalhosSaemNomeadosParaCadaFamilia(t *testing.T) {
 		metrics.MetHistoryRows, metrics.MetHistoryDropped, metrics.MetHistoryDegraded,
 		metrics.MetHistoryDataBytes, metrics.MetHistoryIndexBytes, metrics.MetHistoryOldestWrittenAt,
 		metrics.MetHistoryIndexWindow, metrics.MetHistoryPurged, metrics.MetHistoryRetentionRunning,
-	}, familiasDeIndice...)
+	}, familiasOfIndex...)
 	for _, familia := range esperadas {
-		if !comCabecalho[familia] {
+		if !withCabecalho[familia] {
 			t.Errorf("%s saiu sem # HELP/# TYPE nomeados: série sem tipo não aceita rate(), e série sem ajuda "+
 				"chega ao operador sem a metade do contrato que viaja no texto", familia)
 		}
 	}
 }
 
-// nomesDasFamiliasDeIndice existe para a mensagem de erro do teste de cobertura
+// nomesDasFamiliasOfIndex existe para a mensagem de erro do teste de cobertura
 // abaixo sair legível e ordenada.
-func nomesDasFamiliasDeIndice() string {
-	nomes := append([]string(nil), familiasDeIndice...)
+func nomesDasFamiliasOfIndex() string {
+	nomes := append([]string(nil), familiasOfIndex...)
 	sort.Strings(nomes)
 	return strings.Join(nomes, ", ")
 }
@@ -953,21 +953,21 @@ func nomesDasFamiliasDeIndice() string {
 // produziria uma série que o dashboard nunca casa, e o sintoma é um painel vazio
 // sem ninguém perceber, que é exatamente o que o cabeçalho de names.go descreve.
 func TestAsSeriesDeIndiceSaemSoPelasConstantes(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
+	srv := serverWithHistory(t, specWithHistory)
 	conhecidas := map[string]bool{}
-	for _, f := range familiasDeIndice {
+	for _, f := range familiasOfIndex {
 		conhecidas[f] = true
 	}
 	var vistas int
-	for _, a := range coletaAmostras(t, srv) {
-		if !strings.HasPrefix(a.Nome, "nishidb_index_") {
+	for _, a := range coletaSamples(t, srv) {
+		if !strings.HasPrefix(a.Name, "nishidb_index_") {
 			continue
 		}
 		vistas++
-		if !conhecidas[a.Nome] {
+		if !conhecidas[a.Name] {
 			t.Errorf("o scrape trouxe %q, que não é nenhuma das constantes de names.go (%s): "+
 				"nome digitado à mão diverge no dia em que um dos dois lugares for corrigido",
-				a.Nome, nomesDasFamiliasDeIndice())
+				a.Name, nomesDasFamiliasOfIndex())
 		}
 	}
 	if vistas == 0 {
@@ -982,10 +982,10 @@ func TestAsSeriesDeIndiceSaemSoPelasConstantes(t *testing.T) {
 //
 // O oráculo principal desta família compara `/metrics` contra `/v1/stats`. Quando
 // uma mutação alimenta os DOIS lados da mesma fonte errada — trocar
-// `umSeVerdadeiro(e.ReconstrucaoAtiva)` por `float64(e.Estados.Corrente)` nas duas
+// `umSeVerdadeiro(e.RebuildActive)` por `float64(e.States.Current)` nas duas
 // funções —, a comparação vira `1 == 1` e não vê nada. E num servidor saudável os
 // dois números são estruturalmente iguais: só existe um segmento corrente, o laço
-// sobe sempre que há campo indexado, e `Corrente` só é publicado quando há campo
+// sobe sempre que há campo indexado, e `Current` só é publicado quando há campo
 // indexado. Correlação perfeita, oráculo cego.
 //
 // TestOMedidorDaReconstrucaoNaoEhOContadorDeCorrentes, no storage, afirma sobre a
@@ -1010,34 +1010,34 @@ func TestAsSeriesDeIndiceSaemSoPelasConstantes(t *testing.T) {
 // contagem de correntes, a série responde 1 para todo dataset com dado, o laço
 // morto nunca aparece e o dataset degrada para enumeração em silêncio.
 func TestASerieDaReconstrucaoDesceQuandoOLacoMorre(t *testing.T) {
-	a := novoAmbienteComStorage(t, blocoPadrao, "  segmentSize: 8KiB\n")
-	a.escreveDataset("eventos", specComJanelaApertada)
-	dirIrma := semeiaHistorico(t, a, "eventos", 0, 600)
+	a := newEnvWithStorage(t, blockPadrao, "  segmentSize: 8KiB\n")
+	a.writeDataset("eventos", specWithWindowApertada)
+	dirIrma := seedHistory(t, a, "eventos", 0, 600)
 
-	registro := &registroDoServidor{}
-	srv, err := server.Novo(a.carrega(), server.Opcoes{Log: logging.New(registro, logging.FormatText, slog.LevelInfo)})
+	record := &recordOfServer{}
+	srv, err := server.Novo(a.load(), server.Options{Log: logging.New(record, logging.FormatText, slog.LevelInfo)})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 
 	// Pré-condição: o laço de pé E o retrato publicado. Sem os dois, o estado
 	// final abaixo não distingue "desceu" de "nunca subiu".
-	esperaAte(t, func() bool {
-		e := indiceDoDataset(t, srv, tabelaDaBancada)
+	waitUntil(t, func() bool {
+		e := indexOfDataset(t, srv, tableOfBench)
 		return e.RebuildRunning && e.Current == 1
 	}, "o laço não subiu com o retrato publicado (RebuildRunning e Current=1) em 30s")
 
 	// A sabotagem: um diretório no lugar do .sidx do segmento mais novo, que é o
 	// único que a janela apertada admite — e portanto o único que a pendência
 	// abre.
-	selados := seladosDoDataset(t, dirIrma)
-	alvo := indiceDe(selados[len(selados)-1])
-	if err := os.Remove(alvo); err != nil && !os.IsNotExist(err) {
-		t.Fatalf("montagem: remover %s: %v", alvo, err)
+	selados := seladosOfDataset(t, dirIrma)
+	target := indexOf(selados[len(selados)-1])
+	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("montagem: remover %s: %v", target, err)
 	}
-	if err := os.Mkdir(alvo, 0o755); err != nil {
-		t.Fatalf("montagem: plantar diretório em %s: %v", alvo, err)
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatalf("montagem: plantar diretório em %s: %v", target, err)
 	}
 
 	// A espera é pelo LOG, e não pelo medidor, e a diferença é o teste inteiro: o
@@ -1045,13 +1045,13 @@ func TestASerieDaReconstrucaoDesceQuandoOLacoMorre(t *testing.T) {
 	// justamente o que está em julgamento. Esperar pelo medidor faria a mutação
 	// reprovar por timeout, com a mensagem errada — "o laço não morreu", quando o
 	// que aconteceu foi a série não ter contado.
-	esperaAte(t, func() bool {
-		return strings.Contains(registro.String(), "event=reconstrucao.parou")
+	waitUntil(t, func() bool {
+		return strings.Contains(record.String(), "event=reconstrucao.parou")
 	}, "o laço não parou em 30s: o diretório plantado devia fazer a passada falhar com ENODEV, "+
 		"e sem a morte dele os dois fios continuam iguais e este oráculo não discrimina")
 
 	// O ESTADO QUE DISCRIMINA, lido no /v1/stats e no /metrics.
-	e := indiceDoDataset(t, srv, tabelaDaBancada)
+	e := indexOfDataset(t, srv, tableOfBench)
 	if e.RebuildRunning {
 		t.Errorf("/v1/stats: rebuildRunning continua verdadeiro depois de o log registrar reconstrucao.parou (%+v): "+
 			"o medidor está ecoando outra coisa — zero é o alarme que a Ajuda promete", e)
@@ -1060,15 +1060,15 @@ func TestASerieDaReconstrucaoDesceQuandoOLacoMorre(t *testing.T) {
 		t.Fatalf("corrente = %d depois de o laço morrer, queria 1 (%+v): o retrato anterior tem de ficar de pé, "+
 			"senão os dois fios voltam a ser iguais e este oráculo não discrimina", e.Current, e)
 	}
-	rotulo := map[string]string{metrics.LabelDataset: tabelaDaBancada}
-	ativa, ok := achaSerie(coletaAmostras(t, srv), metrics.MetIndexRebuildActive, rotulo)
+	rotulo := map[string]string{metrics.LabelDataset: tableOfBench}
+	active, ok := achaSerie(coletaSamples(t, srv), metrics.MetIndexRebuildActive, rotulo)
 	if !ok {
-		t.Fatalf("%s não saiu para %q", metrics.MetIndexRebuildActive, tabelaDaBancada)
+		t.Fatalf("%s não saiu para %q", metrics.MetIndexRebuildActive, tableOfBench)
 	}
-	if ativa.Valor != 0 {
+	if active.Value != 0 {
 		t.Errorf("%s = %v com o laço MORTO e corrente = %d: zero é o alarme que a própria Ajuda desta série "+
 			"promete, e um fio que ecoe a contagem de correntes responde 1 para todo dataset com dado — o laço "+
 			"morto nunca aparece e o dataset degrada para enumeração em silêncio",
-			metrics.MetIndexRebuildActive, ativa.Valor, e.Current)
+			metrics.MetIndexRebuildActive, active.Value, e.Current)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
-// amostrasDeIndice publica as seis séries do índice por segmento (§6.6) de UM
+// samplesOfIndex publica as seis séries do índice por segmento (§6.6) de UM
 // dataset.
 //
 // Elas saem para TODO dataset, materializado e histórico, porque o índice por
@@ -26,32 +26,32 @@ import (
 // certo: o §92 manda o medidor subir antes da goroutine, então num dataset com
 // campo indexado o valor verdadeiro na subida é 1. Um medidor que reportasse zero
 // para caber numa regra sobre contadores estaria mentindo sobre o estado.
-func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Sample {
-	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: nome}}
+func samplesOfIndex(name string, e storage.EstatisticasOfIndex) []metrics.Sample {
+	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: name}}
 	// A ordem é a de metrics.IndexStates, e a contagem é indexada por ela:
 	// escrever os quatro pares à mão aqui seria uma segunda lista de estados ao
 	// lado da do pacote de nomes, e a segunda lista é a que esquece o valor novo.
-	porEstado := map[string]int64{
-		metrics.StateSealed:  e.Estados.Selado,
-		metrics.StateCurrent: e.Estados.Corrente,
-		metrics.StatePending: e.Estados.Pendente,
-		metrics.StateOutside: e.Estados.Fora,
+	byState := map[string]int64{
+		metrics.StateSealed:  e.States.Sealed,
+		metrics.StateCurrent: e.States.Current,
+		metrics.StatePending: e.States.Pendente,
+		metrics.StateOutside: e.States.Fora,
 	}
 	out := make([]metrics.Sample, 0, len(metrics.IndexStates)+len(metrics.IndexLookupModes)+4)
-	for _, estado := range metrics.IndexStates {
+	for _, state := range metrics.IndexStates {
 		out = append(out, metrics.Sample{
 			Family: metrics.MetIndexSegments,
 			Name:   metrics.MetIndexSegments,
 			Help: "segmentos por estado de índice: selado (o .sidx cobre o conjunto indexado), corrente (o índice é o WIP), " +
 				"pendente (dentro da janela e na fila de reconstrução) e fora (a janela não o cobre, e ele responde por enumeração de propósito)",
 			Type:   metrics.TypeGauge,
-			Labels: withLabel(rotulo, metrics.LabelState, estado),
-			Value:  float64(porEstado[estado]),
+			Labels: withLabel(rotulo, metrics.LabelState, state),
+			Value:  float64(byState[state]),
 		})
 	}
-	porModo := map[string]int64{
-		metrics.ModeIndex:       e.PorIndice,
-		metrics.ModeEnumeration: e.PorEnumeracao,
+	byModo := map[string]int64{
+		metrics.ModeIndex:       e.ByIndex,
+		metrics.ModeEnumeration: e.ByEnumeration,
 	}
 	for _, modo := range metrics.IndexLookupModes {
 		out = append(out, metrics.Sample{
@@ -61,7 +61,7 @@ func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Sam
 				"porque para o planner e o executor os dois são o mesmo iterador ascendente",
 			Type:   metrics.TypeCounter,
 			Labels: withLabel(rotulo, metrics.LabelMode, modo),
-			Value:  float64(porModo[modo]),
+			Value:  float64(byModo[modo]),
 		})
 	}
 	return append(out,
@@ -91,7 +91,7 @@ func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Sam
 				"0 sem campo indexado ou depois de ele parar, e ele para de vez na primeira falha",
 			Type:   metrics.TypeGauge,
 			Labels: rotulo,
-			Value:  umSeVerdadeiro(e.ReconstrucaoAtiva),
+			Value:  umSeVerdadeiro(e.RebuildActive),
 		},
 		metrics.Sample{
 			Family: metrics.MetIndexCRCFailuresTotal,
@@ -115,10 +115,10 @@ func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Sam
 // sobrando faria a segunda série sobrescrever o rótulo da primeira, e as duas
 // sairiam com o mesmo valor de `estado`. O bug seria invisível no código e óbvio
 // no painel — quatro séries iguais.
-func withLabel(base []metrics.Label, nome, valor string) []metrics.Label {
+func withLabel(base []metrics.Label, name, value string) []metrics.Label {
 	out := make([]metrics.Label, len(base), len(base)+1)
 	copy(out, base)
-	return append(out, metrics.Label{Name: nome, Value: valor})
+	return append(out, metrics.Label{Name: name, Value: value})
 }
 
 // indiceStats monta o bloco `index` do /v1/stats a partir da MESMA estrutura que
@@ -127,17 +127,17 @@ func withLabel(base []metrics.Label, nome, valor string) []metrics.Label {
 // Nenhum número é recalculado aqui, pela regra do handleStats: duas fontes para
 // o mesmo fato divergem, e a divergência aparece como um painel que discorda do
 // JSON sem nada estar quebrado.
-func indexStats(e storage.EstatisticasDeIndice) protocol.IndexStats {
+func indexStats(e storage.EstatisticasOfIndex) protocol.IndexStats {
 	return protocol.IndexStats{
-		Sealed:          e.Estados.Selado,
-		Current:         e.Estados.Corrente,
-		Pending:         e.Estados.Pendente,
-		OutOfWindow:     e.Estados.Fora,
+		Sealed:          e.States.Sealed,
+		Current:         e.States.Current,
+		Pending:         e.States.Pendente,
+		OutOfWindow:     e.States.Fora,
 		Bytes:           e.Bytes,
 		Rebuilds:        e.Reconstrucoes,
-		RebuildRunning:  e.ReconstrucaoAtiva,
+		RebuildRunning:  e.RebuildActive,
 		CRCFailures:     e.CRCFalhas,
-		SegmentsByIndex: e.PorIndice,
-		SegmentsByScan:  e.PorEnumeracao,
+		SegmentsByIndex: e.ByIndex,
+		SegmentsByScan:  e.ByEnumeration,
 	}
 }

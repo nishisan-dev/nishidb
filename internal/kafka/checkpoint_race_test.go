@@ -52,10 +52,10 @@ func (s *storeLento) SourceOffsets() (checkpoint.SourceOffsets, bool, error) {
 
 func (s *storeLento) RowCount() uint64 { return 0 }
 
-// leTudo percorre o mapa guardado pelo store, imitando o que o gravador do
+// readTudo percorre o mapa guardado pelo store, imitando o que o gravador do
 // manifest faz com ele. É aqui que a referência compartilhada apareceria como
 // leitura concorrente de mapa.
-func (s *storeLento) leTudo() {
+func (s *storeLento) readTudo() {
 	s.mu.Lock()
 	o := s.offsets
 	s.mu.Unlock()
@@ -110,7 +110,7 @@ func TestCheckpointDaRevogacaoNaoCorreComOWriter(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < voltas; i++ {
-			w.avanca(&kgo.Record{Partition: int32(i % 4), Offset: int64(i)})
+			w.advance(&kgo.Record{Partition: int32(i % 4), Offset: int64(i)})
 		}
 	}()
 
@@ -134,7 +134,7 @@ func TestCheckpointDaRevogacaoNaoCorreComOWriter(t *testing.T) {
 				t.Errorf("checkpoint da revogação: %v", err)
 				return
 			}
-			st.leTudo()
+			st.readTudo()
 		}
 	}()
 

@@ -47,13 +47,13 @@ var ErrInternalState = errors.New("INTERNAL_STATE")
 //
 // A saída sai com FieldIDs estritamente crescentes e sem TypeNull —
 // pré-condição do Put, que a revalida antes de tornar o record durável.
-// efeitosDoMerge são os contadores das políticas de escrita que só o merge
+// efeitosOfMerge são os contadores das políticas de escrita que só o merge
 // enxerga: o dado gravado não diz quantas vezes um valor foi preservado nem
 // somado, e sem contá-los a política é invisível em produção.
 //
 // É ponteiro e aceita nil porque os testes de unidade do merge não têm
 // métricas a alimentar; o Apply passa os do dataset.
-type efeitosDoMerge struct {
+type efeitosOfMerge struct {
 	congeladas atomic.Int64
 	acumuladas atomic.Int64
 	// saturadas é o único desfecho em que o valor gravado deixa de ser
@@ -61,7 +61,7 @@ type efeitosDoMerge struct {
 	saturadas atomic.Int64
 }
 
-func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte, ef *efeitosDoMerge) ([]byte, error) {
+func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte, ef *efeitosOfMerge) ([]byte, error) {
 	var (
 		r      encoding.FieldReader
 		lastID types.FieldID // 0 é reservado (§32): serve de sentinela inicial

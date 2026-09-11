@@ -18,12 +18,12 @@ import (
 // com o query.maxTimeout da consulta longa a janela deixou de ser estreita:
 // ela passou a ser a duração inteira de um relatório.
 func TestRowQueVenceNoMeioDaVarreduraContinuaVisivelAteOFimDaQuery(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), 0)
+	s, rel := storeWithRegras(t, t.TempDir(), 0)
 	// Duas linhas com o MESMO prazo. A varredura passa pela primeira antes de
 	// o relógio andar e alcança a segunda depois — que é exatamente a forma do
 	// defeito: não é a consulta inteira que falha, é o meio dela.
-	mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
-	mustPut(t, s, "B", 1, payloadComPrazo(t, s, "B", rel.t, 3*time.Minute), nil)
+	mustPut(t, s, "A", 1, payloadWithPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+	mustPut(t, s, "B", 1, payloadWithPrazo(t, s, "B", rel.t, 3*time.Minute), nil)
 
 	snap := s.OpenSnapshot()
 
@@ -36,7 +36,7 @@ func TestRowQueVenceNoMeioDaVarreduraContinuaVisivelAteOFimDaQuery(t *testing.T)
 
 	// O relógio anda DEPOIS de o snapshot ser tomado: as duas linhas vencem
 	// agora, mas nenhuma delas tinha vencido em T0.
-	rel.avanca(4 * time.Minute)
+	rel.advance(4 * time.Minute)
 
 	for it.Next() {
 		vistas++
@@ -55,13 +55,13 @@ func TestRowQueVenceNoMeioDaVarreduraContinuaVisivelAteOFimDaQuery(t *testing.T)
 // um relógio corrente no GetByRowID deixaria o plano indexado com a metade da
 // garantia: o conjunto de candidatos seria estável e o resultado não.
 func TestGetByRowIDUsaORelogioDoSnapshotENaoODoPresente(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), 0)
-	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+	s, rel := storeWithRegras(t, t.TempDir(), 0)
+	id, _ := mustPut(t, s, "A", 1, payloadWithPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
 	snap := s.OpenSnapshot()
 
 	// A linha vence DEPOIS de o snapshot ser tomado.
-	rel.avanca(4 * time.Minute)
+	rel.advance(4 * time.Minute)
 
 	if _, _, ok, err := s.GetByRowID(snap, id, nil); err != nil || !ok {
 		t.Errorf("GetByRowID sob o snapshot: ok=%v err=%v; a linha viva em T0 sumiu porque o fetch consultou o relógio do PRESENTE", ok, err)
@@ -80,11 +80,11 @@ func TestGetByRowIDUsaORelogioDoSnapshotENaoODoPresente(t *testing.T) {
 // nos três primeiros e não neste deixaria `WHERE id = ?` respondendo sobre um
 // instante diferente do de `WHERE status = ?` na mesma consulta.
 func TestGetByKeyUsaORelogioDoSnapshotENaoODoPresente(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), 0)
-	mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+	s, rel := storeWithRegras(t, t.TempDir(), 0)
+	mustPut(t, s, "A", 1, payloadWithPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
 	snap := s.OpenSnapshot()
-	rel.avanca(4 * time.Minute)
+	rel.advance(4 * time.Minute)
 
 	if _, _, ok, err := s.GetByKey(snap, []byte("A"), nil); err != nil || !ok {
 		t.Errorf("GetByKey sob o snapshot: ok=%v err=%v; a linha viva em T0 sumiu do point lookup", ok, err)
@@ -114,7 +114,7 @@ func TestLinhaAtualizadaDuranteAConsultaEhEntregueNaVersaoDeT0(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetByRowID sob o snapshot: ok=%v err=%v", ok, err)
 	}
-	if got := statusDoPayload(t, s, rec.Payload); got != "Start" {
+	if got := statusOfPayload(t, s, rec.Payload); got != "Start" {
 		t.Errorf("a linha veio com status %q, quero \"Start\": a consulta recebeu a versão do PRESENTE, não a de T0", got)
 	}
 
@@ -124,14 +124,14 @@ func TestLinhaAtualizadaDuranteAConsultaEhEntregueNaVersaoDeT0(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetByRowID no presente: ok=%v err=%v", ok, err)
 	}
-	if got := statusDoPayload(t, s, rec2.Payload); got != "Stop" {
+	if got := statusOfPayload(t, s, rec2.Payload); got != "Stop" {
 		t.Errorf("a consulta aberta DEPOIS veio com status %q, quero \"Stop\": o snapshot está congelando o que não devia", got)
 	}
 }
 
-// statusDoPayload extrai o campo `status` do record — o observável que separa
+// statusOfPayload extrai o campo `status` do record — o observável que separa
 // a versão de T0 da versão corrente.
-func statusDoPayload(t *testing.T, s *Store, payload []byte) string {
+func statusOfPayload(t *testing.T, s *Store, payload []byte) string {
 	t.Helper()
 	id, err := s.FieldDict().LookupOrCreate([]byte("status"))
 	if err != nil {
@@ -140,11 +140,11 @@ func statusDoPayload(t *testing.T, s *Store, payload []byte) string {
 	var r encoding.FieldReader
 	r.Reset(payload)
 	for {
-		campo, v, ok := r.Next()
+		field, v, ok := r.Next()
 		if !ok {
 			return ""
 		}
-		if campo == id {
+		if field == id {
 			return string(v.Bytes)
 		}
 	}
@@ -170,7 +170,7 @@ func TestDuasAtualizacoesNaMesmaLinhaEntregamAVersaoDeT0ENaoAIntermediaria(t *te
 	if err != nil || !ok {
 		t.Fatalf("GetByRowID sob o snapshot: ok=%v err=%v", ok, err)
 	}
-	if got := statusDoPayload(t, s, rec.Payload); got != "T0" {
+	if got := statusOfPayload(t, s, rec.Payload); got != "T0" {
 		t.Errorf("a linha veio com status %q, quero \"T0\": a busca no journal devolveu a versão errada da cadeia", got)
 	}
 }
@@ -217,13 +217,13 @@ func TestSemConsultaAbertaAIngestaoNaoGuardaVersaoNenhuma(t *testing.T) {
 func TestSegmentoComVersaoRetidaNaoEhEleitoPelaCompaction(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
 	const keys, rodadas = 40, 30
-	corpusDeSegmentosSelados(t, s, keys, rodadas)
+	corpusOfSegmentosSelados(t, s, keys, rodadas)
 
 	// A eleição SEM leitor nenhum é a linha de base: sem ela, "nenhum
 	// candidato" não distingue o pin funcionando de um corpus que nunca
 	// produziu candidato.
-	semLeitor := s.candidatos(0.5)
-	if len(semLeitor) == 0 {
+	withoutReader := s.candidatos(0.5)
+	if len(withoutReader) == 0 {
 		t.Fatal("nenhum candidato com 30 rodadas sobre 40 keys: sem eleição não há o que este teste exercite")
 	}
 
@@ -231,15 +231,15 @@ func TestSegmentoComVersaoRetidaNaoEhEleitoPelaCompaction(t *testing.T) {
 	// mora num dos segmentos que a eleição acabou de escolher.
 	snap := s.OpenSnapshot()
 	defer s.CloseSnapshot(snap)
-	corpusDeSegmentosSelados(t, s, keys, 1)
+	corpusOfSegmentosSelados(t, s, keys, 1)
 
-	comLeitor := s.candidatos(0.5)
-	for _, seg := range comLeitor {
-		if s.vers.Pinned(seg) {
-			t.Errorf("o segmento %d guarda versão retida e foi eleito para aposentadoria", seg)
+	withReader := s.candidatos(0.5)
+	for _, sec := range withReader {
+		if s.vers.Pinned(sec) {
+			t.Errorf("o segmento %d guarda versão retida e foi eleito para aposentadoria", sec)
 		}
 	}
-	if len(comLeitor) == len(semLeitor) {
+	if len(withReader) == len(withoutReader) {
 		t.Error("a eleição não mudou com um leitor vivo: nenhum segmento ficou pinado, então o teste acima passou por vacuidade")
 	}
 }
@@ -259,7 +259,7 @@ func TestPointLookupEntregaAVersaoDeT0(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetByKey sob o snapshot: ok=%v err=%v", ok, err)
 	}
-	if got := statusDoPayload(t, s, rec.Payload); got != "T0" {
+	if got := statusOfPayload(t, s, rec.Payload); got != "T0" {
 		t.Errorf("o point lookup veio com status %q, quero \"T0\": ele resolve pela primary e ignorou o journal", got)
 	}
 }
@@ -276,13 +276,13 @@ func TestPointLookupEntregaAVersaoDeT0(t *testing.T) {
 func TestCopyForwardNaoCriaVersaoENaoTravaAPropriaPassada(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
 	const keys, rodadas = 40, 30
-	corpusDeSegmentosSelados(t, s, keys, rodadas)
+	corpusOfSegmentosSelados(t, s, keys, rodadas)
 
 	// Uma consulta aberta ANTES da passada: é a condição que faria o
 	// copy-forward versionar, se ele versionasse.
 	snap := s.OpenSnapshot()
 	defer s.CloseSnapshot(snap)
-	antes := s.vers.Entries()
+	before := s.vers.Entries()
 
 	res, err := s.CompactaUmaVez(context.Background(), 0.5)
 	if err != nil {
@@ -291,8 +291,8 @@ func TestCopyForwardNaoCriaVersaoENaoTravaAPropriaPassada(t *testing.T) {
 	if res.SegmentosAposentados == 0 {
 		t.Fatal("nenhum segmento aposentado: sem passada de verdade o teste não exercita o copy-forward")
 	}
-	if got := s.vers.Entries(); got != antes {
-		t.Errorf("Entries() = %d, quero %d: o copy-forward criou versão e vai pinar o segmento que ele mesmo aposenta", got, antes)
+	if got := s.vers.Entries(); got != before {
+		t.Errorf("Entries() = %d, quero %d: o copy-forward criou versão e vai pinar o segmento que ele mesmo aposenta", got, before)
 	}
 }
 
@@ -316,10 +316,10 @@ func TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo(t *testing.T) {
 		ActiveTTL: true, FallbackDuration: time.Hour,
 		WriteInstantFieldName: "_writtenAt", TTLFieldName: "_expiresIn",
 	})
-	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	rel := &relogioOfTest{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 
-	escreve := func(k string, seq int64) {
+	write := func(k string, seq int64) {
 		t.Helper()
 		p := payloadOrdenado(t, s, map[string]types.Value{
 			"id":         {Type: types.TypeString, Bytes: []byte(k)},
@@ -339,7 +339,7 @@ func TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo(t *testing.T) {
 		}
 	}
 
-	escreve("abandonada", 1)
+	write("abandonada", 1)
 	ativas := make([]string, 20)
 	for i := range ativas {
 		ativas[i] = "ativa-" + string(rune('a'+i))
@@ -347,7 +347,7 @@ func TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo(t *testing.T) {
 	rodada := int64(1)
 	for r := 0; r < 15; r++ {
 		for _, k := range ativas {
-			escreve(k, rodada)
+			write(k, rodada)
 		}
 		rodada++
 	}
@@ -357,10 +357,10 @@ func TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo(t *testing.T) {
 	snap := s.OpenSnapshot()
 	defer s.CloseSnapshot(snap)
 
-	rel.avanca(2 * time.Hour) // a abandonada vence DEPOIS do snapshot
+	rel.advance(2 * time.Hour) // a abandonada vence DEPOIS do snapshot
 	for r := 0; r < 15; r++ {
 		for _, k := range ativas {
-			escreve(k, rodada)
+			write(k, rodada)
 		}
 		rodada++
 	}
@@ -380,7 +380,7 @@ func TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("a linha sumiu da consulta em voo: ok=%v err=%v", ok, err)
 	}
-	if got := statusDoPayload(t, s, rec.Payload); got == "" {
+	if got := statusOfPayload(t, s, rec.Payload); got == "" {
 		t.Error("a linha voltou sem o campo status: a compaction lapidou o que a consulta ainda vê")
 	}
 }
@@ -392,10 +392,10 @@ func TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo(t *testing.T) {
 // leitor com o piso antigo passaria de "não vê a linha" para "erra ao lê-la",
 // que é pior. A marca só avança até onde o snapshot mais antigo já não olha.
 func TestRetencaoNaoUltrapassaOPisoDoSnapshotVivo(t *testing.T) {
-	_, hist, rel := parComRetencao(t, 1<<20)
+	_, hist, rel := pairWithRetention(t, 1<<20)
 	for range 50 {
 		apenda(t, hist, "a", rel.t)
-		rel.avanca(time.Minute)
+		rel.advance(time.Minute)
 	}
 
 	// A consulta abre com as 50 linhas vivas: o piso dela é o rowId zero.
@@ -403,20 +403,20 @@ func TestRetencaoNaoUltrapassaOPisoDoSnapshotVivo(t *testing.T) {
 	defer hist.CloseSnapshot(snap)
 
 	// A mesma passada que, sem leitor, avançaria a marca em 20.
-	res := passada(t, hist, LimitesDeRetencao{ExpireAfterWrite: 30 * time.Minute})
-	if res.MarcaAvancou != 0 {
-		t.Errorf("a marca avançou %d com uma consulta cujo piso é o rowId 0: a purga passou por baixo dela", res.MarcaAvancou)
+	res := pass(t, hist, LimitesOfRetention{ExpireAfterWrite: 30 * time.Minute})
+	if res.MarkAvancou != 0 {
+		t.Errorf("a marca avançou %d com uma consulta cujo piso é o rowId 0: a purga passou por baixo dela", res.MarkAvancou)
 	}
-	if n := contaVivas(t, hist); n != 50 {
+	if n := countVivas(t, hist); n != 50 {
 		t.Errorf("%d linhas vivas, quero 50: a purga tirou do dataset linhas que a consulta ainda alcança", n)
 	}
 
 	// A contraprova: fechada a consulta, a mesma passada avança normalmente —
 	// sem ela, este teste passaria com uma retenção que nunca avança.
 	hist.CloseSnapshot(snap)
-	res = passada(t, hist, LimitesDeRetencao{ExpireAfterWrite: 30 * time.Minute})
-	if res.MarcaAvancou != 20 {
-		t.Errorf("a marca avançou %d depois de a consulta fechar, quero 20: a retenção não recuperou o alcance", res.MarcaAvancou)
+	res = pass(t, hist, LimitesOfRetention{ExpireAfterWrite: 30 * time.Minute})
+	if res.MarkAvancou != 20 {
+		t.Errorf("a marca avançou %d depois de a consulta fechar, quero 20: a retenção não recuperou o alcance", res.MarkAvancou)
 	}
 }
 

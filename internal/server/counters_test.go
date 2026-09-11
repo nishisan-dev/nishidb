@@ -13,9 +13,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
-// specServicos é o dataset da proposta: serviços por OLT, com dois contadores
+// specServices é o dataset da proposta: serviços por OLT, com dois contadores
 // — o denominador (todos) e o numerador (autenticados).
-const specServicos = `version: 1
+const specServices = `version: 1
 name: %s
 materialization:
   key:
@@ -43,19 +43,19 @@ counters:
     where: authenticated = true
 `
 
-// semeiaServicos materializa n serviços ANTES de o servidor subir, pelo
+// seedServices materializa n serviços ANTES de o servidor subir, pelo
 // pipeline real — SEM os contadores: é o cenário de um dataset que ganhou
 // `counters:` depois de povoado, e o servidor os constrói na abertura.
-func semeiaServicos(t *testing.T, a *ambiente, nome string, n int) {
+func seedServices(t *testing.T, a *env, name string, n int) {
 	t.Helper()
-	cfg := a.carrega()
-	spec, err := schema.Load(cfg.DatasetSpecPath(nome), cfg.QueryDefaults())
+	cfg := a.load()
+	spec, err := schema.Load(cfg.DatasetSpecPath(name), cfg.QueryDefaults())
 	if err != nil {
 		t.Fatal(err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:                 cfg.DatasetDir(nome),
-		Dataset:             nome,
+		Dir:                 cfg.DatasetDir(name),
+		Dataset:             name,
 		SegmentSize:         cfg.SegmentSize(),
 		IndexedFieldsByName: schema.IndexedFieldNames(spec),
 	})
@@ -92,16 +92,16 @@ func semeiaServicos(t *testing.T, a *ambiente, nome string, n int) {
 	}
 }
 
-func servidorComServicos(t *testing.T, n int) *server.Servidor {
+func serverWithServices(t *testing.T, n int) *server.Server {
 	t.Helper()
-	a := novoAmbienteComStorage(t, blocoPadrao, "")
-	a.escreveDataset("servicos", fmt.Sprintf(specServicos, "servicos"))
-	semeiaServicos(t, a, "servicos", n)
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	a := newEnvWithStorage(t, blockPadrao, "")
+	a.writeDataset("servicos", fmt.Sprintf(specServices, "servicos"))
+	seedServices(t, a, "servicos", n)
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 	return srv
 }
 
@@ -109,36 +109,36 @@ func servidorComServicos(t *testing.T, n int) *server.Servidor {
 // MESMA rota de consulta — sem suporte em cliente nenhum — e o dataset que
 // ganhou `counters:` depois de povoado sobe com os contadores construídos.
 func TestCountersRespondePelaRotaDeQuery(t *testing.T) {
-	srv := servidorComServicos(t, 24)
+	srv := serverWithServices(t, 24)
 	// 24 serviços: 6 na OLT14 (i%4==0), 18 na G1M10; autenticados são os
 	// i%3 != 0 — 16 no total: OLT14 tem i ∈ {4, 8, 16, 20} = 4, G1M10 tem 12.
 	resp := consulta(t, srv, `{"dataset":"servicos","sql":"SELECT olt, total FROM _counters.autenticados_por_olt ORDER BY total ASC"}`)
-	linhas, fim := resultado(t, resp)
-	if fim.End() == nil {
+	rows, end := result(t, resp)
+	if end.End() == nil {
 		t.Fatal("o stream não trouxe a linha de fecho")
 	}
-	if len(linhas) != 2 {
-		t.Fatalf("%d linhas, quero 2: %v", len(linhas), linhas)
+	if len(rows) != 2 {
+		t.Fatalf("%d linhas, quero 2: %v", len(rows), rows)
 	}
-	if !strings.Contains(linhas[0], `"olt":"BR_SPOMO_OLT14"`) || !strings.Contains(linhas[0], `"total":4`) {
-		t.Fatalf("primeira linha = %s", linhas[0])
+	if !strings.Contains(rows[0], `"olt":"BR_SPOMO_OLT14"`) || !strings.Contains(rows[0], `"total":4`) {
+		t.Fatalf("primeira linha = %s", rows[0])
 	}
-	if !strings.Contains(linhas[1], `"olt":"PRCTA_G1M10"`) || !strings.Contains(linhas[1], `"total":12`) {
-		t.Fatalf("segunda linha = %s", linhas[1])
+	if !strings.Contains(rows[1], `"olt":"PRCTA_G1M10"`) || !strings.Contains(rows[1], `"total":12`) {
+		t.Fatalf("segunda linha = %s", rows[1])
 	}
 
 	resp = consulta(t, srv, `{"dataset":"servicos","sql":"SELECT groupKey, total FROM _counters.servicos_por_olt WHERE groupKey = 'PRCTA_G1M10'"}`)
-	linhas, _ = resultado(t, resp)
-	if len(linhas) != 1 || !strings.Contains(linhas[0], `"total":18`) {
-		t.Fatalf("denominador = %v", linhas)
+	rows, _ = result(t, resp)
+	if len(rows) != 1 || !strings.Contains(rows[0], `"total":18`) {
+		t.Fatalf("denominador = %v", rows)
 	}
 
 	resp = consulta(t, srv, `{"dataset":"servicos","sql":"SELECT olt, slot, port, total FROM _counters.autenticados_por_pon WHERE olt = 'BR_SPOMO_OLT14' ORDER BY total ASC LIMIT 3"}`)
-	linhas, _ = resultado(t, resp)
-	if len(linhas) == 0 {
+	rows, _ = result(t, resp)
+	if len(rows) == 0 {
 		t.Fatal("nenhuma PON da OLT14")
 	}
-	for _, l := range linhas {
+	for _, l := range rows {
 		if !strings.Contains(l, `"slot":`) || !strings.Contains(l, `"port":`) {
 			t.Fatalf("linha sem as colunas tipadas: %s", l)
 		}
@@ -148,22 +148,22 @@ func TestCountersRespondePelaRotaDeQuery(t *testing.T) {
 // TestMetaCountersListaPelaRotaDeQuery: a lista dos contadores sai por SQL,
 // pela mesma rota, com a definição e os números vivos.
 func TestMetaCountersListaPelaRotaDeQuery(t *testing.T) {
-	srv := servidorComServicos(t, 24)
+	srv := serverWithServices(t, 24)
 	resp := consulta(t, srv, `{"dataset":"servicos","sql":"SELECT name, groupBy, condition, groups, auditAt FROM _meta.counters ORDER BY name"}`)
-	linhas, fim := resultado(t, resp)
-	if fim.End() == nil {
+	rows, end := result(t, resp)
+	if end.End() == nil {
 		t.Fatal("o stream não trouxe a linha de fecho")
 	}
-	if len(linhas) != 3 {
-		t.Fatalf("%d linhas, quero 3: %v", len(linhas), linhas)
+	if len(rows) != 3 {
+		t.Fatalf("%d linhas, quero 3: %v", len(rows), rows)
 	}
 	for _, quer := range []string{
 		`"name":"autenticados_por_olt","groupBy":"olt","condition":"authenticated = true","groups":2,"auditAt":null`,
 		`"name":"autenticados_por_pon","groupBy":"olt|slot|port"`,
 		`"name":"servicos_por_olt","groupBy":"olt","condition":null`,
 	} {
-		if !strings.Contains(strings.Join(linhas, "\n"), quer) {
-			t.Fatalf("faltou %s em %v", quer, linhas)
+		if !strings.Contains(strings.Join(rows, "\n"), quer) {
+			t.Fatalf("faltou %s em %v", quer, rows)
 		}
 	}
 }
@@ -173,13 +173,13 @@ func TestMetaCountersListaPelaRotaDeQuery(t *testing.T) {
 // só exigia `status != 200`, ele passava verde com a resposta errada — 500 e
 // INTERNAL —, que foi o que o piloto viu em 05/09/2026.
 func TestCountersTabelaDesconhecidaNomeiaAsQueExistem(t *testing.T) {
-	srv := servidorComServicos(t, 4)
+	srv := serverWithServices(t, 4)
 	resp := consulta(t, srv, `{"dataset":"servicos","sql":"SELECT a FROM _counters.nao_existe"}`)
 	defer fecha(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status %d, quero 400: tabela desconhecida é erro do cliente", resp.StatusCode)
 	}
-	f := falhaDe(t, resp)
+	f := failOf(t, resp)
 	if f.Code != protocol.CodeBind {
 		t.Fatalf("código %q, quero %q: a série de erro interno não pode subir por um nome digitado errado", f.Code, protocol.CodeBind)
 	}
@@ -193,7 +193,7 @@ func TestCountersTabelaDesconhecidaNomeiaAsQueExistem(t *testing.T) {
 // piloto consultou e o namespace que não existe. Os três — com o
 // `_counters.nao_existe` do teste acima — são a mesma família.
 func TestTabelaVirtualDesconhecidaSaiComoErroDoCliente(t *testing.T) {
-	srv := servidorComServicos(t, 4)
+	srv := serverWithServices(t, 4)
 	casos := []struct {
 		name  string
 		sql   string
@@ -209,7 +209,7 @@ func TestTabelaVirtualDesconhecidaSaiComoErroDoCliente(t *testing.T) {
 			if resp.StatusCode != http.StatusBadRequest {
 				t.Fatalf("status %d, quero 400", resp.StatusCode)
 			}
-			f := falhaDe(t, resp)
+			f := failOf(t, resp)
 			if f.Code != protocol.CodeBind {
 				t.Fatalf("código %q, quero %q", f.Code, protocol.CodeBind)
 			}

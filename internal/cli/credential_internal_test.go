@@ -25,7 +25,7 @@ import (
 // (package cli_test) exercita ponta a ponta contra um servidor de verdade.
 // Aqui o oráculo é a REGRA em si, sem precisar subir nada.
 
-func flagsParaTeste(t *testing.T, args ...string) *remoteFlags {
+func flagsForTest(t *testing.T, args ...string) *remoteFlags {
 	t.Helper()
 	fs := flag.NewFlagSet("teste", flag.ContinueOnError)
 	f := setupRemoteFlags(fs)
@@ -107,7 +107,7 @@ func TestFlagsRemotasResolveRegrasDePrecedencia(t *testing.T) {
 			if c.env != "" {
 				t.Setenv(envPass, c.env)
 			}
-			f := flagsParaTeste(t, c.args...)
+			f := flagsForTest(t, c.args...)
 			cred, err := f.resolve()
 			if c.querErr {
 				if err == nil {
@@ -137,7 +137,7 @@ func TestFlagsRemotasResolveMensagensNaoEcoamSenha(t *testing.T) {
 	}
 	t.Setenv(envPass, segredo)
 
-	f := flagsParaTeste(t, "--user", "chefe", "--password-file", arq)
+	f := flagsForTest(t, "--user", "chefe", "--password-file", arq)
 	_, err := f.resolve()
 	if err == nil {
 		t.Fatal("queria erro (as duas fontes presentes)")
@@ -158,7 +158,7 @@ func TestFlagsRemotasResolveMensagensNaoEcoamSenha(t *testing.T) {
 // de "definida e vazia" para o MESMO cenário do lado do servidor.
 func TestUserComNISHIDBPASSWORDDefinidaEVaziaEhRecusado(t *testing.T) {
 	t.Setenv(envPass, "")
-	f := flagsParaTeste(t, "--user", "chefe")
+	f := flagsForTest(t, "--user", "chefe")
 	_, err := f.resolve()
 	if err == nil {
 		t.Fatal("queria erro: NISHIDB_PASSWORD definida e vazia com --user")
@@ -171,13 +171,13 @@ func TestUserComNISHIDBPASSWORDDefinidaEVaziaEhRecusado(t *testing.T) {
 	}
 }
 
-// certPEMDeTeste gera um certificado autoassinado mínimo, só para exercitar
+// certPEMOfTest gera um certificado autoassinado mínimo, só para exercitar
 // remoteClient lendo e parseando um PEM de verdade — o handshake TLS de
 // ponta a ponta (SAN, validade) é responsabilidade do e2e em credential_test.go
 // (package cli_test, que não pode enxergar este arquivo _internal_test.go).
-func certPEMDeTeste(t *testing.T) string {
+func certPEMOfTest(t *testing.T) string {
 	t.Helper()
-	chave, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func certPEMDeTeste(t *testing.T) string {
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 	}
-	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &chave.PublicKey, chave)
+	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,12 +245,12 @@ func TestClienteRemotoInstalaCheckRedirect(t *testing.T) {
 }
 
 func TestRecusaRedirectNomeiaOStatusEODestino(t *testing.T) {
-	alvo, err := url.Parse("http://10.0.0.9:9142/v1/stats")
+	target, err := url.Parse("http://10.0.0.9:9142/v1/stats")
 	if err != nil {
 		t.Fatal(err)
 	}
 	req := &http.Request{
-		URL:      alvo,
+		URL:      target,
 		Response: &http.Response{StatusCode: http.StatusFound},
 	}
 	err = refuseRedirect(req, nil)
@@ -272,18 +272,18 @@ func TestRecusaRedirectNomeiaOStatusEODestino(t *testing.T) {
 // req.Response pode ser nil em tese (a função não deve confiar cegamente);
 // a recusa continua valendo, só sem o número do status.
 func TestRecusaRedirectSemResponseAindaAssimRecusa(t *testing.T) {
-	alvo, err := url.Parse("http://10.0.0.9:9142/v1/stats")
+	target, err := url.Parse("http://10.0.0.9:9142/v1/stats")
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := &http.Request{URL: alvo}
+	req := &http.Request{URL: target}
 	if err := refuseRedirect(req, nil); err == nil {
 		t.Fatal("queria erro mesmo sem req.Response")
 	}
 }
 
 func TestClienteRemotoComTLSCAMontaCertPoolEMinVersion(t *testing.T) {
-	caPath := certPEMDeTeste(t)
+	caPath := certPEMOfTest(t)
 	client, err := remoteClient(remoteCredential{tlsCA: caPath})
 	if err != nil {
 		t.Fatal(err)
