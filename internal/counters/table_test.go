@@ -292,3 +292,35 @@ func TestTabelaRecusaDefinicaoQueColideComAsColunasFixas(t *testing.T) {
 		t.Fatal("coluna do groupBy chamada total tem de ser recusada")
 	}
 }
+
+// TestTabelaComMoldeRespondePeloNomeFormatado: o molde muda o texto da coluna
+// key, e a busca por ele continua sendo POINT LOOKUP — é o que faz a aplicação
+// consultar pelo nome do inventário sem pagar uma varredura dos grupos.
+//
+// A contagem de point lookups do motor é o que prova o plano; o número de
+// linhas sozinho passaria também com um full scan filtrado.
+func TestTabelaComMoldeRespondePeloNomeFormatado(t *testing.T) {
+	def := defByPON("autenticados_por_pon")
+	f, err := keyformat.Parse("{olt}.{slot:02}.{port:02}", keyformat.Columns(def.Names, def.Types))
+	if err != nil {
+		t.Fatal(err)
+	}
+	def.Format = f
+	c := openCounter(t, def)
+	populaPON(t, c)
+	eng := engineWithCounter(t, c)
+
+	rows := consulta(t, eng, "SELECT groupKey, total FROM _counters.autenticados_por_pon ORDER BY groupKey ASC")
+	if got, quero := column(rows, "groupKey"), "BR_SPOMO_OLT10.02.01,PRCTA_G1M10.01.09,PRCTA_G1M10.01.12,PRCTA_G1M10.03.02"; got != quero {
+		t.Fatalf("groupKeys = %s, quero %s", got, quero)
+	}
+
+	antes := eng.Metrics().PointLookups.Load()
+	rows = consulta(t, eng, "SELECT groupKey, total FROM _counters.autenticados_por_pon WHERE groupKey = 'PRCTA_G1M10.01.12'")
+	if len(rows) != 1 || rows[0]["total"] != "47" {
+		t.Fatalf("busca pelo nome formatado = %v", rows)
+	}
+	if n := eng.Metrics().PointLookups.Load() - antes; n != 1 {
+		t.Errorf("%d point lookups; a busca pelo groupKey formatado tem de continuar resolvendo pela key, não varrendo os grupos", n)
+	}
+}

@@ -46,9 +46,11 @@ type Contado interface {
 // coluna do groupBy, que o contador não conta por desenho.
 //
 // `condition`, e não `where`: WHERE é palavra reservada do SQL, e uma coluna
-// com esse nome seria impossível de projetar. `groupBy` sai com o mesmo
-// separador do `groupKey` (`olt|slot|port`), para que quem lê a lista saiba
-// como a chave da tabela do contador é escrita. `auditDivergent` e `auditAt`
+// com esse nome seria impossível de projetar. `groupBy` é a lista das colunas
+// de agrupamento na ordem DECLARADA, junta por `|`; quem diz como a key da
+// tabela do contador é escrita é `keyFormat`, o molde efetivo — declarado ou o
+// default já expandido —, porque o molde pode trocar o separador e até
+// reordenar as colunas. `auditDivergent` e `auditAt`
 // são NULL até a primeira auditoria conclusiva desta abertura — zero
 // divergências e "nunca auditado" são afirmações diferentes, e um zero
 // sozinho as confundiria.
@@ -58,11 +60,13 @@ materialization:
   key:
     field: name
 schema:
-  include: [name, groupBy, condition, rows, total, groups, maxGroups, retired, refused, orphans, bytes, auditDivergent, auditAt]
+  include: [name, groupBy, keyFormat, condition, rows, total, groups, maxGroups, retired, refused, orphans, bytes, auditDivergent, auditAt]
   fields:
     name:
       type: string
     groupBy:
+      type: string
+    keyFormat:
       type: string
     condition:
       type: string
@@ -95,6 +99,7 @@ type columnMeta uint8
 const (
 	cmName columnMeta = iota
 	cmGroupBy
+	cmKeyFormat
 	cmCondition
 	cmRows
 	cmTotal
@@ -110,12 +115,14 @@ const (
 
 // nomesDasColumnsMeta casa, posição a posição, com as constantes acima.
 var nomesDasColumnsMeta = [...]string{
-	"name", "groupBy", "condition", "rows", "total", "groups", "maxGroups",
+	"name", "groupBy", "keyFormat", "condition", "rows", "total", "groups", "maxGroups",
 	"retired", "refused", "orphans", "bytes", "auditDivergent", "auditAt",
 }
 
-// SeparadorOfGroupBy é o que separa as colunas no `groupBy` da tabela — o
-// mesmo `|` do groupKey.
+// SeparadorOfGroupBy separa os NOMES das colunas na coluna `groupBy`. Era o
+// mesmo separador do groupKey enquanto o groupKey tinha um separador fixo;
+// hoje o molde decide o dele, e os dois não têm mais relação — quem quiser
+// saber como a key sai lê a coluna `keyFormat`.
 const SeparadorOfGroupBy = "|"
 
 // TableMeta monta o schema sintético e o Store virtual de `_meta.counters`
@@ -157,10 +164,11 @@ func TableMeta(cs []Contado) (*schema.Compiled, query.Store, error) {
 		}
 		f.byNome[def.Name] = len(f.rows)
 		f.rows = append(f.rows, rowMeta{
-			c:       c,
-			name:    []byte(def.Name),
-			groupBy: []byte(strings.Join(def.Names, SeparadorOfGroupBy)),
-			cond:    []byte(def.Where),
+			c:         c,
+			name:      []byte(def.Name),
+			groupBy:   []byte(strings.Join(def.Names, SeparadorOfGroupBy)),
+			keyFormat: []byte(def.Format.String()),
+			cond:      []byte(def.Where),
 		})
 	}
 	return sc, f, nil
@@ -174,10 +182,11 @@ type columnWithID struct {
 // rowMeta é um contador como linha: os textos são calculados uma vez, na
 // montagem, para que a linha não aloque.
 type rowMeta struct {
-	c       Contado
-	name    []byte
-	groupBy []byte
-	cond    []byte // vazio = sem condição (o contador conta toda linha com grupo)
+	c         Contado
+	name      []byte
+	groupBy   []byte
+	keyFormat []byte
+	cond      []byte // vazio = sem condição (o contador conta toda linha com grupo)
 }
 
 // sourceMeta é o Store virtual de `_meta.counters`.
@@ -240,6 +249,8 @@ func (f *sourceMeta) record(row types.RowID, buf []byte) (types.Record, []byte, 
 			v = types.Value{Type: types.TypeString, Bytes: l.name}
 		case cmGroupBy:
 			v = types.Value{Type: types.TypeString, Bytes: l.groupBy}
+		case cmKeyFormat:
+			v = types.Value{Type: types.TypeString, Bytes: l.keyFormat}
 		case cmCondition:
 			if len(l.cond) == 0 {
 				continue
