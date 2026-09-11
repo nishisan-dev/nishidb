@@ -292,22 +292,46 @@ schema:
       type: string
 `
 
-// O schema é o container de tudo que o dataset publica — a tabela base, os
-// contadores e as de meta —, e sem ele a árvore do cliente SQL não tem onde
-// pendurar as tabelas. Adivinhar um default reintroduziria a schema nula que
-// esta mudança veio tirar, então a subida recusa; e a recusa nomeia a chave e
-// mostra um exemplo, porque recusa que não ensina a correção só transfere o
-// trabalho para quem lê o log.
+// O exemplo é conferido ALIMENTANDO-O DE VOLTA ao Parse, e não procurando a
+// palavra "exemplo" na mensagem: procurar a palavra deixaria passar um
+// "sem exemplo disponível", que é exatamente a degradação contra a qual o
+// critério existe. O que o teste afirma é que o operador pode copiar o trecho
+// da mensagem para dentro do YAML e a spec sobe.
 func TestSpecExigeSchemaName(t *testing.T) {
 	_, err := Parse([]byte("version: 1\nname: servicos\n"+minimalMaterialization), BuiltinDefaults)
 	if err == nil {
 		t.Fatal("spec sem schemaName tem de ser recusada")
 	}
-	for _, quero := range []string{"schemaName", "exemplo"} {
-		if !strings.Contains(err.Error(), quero) {
-			t.Errorf("a mensagem não traz %q — recusa que não ensina a correção só transfere o trabalho: %v", quero, err)
-		}
+	if !strings.Contains(err.Error(), "schemaName") {
+		t.Errorf("a mensagem não nomeia a chave que falta: %v", err)
 	}
+	example := betweenBackticks(err.Error())
+	if !strings.HasPrefix(example, "schemaName:") {
+		t.Fatalf("a mensagem não traz um `schemaName: <valor>` entre acentos graves (achei %q) — recusa que não ensina a correção só transfere o trabalho: %v", example, err)
+	}
+	spec, err := Parse([]byte("version: 1\nname: servicos\n"+example+"\n"+minimalMaterialization), BuiltinDefaults)
+	if err != nil {
+		t.Fatalf("o exemplo da própria mensagem (%q) não parseia: %v", example, err)
+	}
+	if spec.SchemaName == "" {
+		t.Fatalf("o exemplo %q parseou mas deixou o SchemaName vazio", example)
+	}
+}
+
+// betweenBackticks devolve o trecho entre o primeiro par de acentos graves de
+// msg, ou "" quando não há par. É o formato em que as mensagens de recusa
+// deste pacote embrulham um exemplo copiável.
+func betweenBackticks(msg string) string {
+	open := strings.Index(msg, "`")
+	if open < 0 {
+		return ""
+	}
+	rest := msg[open+1:]
+	closed := strings.Index(rest, "`")
+	if closed < 0 {
+		return ""
+	}
+	return rest[:closed]
 }
 
 // As quatro grafias recusadas são as quatro formas de o schema deixar de ser
