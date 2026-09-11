@@ -13,3 +13,7 @@ func TestScanAllocsIndependenteDoNumeroDeRows(t *testing.T) {
 func TestLimitAllocsIndependenteDoNumeroDeRows(t *testing.T) {
 	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
 }
+
+func TestTabelaMetaTablesNaoAlocaPorLinha(t *testing.T) {
+	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+}
