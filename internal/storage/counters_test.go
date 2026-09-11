@@ -508,7 +508,7 @@ func indexOf(s, sub string) int {
 // TestMudarOMoldeNaoReconstroiEReRenderizaOTexto é a afirmação central do
 // formato declarável: o texto do grupo NÃO está em disco — o que está é a
 // chave composta —, então trocar o molde re-renderiza na abertura e não custa
-// uma reconstrução. Por isso o molde fica fora do manifest e de mesmaDefinicao,
+// uma reconstrução. Por isso o molde fica fora do manifest e de sameDefinition,
 // como o maxGroups.
 //
 // O que o teste exige é justamente o par: nada reconstruído E o texto novo

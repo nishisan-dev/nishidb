@@ -21,7 +21,7 @@ disco). Este plano faz só o formato no contador.
 - `internal/storage/counter/textkey.go` (`KeyText`) é o **único** produtor do texto.
 - **O texto não vai para disco.** `grupos.dict` grava só a chave composta binária;
   `texts[id]` e `byText` nascem em `catchUpWithDict` (`counter.go:222`) na abertura
-  e a cada grupo novo. `mesmaDefinicao` (`storage/counters.go:165`) compara só nome,
+  e a cada grupo novo. `sameDefinition` (`storage/counters.go:165`) compara só nome,
   colunas e `where`. Logo **mudar o formato não reconstrói o contador** — era a
   pergunta explícita da issue, e a resposta é sim, basta reabrir.
 - `WHERE groupKey = '…'` é `PointLookupPlan` → `ByText` → lookup de mapa. Trocar o
@@ -128,7 +128,7 @@ A guarda de `catchUpWithDict` continua, como segunda linha para a abertura.
 
 ### O que entra no manifest, e o que não entra
 
-`keyFormat` **não** entra em `mesmaDefinicao` — não decide o conteúdo do vetor, e é
+`keyFormat` **não** entra em `sameDefinition` — não decide o conteúdo do vetor, e é
 isso que garante que trocar o molde não reconstrói o contador.
 
 Mas **entra em `checkpoint.CounterInfo`**, só para ser lembrado: na abertura, molde
@@ -137,7 +137,7 @@ texto de todos os grupos muda em silêncio e o suporte não tem como saber o que
 cliente via ontem. A seção do manifest é ignorável (`0x0001`), então o binário antigo
 segue abrindo o dataset.
 
-`descreveCounters` (`storage/counters.go:625`) passa a logar o molde efetivo junto de
+`describeCounters` (`storage/counters.go:625`) passa a logar o molde efetivo junto de
 `groupBy`, `where` e `maxGroups`.
 
 ## Execução
@@ -179,18 +179,18 @@ e à renderização (`internal/storage/counter`) — duas cópias é como as dua
   do godoc do pacote (linhas 16-25) ganha a chave.
 - `internal/counters/compile.go`: monta o `Format` (declarado ou default) e o põe na
   `Definition`.
-- `checkpoint.CounterInfo` ganha o molde; `infoOfCounters` o grava; `mesmaDefinicao`
+- `checkpoint.CounterInfo` ganha o molde; `infoOfCounters` o grava; `sameDefinition`
   **não** o compara; `openCounters` emite o WARN de molde trocado.
 
 ### Bloco 4 — `_meta.counters` diz o formato
 
 Coluna `keyFormat` com o molde efetivo (o default sai expandido, para o operador
-sempre ver um molde). Toca `especOfTableMeta`, as constantes `columnMeta`,
-`nomesDasColumnsMeta` e `rowMeta` — texto calculado uma vez, o gate de zero alocação
+sempre ver um molde). Toca `metaTableSpec`, as constantes `columnMeta`,
+`metaColumnNames` e `metaRow` — texto calculado uma vez, o gate de zero alocação
 por linha continua valendo.
 
 A coluna `groupBy` continua sendo a lista de nomes na ordem **declarada**, junta por
-`|`. O godoc de `SeparadorOfGroupBy` (`meta.go:117`) e o de `meta.go:50` hoje afirmam
+`|`. O godoc de `GroupBySeparator` (`meta.go:117`) e o de `meta.go:50` hoje afirmam
 que esse `|` ensina "como a chave da tabela é escrita" — com molde declarável isso
 passa a mentir (e mente mais ainda quando o molde reordena). Os dois textos são
 corrigidos: `groupBy` é a lista de colunas; quem diz como a key é escrita é
@@ -199,9 +199,9 @@ corrigidos: `groupBy` é a lista de colunas; quem diz como a key é escrita é
 ### Bloco 5 — renomeação incremental (débito 116)
 
 Os arquivos tocados carregam identificadores PT-BR que a regra manda renomear no
-mesmo PR: `SeparadorOfGroupBy`, `nomesDasColumnsMeta`, `especOfTableMeta`,
-`cmAposentados`/`cmRecusados`/`cmOrfas`/`cmAuditDivergentes`/`cmAuditIn`, `byNome`,
-`maxColumnsOfAgrupamento`, `nameOfTipo`, `mesmaDefinicao`, `descreveCounters`. Cada
+mesmo PR: `GroupBySeparator`, `metaColumnNames`, `metaTableSpec`,
+`cmRetired`/`cmRefused`/`cmOrphans`/`cmAuditDivergent`/`cmAuditAt`, `byNome`,
+`maxColumnsOfAgrupamento`, `nameOfTipo`, `sameDefinition`, `describeCounters`. Cada
 par velho → novo entra em `planning/identificadores-em-ingles/mapeamento-2-manual.tsv`,
 senão o gate `TestRenamedIdentifiersAreNotCitedByTheirOldNames` não conhece o nome
 novo. Escopo: só o que estes blocos editam. Commit próprio, separado da feature.
@@ -239,7 +239,7 @@ relate os dois.**
 | **R5 fecha o escape** | aceitar `"{olt}\{descricao}"` — a propriedade de injetividade tem de acusar as duas tuplas da tabela acima |
 | escape só do primeiro caractere do literal | escapar todos os caracteres dos literais (`BR_SPOAM_OLT` vira `BR_SPOAM_\O\L\T`) |
 | o golden vê a mudança do default | rodar o caso `["a","b\|c"]` com o valor de hoje antes da regra nova entrar |
-| **trocar o molde não reconstrói** | pôr o molde em `mesmaDefinicao` — o teste de reabertura tem de acusar contador recriado |
+| **trocar o molde não reconstrói** | pôr o molde em `sameDefinition` — o teste de reabertura tem de acusar contador recriado |
 | **a colisão não fica durável** | mover a guarda para depois do `Intern` — o teste tem de acusar `grupos.dict` com a chave colidente e a reabertura falhando |
 | guarda de colisão | `Format` sem escape construído no teste do próprio pacote, dois grupos que colidam: recusa antes do `Intern` |
 
@@ -265,8 +265,34 @@ Ponta a ponta, além dos unitários:
   (`Transition:370`, `catchUpWithDict:222`, `validateDefinition:203`)
 - `internal/schema/counter.go` (godoc 16-25, `rawCounter` 70-127, validação 135-194)
 - `internal/counters/compile.go`, `internal/counters/meta.go`
-- `internal/storage/counters.go` (`mesmaDefinicao`, `infoOfCounters`,
-  `descreveCounters`), `internal/storage/checkpoint/manifest.go`
+- `internal/storage/counters.go` (`sameDefinition`, `infoOfCounters`,
+  `describeCounters`), `internal/storage/checkpoint/manifest.go`
 - README, `docs/architecture.md`, `docs/glossario.md`,
   `docs/aceite-formato-do-groupkey.md`
 - `planning/identificadores-em-ingles/mapeamento-2-manual.tsv`
+
+## Desvios na execução
+
+Dois pontos do plano não sobreviveram ao contato com o código, e ficam
+registrados porque em ambos o plano estava errado, não o código.
+
+**O molde não é gravado no manifest.** O plano mandava gravá-lo em
+`CounterInfo` — fora da comparação que reconstrói — só para a abertura poder
+avisar que ele mudou. O decodificador da seção dos contadores exige tamanho
+EXATO, entrada por entrada: um campo novo faria este binário recusar, como
+manifest corrompido, todo manifest escrito pelo binário anterior. Trocar
+formato de disco para produzir uma mensagem de log não se paga. O aviso virou
+o log de subida, que passa a sair com o molde efetivo ao lado de `groupBy`,
+`where` e `maxGroups`; comparar dois boots responde a mesma pergunta. Se o
+aviso explícito fizer falta, ele cabe numa seção NOVA ignorável, que um
+manifest antigo simplesmente não tem — sem tocar na que existe.
+
+**A regra R8 partia de uma premissa falsa.** O plano dizia recusar `{OLT}`
+porque "nomes de coluna são `[a-z0-9_]+`". Não são: `spec.go` documenta que
+nome de campo no NishiDB nunca foi restrito a minúsculas, e a fixture da spec
+tem `Acct-Status-Type`. Inventar um alfabeto ali recusaria coluna legítima.
+O nome dentro do marcador passou a ser casado LITERALMENTE contra as colunas
+do `groupBy`, e `{ olt }` cai na recusa de nome desconhecido, que é a mensagem
+certa. Pela mesma razão o molde default NÃO atravessa o parser: uma coluna com
+`:`, `{` ou `}` no nome não teria como ser escrita num molde, e fazer o default
+compilar a gramática quebraria dataset que hoje funciona.

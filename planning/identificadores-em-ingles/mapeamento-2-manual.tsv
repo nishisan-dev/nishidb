@@ -911,3 +911,17 @@ scripts/renamecite	const	deParaTabela	ofForTable	renomeado à mão no fechamento
 internal/counters	func	NovoCompilador	NewCompiler	renomeado à mão no fechamento do ciclo (11/09/2026); assinatura reflui no diff, linha acrescentada à mão
 internal/kafka	func	NovaFila	NewQueue	renomeado à mão no fechamento do ciclo (11/09/2026); assinatura reflui no diff, linha acrescentada à mão
 internal/kafka	func	NovoWriter	NewWriter	renomeado à mão no fechamento do ciclo (11/09/2026); assinatura reflui no diff, linha acrescentada à mão
+internal/counters	const	SeparadorOfGroupBy	GroupBySeparator	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/counters	var	nomesDasColumnsMeta	metaColumnNames	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/counters	const	especOfTableMeta	metaTableSpec	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/counters	type	columnMeta	metaColumn	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/counters	const	cmAposentados	cmRetired	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/counters	const	cmRecusados	cmRefused	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/counters	const	cmOrfas	cmOrphans	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/counters	const	cmAuditDivergentes	cmAuditDivergent	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/counters	const	cmAuditIn	cmAuditAt	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/counters	type	rowMeta	metaRow	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/counters	type	sourceMeta	metaSource	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/counters	type	iteradorMeta	metaIterator	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/storage	func	mesmaDefinicao	sameDefinition	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/storage	func	descreveCounters	describeCounters	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)

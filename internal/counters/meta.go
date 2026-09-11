@@ -34,7 +34,7 @@ type Contado interface {
 	Stats() counter.Stats
 }
 
-// especOfTableMeta é a spec da tabela, no MESMO YAML de um dataset de
+// metaTableSpec é a spec da tabela, no MESMO YAML de um dataset de
 // verdade, como o `_meta.fields` e o `_counters.<nome>`.
 //
 // `rows` e `total` são os agregados do contador — quantas linhas apontam para
@@ -54,7 +54,7 @@ type Contado interface {
 // são NULL até a primeira auditoria conclusiva desta abertura — zero
 // divergências e "nunca auditado" são afirmações diferentes, e um zero
 // sozinho as confundiria.
-const especOfTableMeta = `version: 1
+const metaTableSpec = `version: 1
 name: ` + TableMetaCounters + `
 materialization:
   key:
@@ -92,12 +92,12 @@ schema:
       type: timestamp
 `
 
-// columnMeta identifica cada coluna da tabela, para a linha ser montada por
+// metaColumn identifica cada coluna da tabela, para a linha ser montada por
 // um switch em vez de por nome.
-type columnMeta uint8
+type metaColumn uint8
 
 const (
-	cmName columnMeta = iota
+	cmName metaColumn = iota
 	cmGroupBy
 	cmKeyFormat
 	cmCondition
@@ -105,25 +105,25 @@ const (
 	cmTotal
 	cmGroups
 	cmCeiling
-	cmAposentados
-	cmRecusados
-	cmOrfas
+	cmRetired
+	cmRefused
+	cmOrphans
 	cmBytes
-	cmAuditDivergentes
-	cmAuditIn
+	cmAuditDivergent
+	cmAuditAt
 )
 
-// nomesDasColumnsMeta casa, posição a posição, com as constantes acima.
-var nomesDasColumnsMeta = [...]string{
+// metaColumnNames casa, posição a posição, com as constantes acima.
+var metaColumnNames = [...]string{
 	"name", "groupBy", "keyFormat", "condition", "rows", "total", "groups", "maxGroups",
 	"retired", "refused", "orphans", "bytes", "auditDivergent", "auditAt",
 }
 
-// SeparadorOfGroupBy separa os NOMES das colunas na coluna `groupBy`. Era o
+// GroupBySeparator separa os NOMES das colunas na coluna `groupBy`. Era o
 // mesmo separador do groupKey enquanto o groupKey tinha um separador fixo;
 // hoje o molde decide o dele, e os dois não têm mais relação — quem quiser
 // saber como a key sai lê a coluna `keyFormat`.
-const SeparadorOfGroupBy = "|"
+const GroupBySeparator = "|"
 
 // TableMeta monta o schema sintético e o Store virtual de `_meta.counters`
 // sobre os contadores dados. A lista pode ser vazia: a tabela existe em todo
@@ -134,7 +134,7 @@ const SeparadorOfGroupBy = "|"
 // (o nome) resolve por mapa. O que muda entre duas consultas são os números,
 // lidos no presente a cada linha, como o `_counters` lê os totais.
 func TableMeta(cs []Contado) (*schema.Compiled, query.Store, error) {
-	spec, err := schema.Parse([]byte(especOfTableMeta), schema.BuiltinDefaults)
+	spec, err := schema.Parse([]byte(metaTableSpec), schema.BuiltinDefaults)
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", meta.Namespace, TableMetaCounters, err)
 	}
@@ -142,31 +142,31 @@ func TableMeta(cs []Contado) (*schema.Compiled, query.Store, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", meta.Namespace, TableMetaCounters, err)
 	}
-	f := &sourceMeta{
-		rows:    make([]rowMeta, 0, len(cs)),
-		byNome:  make(map[string]int, len(cs)),
-		columns: make([]columnWithID, 0, len(nomesDasColumnsMeta)),
+	f := &metaSource{
+		rows:    make([]metaRow, 0, len(cs)),
+		byName:  make(map[string]int, len(cs)),
+		columns: make([]columnWithID, 0, len(metaColumnNames)),
 	}
-	for k, name := range nomesDasColumnsMeta {
+	for k, name := range metaColumnNames {
 		id, err := idOfColumn(sc, name)
 		if err != nil {
 			return nil, nil, err
 		}
-		f.columns = append(f.columns, columnWithID{id: id, k: columnMeta(k)})
+		f.columns = append(f.columns, columnWithID{id: id, k: metaColumn(k)})
 	}
 	// O payload exige FieldID crescente; a ordem é resolvida UMA vez aqui,
 	// e a linha é montada sem ordenar.
 	sort.Slice(f.columns, func(i, j int) bool { return f.columns[i].id < f.columns[j].id })
 	for _, c := range cs {
 		def := c.Def()
-		if _, exists := f.byNome[def.Name]; exists {
+		if _, exists := f.byName[def.Name]; exists {
 			return nil, nil, fmt.Errorf("contadores: dois contadores chamados %q", def.Name)
 		}
-		f.byNome[def.Name] = len(f.rows)
-		f.rows = append(f.rows, rowMeta{
+		f.byName[def.Name] = len(f.rows)
+		f.rows = append(f.rows, metaRow{
 			c:         c,
 			name:      []byte(def.Name),
-			groupBy:   []byte(strings.Join(def.Names, SeparadorOfGroupBy)),
+			groupBy:   []byte(strings.Join(def.Names, GroupBySeparator)),
 			keyFormat: []byte(def.Format.String()),
 			cond:      []byte(def.Where),
 		})
@@ -176,12 +176,12 @@ func TableMeta(cs []Contado) (*schema.Compiled, query.Store, error) {
 
 type columnWithID struct {
 	id types.FieldID
-	k  columnMeta
+	k  metaColumn
 }
 
-// rowMeta é um contador como linha: os textos são calculados uma vez, na
+// metaRow é um contador como linha: os textos são calculados uma vez, na
 // montagem, para que a linha não aloque.
-type rowMeta struct {
+type metaRow struct {
 	c         Contado
 	name      []byte
 	groupBy   []byte
@@ -189,35 +189,35 @@ type rowMeta struct {
 	cond      []byte // vazio = sem condição (o contador conta toda linha com grupo)
 }
 
-// sourceMeta é o Store virtual de `_meta.counters`.
-type sourceMeta struct {
-	rows    []rowMeta
-	byNome  map[string]int
+// metaSource é o Store virtual de `_meta.counters`.
+type metaSource struct {
+	rows    []metaRow
+	byName  map[string]int
 	columns []columnWithID // em ordem crescente de FieldID
 }
 
 // OpenSnapshot devolve o limite de linhas; o conjunto é fixo, então não há o
 // que congelar além dele. Época e instante ficam zerados e são ignorados.
-func (f *sourceMeta) OpenSnapshot() types.Snapshot {
+func (f *metaSource) OpenSnapshot() types.Snapshot {
 	return types.Snapshot{LimitRowID: types.RowID(len(f.rows) + 1)}
 }
 
 // CloseSnapshot é no-op: a fonte não retém nada.
-func (f *sourceMeta) CloseSnapshot(types.Snapshot) {}
+func (f *metaSource) CloseSnapshot(types.Snapshot) {}
 
-func (f *sourceMeta) ScanLive(snap types.Snapshot) types.RowIDIterator {
-	return &iteradorMeta{limit: snap.LimitRowID}
+func (f *metaSource) ScanLive(snap types.Snapshot) types.RowIDIterator {
+	return &metaIterator{limit: snap.LimitRowID}
 }
 
-func (f *sourceMeta) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+func (f *metaSource) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	if id == 0 || id >= snap.LimitRowID || int(id) > len(f.rows) {
 		return types.Record{}, buf, false, nil
 	}
 	return f.record(id, buf)
 }
 
-func (f *sourceMeta) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
-	i, ok := f.byNome[string(key)]
+func (f *metaSource) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
+	i, ok := f.byName[string(key)]
 	if !ok {
 		return types.Record{}, buf, false, nil
 	}
@@ -227,17 +227,17 @@ func (f *sourceMeta) GetByKey(snap types.Snapshot, key, buf []byte) (types.Recor
 // Indexed responde SEMPRE false, como nas outras tabelas virtuais: sem
 // índice declarado o planner varre as linhas — uma por contador — e a key
 // (o nome) dá o point lookup por conta própria.
-func (f *sourceMeta) Indexed(types.FieldID) bool { return false }
+func (f *metaSource) Indexed(types.FieldID) bool { return false }
 
 // Lookup nunca é chamado: rede de segurança, como no _meta e no _counters.
-func (f *sourceMeta) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
+func (f *metaSource) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
 	return nil, fmt.Errorf("contadores: a tabela %s.%s não tem índice (campo %d)", meta.Namespace, TableMetaCounters, field)
 }
 
 // record codifica UM contador como uma linha, lendo as estatísticas no
 // presente. Coluna ausente é NULL: a condição quando o contador não tem
 // `where`, e as duas da auditoria enquanto nenhuma auditoria concluiu.
-func (f *sourceMeta) record(row types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+func (f *metaSource) record(row types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	l := f.rows[row-1]
 	est := l.c.Stats()
 	buf = buf[:0]
@@ -264,39 +264,39 @@ func (f *sourceMeta) record(row types.RowID, buf []byte) (types.Record, []byte, 
 			v = types.Value{Type: types.TypeInt64, I64: int64(est.Groups)}
 		case cmCeiling:
 			v = types.Value{Type: types.TypeInt64, I64: int64(est.Ceiling)}
-		case cmAposentados:
+		case cmRetired:
 			v = types.Value{Type: types.TypeInt64, I64: int64(est.Retired)}
-		case cmRecusados:
+		case cmRefused:
 			v = types.Value{Type: types.TypeInt64, I64: int64(est.Refused)} //nolint:gosec // contagem, nunca perto do teto do int64
-		case cmOrfas:
+		case cmOrphans:
 			v = types.Value{Type: types.TypeInt64, I64: int64(est.Orphans)} //nolint:gosec // idem
 		case cmBytes:
 			v = types.Value{Type: types.TypeInt64, I64: est.Bytes}
-		case cmAuditDivergentes:
+		case cmAuditDivergent:
 			if est.AuditLastUnix == 0 {
 				continue
 			}
 			v = types.Value{Type: types.TypeInt64, I64: est.AuditDivergences}
-		case cmAuditIn:
+		case cmAuditAt:
 			if est.AuditLastUnix == 0 {
 				continue
 			}
 			v = types.Value{Type: types.TypeTimestamp, I64: est.AuditLastUnix * 1000}
 		}
 		if buf, err = encoding.AppendField(buf, col.id, v); err != nil {
-			return types.Record{}, buf, false, fmt.Errorf("contadores: codificando a coluna %s do contador %q: %w", nomesDasColumnsMeta[col.k], l.name, err)
+			return types.Record{}, buf, false, fmt.Errorf("contadores: codificando a coluna %s do contador %q: %w", metaColumnNames[col.k], l.name, err)
 		}
 	}
 	return types.Record{RowID: row, Sequence: int64(row), Key: l.name, Payload: buf}, buf, true, nil
 }
 
-// iteradorMeta percorre 1..limite-1: toda linha é viva.
-type iteradorMeta struct {
+// metaIterator percorre 1..limite-1: toda linha é viva.
+type metaIterator struct {
 	limit types.RowID
 	id    types.RowID
 }
 
-func (it *iteradorMeta) Next() bool {
+func (it *metaIterator) Next() bool {
 	if it.id+1 < it.limit {
 		it.id++
 		return true
@@ -305,6 +305,6 @@ func (it *iteradorMeta) Next() bool {
 	return false
 }
 
-func (it *iteradorMeta) RowID() types.RowID { return it.id }
-func (it *iteradorMeta) Err() error         { return nil }
-func (it *iteradorMeta) Close() error       { return nil }
+func (it *metaIterator) RowID() types.RowID { return it.id }
+func (it *metaIterator) Err() error         { return nil }
+func (it *metaIterator) Close() error       { return nil }

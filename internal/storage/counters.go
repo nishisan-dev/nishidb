@@ -103,7 +103,7 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 			// Dataset novo: não há o que reconstruir, o vetor nasce vazio.
 		case !tinha:
 			recria, motivo = true, "o dataset não tinha este contador"
-		case !mesmaDefinicao(info, def):
+		case !sameDefinition(info, def):
 			recria, motivo = true, fmt.Sprintf("os parâmetros mudaram (groupBy %v → %v, where %q → %q)",
 				info.Columns, columnsOf(def), info.Where, def.Where)
 		}
@@ -160,14 +160,14 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 	return nil
 }
 
-// mesmaDefinicao compara os parâmetros que decidem o conteúdo: nome, colunas
+// sameDefinition compara os parâmetros que decidem o conteúdo: nome, colunas
 // (na ordem) e where.
 //
 // O molde do groupKey NÃO entra, pelo mesmo critério do maxGroups: ele decide
 // como o grupo é ESCRITO, não o que foi contado. O texto é derivado da chave em
 // toda abertura, então trocá-lo re-renderiza e não custa uma varredura. Quem
 // avisa que ele mudou é o log de subida, que sai com o molde efetivo.
-func mesmaDefinicao(info checkpoint.CounterInfo, def counter.Definition) bool {
+func sameDefinition(info checkpoint.CounterInfo, def counter.Definition) bool {
 	return info.Name == def.Name && info.Where == def.Where && slices.Equal(info.Columns, columnsOf(def))
 }
 
@@ -626,8 +626,8 @@ func (s *Store) runRetirement(ctx context.Context) {
 	}
 }
 
-// descreveCounters rende as definições numa linha, para o log de subida.
-func descreveCounters(cs []*counter.Counter) string {
+// describeCounters rende as definições numa linha, para o log de subida.
+func describeCounters(cs []*counter.Counter) string {
 	var sb strings.Builder
 	for i, c := range cs {
 		if i > 0 {
