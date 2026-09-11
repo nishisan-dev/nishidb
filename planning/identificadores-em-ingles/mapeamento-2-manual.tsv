@@ -925,3 +925,4 @@ internal/counters	type	sourceMeta	metaSource	renomeado ao tocar o arquivo no cic
 internal/counters	type	iteradorMeta	metaIterator	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
 internal/storage	func	mesmaDefinicao	sameDefinition	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
 internal/storage	func	descreveCounters	describeCounters	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
+internal/server	var	nomes	names	renomeado ao tocar o Novo no ciclo do schema declarado (11/09/2026)

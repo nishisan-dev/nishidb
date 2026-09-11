@@ -243,14 +243,14 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("nenhum dataset em %s", cfg.Datasets.Directory)
 	}
-	nomes := make([]string, 0, len(specs))
+	names := make([]string, 0, len(specs))
 	for name := range specs {
-		nomes = append(nomes, name)
+		names = append(names, name)
 	}
 	// Alfabética, como a do ListDatasets: a ordem de abertura dos datasets é
 	// a ordem em que os erros de subida aparecem, e ela tem de ser a mesma em
 	// dois processos com a mesma configuração.
-	sort.Strings(nomes)
+	sort.Strings(names)
 
 	if err := validateHistoryNames(specs); err != nil {
 		return nil, err
@@ -302,7 +302,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		log:         log,
 		reg:         reg,
 		eng:         query.NewEngine(),
-		byNome:      make(map[string]*dataset, len(nomes)),
+		byNome:      make(map[string]*dataset, len(names)),
 		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
 		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
 		inVoo:       newInVoo(),
@@ -349,7 +349,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		}
 	}
 
-	for _, name := range nomes {
+	for _, name := range names {
 		d, err := s.openDataset(specs[name], log)
 		if err != nil {
 			return nil, err
