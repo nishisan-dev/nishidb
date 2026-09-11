@@ -59,6 +59,7 @@ func BenchmarkPatchParseRadiusEvent(b *testing.B) {
 // caminho mais quente do dataset real era o único sem instrumento.
 const benchDescobertaYAML = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id

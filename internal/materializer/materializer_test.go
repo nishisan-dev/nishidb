@@ -236,6 +236,7 @@ func TestApplyNullRemoveCampo(t *testing.T) {
 const replaceYAML = `
 version: 1
 name: radius_replace
+schemaName: telecom
 materialization:
   mode: replace
   key:
@@ -367,6 +368,7 @@ func TestApplySequenceEqualEMenorDescartam(t *testing.T) {
 const withoutSequenceYAML = `
 version: 1
 name: sem_sequence
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -401,6 +403,7 @@ func TestApplySemSequenceAplicaTudo(t *testing.T) {
 const unknownYAMLTmpl = `
 version: 1
 name: unknown_%s
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -509,6 +512,7 @@ func TestApplyMongoExtendedJSONNaoArmazenaWrapper(t *testing.T) {
 const includeExplicitoYAML = `
 version: 1
 name: include_explicito
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -1079,6 +1083,7 @@ func TestApplyFixtureRadiusCompletoDepoisPatch(t *testing.T) {
 
 const ceilingYAMLTmpl = `version: 1
 name: t
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -1155,6 +1160,7 @@ func TestCategoriaDeTetoNaoEEventoRuim(t *testing.T) {
 
 const ceilingAninhadoYAMLTmpl = `version: 1
 name: t
+schemaName: telecom
 materialization:
   key:
     field: id

@@ -13,6 +13,7 @@ import (
 const arenaYAML = `
 version: 1
 name: ds
+schemaName: telecom
 materialization:
   key:
     field: id

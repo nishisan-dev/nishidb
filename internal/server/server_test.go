@@ -23,6 +23,7 @@ import (
 
 const specWithoutKafka = `version: 1
 name: %s
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -37,6 +38,7 @@ schema:
 // §51 é que as consultas subam assim mesmo.
 const specWithKafka = `version: 1
 name: %s
+schemaName: telecom
 source:
   type: kafka
   kafka:
@@ -188,6 +190,7 @@ func TestGroupIdDuplicadoRecusaASubida(t *testing.T) {
 	// Os dois com o mesmo tópico e o mesmo group.
 	yml := `version: 1
 name: %NOME%
+schemaName: telecom
 source:
   type: kafka
   kafka:

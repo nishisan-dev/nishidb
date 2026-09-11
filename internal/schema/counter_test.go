@@ -13,6 +13,7 @@ func yamlWithCounters(countersBlock string) string {
 	return `
 version: 1
 name: servicos
+schemaName: telecom
 materialization:
   key:
     field: customerId
@@ -158,6 +159,7 @@ func TestCountersAceitaColunaExtraida(t *testing.T) {
 	spec, err := Parse([]byte(`
 version: 1
 name: servicos
+schemaName: telecom
 materialization:
   key:
     field: id

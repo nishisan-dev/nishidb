@@ -11,7 +11,7 @@ func yamlWithMerge(mode, fields string) string {
 	if mode != "" {
 		m = "  mode: " + mode + "\n"
 	}
-	return "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" + m +
+	return "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n" + m +
 		"schema:\n  fields:\n" + fields
 }
 
@@ -72,7 +72,7 @@ func TestMergeSomaNaKeyEhRecusado(t *testing.T) {
 }
 
 func TestMergeSomaNaSequenceEhRecusado(t *testing.T) {
-	yaml := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
+	yaml := "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n" +
 		"  sequence:\n    field: seq\n" +
 		"schema:\n  fields:\n    id:\n      type: string\n" +
 		"    seq:\n      type: int64\n      merge: sum\n"

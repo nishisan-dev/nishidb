@@ -12,6 +12,7 @@ import (
 
 const specServicesCLI = `version: 1
 name: servicos
+schemaName: telecom
 materialization:
   key:
     field: customerId
@@ -82,6 +83,7 @@ func TestQueryLocalRespondeCountersMantidosNaIngestao(t *testing.T) {
 // como o inventário o escreve — separador escolhido e slot com zero à esquerda.
 const specServicesWithMold = `version: 1
 name: servicos
+schemaName: telecom
 materialization:
   key:
     field: customerId

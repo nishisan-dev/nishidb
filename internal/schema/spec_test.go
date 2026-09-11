@@ -10,6 +10,7 @@ import (
 const baseYAML = `
 version: 1
 name: radius_sessions
+schemaName: telecom
 materialization:
   key:
     source: payload
@@ -109,6 +110,7 @@ func TestParseDefaults(t *testing.T) {
 	s := parseOK(t, `
 version: 1
 name: minimal
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -165,9 +167,9 @@ func TestParseValidationErrors(t *testing.T) {
 		// incondicionalmente (como a key): sob include explícito, um campo
 		// não declarado compilaria como auto/TypeNull e quebraria o greater
 		// do materializer.
-		{"sequence nao declarada", "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n  sequence:\n    field: _SEQ\nschema:\n  include: [id, _SEQ]\n  fields:\n    id:\n      type: string\n", "sequence"},
+		{"sequence nao declarada", "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n  sequence:\n    field: _SEQ\nschema:\n  include: [id, _SEQ]\n  fields:\n    id:\n      type: string\n", "sequence"},
 		{"sequence declarada com outro tipo", repl("    _SEQ:\n      type: int64", "    _SEQ:\n      type: string"), "_SEQ"},
-		{"ttl na forma antiga", "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n  ttl:\n    expireAfterWrite: 2h\nschema:\n  include: [id]\n  fields:\n    id:\n      type: string\n", "lista"},
+		{"ttl na forma antiga", "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n  ttl:\n    expireAfterWrite: 2h\nschema:\n  include: [id]\n  fields:\n    id:\n      type: string\n", "lista"},
 		{"unknownFields invalido", repl("unknownFields: include", "unknownFields: drop"), "unknownFields"},
 		{"tipo de campo invalido", repl("      type: double", "      type: float"), "float"},
 		{"index invalido", repl("index: true", "index: btree"), "btree"},
@@ -273,5 +275,86 @@ func TestMaxColsDeclaradoVenceODefault(t *testing.T) {
 	}
 	if s.Schema.OnMaxCols != OnMaxColsStop {
 		t.Errorf("OnMaxCols = %q, quer %q", s.Schema.OnMaxCols, OnMaxColsStop)
+	}
+}
+
+// minimalMaterialization é o resto OBRIGATÓRIO de uma spec: os casos de
+// `schemaName` montam o topo do documento linha a linha, porque é o topo que
+// está sob teste, e este bloco é tudo o que eles não querem repetir. Ele não
+// sai do baseYAML porque aquele traz um dataset inteiro — e um caso de recusa
+// que falhasse por outro motivo do meio do arquivo mentiria sobre a causa.
+const minimalMaterialization = `materialization:
+  key:
+    field: id
+schema:
+  fields:
+    id:
+      type: string
+`
+
+// O schema é o container de tudo que o dataset publica — a tabela base, os
+// contadores e as de meta —, e sem ele a árvore do cliente SQL não tem onde
+// pendurar as tabelas. Adivinhar um default reintroduziria a schema nula que
+// esta mudança veio tirar, então a subida recusa; e a recusa nomeia a chave e
+// mostra um exemplo, porque recusa que não ensina a correção só transfere o
+// trabalho para quem lê o log.
+func TestSpecExigeSchemaName(t *testing.T) {
+	_, err := Parse([]byte("version: 1\nname: servicos\n"+minimalMaterialization), BuiltinDefaults)
+	if err == nil {
+		t.Fatal("spec sem schemaName tem de ser recusada")
+	}
+	for _, quero := range []string{"schemaName", "exemplo"} {
+		if !strings.Contains(err.Error(), quero) {
+			t.Errorf("a mensagem não traz %q — recusa que não ensina a correção só transfere o trabalho: %v", quero, err)
+		}
+	}
+}
+
+// As quatro grafias recusadas são as quatro formas de o schema deixar de ser
+// um identificador SQL simples e sem ambiguidade: o prefixo reservado aos
+// espaços de nome do produto, a maiúscula (que obrigaria o cliente a citar o
+// nome), o ponto (que inventaria um terceiro nível que a gramática do FROM não
+// tem) e o vazio explícito, que é ausência escrita à mão.
+func TestSpecRecusaSchemaNameInvalido(t *testing.T) {
+	for nome, valor := range map[string]string{
+		"prefixo reservado": "_meta",
+		"maiuscula":         "Telecom",
+		"com ponto":         "tele.com",
+		"vazio":             `""`,
+	} {
+		t.Run(nome, func(t *testing.T) {
+			_, err := Parse([]byte("version: 1\nname: servicos\nschemaName: "+valor+"\n"+minimalMaterialization), BuiltinDefaults)
+			if err == nil {
+				t.Fatalf("schemaName %s tem de ser recusado", valor)
+			}
+		})
+	}
+}
+
+func TestSpecAceitaSchemaName(t *testing.T) {
+	spec, err := Parse([]byte("version: 1\nname: servicos\nschemaName: telecom\n"+minimalMaterialization), BuiltinDefaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.SchemaName != "telecom" {
+		t.Fatalf("SchemaName = %q", spec.SchemaName)
+	}
+}
+
+// O motor de consulta só carrega o Compiled — a DatasetSpec fica para trás
+// depois da subida. Sem a cópia, quem monta o catálogo teria de reabrir o YAML
+// para saber em que schema a tabela vive, que é a estrutura errada para
+// consultar no caminho de uma requisição.
+func TestCompiladoCarregaOSchemaName(t *testing.T) {
+	spec, err := Parse([]byte("version: 1\nname: servicos\nschemaName: telecom\n"+minimalMaterialization), BuiltinDefaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := spec.Compile(NewInMemoryDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SchemaName != "telecom" {
+		t.Fatalf("Compiled.SchemaName = %q, quer telecom", c.SchemaName)
 	}
 }

@@ -21,6 +21,7 @@ func tableVirtualOfTest(t *testing.T, eng *query.Engine, namespace, table string
 	t.Helper()
 	spec, err := schema.Parse([]byte(`version: 1
 name: `+table+`
+schemaName: telecom
 materialization:
   key:
     field: groupKey
@@ -132,7 +133,7 @@ func TestTabelaVirtualDesconhecidaListaAsDoDataset(t *testing.T) {
 func TestRegistraVirtualRecusaDuplicataEDatasetDesconhecido(t *testing.T) {
 	h := newHarness(t)
 	tableVirtualOfTest(t, h.engine, "_counters", "x")
-	spec, _ := schema.Parse([]byte("version: 1\nname: x\nmaterialization:\n  key:\n    field: k\nschema:\n  fields:\n    k:\n      type: string\n"), schema.BuiltinDefaults)
+	spec, _ := schema.Parse([]byte("version: 1\nname: x\nschemaName: telecom\nmaterialization:\n  key:\n    field: k\nschema:\n  fields:\n    k:\n      type: string\n"), schema.BuiltinDefaults)
 	sc, _ := spec.Compile(fakestorage.NewDict())
 	if err := h.engine.RegisterVirtual(dataset, "_counters", "x", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
 		t.Fatal("tabela virtual repetida tem de ser recusada")

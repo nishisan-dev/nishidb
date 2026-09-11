@@ -70,6 +70,7 @@ do dataset** (`radius_sessions.yaml` → `name: radius_sessions`).
 version: 1
 
 name: radius_sessions
+schemaName: telecom
 
 source:
   type: kafka

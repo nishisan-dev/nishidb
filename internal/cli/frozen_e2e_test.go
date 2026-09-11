@@ -21,6 +21,7 @@ import (
 const alarmesYAML = `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id

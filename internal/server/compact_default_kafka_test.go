@@ -157,6 +157,7 @@ func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) 
 // MESMO key set — a forma do dataset do §86.
 const specKafkaForCompactDefault = `version: 1
 name: d
+schemaName: telecom
 source:
   type: kafka
   kafka:

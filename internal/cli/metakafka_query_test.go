@@ -15,6 +15,7 @@ import (
 // observa.
 const specWithKafkaCLI = `version: 1
 name: eventos
+schemaName: telecom
 source:
   type: kafka
   kafka:

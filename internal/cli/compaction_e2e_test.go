@@ -50,6 +50,7 @@ import (
 // selar segmento — o teste mediria a vazão do kfake, não a compaction.
 const e2eSpecYAML = `version: 1
 name: sessoes
+schemaName: telecom
 source:
   type: kafka
   kafka:

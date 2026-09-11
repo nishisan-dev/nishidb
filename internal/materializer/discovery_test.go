@@ -11,6 +11,7 @@ import (
 
 const descobreYAML = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -133,6 +134,7 @@ func TestListaDescobertaViraColunaJson(t *testing.T) {
 // defeito; foi a verificação com o binário que o pegou.
 const onlyDescobreYAML = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id

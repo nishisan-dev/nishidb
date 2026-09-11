@@ -43,6 +43,7 @@ const KeyOfSummary = "source"
 // isso) e tem de existir em TODA linha, e `partition` é NULL no resumo.
 const especOfTable = `version: 1
 name: ` + TableMetaKafka + `
+schemaName: ` + schema.SyntheticSchemaName + `
 materialization:
   key:
     field: id

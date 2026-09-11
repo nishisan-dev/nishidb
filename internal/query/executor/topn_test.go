@@ -24,6 +24,7 @@ import (
 const yamlTopN = `
 version: 1
 name: t
+schemaName: telecom
 materialization:
   key:
     field: id

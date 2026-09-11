@@ -11,6 +11,7 @@ import (
 const prazoYAML = `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -60,6 +61,7 @@ func TestPrazoZeroQuandoNenhumaCasaESemRegraDeFundo(t *testing.T) {
 	yaml := `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -85,6 +87,7 @@ func TestPrazoNeverDaZeroMesmoComRegraDeFundo(t *testing.T) {
 	yaml := `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -199,6 +202,7 @@ func TestContadorSemRegraContaOQueNaoCasa(t *testing.T) {
 	h := newHarness(t, `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id

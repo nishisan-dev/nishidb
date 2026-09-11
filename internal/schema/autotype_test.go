@@ -12,6 +12,7 @@ import (
 const autoYAML = `
 version: 1
 name: auto_ds
+schemaName: telecom
 materialization:
   key:
     field: id

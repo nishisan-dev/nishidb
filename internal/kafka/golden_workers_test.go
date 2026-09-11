@@ -26,6 +26,7 @@ import (
 // decodificou primeiro.
 const goldenYAML = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id

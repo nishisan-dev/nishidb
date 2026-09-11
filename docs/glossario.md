@@ -104,6 +104,7 @@ inglês correspondente.
 | grupo | group | internal/storage/counter |
 | linha | row | internal/storage/rowindex |
 | campo | field | internal/schema |
+| schema (o container SQL em que TODAS as tabelas do dataset aparecem para o cliente; não confundir com o bloco `schema:` do YAML, que declara os campos) | schema | internal/schema/spec.go |
 | campo (componente de data/hora) | component | internal/typeparse/datetime.go |
 | chave | key | internal/index/valuekey |
 | dicionário | dict | internal/storage/counter/dict.go |

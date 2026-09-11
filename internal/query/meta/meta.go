@@ -145,6 +145,7 @@ func (e *errOfTable) Unwrap() error { return e.err }
 // observação.
 const especOfTable = `version: 1
 name: ` + TableFields + `
+schemaName: ` + schema.SyntheticSchemaName + `
 materialization:
   key:
     field: name

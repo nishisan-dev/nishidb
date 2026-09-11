@@ -116,6 +116,7 @@ func (i *stubIter) Close() error {
 const stubYAML = `
 version: 1
 name: linhas
+schemaName: telecom
 materialization:
   key:
     field: id

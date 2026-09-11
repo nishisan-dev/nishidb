@@ -26,6 +26,7 @@ import (
 // o suficiente para exercitar projeção, WHERE com parâmetro e metadados.
 const specConsultavel = `version: 1
 name: %s
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -603,6 +604,7 @@ func TestColunaComNomeReservadoEhRecusada(t *testing.T) {
 	a := newEnvWith(t, blockPadrao)
 	a.writeDataset("d", `version: 1
 name: d
+schemaName: telecom
 materialization:
   key:
     field: id

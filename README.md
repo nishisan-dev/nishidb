@@ -319,6 +319,7 @@ dataset:
 ```yaml
 version: 1
 name: radius_sessions
+schemaName: telecom
 
 materialization:
   key:

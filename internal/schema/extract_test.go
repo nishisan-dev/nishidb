@@ -10,6 +10,7 @@ import (
 
 const extractYAML = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -303,6 +304,7 @@ func TestCamposComBitmapVazioSemIndice(t *testing.T) {
 
 const discoverYAML = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id

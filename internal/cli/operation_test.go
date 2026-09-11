@@ -448,6 +448,7 @@ const nameOfSegundoDataset = "auditoria_acessos"
 
 const specOfSegundoDataset = `version: 1
 name: auditoria_acessos
+schemaName: auditoria
 materialization:
   key:
     field: sessao

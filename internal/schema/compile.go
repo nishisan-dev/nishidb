@@ -291,7 +291,17 @@ func (c *Compiled) FixAutoType(f *CompiledField, t types.FieldType) error {
 // seguros para uso concorrente (writer + queries); ResolveUnknown muta o
 // cache sob lock — chamado apenas pelo writer.
 type Compiled struct {
-	Name       string
+	Name string
+	// SchemaName é o schema declarado pelo dataset (DatasetSpec.SchemaName),
+	// copiado para cá porque depois da subida o motor de consulta só carrega o
+	// Compiled: quem monta o catálogo das tabelas responde no caminho de uma
+	// requisição e não pode reabrir o YAML para descobrir em que schema a
+	// tabela vive.
+	//
+	// Ele viaja para as tabelas IRMÃS pelo mesmo caminho da spec: a histórica
+	// nasce de DeriveHistory, que o herda, porque a irmã é outra tabela do
+	// MESMO dataset e não outro dataset.
+	SchemaName string
 	Mode       Mode
 	IncludeAll bool
 	Unknown    UnknownPolicy
@@ -444,6 +454,7 @@ func (c *Compiled) KnownFieldCount() int { return c.dict.Len() }
 func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	c := &Compiled{
 		Name:          s.Name,
+		SchemaName:    s.SchemaName,
 		MaxRows:       s.Query.MaxRows,
 		Timeout:       s.Query.Timeout,
 		MaxTimeout:    s.Query.MaxTimeout,

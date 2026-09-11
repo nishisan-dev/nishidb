@@ -20,6 +20,7 @@ import (
 const ttlCondicionalYAML = `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -160,6 +161,7 @@ func TestCicloNeverNaoExpiraComRegraDeFundoPresente(t *testing.T) {
 	b := newBenchTTL(t, `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id

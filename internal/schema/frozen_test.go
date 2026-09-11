@@ -14,7 +14,7 @@ func yamlFrozen(mode, fields string) string {
 	if mode != "" {
 		m = "  mode: " + mode + "\n"
 	}
-	return "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" + m +
+	return "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n" + m +
 		"schema:\n  fields:\n" + fields
 }
 
@@ -98,7 +98,7 @@ func TestFormatJuntoDeFrozenFromEhRecusado(t *testing.T) {
 // A sequence é uma coluna comum do ponto de vista do congelamento: congelar a
 // PRIMEIRA sequence vista é um pedido legítimo, e nada nela impede a captura.
 func TestFrozenFromParaASequenceEhAceito(t *testing.T) {
-	yaml := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
+	yaml := "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n" +
 		"  sequence:\n    field: seq\n" +
 		"schema:\n  fields:\n    id:\n      type: string\n" +
 		"    seq:\n      type: int64\n" +

@@ -14,6 +14,7 @@ import (
 const autoFixYAML = `
 version: 1
 name: auto_fix
+schemaName: telecom
 materialization:
   key:
     field: id

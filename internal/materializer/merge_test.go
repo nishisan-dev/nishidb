@@ -104,6 +104,7 @@ func mustEncode(t *testing.T, patch []patchEntry) []byte {
 const spec22YAML = `
 version: 1
 name: spec22
+schemaName: telecom
 materialization:
   key:
     field: id

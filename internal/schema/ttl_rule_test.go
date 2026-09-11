@@ -11,7 +11,7 @@ import (
 // yamlWithRules monta uma spec mínima com a lista de regras dada, já indentada
 // sob materialization.
 func yamlWithRules(rules string) string {
-	return "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" + rules +
+	return "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n" + rules +
 		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n"
 }
 

@@ -21,6 +21,7 @@ import (
 // orçamento de BUFFER DE SAÍDA, que é do caminho de consulta.
 const specWithText = `version: 1
 name: %s
+schemaName: telecom
 materialization:
   key:
     field: id

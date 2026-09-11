@@ -21,6 +21,7 @@ import (
 
 const specWithHistory = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -226,6 +227,7 @@ func TestSeriesDoWatchdogNascemComZero(t *testing.T) {
 // aposenta o segmento antes de a janela o alcançar.
 const specWithWindowInocua = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -378,6 +380,7 @@ func waitRowOfLog(t *testing.T, record *recordOfServer, event string) string {
 // relógio da ingestão.
 const specWithWindowApertada = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id

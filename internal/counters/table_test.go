@@ -105,7 +105,7 @@ func openCounter(t *testing.T, def counter.Definition) *counter.Counter {
 // do contador sob ele.
 func engineWithCounter(t *testing.T, c *counter.Counter) *query.Engine {
 	t.Helper()
-	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
+	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

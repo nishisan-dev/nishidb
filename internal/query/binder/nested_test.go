@@ -36,6 +36,7 @@ func bindWithYAML(t *testing.T, yml, sql string) (*binder.BoundQuery, error) {
 
 const nestedYAML = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -153,6 +154,7 @@ func TestTetoContaTambemOCaminhoQualificado(t *testing.T) {
 
 const discoveryOnlyYAML = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id

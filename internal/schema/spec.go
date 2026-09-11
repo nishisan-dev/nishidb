@@ -21,10 +21,33 @@ import (
 // ErrInvalidSpec categoriza qualquer erro de validação de spec.
 var ErrInvalidSpec = errors.New("materialization spec inválida")
 
+// SyntheticSchemaName é o schemaName das specs SINTÉTICAS — as das tabelas
+// virtuais (`_meta.*`, `_counters.*`), montadas em código para atravessar o
+// mesmo Parse/Compile de um dataset de verdade em vez de terem um caminho
+// próprio de validação.
+//
+// O valor não é lido por ninguém: no catálogo, a tabela virtual aparece no
+// schema do DATASET a que pertence — que é quem declarou um —, e não no da
+// spec que a descreve. Ele existe porque a obrigatoriedade do schemaName vale
+// para todas as specs, sem exceção que abriria buraco; e é UMA constante
+// porque três literais soltos em três pacotes viram três valores diferentes na
+// primeira vez que alguém mexer num deles.
+const SyntheticSchemaName = "virtual"
+
 // DatasetSpec é a spec validada, com defaults aplicados.
 type DatasetSpec struct {
-	Version         int
-	Name            string
+	Version int
+	Name    string
+	// SchemaName é o schema em que TODAS as tabelas deste dataset vivem — a
+	// base, os contadores e as de meta. É obrigatório e não tem default: um
+	// default faria `servicos.servicos`, e a ausência faria schema nula na
+	// árvore do cliente SQL. As duas foram olhadas e recusadas no desenho.
+	//
+	// Ele é o que torna a colisão de nomes irrepresentável em vez de
+	// detectada: dentro do schema, a tabela base, os contadores e as de meta
+	// dividem um espaço de nomes, e o prefixo "_" reservado é o que separa o
+	// que é do motor do que é do dado.
+	SchemaName      string
 	Source          SourceSpec
 	Errors          ErrorsSpec
 	Materialization MaterializationSpec
@@ -212,8 +235,9 @@ type QuerySpec struct {
 
 // Estruturas cruas do YAML (tudo opcional; defaults e validação em validate).
 type rawSpec struct {
-	Version *int   `yaml:"version"`
-	Name    string `yaml:"name"`
+	Version    *int   `yaml:"version"`
+	Name       string `yaml:"name"`
+	SchemaName string `yaml:"schemaName"`
 	// Source e Errors ficam como nó cru porque a recusa de chave desconhecida
 	// nesses dois blocos é feita à mão, sobre as chaves do documento — ver
 	// block(), em source.go, para o motivo de yaml.KnownFields não servir.
@@ -685,6 +709,35 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 			raw.Name, CountersNamespace)
 	}
 	s.Name = raw.Name
+
+	// O schema é o container de tudo que o dataset publica, e ele é
+	// OBRIGATÓRIO. Um default derivado do nome entregaria `servicos.servicos`,
+	// e a ausência entregaria a schema nula que o DBeaver mostra hoje — as
+	// duas foram consideradas e recusadas, porque a chave existe exatamente
+	// para desfazer a ambiguidade entre datasets de um mesmo servidor.
+	//
+	// Que isto derrube todo YAML existente é sabido e aceito: não há release
+	// publicada, e config recusada na subida custa uma linha e um restart,
+	// enquanto config adivinhada custa uma árvore errada que ninguém consegue
+	// explicar. A mensagem nomeia a chave E mostra um exemplo — ensinar a
+	// correção é o que separa uma recusa útil de um "faltando".
+	if raw.SchemaName == "" {
+		return nil, specErrf(
+			"schemaName obrigatório: é o schema em que as tabelas deste dataset aparecem para o cliente SQL (exemplo: `schemaName: telecom`)")
+	}
+	if !isIdentName(raw.SchemaName) {
+		return nil, specErrf("schemaName %q inválido (esperado [a-z0-9_]+)", raw.SchemaName)
+	}
+	// Mesma reserva do nome de DATASET, e pela mesma razão: as tabelas de meta
+	// moram no schema com o "_" na frente (`telecom._fields`), e um schema que
+	// pudesse se chamar `_meta` disputaria o nome com o espaço de nome do
+	// produto.
+	if strings.HasPrefix(raw.SchemaName, "_") {
+		return nil, specErrf(
+			"schemaName %q: o prefixo \"_\" é reservado aos espaços de nome do produto (_meta, %s); escolha outro nome",
+			raw.SchemaName, CountersNamespace)
+	}
+	s.SchemaName = raw.SchemaName
 
 	var err error
 	if s.Source, err = validateSource(&raw.Source); err != nil {

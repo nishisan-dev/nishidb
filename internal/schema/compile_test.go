@@ -280,6 +280,7 @@ func TestExplicitIncludeIsClosed(t *testing.T) {
 	s := parseOK(t, `
 version: 1
 name: closed
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -313,6 +314,7 @@ func TestIncludeUndeclaredBecomesAuto(t *testing.T) {
 	s := parseOK(t, `
 version: 1
 name: autofield
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -340,6 +342,7 @@ func TestUnknownIncludeRequiresWildcard(t *testing.T) {
 	parseErr(t, `
 version: 1
 name: contradicao
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -359,6 +362,7 @@ schema:
 func ceilingYAML(maxCols int, onMax string) string {
 	return fmt.Sprintf(`version: 1
 name: t
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -455,7 +459,7 @@ func TestCompileRecusaCamposDeclaradosAcimaDoTeto(t *testing.T) {
 // precisam de um YAML isolado do baseYAML porque o baseYAML está migrando
 // para a grafia nova junto com o resto da suíte.
 func yamlWithDeclaredIndex(spelling string) string {
-	return "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
+	return "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n" +
 		"schema:\n  fields:\n    id:\n      type: string\n" +
 		"    node:\n      type: string\n      index: " + spelling + "\n"
 }

@@ -6,6 +6,7 @@ version: 1
 # uma divergência entre o parser da ingestão e o da query passa despercebida —
 # ela aparece como resultado VAZIO, não como erro.
 name: todos_os_tipos
+schemaName: telecom
 
 materialization:
   key:

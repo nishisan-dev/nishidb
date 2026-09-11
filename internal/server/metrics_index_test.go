@@ -506,6 +506,7 @@ const tableOfBench = "eventos_history"
 //     pendentes.
 const specOfBenchOfIndex = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id

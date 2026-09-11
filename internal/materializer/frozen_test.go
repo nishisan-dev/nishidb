@@ -12,6 +12,7 @@ import (
 const congeladaYAML = `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -33,6 +34,7 @@ schema:
 const congeladaYAMLWithTTL = `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -148,6 +150,7 @@ func TestCongeladaDeOrigemAutoFixaOProprioTipo(t *testing.T) {
 	c := compileYAML(t, `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id

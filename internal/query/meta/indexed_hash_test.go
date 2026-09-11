@@ -15,6 +15,7 @@ import (
 // desde a D5 — para o teste abaixo verificar a coluna `indexed`.
 const targetWithIndexYAML = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id

@@ -633,6 +633,7 @@ func TestMetadataPublicaAColunaDerivada(t *testing.T) {
 // campo json.
 const specWithExtract = `version: 1
 name: d
+schemaName: telecom
 materialization:
   key:
     field: id
