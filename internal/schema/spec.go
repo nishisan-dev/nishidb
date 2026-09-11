@@ -763,7 +763,8 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 		return nil, specErrf("schemaName %q inválido (esperado [a-z0-9_]+)", raw.SchemaName)
 	}
 	// Mesma reserva do nome de DATASET, e pela mesma razão: as tabelas de meta
-	// moram no schema com o "_" na frente (`telecom._fields`), e um schema que
+	// moram num schema PRÓPRIO com o "_" na frente — o `_meta`, ao lado do
+	// schema do dataset e não dentro dele —, e um schema de usuário que
 	// pudesse se chamar `_meta` disputaria o nome com o espaço de nome do
 	// produto.
 	//
