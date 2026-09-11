@@ -37,11 +37,12 @@ type record struct {
 	sch     *schema.Compiled
 	store   Store
 	planner *planner.Planner
-	// virtuais são as tabelas virtuais registradas sob este dataset, por
-	// namespace e por tabela — hoje as `_counters.<nome>`. Cada uma é um
-	// registro completo (schema sintético, store virtual, planner), e passa
-	// pelo MESMO pipeline que um dataset de verdade.
-	virtuais map[string]map[string]*record
+	// virtualTables são as tabelas virtuais registradas sob este dataset, por
+	// namespace e por tabela — as `_counters.<nome>` mais as do `_meta` que
+	// dependem do storage (`counters`, `kafka`). Cada uma é um registro
+	// completo (schema sintético, store virtual, planner), e passa pelo MESMO
+	// pipeline que um dataset de verdade.
+	virtualTables map[string]map[string]*record
 }
 
 // Engine mantém os datasets registrados. Register é de configuração; Execute é
@@ -113,10 +114,10 @@ func (e *Engine) RegisterVirtual(dataset, namespace, table string, sch *schema.C
 		return fmt.Errorf("query: dataset %q não registrado; a tabela virtual %s.%s não tem sob o que viver", dataset, namespace, table)
 	}
 	reg.declaraNamespace(namespace)
-	if _, exists := reg.virtuais[namespace][table]; exists {
+	if _, exists := reg.virtualTables[namespace][table]; exists {
 		return fmt.Errorf("query: tabela virtual %s.%s já registrada em %q", namespace, table, dataset)
 	}
-	reg.virtuais[namespace][table] = &record{sch: sch, store: st, planner: planner.New(st, &e.planStats)}
+	reg.virtualTables[namespace][table] = &record{sch: sch, store: st, planner: planner.New(st, &e.planStats)}
 	return nil
 }
 
@@ -139,11 +140,11 @@ func (e *Engine) DeclaraNamespace(dataset, namespace string) error {
 }
 
 func (reg *record) declaraNamespace(namespace string) {
-	if reg.virtuais == nil {
-		reg.virtuais = make(map[string]map[string]*record)
+	if reg.virtualTables == nil {
+		reg.virtualTables = make(map[string]map[string]*record)
 	}
-	if reg.virtuais[namespace] == nil {
-		reg.virtuais[namespace] = make(map[string]*record)
+	if reg.virtualTables[namespace] == nil {
+		reg.virtualTables[namespace] = make(map[string]*record)
 	}
 }
 
@@ -151,7 +152,7 @@ func (reg *record) declaraNamespace(namespace string) {
 // mensagem de recusa: o `_meta` fixo mais os registrados neste dataset.
 func (reg *record) namespacesConhecidos() []string {
 	out := []string{meta.Namespace}
-	for ns := range reg.virtuais {
+	for ns := range reg.virtualTables {
 		out = append(out, ns)
 	}
 	sort.Strings(out)
@@ -173,7 +174,7 @@ func (reg *record) namespacesConhecidos() []string {
 func tableVirtual(tableVirtual *record, dataset, namespace, table string, pos int) (*record, error) {
 	// O `_meta` existe sempre, registrado ou não: a `fields` é fixa e mora
 	// no pacote meta, fora deste registro.
-	byTable, ok := tableVirtual.virtuais[namespace]
+	byTable, ok := tableVirtual.virtualTables[namespace]
 	if !ok && namespace != meta.Namespace {
 		return nil, binder.ErrorAt(pos, "namespace %q não existe; existem %s", namespace, strings.Join(tableVirtual.namespacesConhecidos(), " e "))
 	}
