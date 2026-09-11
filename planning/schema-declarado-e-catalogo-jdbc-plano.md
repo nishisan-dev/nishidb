@@ -523,7 +523,7 @@ func TestSchemaDesconhecidoListaOsExistentes(t *testing.T) { /* mensagem com tel
 - Produces:
 
 ```go
-// Schema é o schema declarado do dataset. Campo ADITIVO.
+// Schema é o schema declarado do dataset. O campo é ADITIVO.
 Schema string `json:"schema"`
 // Tables são TODAS as tabelas consultáveis deste dataset, a base inclusive.
 // Aditivo: um cliente que não o conhece continua lendo Columns como antes.
