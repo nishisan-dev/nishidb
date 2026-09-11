@@ -8,6 +8,23 @@
 > workflow de agentes (§9 do spec); o script do workflow está na Tarefa 2.0 e é
 > reutilizado com argumentos diferentes.
 
+> **FECHADO ANTECIPADAMENTE em 11/09/2026** por decisão de custo (uso semanal
+> de agentes). Rodaram pelo mecanismo deste plano: Fase 0, Fase 1 e os grupos
+> G0 a G3 da Fase 2 (PRs #51 a #55). G4, G5 e G6 foram feitos à mão, em
+> lotes, na IDE (commits `ef9734e..fcd5e64`; registro em
+> `planning/rename_pt_functions_plan.md` e `planning/checkpoint_variaveis.md`),
+> e os pares extraídos do diff entraram em
+> `planning/identificadores-em-ingles/mapeamento-2-manual.tsv`, que o gate de
+> citação pendurada e o `renamecite` leem como os demais. As Fases 3, 4 e 5
+> não rodaram. O que restou (6,5 % das declarações não-teste com sinal PT-BR,
+> nomes de teste, mensagens, chaves de log e contratos) passa a ser renomeado
+> **incrementalmente** — a feature que toca o identificador o renomeia no
+> mesmo PR, pela regra do `CLAUDE.md`. Números, verificação e o que ficou de
+> fora: `docs/aceite-identificadores-em-ingles.md`; débito 116. As tarefas
+> abaixo ficam como registro do que foi feito e como receita para quem
+> retomar um grupo inteiro; os `- [ ]` das fases que não rodaram não serão
+> marcados.
+
 **Objetivo:** todo identificador, nome de pacote, arquivo, teste, mensagem, chave
 de log e contrato do NishiDB em inglês, com a prosa (docs, comentários, commits,
 mensagens de falha de teste) em PT-BR, sem nada renomeado à mão.
