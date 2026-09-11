@@ -61,11 +61,10 @@ func configWithDatasets(t *testing.T, specsBySchema map[string]string) *Config {
 // deles o cliente enxergaria dependeria da ordem de carga — que não é
 // contrato.
 //
-// A recusa é PREVENTIVA, e o comentário não afirma o que o motor ainda não
-// faz: hoje o qualificador de um `FROM telecom.tabela` é IGNORADO (só o
-// prefixo `_` desvia, e o binder confere apenas o dataset). O valor de recusar
-// agora é não deixar nascer YAML em produção que o catálogo depois teria de
-// desfazer.
+// O motor resolve o qualificador de um `FROM telecom.tabela` contra os
+// schemas declarados, então o schema repetido não seria só um container
+// ambíguo na árvore do cliente: a mesma consulta abriria a tabela de um ou de
+// outro dataset conforme a ordem de carga.
 //
 // O assert cobra os TRÊS nomes — o schema e os dois datasets — porque recusa
 // que não ensina a correção só transfere o trabalho: quem lê o log tem de

@@ -823,8 +823,10 @@ registrada, em relação à `_meta.counters` e à `_meta.kafka`, não muda a
 resposta. O congelamento existe, mas é POR CONSULTA: o snapshot fixa o catálogo
 de T0, e a varredura não vê tabela aparecer no meio.
 
-**A key é o endereço, não o nome.** `id` é o que o `FROM` aceita
-(`_counters.por_olt`, `_meta.tables`, ou só o nome na base). O nome não serve
+**A key é o endereço do atalho, não o nome.** `id` é a forma que o `FROM`
+aceita sem nomear schema (`_counters.por_olt`, `_meta.tables`, ou só o nome na
+base) — o par `schema.name`, que as outras duas colunas dão, é o endereço
+completo. O nome sozinho não serve
 de key porque não é único: a compilação da spec recusa três colisões no nome de
 um contador — o prefixo `_`, o nome do próprio dataset e o nome repetido entre
 dois contadores —, e nenhuma delas alcança o nome de uma tabela de meta. Um
@@ -836,6 +838,48 @@ Ela mora em `internal/query`, e não em `internal/query/meta` ao lado da
 `fields`, porque o conteúdo dela é o `Catalog` e o pacote `meta` não pode
 importar `query`; e não num pacote à parte como `internal/counters` e
 `internal/metakafka`, porque não costura o motor a subsistema nenhum.
+
+### O `FROM` qualificado pelo schema
+
+O `FROM` tem três formas, e cada uma resolve o dataset alvo de um jeito:
+`FROM <nome>` é a base do dataset da requisição; `FROM _ns.<nome>` é o ATALHO,
+que significa "a tabela virtual do dataset da requisição" e não nomeia dataset
+nenhum; `FROM <schema>.<nome>` é o **endereço completo** — como o `schemaName`
+é único entre os datasets (`config.ValidateSchemaUniqueness`), o par identifica
+uma tabela e só uma em todo o servidor, e a resolve venha a requisição pelo
+handle que vier. É a forma que um cliente SQL gera sozinho a partir do
+catálogo, e o spike do DBeaver confirmou que é a que ele monta.
+
+**Quem resolve o par é o `Engine.Catalog`, não uma varredura própria do
+roteamento.** O catálogo já é a única derivação de "que tabelas cada dataset
+publica, em que schema cada uma aparece e por qual namespace cada uma abre", e
+o godoc dele já prometia que toda tabela listada é aberta pelo `Execute`. Uma
+segunda varredura no roteamento faria dessa promessa uma coincidência: na
+primeira tabela que entrasse só num dos dois lados, a ferramenta mostraria uma
+tabela que a consulta recusa — ou o contrário — sem nada estar quebrado. Com a
+resolução SAINDO do catálogo, a promessa vira mecanismo.
+
+**A regra "o dataset do argumento tem de bater com o do `FROM`" continua
+valendo, e roda depois da resolução.** Ela existe contra endereço AMBÍGUO —
+`FROM y` com o handle `x` são dois nomes e nenhum jeito de saber qual o usuário
+quis. O qualificado não tem essa ambiguidade, então o handle deixa de ser o
+alvo e passa a ser só o default das formas não qualificadas, que é o papel do
+"current schema" numa conexão SQL. Não há fronteira de autorização a
+atravessar: os papéis do servidor são READ e ADMIN **por rota**, não por
+dataset, e quem pode consultar já podia mandar outro dataset no campo da
+requisição. Provas: `TestSchemaQualificadoResolveODatasetCerto` (a view e a
+base do OUTRO dataset abrem pelo schema) e
+`TestAtalhoSemSchemaUsaODatasetDaRequisicao` (o atalho não virou busca global).
+
+**Ler o qualificador é também recusar o que não é schema.** Até aqui
+`FROM qualquercoisa.tabela` era aceito e idêntico a `FROM tabela` — o prefixo
+era descartado. Agora qualificador que não é schema declarado é recusado
+listando os que existem, e schema certo com tabela inexistente é recusado
+listando as tabelas daquele schema. As duas são erro de quem escreveu a query e
+saem por `binder.ErrorAt`, como as recusas de namespace
+(`TestQualificadorQueNaoEhSchemaEhRecusado`,
+`TestSchemaDesconhecidoListaOsExistentes`,
+`TestSchemaConhecidoSemATabelaListaAsDoSchema`).
 
 `_meta.fields` responde "o que este dataset tem" — nome, tipo, se é
 autodescoberto, índice declarado, índice físico, campo de origem e a

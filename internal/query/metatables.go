@@ -41,20 +41,22 @@ const TableMetaTables = "tables"
 // apareceria aqui ao lado desta própria tabela, com o mesmo `name` e schemas
 // diferentes. Duas linhas de mesma key fariam o point lookup
 // devolver uma e a varredura devolver duas — o motor discordando de si mesmo
-// conforme o plano escolhido. `id` é o endereço que o FROM aceita
-// (`_counters.por_olt`, `_meta.tables`, ou só o nome na tabela base), e ele é
-// único porque o registro de tabelas virtuais é um mapa por namespace e por
-// tabela, e o RegisterVirtual recusa a segunda tabela de mesmo nome no mesmo
-// namespace.
+// conforme o plano escolhido. `id` é o endereço do ATALHO
+// (`_counters.por_olt`, `_meta.tables`, ou só o nome na tabela base) — o FROM
+// também aceita o par `schema.tabela`, que é o que as colunas `schema` e
+// `name` dão. `id` é único porque o registro de tabelas virtuais é um mapa por
+// namespace e por tabela, e o RegisterVirtual recusa a segunda tabela de mesmo
+// nome no mesmo namespace.
 //
 // `columns` é a CONTAGEM de colunas descritíveis, não a lista: quem quer os
 // nomes tem a `_meta.fields`, e uma lista junta por separador seria um segundo
 // formato a parsear para responder o que a outra tabela já responde em linhas.
 //
-// `namespace` é NULL na tabela base — ela é aberta pelo nome, sem qualificador,
-// e ausência é o que NULL significa nas três camadas deste produto. `schema`
-// nunca é NULL: a spec exige `schemaName` de todo dataset e as tabelas de meta
-// saem no `_meta`.
+// `namespace` é NULL na tabela base — pelo atalho ela é aberta só pelo nome, e
+// ausência é o que NULL significa nas três camadas deste produto. Não quer
+// dizer que ela não tenha qualificador: `schema.base` a abre como abre
+// qualquer outra. `schema` nunca é NULL: a spec exige `schemaName` de todo
+// dataset e as tabelas de meta saem no `_meta`.
 const specOfMetaTables = `version: 1
 name: ` + TableMetaTables + `
 schemaName: ` + schema.SyntheticSchemaName + `

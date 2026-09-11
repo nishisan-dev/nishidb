@@ -800,14 +800,12 @@ func ValidateGroupUniqueness(specs map[string]*schema.DatasetSpec) error {
 // classe de defeito do groupId duplicado: nada quebra, tudo responde, e a
 // resposta é de outro dataset.
 //
-// A recusa é PREVENTIVA, e o godoc não pode fingir o contrário: o motor de
-// hoje IGNORA o qualificador de um `FROM telecom.tabela` — o roteamento só
-// desvia namespace com prefixo `_` (query/meta.Reconhece) e o binder confere
-// apenas o dataset da requisição —, de modo que `FROM telecom.x` e
-// `FROM qualquercoisa.x` são ambos aceitos e idênticos a `FROM x`. O schema é
-// o que VAI identificar o dataset quando o catálogo existir; deixar dois
-// datasets nascerem no mesmo schema agora só adiaria a colisão para um dia em
-// que já haveria YAML em produção para corrigir.
+// A recusa deixou de ser preventiva: o motor RESOLVE o qualificador de um
+// `FROM telecom.tabela` contra os schemas declarados (query.Execute, pelo
+// Catalog), e é essa unicidade que faz o par (schema, tabela) endereçar uma
+// tabela e só uma em todo o servidor. Dois datasets no mesmo schema fariam a
+// mesma consulta abrir a tabela de um ou de outro conforme a ordem de carga do
+// diretório — que nunca foi contrato.
 //
 // A tabela IRMÃ do histórico NÃO entra nesta conta, e isso é desenho: ela
 // herda o schemaName do dataset base (schema.DeriveHistory) porque é outra

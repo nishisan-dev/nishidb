@@ -377,13 +377,13 @@ nomeando o schema e os **dois** datasets. A razão é que o schema é o containe
 em que as tabelas de cada dataset **serão apresentadas no catálogo** que o
 cliente SQL lê — repetido, o catálogo teria dois containers de mesmo nome com
 tabelas diferentes dentro, e qual deles o cliente enxergaria dependeria da
-ordem em que o diretório foi lido, que nunca foi contrato. A recusa é
-**preventiva**: o SQL de hoje ignora o qualificador (`SELECT * FROM telecom.x`
-e `SELECT * FROM x` são a mesma consulta, e qualquer outro prefixo que não
-comece por `_` também), e é justamente por isso que a unicidade entra antes de
-haver YAML em produção para corrigir. A recusa vale para o servidor e para os
-comandos locais (`ingest`, `query`, `counters`, `offsets`), que leem o mesmo
-diretório.
+ordem em que o diretório foi lido, que nunca foi contrato. E o schema é
+**endereço**: `SELECT * FROM telecom.por_olt` abre a tabela do dataset dono do
+schema `telecom`, seja qual for o dataset da conexão — repetido, a mesma
+consulta responderia de um ou de outro. Um qualificador que não é schema
+declarado é **recusado**, nomeando os que existem. A recusa vale para o
+servidor e para os comandos locais (`ingest`, `query`, `counters`, `offsets`),
+que leem o mesmo diretório.
 A tabela **histórica não entra nessa conta**: ela herda o schema do dataset que
 a declara, porque é outra tabela do mesmo dataset.
 
@@ -1371,11 +1371,16 @@ evento atrasado. Sem isso o contador está certo sobre um estado errado.
 ### SQL suportado (v1)
 
 ```sql
-SELECT <colunas | *> FROM <dataset>
+SELECT <colunas | *> FROM <tabela>
   [WHERE <predicado>]
   [ORDER BY <chave> [, <chave>]*]
   [LIMIT <n>]
   [OFFSET <n>]
+
+<tabela> := <nome>                   -- a base do dataset da conexão
+          | <schema> "." <nome>      -- endereço completo, qualquer dataset
+          | "_counters" "." <nome>   -- atalho: no dataset da conexão
+          | "_meta" "." <nome>       -- atalho: no dataset da conexão
 
 <chave> := <coluna> [ASC | DESC] [NULLS (FIRST | LAST)]
 
@@ -1389,6 +1394,21 @@ SELECT <colunas | *> FROM <dataset>
 Comparadores `=`, `!=`, `>`, `>=`, `<`, `<=`; `AND`, `OR`, parênteses;
 `IS NULL` / `IS NOT NULL`; `LIKE` e `NOT LIKE`; alias e campos entre aspas
 duplas (obrigatórias para nomes com hífen, como `"Acct-Status-Type"`).
+
+**O `FROM` qualificado pelo schema é endereço de servidor, não de conexão.**
+Como o `schemaName` é único entre os datasets, o par `schema.tabela` identifica
+uma tabela e só uma: `SELECT * FROM telecom.por_olt` abre o contador `por_olt`
+do dataset que declara o schema `telecom`, mesmo que a conexão tenha sido
+aberta contra outro dataset. Vale para a base e para as views, e é a forma que
+um cliente SQL gera sozinho a partir do catálogo (é o que o DBeaver monta ao
+clicar na tabela). O dataset da requisição continua sendo o default das formas
+NÃO qualificadas — `FROM <nome>` e os atalhos `_counters.<nome>` /
+`_meta.<nome>`, que sempre significam "neste dataset".
+
+Qualificador que não é schema declarado é **recusado**, listando os que
+existem; schema certo com tabela que não existe é recusado listando as tabelas
+daquele schema. Nenhum dos dois é erro interno: o cliente recebe erro de bind
+com a posição do nome ofensor.
 
 `LIKE` vale só para coluna de **texto** — outro tipo é recusado no bind, com a
 posição da coluna, nunca com resultado vazio. `%` casa qualquer sequência e `_`
@@ -1432,11 +1452,12 @@ mesma: a base como `TABLE` no schema declarado no YAML, os contadores como
 primeira pergunta de quem chega a um dataset que não conhece, e a resposta não
 exige rota HTTP nem suporte em cliente nenhum.
 
-`id` é o endereço que o `FROM` aceita — `_counters.por_olt`, `_meta.kafka`, ou
-só o nome na tabela base —, e é a chave da tabela: `name` sozinho não é único,
-porque um contador pode se chamar `tables` e aparecer ao lado desta.
-`namespace` é NULL só na tabela base, que abre sem qualificador; `columns` é a
-contagem de colunas descritíveis (os nomes estão na `_meta.fields`); e
+`id` é o endereço do **atalho** — `_counters.por_olt`, `_meta.kafka`, ou só o
+nome na tabela base —, e é a chave da tabela: `name` sozinho não é único,
+porque um contador pode se chamar `tables` e aparecer ao lado desta. O `FROM`
+aceita também o par `schema.name`, que é o endereço completo (ver abaixo).
+`namespace` é NULL só na tabela base, que não tem atalho com prefixo; `columns`
+é a contagem de colunas descritíveis (os nomes estão na `_meta.fields`); e
 `description` é NULL em toda linha hoje — nada declara descrição de tabela, e o
 catálogo não inventa uma.
 

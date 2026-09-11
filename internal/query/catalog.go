@@ -29,12 +29,16 @@ type TableInfo struct {
 	Schema string
 	// Name é o nome da tabela DENTRO do Schema.
 	Name string
-	// Namespace é o espaço de nome virtual por onde o FROM abre a tabela hoje
-	// (`_counters`, `_meta`), e sai VAZIO para a tabela base — que é aberta
-	// pelo nome, sem prefixo. Ele é publicado porque o par (Schema, Name) não
-	// é endereço: quem precisar montar o FROM de uma view — o /v1/metadata e a
-	// `_meta.tables` — não teria como reconstruir `_counters.por_olt` a partir
-	// de `telecom` e `por_olt`.
+	// Namespace é o espaço de nome reservado por onde o ATALHO abre a tabela
+	// (`_counters`, `_meta`) — a forma que significa "no dataset da
+	// requisição" —, e sai VAZIO para a tabela base, que pelo atalho é aberta
+	// só pelo nome, sem prefixo.
+	//
+	// Ele é publicado porque não é reconstruível a partir de (Schema, Name):
+	// quem precisar montar o atalho de uma view — o /v1/metadata e a
+	// `_meta.tables` — não teria como chegar a `_counters.por_olt` sabendo
+	// apenas `telecom` e `por_olt`. O par (Schema, Name) é o OUTRO endereço, e
+	// esse o FROM aceita direto.
 	Namespace string
 	Kind      TableKind
 	// Description é o texto que o cliente mostra ao lado da tabela. Hoje sai
@@ -69,13 +73,16 @@ type TableInfo struct {
 // desvio do Execute a trata. Toda tabela listada aqui É aberta pelo Execute, e
 // tabela que ele abre não fica de fora.
 //
-// Mas o par (Schema, Name) ainda NÃO é o endereço que o FROM aceita: o
-// contador publicado como `(telecom, por_olt)` só abre hoje por
-// `FROM _counters.por_olt`, porque o motor resolve a view pelo NAMESPACE e não
-// pelo schema. Por isso a linha também carrega o Namespace — é com ele que se
-// monta o FROM que funciona. Fazer o schema declarado ser aceito no FROM é a
-// tarefa seguinte do ciclo; até lá, quem consome esta lista para executar SQL
-// tem de usar o Namespace, e o Schema é só o lugar na árvore do cliente.
+// O par (Schema, Name) É o endereço que o FROM aceita: o contador publicado
+// como `(telecom, por_olt)` abre por `FROM telecom.por_olt`, de qualquer
+// dataset do servidor. Quem resolve esse FROM é o resolveSchemaQualified
+// (engine.go), e ele resolve LENDO ESTA LISTA — não há segunda varredura dos
+// registros, justamente para que o catálogo e o roteamento não possam
+// discordar.
+//
+// O Namespace continua publicado porque ele é o outro endereço, o do atalho:
+// `FROM _counters.por_olt` significa "no dataset da requisição", e é a forma
+// que o `_meta` usa. Ele não é reconstruível a partir de (Schema, Name).
 //
 // A `_meta.tables` já sai daqui (metatables.go); o /v1/metadata ainda monta a
 // resposta dele por conta própria, a partir do compilado do dataset, e passa a
