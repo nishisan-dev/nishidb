@@ -442,7 +442,7 @@ inglês correspondente.
 | indexável (a CONJUNÇÃO das duas: o schema declara E o store atende; o termo pode virar lookup) | indexable | internal/query/planner |
 | indexável (o TIPO declarado aceita `index: true`, decidido no load sem consultar store nem schema) | indexable type | internal/schema |
 | qualificado / qualificada / qualificador (o "pai." que precede o nome da coluna) | qualified / qualifier | internal/schema, internal/query/binder |
-| qualificado pelo schema (o "schema." que precede o nome da TABELA no FROM: endereço completo, único no servidor, distinto do atalho "_ns.") | schema-qualified | internal/query |
+| qualificado pelo schema (o "schema." que precede o nome da TABELA no FROM: endereço completo, que a configuração mantém único no servidor, distinto do atalho "_ns.") | schema-qualified | internal/query |
 | grafia (a palavra escrita no YAML para o valor de uma chave) | spelling | internal/schema |
 | visibilidade (por quanto tempo o grupo vazio continua visível) | visibility | internal/schema |
 | duração | duration | internal/schema, internal/storage/counter |
