@@ -12,16 +12,16 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// semTeto é o orçamento ILIMITADO, para os testes cujo assunto NÃO é o
+// withoutCeiling é o orçamento ILIMITADO, para os testes cujo assunto NÃO é o
 // orçamento — concatenação, flush, erro sticky, estabilidade da capacidade.
 //
 // Passar um teto real neles acoplaria cada asserção a um número que não tem
 // nada a ver com o que ela afirma, e a primeira mudança de default quebraria a
 // suíte inteira por um motivo que não é o dela. Os testes que EXERCEM o
 // orçamento declaram o teto deles, explicitamente — ver budget_writer_test.go.
-func semTeto() *budget.PerQuery { return budget.NewGlobal(0).Query(0) }
+func withoutCeiling() *budget.PerQuery { return budget.NewGlobal(0).Query(0) }
 
-func rowDeTeste(i int) Row {
+func rowOfTest(i int) Row {
 	return Row{cols: []ColView{
 		col("id", str("K"+strings.Repeat("0", 4)+string(rune('0'+i%10)))),
 		col("n", i64(int64(i))),
@@ -30,12 +30,12 @@ func rowDeTeste(i int) Row {
 
 func TestStreamWriterConcatena(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewStreamWriter(&buf, 64, semTeto()) // buffer pequeno de propósito: força vários flushes
+	s := NewStreamWriter(&buf, 64, withoutCeiling()) // buffer pequeno de propósito: força vários flushes
 
-	var esperado []byte
+	var expected []byte
 	for i := 0; i < 50; i++ {
-		r := rowDeTeste(i)
-		esperado = AppendRow(esperado, r)
+		r := rowOfTest(i)
+		expected = AppendRow(expected, r)
 		if err := s.WriteRow(r); err != nil {
 			t.Fatal(err)
 		}
@@ -43,7 +43,7 @@ func TestStreamWriterConcatena(t *testing.T) {
 	if err := s.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(buf.Bytes(), esperado) {
+	if !bytes.Equal(buf.Bytes(), expected) {
 		t.Errorf("saída divergiu da concatenação de AppendRow")
 	}
 	if n := bytes.Count(buf.Bytes(), []byte{'\n'}); n != 50 {
@@ -55,8 +55,8 @@ func TestStreamWriterConcatena(t *testing.T) {
 // esquecer produz um resultado truncado que parece completo.
 func TestStreamWriterExigeFlush(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewStreamWriter(&buf, 1<<20, semTeto())
-	if err := s.WriteRow(rowDeTeste(0)); err != nil {
+	s := NewStreamWriter(&buf, 1<<20, withoutCeiling())
+	if err := s.WriteRow(rowOfTest(0)); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() != 0 {
@@ -73,14 +73,14 @@ func TestStreamWriterExigeFlush(t *testing.T) {
 // espiao conta escritas e pode falhar sob demanda.
 type espiao struct {
 	escritas int
-	falha    error
+	fail     error
 	curto    bool
 }
 
 func (e *espiao) Write(p []byte) (int, error) {
 	e.escritas++
-	if e.falha != nil {
-		return 0, e.falha
+	if e.fail != nil {
+		return 0, e.fail
 	}
 	if e.curto {
 		return len(p) - 1, nil
@@ -89,18 +89,18 @@ func (e *espiao) Write(p []byte) (int, error) {
 }
 
 func TestStreamWriterErroEhStickyEIdentificavel(t *testing.T) {
-	falha := errors.New("cano quebrado")
-	e := &espiao{falha: falha}
-	s := NewStreamWriter(e, 16, semTeto())
+	fail := errors.New("cano quebrado")
+	e := &espiao{fail: fail}
+	s := NewStreamWriter(e, 16, withoutCeiling())
 
-	err := s.WriteRow(rowDeTeste(0))
+	err := s.WriteRow(rowOfTest(0))
 	if err == nil {
 		t.Fatal("erro de escrita não propagou")
 	}
 	if !errors.Is(err, ErrWrite) {
 		t.Errorf("erro = %v, want errors.Is ErrWrite", err)
 	}
-	if !errors.Is(err, falha) {
+	if !errors.Is(err, fail) {
 		t.Errorf("erro = %v, want preservar a causa", err)
 	}
 	if !strings.Contains(err.Error(), "ndjson: escrita falhou") {
@@ -108,23 +108,23 @@ func TestStreamWriterErroEhStickyEIdentificavel(t *testing.T) {
 	}
 
 	// Sticky: nada mais é escrito, e o erro é o MESMO.
-	antes := e.escritas
+	before := e.escritas
 	for i := 0; i < 5; i++ {
-		if got := s.WriteRow(rowDeTeste(i)); got != err {
+		if got := s.WriteRow(rowOfTest(i)); got != err {
 			t.Fatalf("erro %d = %v, want o mesmo erro sticky", i, got)
 		}
 	}
 	if got := s.Flush(); got != err {
 		t.Errorf("Flush = %v, want o mesmo erro sticky", got)
 	}
-	if e.escritas != antes {
-		t.Errorf("escreveu %d vezes depois da falha", e.escritas-antes)
+	if e.escritas != before {
+		t.Errorf("escreveu %d vezes depois da falha", e.escritas-before)
 	}
 }
 
 func TestStreamWriterShortWrite(t *testing.T) {
-	s := NewStreamWriter(&espiao{curto: true}, 16, semTeto())
-	err := s.WriteRow(rowDeTeste(0))
+	s := NewStreamWriter(&espiao{curto: true}, 16, withoutCeiling())
+	err := s.WriteRow(rowOfTest(0))
 	if !errors.Is(err, io.ErrShortWrite) {
 		t.Errorf("erro = %v, want io.ErrShortWrite", err)
 	}
@@ -136,7 +136,7 @@ func TestStreamWriterShortWrite(t *testing.T) {
 // Linha maior que o buffer: cresce, escreve e não trava.
 func TestStreamWriterLinhaMaiorQueOBuffer(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewStreamWriter(&buf, 8, semTeto())
+	s := NewStreamWriter(&buf, 8, withoutCeiling())
 	grande := Row{cols: []ColView{col("txt", str(strings.Repeat("x", 10_000)))}}
 
 	if err := s.WriteRow(grande); err != nil {
@@ -158,10 +158,10 @@ func TestStreamWriterLinhaMaiorQueOBuffer(t *testing.T) {
 // linhas, o writer estaria acumulando o resultado — que é exatamente o que
 // este projeto existe para não fazer.
 func TestStreamWriterCapEstavel(t *testing.T) {
-	capacidade := func(linhas int) int {
-		s := NewStreamWriter(io.Discard, 4096, semTeto())
-		for i := 0; i < linhas; i++ {
-			if err := s.WriteRow(rowDeTeste(i)); err != nil {
+	capacidade := func(rows int) int {
+		s := NewStreamWriter(io.Discard, 4096, withoutCeiling())
+		for i := 0; i < rows; i++ {
+			if err := s.WriteRow(rowOfTest(i)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -195,7 +195,7 @@ func TestStreamWriterCapEstavel(t *testing.T) {
 // bufSize <= 0 cai no padrão: um writer com buffer zero faria flush por linha.
 func TestStreamWriterBufPadrao(t *testing.T) {
 	for _, n := range []int{0, -1} {
-		s := NewStreamWriter(io.Discard, n, semTeto())
+		s := NewStreamWriter(io.Discard, n, withoutCeiling())
 		if cap(s.buf) != DefaultBufSize || s.flushAt != DefaultBufSize {
 			t.Errorf("bufSize %d: cap=%d flushAt=%d, want %d", n, cap(s.buf), s.flushAt, DefaultBufSize)
 		}
@@ -205,10 +205,10 @@ func TestStreamWriterBufPadrao(t *testing.T) {
 // Nenhum byte extra, nenhum byte perdido.
 func TestStreamWriterBytesEscritos(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewStreamWriter(&buf, 128, semTeto())
+	s := NewStreamWriter(&buf, 128, withoutCeiling())
 	total := 0
 	for i := 0; i < 500; i++ {
-		r := rowDeTeste(i)
+		r := rowOfTest(i)
 		total += len(AppendRow(nil, r))
 		if err := s.WriteRow(r); err != nil {
 			t.Fatal(err)
@@ -224,7 +224,7 @@ func TestStreamWriterBytesEscritos(t *testing.T) {
 
 // ---------------------------------------------------------------- gates
 
-var lixo []byte
+var garbage []byte
 
 // G1: zero alocação por linha. O dst é pré-crescido e truncado a cada
 // iteração, como faz o StreamWriter.
@@ -237,7 +237,7 @@ func TestGateAppendRowZeroAlloc(t *testing.T) {
 		col("t", ts(1700000000123)),
 		col("b", types.Value{Type: types.TypeBytes, Bytes: []byte{0, 1}}),
 		col("j", types.Value{Type: types.TypeJSON, Bytes: []byte(`{"a":1}`)}),
-		ColView{Name: "nulo", Null: true},
+		{Name: "nulo", Null: true},
 	}}
 	dst := make([]byte, 0, 4096)
 
@@ -247,7 +247,7 @@ func TestGateAppendRowZeroAlloc(t *testing.T) {
 	if got != 0 {
 		t.Errorf("AppendRow = %.1f allocs/op, want 0", got)
 	}
-	lixo = dst
+	garbage = dst
 }
 
 // G2: zero alocação por TIPO. netip.AppendTo, base64.AppendEncode e
@@ -269,15 +269,15 @@ func TestGateAppendValueZeroAllocPorTipo(t *testing.T) {
 		"nulo":      {},
 	}
 	dst := make([]byte, 0, 512)
-	for nome, v := range casos {
-		t.Run(nome, func(t *testing.T) {
+	for name, v := range casos {
+		t.Run(name, func(t *testing.T) {
 			got := testing.AllocsPerRun(1000, func() { dst = AppendValue(dst[:0], v) })
 			if got != 0 {
-				t.Errorf("AppendValue(%s) = %.1f allocs/op, want 0", nome, got)
+				t.Errorf("AppendValue(%s) = %.1f allocs/op, want 0", name, got)
 			}
 		})
 	}
-	lixo = dst
+	garbage = dst
 }
 
 // G1-writer: o StreamWriter não pode alocar em regime. Sem este gate, uma
@@ -289,8 +289,8 @@ func TestGateAppendValueZeroAllocPorTipo(t *testing.T) {
 // (bufSize + maiorLinha) e SÓ DEPOIS entra em regime. Medir o aquecimento
 // junto mediria o crescimento, não o regime.
 func TestGateStreamWriterZeroAllocEmRegime(t *testing.T) {
-	s := NewStreamWriter(io.Discard, 4096, semTeto())
-	row := rowDeTeste(1)
+	s := NewStreamWriter(io.Discard, 4096, withoutCeiling())
+	row := rowOfTest(1)
 	for i := 0; i < 2000; i++ { // aquecimento: leva o buffer ao teto
 		if err := s.WriteRow(row); err != nil {
 			t.Fatal(err)
@@ -302,7 +302,7 @@ func TestGateStreamWriterZeroAllocEmRegime(t *testing.T) {
 	// cada ~146 rows com este buffer — é exatamente uma taxa dessas, e passaria
 	// despercebida.
 	const rodadas = 3000
-	if got := mallocsEm(t, func() {
+	if got := mallocsIn(t, func() {
 		for i := 0; i < rodadas; i++ {
 			if err := s.WriteRow(row); err != nil {
 				t.Fatal(err)
@@ -312,7 +312,7 @@ func TestGateStreamWriterZeroAllocEmRegime(t *testing.T) {
 		t.Errorf("%d alocações em %d WriteRow, want 0 (%.4f por chamada)",
 			got, rodadas, float64(got)/rodadas)
 	}
-	if got := mallocsEm(t, func() {
+	if got := mallocsIn(t, func() {
 		for i := 0; i < 200; i++ {
 			if err := s.Flush(); err != nil {
 				t.Fatal(err)
@@ -323,17 +323,17 @@ func TestGateStreamWriterZeroAllocEmRegime(t *testing.T) {
 	}
 }
 
-// mallocsEm conta as alocações ABSOLUTAS de f, com o GC parado para que o
+// mallocsIn conta as alocações ABSOLUTAS de f, com o GC parado para que o
 // número seja o de mallocs e não o saldo.
-func mallocsEm(t *testing.T, f func()) uint64 {
+func mallocsIn(t *testing.T, f func()) uint64 {
 	t.Helper()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	var antes, depois runtime.MemStats
+	var before, depois runtime.MemStats
 	runtime.GC()
-	runtime.ReadMemStats(&antes)
+	runtime.ReadMemStats(&before)
 	f()
 	runtime.ReadMemStats(&depois)
-	return depois.Mallocs - antes.Mallocs
+	return depois.Mallocs - before.Mallocs
 }
 
 // Os três caminhos do encoder que os gates anteriores NÃO exercitavam: o json
@@ -348,14 +348,14 @@ func TestGateCaminhosNaoTriviaisZeroAlloc(t *testing.T) {
 			{Name: "com\"aspas", Val: str("linha\nnova\ttab")}}},
 	}
 	dst := make([]byte, 0, 4096)
-	for nome, row := range casos {
-		t.Run(nome, func(t *testing.T) {
+	for name, row := range casos {
+		t.Run(name, func(t *testing.T) {
 			if got := testing.AllocsPerRun(1000, func() { dst = AppendRow(dst[:0], row) }); got != 0 {
-				t.Errorf("%s = %.1f allocs/op, want 0", nome, got)
+				t.Errorf("%s = %.1f allocs/op, want 0", name, got)
 			}
 		})
 	}
-	lixo = dst
+	garbage = dst
 }
 
 func BenchmarkAppendRow(b *testing.B) {
@@ -365,7 +365,7 @@ func BenchmarkAppendRow(b *testing.B) {
 		col("ip", types.Value{Type: types.TypeIPv4, Bytes: []byte{177, 1, 2, 3}}),
 		col("octets", i64(4096)),
 		col("started", ts(1700000000123)),
-		ColView{Name: "cause", Null: true},
+		{Name: "cause", Null: true},
 	}}
 	dst := make([]byte, 0, 4096)
 	b.ReportAllocs()
@@ -373,7 +373,7 @@ func BenchmarkAppendRow(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		dst = AppendRow(dst[:0], row)
 	}
-	lixo = dst
+	garbage = dst
 }
 
 func BenchmarkAppendTimestamp(b *testing.B) {
@@ -383,7 +383,7 @@ func BenchmarkAppendTimestamp(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		dst = AppendValue(dst[:0], ts(1700000000123))
 	}
-	lixo = dst
+	garbage = dst
 }
 
 func BenchmarkAppendJSONString(b *testing.B) {
@@ -395,7 +395,7 @@ de linha`)
 	for i := 0; i < b.N; i++ {
 		dst = AppendJSONString(dst[:0], s)
 	}
-	lixo = dst
+	garbage = dst
 }
 
 // BenchmarkStreamWriterComOrcamento mede o caminho de PRODUÇÃO: teto ativo.
@@ -410,7 +410,7 @@ func BenchmarkStreamWriterComOrcamento(b *testing.B) {
 		b.Fatal("o orçamento do benchmark não coube")
 	}
 	s := NewStreamWriter(io.Discard, DefaultBufSize, orc)
-	r := rowDeTeste(7)
+	r := rowOfTest(7)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -421,8 +421,8 @@ func BenchmarkStreamWriterComOrcamento(b *testing.B) {
 }
 
 func BenchmarkStreamWriter(b *testing.B) {
-	s := NewStreamWriter(io.Discard, DefaultBufSize, semTeto())
-	row := rowDeTeste(1)
+	s := NewStreamWriter(io.Discard, DefaultBufSize, withoutCeiling())
+	row := rowOfTest(1)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

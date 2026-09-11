@@ -19,22 +19,22 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 )
 
-func runQuery(args []string, amb Ambiente) int {
+func runQuery(args []string, amb Context) int {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
 		argConfig = fs.String("config", "", "caminho do nishidb.yaml")
 		dataset   = fs.String("dataset", "", "nome do dataset")
 		limit     = fs.Int("limit", -1, "sobrepõe o LIMIT da query")
-		servidor  = fs.String("server", "", "consulta pelo protocolo remoto em vez de abrir o dataset local")
+		server    = fs.String("server", "", "consulta pelo protocolo remoto em vez de abrir o dataset local")
 	)
-	var params listaDeParametros
-	fs.Var(&params, "param", "valor de um `?` posicional, no formato <tipo>:<valor> ("+tiposDeParametro+"); repetível, na ordem dos ?")
-	credFlags := registraFlagsRemotas(fs)
+	var params listaOfParametros
+	fs.Var(&params, "param", "valor de um `?` posicional, no formato <tipo>:<valor> ("+tiposOfParametro+"); repetível, na ordem dos ?")
+	credFlags := setupRemoteFlags(fs)
 	if err := fs.Parse(args); err != nil {
-		return ExitUso
+		return ExitUsageError
 	}
-	// A credencial só é USADA no caminho --server (consultaRemota, abaixo),
+	// A credencial só é USADA no caminho --server (remoteQuery, abaixo),
 	// mas a validação roda sempre: --user/--password-file/NISHIDB_PASSWORD
 	// mal combinados são erro de uso independente de --config ou --server, e
 	// resolver aqui garante a MESMA mensagem que status/datasets/inspect/
@@ -46,7 +46,7 @@ func runQuery(args []string, amb Ambiente) int {
 		// novos, e as chamadas bare a fmt.Fprintln já existentes neste
 		// arquivo são débito anterior a esta task, não um precedente a repetir.
 		_, _ = fmt.Fprintln(amb.Stderr, "query:", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	// Com --server o dataset não é aberto aqui, então não há nishidb.yaml para
 	// ler: quem resolve caminho, teto e timeout é o servidor. Exigir --config
@@ -55,13 +55,13 @@ func runQuery(args []string, amb Ambiente) int {
 	switch {
 	case *dataset == "":
 		fmt.Fprintln(amb.Stderr, "query: --dataset é obrigatório")
-		return ExitUso
-	case *servidor == "" && *argConfig == "":
+		return ExitUsageError
+	case *server == "" && *argConfig == "":
 		fmt.Fprintln(amb.Stderr, "query: informe --config (consulta local) ou --server (consulta remota)")
-		return ExitUso
-	case *servidor != "" && *argConfig != "":
+		return ExitUsageError
+	case *server != "" && *argConfig != "":
 		fmt.Fprintln(amb.Stderr, "query: --config e --server são exclusivos; o --server usa a configuração do servidor")
-		return ExitUso
+		return ExitUsageError
 	}
 	if fs.NArg() != 1 {
 		// A dica sobre a ordem existe por causa do --param: flag.Parse para no
@@ -69,7 +69,7 @@ func runQuery(args []string, amb Ambiente) int {
 		// --param string:x` não parseia a flag — ela vira Arg(1) e cai aqui,
 		// com uma mensagem que sozinha não ajudaria em nada.
 		_, _ = fmt.Fprintln(amb.Stderr, "query: informe exatamente uma query SQL (as flags vêm ANTES dela)")
-		return ExitUso
+		return ExitUsageError
 	}
 
 	// A validação roda ANTES de qualquer conexão ou abertura de dataset, e usa
@@ -77,42 +77,42 @@ func runQuery(args []string, amb Ambiente) int {
 	// gramática. É o que faz `--param int64:9223372036854775808` receber a
 	// mensagem de overflow do protocolo na linha de comando, em vez de depois
 	// de um round-trip.
-	valores, err := protocol.Values(params)
+	values, err := protocol.Values(params)
 	if err != nil {
 		_, _ = fmt.Fprintln(amb.Stderr, "query:", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	sql := fs.Arg(0)
 	if *limit >= 0 {
-		sql = comLimit(sql, *limit)
+		sql = withLimit(sql, *limit)
 	}
 
-	if *servidor != "" {
-		return consultaRemota(*servidor, *dataset, sql, params, cred, amb)
+	if *server != "" {
+		return remoteQuery(*server, *dataset, sql, params, cred, amb)
 	}
 
 	cfg, err := nishiconfig.Load(*argConfig)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
-		return ExitUso
+		return ExitUsageError
 	}
 
-	st, compilado, spec, fecha, err := abreParaConsulta(cfg, *dataset)
+	st, compilado, spec, close, err := openForQuery(cfg, *dataset)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
-		dicaDeServidor(err, *argConfig, *dataset, amb)
-		return codigoDoErro(err)
+		serverHint(err, *argConfig, *dataset, amb)
+		return errorCode(err)
 	}
-	defer fecha()
+	defer close()
 
 	eng := query.NewEngine()
 	if err := eng.Register(*dataset, compilado, st); err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
-		return ExitUso
+		return ExitUsageError
 	}
-	if err := counters.Registra(eng, *dataset, st); err != nil {
-		avisa(amb, "query: %v\n", err)
-		return ExitUso
+	if err := counters.Register(eng, *dataset, st); err != nil {
+		notify(amb, "query: %v\n", err)
+		return ExitUsageError
 	}
 	// `_meta.kafka` responde aqui com o que EXISTE fora do servidor: a spec
 	// (tópico, grupo, bootstrap, enabled) e a posição durável do checkpoint.
@@ -123,25 +123,25 @@ func runQuery(args []string, amb Ambiente) int {
 	//
 	// Só no dataset DECLARADO, como no servidor: a irmã não tem fonte própria.
 	if spec != nil {
-		if err := metakafka.Registra(eng, *dataset, metakafka.Fonte{
-			Declarada: metakafka.DoYAML(spec.Source.Kafka),
+		if err := metakafka.Register(eng, *dataset, metakafka.Source{
+			Declarada: metakafka.OfYAML(spec.Source.Kafka),
 			Duraveis:  st.SourceOffsets,
 		}); err != nil {
-			avisa(amb, "query: %v\n", err)
-			return ExitUso
+			notify(amb, "query: %v\n", err)
+			return ExitUsageError
 		}
 	}
 
 	// O caminho local recebe os MESMOS valores. Ignorá-los aqui faria a flag
 	// mentir num dos dois modos, e quebraria a promessa escrita em
-	// consultaRemota: "um script que troca --config por --server não muda mais
+	// remoteQuery: "um script que troca --config por --server não muda mais
 	// nada".
-	it, err := eng.Execute(amb.Ctx, *dataset, sql, valores)
+	it, err := eng.Execute(amb.Ctx, *dataset, sql, values)
 	if err != nil {
 		// O erro de sintaxe/bind sai ANTES de qualquer byte no stdout: quem
 		// consome a saída não pode receber linha parcial seguida de erro.
-		imprimeErroDeQuery(amb.Stderr, sql, err)
-		return codigoDoErro(err)
+		printQueryError(amb.Stderr, sql, err)
+		return errorCode(err)
 	}
 	defer it.Close()
 
@@ -165,22 +165,22 @@ func runQuery(args []string, amb Ambiente) int {
 		_, _ = fmt.Fprintln(amb.Stderr,
 			"query: o orçamento de memória de consulta não comporta esta consulta "+
 				"(runtime.memoryTarget contra runtime.query.maxBufferPerQuery)")
-		return ExitUso
+		return ExitUsageError
 	}
 	defer orc.Release()
 	w := executor.NewStreamWriter(amb.Stdout, executor.DefaultBufSize, orc)
 	for it.Next() {
 		if err := w.WriteRow(it.Row()); err != nil {
 			fmt.Fprintln(amb.Stderr, "query: escrevendo o resultado:", err)
-			return ExitUso
+			return ExitUsageError
 		}
 	}
 	if err := w.Flush(); err != nil {
 		fmt.Fprintln(amb.Stderr, "query: escrevendo o resultado:", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	if err := it.Err(); err != nil {
-		// O truncamento sai por aqui como qualquer outro erro: o codigoDoErro
+		// O truncamento sai por aqui como qualquer outro erro: o errorCode
 		// já o traduz no exit code próprio, e a mensagem do sentinela já diz
 		// "resultado truncado no teto de query.maxRows" com o número. Um ramo
 		// especial aqui seria indistinguível deste — código que nenhum teste
@@ -189,12 +189,12 @@ func runQuery(args []string, amb Ambiente) int {
 		// O que NÃO pode acontecer é sair 0: as linhas emitidas são válidas,
 		// mas o resultado não está completo, e quem consome precisa saber.
 		fmt.Fprintln(amb.Stderr, "query:", err)
-		return codigoDoErro(err)
+		return errorCode(err)
 	}
 	return ExitOK
 }
 
-// comLimit acrescenta (ou substitui) o LIMIT da query, PRESERVANDO o OFFSET.
+// withLimit acrescenta (ou substitui) o LIMIT da query, PRESERVANDO o OFFSET.
 //
 // A substituição continua textual — reescrever a AST exigiria serializá-la de
 // volta, e a v1 não tem serializador —, mas o corte deixou de ser "da última
@@ -213,7 +213,7 @@ func runQuery(args []string, amb Ambiente) int {
 // PARSER de verdade, o mesmo que o Execute vai usar — pelo mesmo argumento que
 // já tinha tirado essa decisão de uma varredura textual própria: duas gramáticas
 // divergem, e a divergência aparece como query reescrita errada.
-func comLimit(sql string, n int) string {
+func withLimit(sql string, n int) string {
 	corte := strings.TrimRight(strings.TrimSpace(sql), ";")
 	st, err := parser.Parse(corte)
 	if err != nil {
@@ -223,45 +223,45 @@ func comLimit(sql string, n int) string {
 		// escreveu.
 		return fmt.Sprintf("%s LIMIT %d", corte, n)
 	}
-	inicio := len(corte)
-	if st.HasLimit && st.LimitPos < inicio {
-		inicio = inicioDaClausula(corte, st.LimitPos)
+	start := len(corte)
+	if st.HasLimit && st.LimitPos < start {
+		start = clauseStart(corte, st.LimitPos)
 	}
-	if st.HasOffset && inicioDaClausula(corte, st.OffsetPos) < inicio {
-		inicio = inicioDaClausula(corte, st.OffsetPos)
+	if st.HasOffset && clauseStart(corte, st.OffsetPos) < start {
+		start = clauseStart(corte, st.OffsetPos)
 	}
-	corte = strings.TrimSpace(corte[:inicio])
+	corte = strings.TrimSpace(corte[:start])
 	if st.HasOffset {
 		return fmt.Sprintf("%s LIMIT %d OFFSET %d", corte, n, st.Offset)
 	}
 	return fmt.Sprintf("%s LIMIT %d", corte, n)
 }
 
-// inicioDaClausula recua da posição do LITERAL até o início da palavra-chave
+// clauseStart recua da posição do LITERAL até o início da palavra-chave
 // que o precede.
 //
 // O parser guarda a posição do NÚMERO (`LimitPos` aponta para o `10` de
 // `LIMIT 10`), que é o que a mensagem de erro precisa. Para cortar, é preciso a
 // posição da PALAVRA — cortar no número deixaria um `LIMIT` órfão no texto.
-func inicioDaClausula(sql string, posDoLiteral int) int {
-	i := posDoLiteral
+func clauseStart(sql string, posOfLiteral int) int {
+	i := posOfLiteral
 	// Recua o espaço entre a palavra e o número.
 	for i > 0 && (sql[i-1] == ' ' || sql[i-1] == '\t' || sql[i-1] == '\n' || sql[i-1] == '\r') {
 		i--
 	}
 	// Recua a palavra.
-	for i > 0 && !ehEspaco(sql[i-1]) {
+	for i > 0 && !isSpace(sql[i-1]) {
 		i--
 	}
 	return i
 }
 
-func ehEspaco(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
-// imprimeErroDeQuery mostra a POSIÇÃO e o trecho ofensor, não só a mensagem.
+// printQueryError mostra a POSIÇÃO e o trecho ofensor, não só a mensagem.
 // A posição é a informação que o front-end já carrega e que o usuário precisa
 // para achar o erro numa query de várias linhas.
-func imprimeErroDeQuery(w io.Writer, sql string, err error) {
+func printQueryError(w io.Writer, sql string, err error) {
 	fmt.Fprintln(w, "query:", err)
 
 	var se *lexer.SyntaxError
@@ -277,26 +277,26 @@ func imprimeErroDeQuery(w io.Writer, sql string, err error) {
 	if pos < 0 || pos > len(sql) {
 		return
 	}
-	linha, coluna, texto := recorta(sql, pos)
+	row, column, text := recorta(sql, pos)
 	fmt.Fprintf(w, "  linha %d, coluna %d:\n    %s\n    %s^\n",
-		linha, coluna, texto, strings.Repeat(" ", coluna-1))
+		row, column, text, strings.Repeat(" ", column-1))
 }
 
-// recorta devolve a linha (1-based), a coluna (1-based) e o texto da linha
+// recorta devolve a line (1-based), a coluna (1-based) e o texto da line
 // onde o offset cai.
 func recorta(sql string, pos int) (int, int, string) {
-	linha, inicio := 1, 0
+	row, start := 1, 0
 	for i := 0; i < pos && i < len(sql); i++ {
 		if sql[i] == '\n' {
-			linha++
-			inicio = i + 1
+			row++
+			start = i + 1
 		}
 	}
-	fim := strings.IndexByte(sql[inicio:], '\n')
-	if fim < 0 {
-		fim = len(sql)
+	end := strings.IndexByte(sql[start:], '\n')
+	if end < 0 {
+		end = len(sql)
 	} else {
-		fim += inicio
+		end += start
 	}
-	return linha, pos - inicio + 1, sql[inicio:fim]
+	return row, pos - start + 1, sql[start:end]
 }

@@ -8,8 +8,8 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/cli"
 )
 
-// contaLinhas devolve as linhas NDJSON do stdout, sem a vazia do fim.
-func contaLinhas(saida string) []string {
+// countRows devolve as linhas NDJSON do stdout, sem a vazia do fim.
+func countRows(saida string) []string {
 	saida = strings.TrimSpace(saida)
 	if saida == "" {
 		return nil
@@ -25,7 +25,7 @@ func contaLinhas(saida string) []string {
 // tinha como fornecê-los. O driver JDBC seria o primeiro, e testar o Java
 // contra um caminho Go que nenhum cliente Go percorreu seria testar duas
 // coisas de uma vez.
-// umStatusDoCorpus descobre um valor que EXISTE no dado, em vez de fixar um.
+// umStatusOfCorpus descobre um valor que EXISTE no dado, em vez de fixar um.
 //
 // O gerador do corpus é determinístico mas o conjunto de status que ele produz
 // depende do número de eventos: com 40, não há um único "Stop". Um teste que
@@ -35,23 +35,23 @@ func contaLinhas(saida string) []string {
 // {"--server", endereço}. A sondagem tem de usar o MESMO modo do teste que a
 // chama — com o servidor no ar, o flock barra a consulta local, e o erro
 // apontaria para o lugar errado.
-func umStatusDoCorpus(t *testing.T, a *ambiente, conexao ...string) string {
+func umStatusOfCorpus(t *testing.T, a *env, conexao ...string) string {
 	t.Helper()
 	args := append([]string{"query"}, conexao...)
 	args = append(args, "--dataset", "radius_sessions", "SELECT status FROM radius_sessions LIMIT 1")
-	if code := a.roda(args...); code != cli.ExitOK {
+	if code := a.run(args...); code != cli.ExitOK {
 		t.Fatalf("sondando o corpus: exit %d: %s", code, a.stderr.String())
 	}
-	linhas := contaLinhas(a.stdout.String())
-	if len(linhas) == 0 {
+	rows := countRows(a.stdout.String())
+	if len(rows) == 0 {
 		t.Fatal("o corpus não produziu nenhuma row")
 	}
 	var m map[string]string
-	if err := json.Unmarshal([]byte(linhas[0]), &m); err != nil {
+	if err := json.Unmarshal([]byte(rows[0]), &m); err != nil {
 		t.Fatal(err)
 	}
 	if m["status"] == "" {
-		t.Fatalf("a primeira row não tem status: %s", linhas[0])
+		t.Fatalf("a primeira row não tem status: %s", rows[0])
 	}
 	return m["status"]
 }
@@ -70,55 +70,55 @@ func umStatusDoCorpus(t *testing.T, a *ambiente, conexao ...string) string {
 // a promessa inteira do parâmetro. Uma asserção sobre o número de linhas
 // passaria com um WHERE que casasse a coisa errada.
 func TestParamProduzOMesmoResultadoQueOLiteralPeloProtocoloRemoto(t *testing.T) {
-	a := novoAmbienteRemoto(t, 100000)
-	sobeComEntrada(t, a, corpus(t, 200))
+	a := newEnvRemote(t, 100000)
+	risesWithEntry(t, a, corpus(t, 200))
 
-	status := umStatusDoCorpus(t, a.ambiente, "--server", a.endereco())
+	status := umStatusOfCorpus(t, a.env, "--server", a.endereco())
 
-	if code := a.roda("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+	if code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
 		"--param", "string:"+status,
 		"SELECT id, status FROM radius_sessions WHERE status = ?"); code != cli.ExitOK {
 		t.Fatalf("com ?: exit = %d: %s", code, a.stderr.String())
 	}
-	comParametro := a.stdout.String()
+	withParametro := a.stdout.String()
 
-	if code := a.roda("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+	if code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
 		"SELECT id, status FROM radius_sessions WHERE status = '"+status+"'"); code != cli.ExitOK {
 		t.Fatalf("com literal: exit = %d: %s", code, a.stderr.String())
 	}
-	comLiteral := a.stdout.String()
+	withLiteral := a.stdout.String()
 
-	if len(contaLinhas(comParametro)) == 0 {
+	if len(countRows(withParametro)) == 0 {
 		t.Fatalf("nenhuma linha para status=%q, que veio do próprio corpus", status)
 	}
-	if comParametro != comLiteral {
+	if withParametro != withLiteral {
 		t.Errorf("o ? não produziu o mesmo que o literal:\n--- com ? ---\n%s\n--- com literal ---\n%s",
-			comParametro, comLiteral)
+			withParametro, withLiteral)
 	}
 }
 
 // A flag vale nos DOIS caminhos.
 //
-// consultaRemota promete que "um script que troca --config por --server não
+// remoteQuery promete que "um script que troca --config por --server não
 // muda mais nada". Uma flag que só funcionasse no remoto quebraria a promessa
 // justamente onde ela é mais fácil de verificar — e a query com ? pelo caminho
 // local saía com exit 2 desde o M1, o que o README registrava como limite.
 func TestParamFuncionaTambemNoCaminhoLocalComConfig(t *testing.T) {
-	a := novoAmbiente(t)
-	if code := a.rodaComEntrada(corpus(t, 30), "ingest",
+	a := newEnv(t)
+	if code := a.runWithEntry(corpus(t, 30), "ingest",
 		"--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != cli.ExitOK {
 		t.Fatalf("ingest: %s", a.stderr.String())
 	}
 
-	status := umStatusDoCorpus(t, a, "--config", a.config)
+	status := umStatusOfCorpus(t, a, "--config", a.config)
 
-	code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
+	code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 		"--param", "string:"+status,
 		"SELECT id, status FROM radius_sessions WHERE status = ?")
 	if code != cli.ExitOK {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}
-	if len(contaLinhas(a.stdout.String())) == 0 {
+	if len(countRows(a.stdout.String())) == 0 {
 		t.Fatalf("nenhuma linha pelo caminho local para status=%q", status)
 	}
 }
@@ -129,12 +129,12 @@ func TestParamFuncionaTambemNoCaminhoLocalComConfig(t *testing.T) {
 // É o que o int64 verbatim compra: com o valor convertido por strconv no CLI,
 // ou pior, por float64, este número chegaria ao servidor arredondado e ACEITO.
 func TestParamInt64AcimaDoTetoRecusaComAMensagemDoProtocolo(t *testing.T) {
-	a := novoAmbiente(t)
-	code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
+	a := newEnv(t)
+	code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 		"--param", "int64:9223372036854775808",
 		"SELECT id FROM radius_sessions WHERE _SEQ = ?")
-	if code != cli.ExitUso {
-		t.Fatalf("exit = %d, quer %d (erro de uso)", code, cli.ExitUso)
+	if code != cli.ExitUsageError {
+		t.Fatalf("exit = %d, quer %d (erro de uso)", code, cli.ExitUsageError)
 	}
 	if !strings.Contains(a.stderr.String(), "parameters[1]") {
 		t.Errorf("a mensagem não é a do protocolo (índice 1-based): %s", a.stderr.String())
@@ -148,13 +148,13 @@ func TestParamInt64AcimaDoTetoRecusaComAMensagemDoProtocolo(t *testing.T) {
 // NULL. Este é o oráculo do lado Go para o limite que o driver JDBC vai
 // publicar como SQLFeatureNotSupportedException em setNull.
 func TestParamNuloEnsinaIsNull(t *testing.T) {
-	a := novoAmbiente(t)
+	a := newEnv(t)
 	// `string:null` é a string "null", não o null de JSON — e é a única coisa
 	// que a sintaxe da flag consegue produzir.
-	code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
+	code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 		"--param", "string:null",
 		"SELECT id FROM radius_sessions WHERE status = ?")
-	if code == cli.ExitUso && strings.Contains(a.stderr.String(), "IS NULL") {
+	if code == cli.ExitUsageError && strings.Contains(a.stderr.String(), "IS NULL") {
 		t.Fatal("a flag conseguiu produzir um parâmetro NULO; ela não deveria ter sintaxe para isso")
 	}
 }
@@ -166,11 +166,11 @@ func TestParamNuloEnsinaIsNull(t *testing.T) {
 // comando que um humano vai instintivamente pôr depois da query, e "informe
 // exatamente uma query SQL" sozinho não ajudaria nesse caso.
 func TestParamDepoisDaQueryEhRecusadoComMensagemQueEnsinaAOrdem(t *testing.T) {
-	a := novoAmbiente(t)
-	code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
+	a := newEnv(t)
+	code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 		"SELECT id FROM radius_sessions WHERE status = ?", "--param", "string:Stop")
-	if code != cli.ExitUso {
-		t.Fatalf("exit = %d, quer %d", code, cli.ExitUso)
+	if code != cli.ExitUsageError {
+		t.Fatalf("exit = %d, quer %d", code, cli.ExitUsageError)
 	}
 	if !strings.Contains(a.stderr.String(), "ANTES") {
 		t.Errorf("a mensagem não ensina a ordem: %s", a.stderr.String())

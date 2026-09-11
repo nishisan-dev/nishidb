@@ -36,7 +36,7 @@ func (s *Store) EspelhosDivergentesForTest() uint64 { return s.espelhosDivergent
 func (s *Store) PartialCheckpointForTest() error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	if err := s.segW.Sync(); err != nil {
+	if err := s.secW.Sync(); err != nil {
 		return err
 	}
 	if err := s.locs.ApplyOverlay(); err != nil {
@@ -51,7 +51,7 @@ func (s *Store) PartialCheckpointForTest() error {
 	return s.seqs.Msync()
 }
 
-// CorrompeEspelhoParaTeste move os espelhos atômicos por fora dos mapas de
+// CorruptEspelhoForTest move os espelhos atômicos por fora dos mapas de
 // contabilidade — a precondição que a conferência do checkpoint existe para
 // achar e que nenhum caminho legítimo do writer produz.
 //
@@ -60,20 +60,20 @@ func (s *Store) PartialCheckpointForTest() error {
 // contrato faria o seam plantar um estado que o produto não consegue
 // alcançar, e um detector aferido contra estado impossível não diz nada sobre
 // o estado real.
-func (s *Store) CorrompeEspelhoParaTeste(fn func(*Store)) {
+func (s *Store) CorruptEspelhoForTest(fn func(*Store)) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	fn(s)
 }
 
-// SetAposentadoriaTraceForTest instala o gravador dos passos da aposentadoria
+// SetRetirementTraceForTest instala o gravador dos passos da aposentadoria
 // de segmento (seam de teste; nil em produção). É por ele que o crash test
 // para o processo DENTRO de cada janela do D5.
-func (s *Store) SetAposentadoriaTraceForTest(fn func(passo string)) { s.apTrace = fn }
+func (s *Store) SetRetirementTraceForTest(fn func(passo string)) { s.apTrace = fn }
 
-// SetSyncDeDiretorioTraceForTest instala o observador dos fsyncs de diretório
+// SetSyncOfDiretorioTraceForTest instala o observador dos fsyncs de diretório
 // da aposentadoria (seam de teste; nil em produção). Ele é chamado de dentro
 // do helper que executa o fsync, DEPOIS de o fsync devolver nil — quem apaga
 // a chamada apaga o aviso junto, que é a única forma de o teste distinguir a
 // presença da ausência de uma durabilidade que não deixa rastro em disco.
-func (s *Store) SetSyncDeDiretorioTraceForTest(fn func(dir string)) { s.apDirSync = fn }
+func (s *Store) SetSyncOfDiretorioTraceForTest(fn func(dir string)) { s.apDirSync = fn }

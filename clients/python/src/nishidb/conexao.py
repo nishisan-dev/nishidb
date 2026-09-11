@@ -24,16 +24,16 @@ from .transporte import Transporte
 ENV_SENHA = "NISHIDB_PASSWORD"
 
 
-def _resolve_senha(usuario: str | None, senha: str | None, arquivo_senha: str | None) -> str:
+def _resolve_password(user: str | None, password: str | None, password_file: str | None) -> str:
     """Valida as fontes de senha e lê a escolhida. Nenhuma mensagem ecoa VALOR."""
-    senha_env = os.environ.get(ENV_SENHA)
-    tem_env = senha_env is not None
-    tem_arquivo = arquivo_senha is not None
-    tem_kwarg = senha is not None
-    fontes = sum((tem_env, tem_arquivo, tem_kwarg))
+    password_env = os.environ.get(ENV_SENHA)
+    has_env = password_env is not None
+    has_file = password_file is not None
+    has_kwarg = password is not None
+    sources = sum((has_env, has_file, has_kwarg))
 
-    if not usuario:
-        if fontes:
+    if not user:
+        if sources:
             raise erros.InterfaceError(
                 f"password/password_file/{ENV_SENHA} exigem user — "
                 "a senha sozinha não identifica ninguém"
@@ -42,38 +42,41 @@ def _resolve_senha(usuario: str | None, senha: str | None, arquivo_senha: str | 
         # autenticação são decisões independentes do servidor (§77).
         return ""
 
-    if fontes == 0:
+    if sources == 0:
         raise erros.InterfaceError(
             f"user exige uma senha por password=, password_file= ou {ENV_SENHA}"
         )
-    if fontes > 1:
+    if sources > 1:
         raise erros.InterfaceError(
             f"password, password_file e {ENV_SENHA} são exclusivos: escolha UMA fonte"
         )
 
-    if tem_kwarg:
-        return senha or ""
-    if tem_arquivo:
+    if has_kwarg:
+        return password or ""
+    if has_file:
         try:
-            with open(arquivo_senha, encoding="utf-8") as f:  # type: ignore[arg-type]
-                bruto = f.read()
+            with open(password_file, encoding="utf-8") as f:  # type: ignore[arg-type]
+                raw = f.read()
         except OSError as e:
             raise erros.InterfaceError(f"password_file: {e}") from e
         # Mesma aparagem do servidor: todo `echo senha > arquivo` termina em
         # LF ou CRLF.
-        limpa = bruto.rstrip("\r\n")
-        if not limpa:
+        cleaned = raw.rstrip("\r\n")
+        if not cleaned:
             raise erros.InterfaceError(
-                f"password_file {arquivo_senha} está vazio (ou só tem quebra de linha)"
+                f"password_file {password_file} está vazio (ou só tem quebra de linha)"
             )
-        return limpa
+        return cleaned
 
-    if senha_env == "":
+    if password_env == "":
         raise erros.InterfaceError(
             f"{ENV_SENHA} está definida e VAZIA — não é a mesma coisa que ausente; "
             "preencha a variável ou use password_file"
         )
-    return senha_env or ""
+    return password_env or ""
+
+
+_resolve_senha = _resolve_password
 
 
 class Connection:
@@ -93,24 +96,24 @@ class Connection:
     ProgrammingError = erros.ProgrammingError
     NotSupportedError = erros.NotSupportedError
 
-    def __init__(self, destino: _dsn.Destino, usuario: str | None, senha: str) -> None:
-        self._destino = destino
-        self._transporte = Transporte(destino, usuario, senha)
-        self._fechada = False
-        self._cursores: list[Cursor] = []
-        self._tetos: dict[str, tuple[int, int]] = {}
+    def __init__(self, destination: _dsn.Destino, user: str | None, password: str) -> None:
+        self._destination = destination
+        self._transport = Transporte(destination, user, password)
+        self._closed = False
+        self._cursors: list[Cursor] = []
+        self._limits: dict[str, tuple[int, int]] = {}
 
         # Os limites do dataset são buscados ANTES de qualquer consulta, como o
         # JDBC faz. Efeito colateral desejado: dataset inexistente falha ao
         # ABRIR a conexão, e não na primeira query — que é onde o usuário já
         # perdeu o contexto do erro.
         try:
-            meta = self.metadata(destino.dataset)
+            metadata = self.metadata(destination.dataset)
         except erros.Error:
-            self._transporte.close()
-            self._fechada = True
+            self._transport.close()
+            self._closed = True
             raise
-        self._dataset_meta = meta
+        self._dataset_meta = metadata
 
     # --------------------------------------------------------------- estado
 
@@ -118,18 +121,22 @@ class Connection:
     def dataset(self) -> str:
         """O dataset da string de conexão — o fallback de toda query cujo
         `FROM` o scanner não reconheceu."""
-        return self._destino.dataset
+        return self._destination.dataset
 
     @property
-    def transporte(self) -> Transporte:
-        return self._transporte
+    def transport(self) -> Transporte:
+        return self._transport
 
-    def exige_aberta(self) -> Connection:
-        if self._fechada:
+    transporte = transport
+
+    def require_open(self) -> Connection:
+        if self._closed:
             raise erros.InterfaceError("a conexão está fechada")
         return self
 
-    def tetos_de(self, dataset: str) -> tuple[int, int]:
+    exige_aberta = require_open
+
+    def limits_for(self, dataset: str) -> tuple[int, int]:
         """(maxRows, maxTimeoutMs) efetivos, ou (0, 0) quando desconhecidos.
 
         Só o dataset da conexão é buscado na abertura. Para outro, devolvemos
@@ -137,25 +144,27 @@ class Connection:
         dataset citado num FROM custaria uma viagem de rede por consulta nova,
         para evitar um erro que o servidor já dá com clareza.
         """
-        return self._tetos.get(dataset, (0, 0))
+        return self._limits.get(dataset, (0, 0))
+
+    tetos_de = limits_for
 
     # ------------------------------------------------------------- as rotas
 
     def metadata(self, dataset: str | None = None) -> list[documentos.DatasetMeta]:
         """`GET /v1/metadata`, de todos os datasets ou de um só."""
-        self.exige_aberta()
-        caminho = "/v1/metadata"
+        self.require_open()
+        path = "/v1/metadata"
         if dataset is not None:
-            caminho += "?dataset=" + quote(dataset, safe="")
-        metas = documentos.datasets_de(self._transporte.documento(caminho))
-        for m in metas:
-            self._tetos[m.name] = (m.max_rows, m.timeout_ms)
-        return metas
+            path += "?dataset=" + quote(dataset, safe="")
+        dataset_meta = documentos.datasets_de(self._transport.documento(path))
+        for item in dataset_meta:
+            self._limits[item.name] = (item.max_rows, item.timeout_ms)
+        return dataset_meta
 
     def stats(self) -> documentos.Estatisticas:
         """`GET /v1/stats`."""
-        self.exige_aberta()
-        return documentos.Estatisticas.de_json(self._transporte.documento("/v1/stats"))
+        self.require_open()
+        return documentos.Estatisticas.de_json(self._transport.documento("/v1/stats"))
 
     def health(self) -> documentos.Saude:
         """`GET /v1/health`.
@@ -163,16 +172,16 @@ class Connection:
         Sai com 503 quando o processo não está UP, e isso **não é erro** aqui:
         é a resposta, e o estado está no corpo.
         """
-        self.exige_aberta()
-        return documentos.Saude.de_json(self._transporte.documento("/v1/health"))
+        self.require_open()
+        return documentos.Saude.de_json(self._transport.documento("/v1/health"))
 
     # -------------------------------------------------------------- PEP 249
 
     def cursor(self) -> Cursor:
-        self.exige_aberta()
-        c = Cursor(self)
-        self._cursores.append(c)
-        return c
+        self.require_open()
+        cursor = Cursor(self)
+        self._cursors.append(cursor)
+        return cursor
 
     def commit(self) -> None:
         """No-op.
@@ -194,13 +203,13 @@ class Connection:
 
     def close(self) -> None:
         """Fecha os cursores abertos e depois a conexão HTTP, nessa ordem."""
-        if self._fechada:
+        if self._closed:
             return
-        for c in list(self._cursores):
-            c.close()
-        self._cursores.clear()
-        self._transporte.close()
-        self._fechada = True
+        for cursor in list(self._cursors):
+            cursor.close()
+        self._cursors.clear()
+        self._transport.close()
+        self._closed = True
 
     def __enter__(self) -> Connection:
         return self
@@ -233,35 +242,35 @@ def connect(
     `NISHIDB_PASSWORD` — uma e só uma delas.
     """
     if dsn is not None:
-        destino = _dsn.parse(dsn)
+        destination = _dsn.parse(dsn)
     else:
         if not host or not dataset:
             raise erros.InterfaceError("sem dsn, host= e dataset= são obrigatórios")
-        destino = _dsn.Destino(host=host, port=port or _dsn.PORTA_PADRAO, dataset=dataset)
+        destination = _dsn.Destino(host=host, port=port or _dsn.PORTA_PADRAO, dataset=dataset)
 
-    trocas: dict[str, Any] = {}
+    overrides: dict[str, Any] = {}
     if host is not None:
-        trocas["host"] = host
+        overrides["host"] = host
     if port is not None:
-        trocas["port"] = port
+        overrides["port"] = port
     if dataset is not None:
-        trocas["dataset"] = dataset
+        overrides["dataset"] = dataset
     if user is not None:
-        trocas["user"] = user
+        overrides["user"] = user
     if tls is not None:
-        trocas["tls"] = tls
+        overrides["tls"] = tls
     if tls_ca is not None:
-        trocas["tls_ca"] = tls_ca
+        overrides["tls_ca"] = tls_ca
     if connect_timeout_ms is not None:
-        trocas["connect_timeout_ms"] = connect_timeout_ms
-    if trocas:
+        overrides["connect_timeout_ms"] = connect_timeout_ms
+    if overrides:
         from dataclasses import replace
 
-        destino = replace(destino, **trocas)
+        destination = replace(destination, **overrides)
 
-    if destino.tls_ca is not None and not destino.tls:
+    if destination.tls_ca is not None and not destination.tls:
         raise erros.InterfaceError("tls_ca exige tls=True")
 
-    usuario = destino.user
-    senha = _resolve_senha(usuario, password, password_file)
-    return Connection(destino, usuario, senha)
+    user = destination.user
+    password = _resolve_password(user, password, password_file)
+    return Connection(destination, user, password)

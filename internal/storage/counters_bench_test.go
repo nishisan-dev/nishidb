@@ -16,14 +16,14 @@ import (
 // "ordem do full scan" que o plano fixou para a reconstrução, e é o tempo em
 // que o writer fica parado num rebuild.
 func BenchmarkReconstroiContadores1M(b *testing.B) {
-	const linhas = 1 << 20
+	const rows = 1 << 20
 	s := openStore(b, Options{
 		Dir:           b.TempDir(),
 		SegmentSize:   64 << 20,
-		EstimatedRows: linhas,
-		CompilaContadores: callbackDeContadores(
-			contadorDeTeste{nome: "aut", groupBy: []string{"olt"}, where: true, teto: 4096},
-			contadorDeTeste{nome: "serv", groupBy: []string{"olt"}, teto: 4096},
+		EstimatedRows: rows,
+		CompileCountersCallbackFunction: callbackOfCounters(
+			counterOfTest{name: "aut", groupBy: []string{"olt"}, where: true, ceiling: 4096},
+			counterOfTest{name: "serv", groupBy: []string{"olt"}, ceiling: 4096},
 		),
 	})
 	dict := s.FieldDict()
@@ -48,10 +48,10 @@ func BenchmarkReconstroiContadores1M(b *testing.B) {
 			ordem[j], ordem[j-1] = ordem[j-1], ordem[j]
 		}
 	}
-	var buf, chave, olt []byte
+	var buf, key, olt []byte
 	var autenticadosNaOLT0 int64
-	for i := 0; i < linhas; i++ {
-		chave = strconv.AppendInt(chave[:0], int64(i), 10)
+	for i := 0; i < rows; i++ {
+		key = strconv.AppendInt(key[:0], int64(i), 10)
 		olt = append(olt[:0], "OLT"...)
 		olt = strconv.AppendInt(olt, int64(i%2048), 10)
 		auth := i%3 != 0
@@ -63,7 +63,7 @@ func BenchmarkReconstroiContadores1M(b *testing.B) {
 			var v types.Value
 			switch id {
 			case idID:
-				v = types.Value{Type: types.TypeString, Bytes: chave}
+				v = types.Value{Type: types.TypeString, Bytes: key}
 			case oltID:
 				v = types.Value{Type: types.TypeString, Bytes: olt}
 			default:
@@ -74,7 +74,7 @@ func BenchmarkReconstroiContadores1M(b *testing.B) {
 			}
 			buf = mustAppendField(b, buf, id, v)
 		}
-		if _, _, err := s.Put(chave, 0, 0, buf, nil); err != nil {
+		if _, _, err := s.Put(key, 0, 0, buf, nil); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -83,25 +83,25 @@ func BenchmarkReconstroiContadores1M(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := s.ReconstroiContadores(context.Background()); err != nil {
+		if _, err := s.ReconstroiCounters(context.Background()); err != nil {
 			b.Fatal(err)
 		}
 	}
 	b.StopTimer()
 	// A reconstrução tem de reproduzir os totais — senão o número medido é o
 	// de uma varredura que não fez o trabalho.
-	for _, c := range s.Contadores() {
+	for _, c := range s.Counters() {
 		id, ok := c.ByText([]byte("OLT0"))
 		if !ok {
 			b.Fatalf("%s: OLT0 não está no dicionário depois da reconstrução", c.Def().Name)
 		}
 		_, _, total, refs, _ := c.Group(id)
-		quer := int64(linhas / 2048)
+		quer := int64(rows / 2048)
 		if c.Def().Name == "aut" {
 			quer = autenticadosNaOLT0
 		}
-		if total != quer || refs != linhas/2048 {
-			b.Fatalf("%s[OLT0]: total %d refs %d, quer %d e %d", c.Def().Name, total, refs, quer, linhas/2048)
+		if total != quer || refs != rows/2048 {
+			b.Fatalf("%s[OLT0]: total %d refs %d, quer %d e %d", c.Def().Name, total, refs, quer, rows/2048)
 		}
 	}
 }

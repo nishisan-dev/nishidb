@@ -13,7 +13,7 @@ import (
 
 // A QUARTA rota de leitura. O quiesce da I2 cobriu Put, GetByKey, GetByRowID e
 // ScanLive, e o teste daquela tarefa asseriu "toda operação após o Close" — mas
-// o helper `abre` não configura índice, então o Lookup estava fora do alcance da
+// o helper `open` não configura índice, então o Lookup estava fora do alcance da
 // asserção. A invariante valia em três rotas e falhava na quarta.
 //
 // O iterador do índice é o mais exposto de todos: ele SOBREVIVE à chamada que o
@@ -27,24 +27,24 @@ import (
 // bitmap deixaria a rota mais exposta do motor novo sem asserção de quiesce
 // nenhuma.
 
-func abreComBitmap(t *testing.T, campo string) (*storage.Store, types.FieldID) {
+func openWithBitmap(t *testing.T, field string) (*storage.Store, types.FieldID) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "ds")
-	st, err := storage.Open(storage.Options{Dir: dir, CamposIndexadosPorNome: []string{campo}})
+	st, err := storage.Open(storage.Options{Dir: dir, IndexedFieldsByName: []string{field}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := st.FieldDict().LookupOrCreate([]byte(campo))
+	id, err := st.FieldDict().LookupOrCreate([]byte(field))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return st, id
 }
 
-func povoa(t *testing.T, st *storage.Store, campo types.FieldID, valor string, rows int) {
+func povoa(t *testing.T, st *storage.Store, field types.FieldID, value string, rows int) {
 	t.Helper()
-	p, err := encoding.AppendField(nil, campo,
-		types.Value{Type: types.TypeString, Bytes: []byte(valor)})
+	p, err := encoding.AppendField(nil, field,
+		types.Value{Type: types.TypeString, Bytes: []byte(value)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,10 +60,10 @@ func povoa(t *testing.T, st *storage.Store, campo types.FieldID, valor string, r
 // mmap ("offset N fora dos limites (size=0)"), porque o Close zera o tamanho da
 // região e o iterador continuava lendo.
 func TestIteradorDeBitmapEmVooNaoEntraEmPanicNoClose(t *testing.T) {
-	st, campo := abreComBitmap(t, "status")
-	povoa(t, st, campo, "Stop", 4096)
+	st, field := openWithBitmap(t, "status")
+	povoa(t, st, field, "Stop", 4096)
 
-	it, err := st.Lookup(campo, types.Value{Type: types.TypeString, Bytes: []byte("Stop")})
+	it, err := st.Lookup(field, types.Value{Type: types.TypeString, Bytes: []byte("Stop")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,13 +93,13 @@ func TestIteradorDeBitmapEmVooNaoEntraEmPanicNoClose(t *testing.T) {
 
 // Iterador de índice criado DEPOIS do Close: sem panic, sem row, com o motivo.
 func TestLookupAposCloseDevolveErro(t *testing.T) {
-	st, campo := abreComBitmap(t, "status")
-	povoa(t, st, campo, "Stop", 64)
+	st, field := openWithBitmap(t, "status")
+	povoa(t, st, field, "Stop", 64)
 
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Lookup(campo, types.Value{Type: types.TypeString, Bytes: []byte("Stop")}); !errors.Is(err, storage.ErrDatasetClosed) {
+	if _, err := st.Lookup(field, types.Value{Type: types.TypeString, Bytes: []byte("Stop")}); !errors.Is(err, storage.ErrDatasetClosed) {
 		t.Errorf("Lookup após Close = %v, want ErrDatasetClosed", err)
 	}
 }
@@ -108,18 +108,18 @@ func TestLookupAposCloseDevolveErro(t *testing.T) {
 // acontece. É o cenário do servidor do M3 — Store de vida longa e query em
 // streaming —, onde o CLI não tem a ordem de defer a favor.
 func TestCloseConcorrenteComIteradoresDeBitmap(t *testing.T) {
-	st, campo := abreComBitmap(t, "status")
-	povoa(t, st, campo, "Stop", 4096)
-	valor := types.Value{Type: types.TypeString, Bytes: []byte("Stop")}
+	st, field := openWithBitmap(t, "status")
+	povoa(t, st, field, "Stop", 4096)
+	value := types.Value{Type: types.TypeString, Bytes: []byte("Stop")}
 
-	const leitores = 6
+	const readers = 6
 	var wg sync.WaitGroup
-	for range leitores {
+	for range readers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for range 2_000 {
-				it, err := st.Lookup(campo, valor)
+				it, err := st.Lookup(field, value)
 				if err != nil {
 					if !errors.Is(err, storage.ErrDatasetClosed) {
 						t.Errorf("Lookup: %v", err)
@@ -165,10 +165,10 @@ func TestCloseConcorrenteComIteradoresDeBitmap(t *testing.T) {
 // só descobre o vazio DURANTE a varredura, que reentra no Store a cada avanço.
 // Se o dataset fechou, ele diz que fechou.
 func TestIteradorVazioDeBitmapSobreviveAoClose(t *testing.T) {
-	st, campo := abreComBitmap(t, "status")
-	povoa(t, st, campo, "Stop", 8)
+	st, field := openWithBitmap(t, "status")
+	povoa(t, st, field, "Stop", 8)
 
-	it, err := st.Lookup(campo, types.Value{Type: types.TypeString, Bytes: []byte("Start")})
+	it, err := st.Lookup(field, types.Value{Type: types.TypeString, Bytes: []byte("Start")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestIteradorVazioDeBitmapSobreviveAoClose(t *testing.T) {
 
 	// E sem o Close no meio, o mesmo valor inexistente é vazio SEM erro: a
 	// asserção acima não pode estar passando por um erro que aparece sempre.
-	st2, campo2 := abreComBitmap(t, "status")
+	st2, campo2 := openWithBitmap(t, "status")
 	povoa(t, st2, campo2, "Stop", 8)
 	defer func() { _ = st2.Close() }()
 	it2, err := st2.Lookup(campo2, types.Value{Type: types.TypeString, Bytes: []byte("Start")})

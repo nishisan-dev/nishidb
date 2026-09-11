@@ -57,7 +57,7 @@ func errAt(pos int, format string, args ...any) error {
 	return &Error{Msg: fmt.Sprintf(format, args...), Pos: pos}
 }
 
-// errNoPos é para o que não tem lugar no SQL — hoje, só os parâmetros.
-func errNoPos(format string, args ...any) error {
+// errInPos é para o que não tem lugar no SQL — hoje, só os parâmetros.
+func errInPos(format string, args ...any) error {
 	return &Error{Msg: fmt.Sprintf(format, args...), Pos: -1}
 }

@@ -166,7 +166,7 @@ Fontes, na ordem: `Store.Stats()` (`store.go:1233`), `Engine.Metrics()`/`PlanMet
 | `internal/server/query.go` *(novo)* | `handleQuery`: decodifica, valida, adquire o semáforo, executa, emite a moldura, mede |
 | `internal/server/metadata.go` *(novo)* | `handleMetadata` e `handleStats` |
 | `internal/server/metrics_query.go` *(novo)* | Famílias `nishidb_query_total`/`_active`/`_errors`/`_latency_seconds` + CollectorFunc de `_full_scans` (D13). Nomes vêm de `internal/metrics/names.go`, nunca digitados à mão |
-| `internal/server/server.go` | `sobeHTTP` registra as três rotas; `Novo` avisa (WARN) se o bind não é loopback |
+| `internal/server/server.go` | `risesHTTP` registra as três rotas; `Novo` avisa (WARN) se o bind não é loopback |
 | `internal/cli/query.go` | Flag `--server`; caminho remoto; tradução do fecho em exit code; dica de `--server` na mensagem do `ErrDatasetLocked` |
 | `internal/cli/cli.go` | Texto de uso |
 

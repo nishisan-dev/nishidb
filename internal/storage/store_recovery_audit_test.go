@@ -20,7 +20,7 @@ func audManifestPath(dir string) string {
 	return filepath.Join(dir, "checkpoint", "manifest.bin")
 }
 
-func audSegPath(dir string, id uint32) string {
+func audSecPath(dir string, id uint32) string {
 	return filepath.Join(dir, "data", fmt.Sprintf("segment-%08d.dat", id))
 }
 
@@ -51,7 +51,7 @@ func mustGetAud(t *testing.T, s *Store, key string) types.Record {
 }
 
 func TestReplayReinsereKeyComPrimaryAtrasDasLocations(t *testing.T) {
-	// Janela real do §10.2: o ApplyOverlay grava as locations no mmap ANTES
+	// Window real do §10.2: o ApplyOverlay grava as locations no mmap ANTES
 	// do msync da primary. Um crash entre os dois deixa as locations À
 	// FRENTE da primary. Se o replay só inserisse na primary as rows que
 	// ainda não têm location, a key ficaria inalcançável por GetByKey para
@@ -65,7 +65,7 @@ func TestReplayReinsereKeyComPrimaryAtrasDasLocations(t *testing.T) {
 	}
 
 	idxPath := filepath.Join(dir, "indexes", "primary.idx")
-	primariaEmS, err := os.ReadFile(idxPath)
+	primariaInS, err := os.ReadFile(idxPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestReplayReinsereKeyComPrimaryAtrasDasLocations(t *testing.T) {
 	}
 	// Regride SÓ a primary ao estado de S: as locations do tail continuam no
 	// mmap, a primary não conhece as keys do tail.
-	if err := os.WriteFile(idxPath, primariaEmS, 0o644); err != nil {
+	if err := os.WriteFile(idxPath, primariaInS, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -100,9 +100,9 @@ func TestReplayReinsereKeyComPrimaryAtrasDasLocations(t *testing.T) {
 	if used := s2.Stats().PrimaryLoadFactor; used <= 0 {
 		t.Fatal("load factor deveria ser positivo")
 	}
-	novo, created := mustPut(t, s2, "tail-1", 9, statusPayload(t, s2, "tail-1", "Stop", 9), nil)
+	nw, created := mustPut(t, s2, "tail-1", 9, statusPayload(t, s2, "tail-1", "Stop", 9), nil)
 	if created {
-		t.Fatalf("a key do tail deveria ser reconhecida como existente, virou row nova %d", novo)
+		t.Fatalf("a key do tail deveria ser reconhecida como existente, virou row nova %d", nw)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestOpenAposCrashAntesDoPrimeiroManifest(t *testing.T) {
 	if err := os.Remove(audManifestPath(dir)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(audSegPath(dir, 1)); err != nil {
+	if _, err := os.Stat(audSecPath(dir, 1)); err != nil {
 		t.Fatalf("o cenário exige o segmento 1 já criado: %v", err)
 	}
 
@@ -154,8 +154,8 @@ func TestOpenComDurableOffsetAlemDoSegmento(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tamanhoOriginal := fileSizeAud(t, audSegPath(dir, 1))
-	m.DurableOffset = uint64(tamanhoOriginal) + 4096
+	sizeOriginal := fileSizeAud(t, audSecPath(dir, 1))
+	m.DurableOffset = uint64(sizeOriginal) + 4096
 	if err := checkpoint.Write(audManifestPath(dir), m); err != nil {
 		t.Fatal(err)
 	}
@@ -163,8 +163,8 @@ func TestOpenComDurableOffsetAlemDoSegmento(t *testing.T) {
 	if _, err := Open(opts); !errors.Is(err, ErrDatasetCorrupt) {
 		t.Fatalf("durableOffset além do arquivo deveria ser fatal, obtido %v", err)
 	}
-	if got := fileSizeAud(t, audSegPath(dir, 1)); got != tamanhoOriginal {
-		t.Fatalf("o Open não pode ter mexido no segmento: %d → %d", tamanhoOriginal, got)
+	if got := fileSizeAud(t, audSecPath(dir, 1)); got != sizeOriginal {
+		t.Fatalf("o Open não pode ter mexido no segmento: %d → %d", sizeOriginal, got)
 	}
 }
 
@@ -196,7 +196,7 @@ func TestOpenComDurableOffsetAbaixoDoHeader(t *testing.T) {
 func TestErrosFataisDeDatasetSaoClassificaveis(t *testing.T) {
 	// Todo caminho "não dá para recuperar sozinho" precisa ser distinguível
 	// de um erro de I/O transitório pelo caller (e pelos testes).
-	novoDataset := func(t *testing.T) (string, Options) {
+	newDataset := func(t *testing.T) (string, Options) {
 		t.Helper()
 		dir := t.TempDir()
 		opts := Options{Dir: dir}
@@ -212,7 +212,7 @@ func TestErrosFataisDeDatasetSaoClassificaveis(t *testing.T) {
 	}
 
 	t.Run("manifest_ausente_com_dados", func(t *testing.T) {
-		dir, opts := novoDataset(t)
+		dir, opts := newDataset(t)
 		if err := os.Remove(audManifestPath(dir)); err != nil {
 			t.Fatal(err)
 		}
@@ -222,7 +222,7 @@ func TestErrosFataisDeDatasetSaoClassificaveis(t *testing.T) {
 	})
 
 	t.Run("manifest_corrompido", func(t *testing.T) {
-		dir, opts := novoDataset(t)
+		dir, opts := newDataset(t)
 		raw, err := os.ReadFile(audManifestPath(dir))
 		if err != nil {
 			t.Fatal(err)
@@ -243,8 +243,8 @@ func TestErrosFataisDeDatasetSaoClassificaveis(t *testing.T) {
 	})
 
 	t.Run("segmento_do_manifest_removido", func(t *testing.T) {
-		dir, opts := novoDataset(t)
-		if err := os.Remove(audSegPath(dir, 1)); err != nil {
+		dir, opts := newDataset(t)
+		if err := os.Remove(audSecPath(dir, 1)); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := Open(opts); !errors.Is(err, ErrDatasetCorrupt) {
@@ -269,7 +269,7 @@ func TestOpenComBuracoNaCadeiaDeSegmentos(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(audSegPath(dir, 2)); err != nil {
+	if err := os.Remove(audSecPath(dir, 2)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -283,10 +283,10 @@ func TestReplayUsaOMesmoCodePathDoWritePath(t *testing.T) {
 	// senão as duas divergem em silêncio. O observável é a igualdade dos
 	// tallies: gravar N records e replayá-los tem que produzir a mesma
 	// contabilidade de liveness que gravá-los com checkpoint no fim.
-	monta := func(t *testing.T, comCheckpointNoFim bool) []checkpoint.SegmentInfo {
+	build := func(t *testing.T, comCheckpointNoEnd bool) []checkpoint.SegmentInfo {
 		t.Helper()
 		dir := t.TempDir()
-		opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+		opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 		s := audOpen(t, opts)
 		for i := 0; i < 4; i++ {
 			k := fmt.Sprintf("cp-%d", i)
@@ -300,7 +300,7 @@ func TestReplayUsaOMesmoCodePathDoWritePath(t *testing.T) {
 			}
 			mustPut(t, s, k, 2, statusPayload(t, s, k, "Stop", 2), &prev)
 		}
-		if comCheckpointNoFim {
+		if comCheckpointNoEnd {
 			if err := s.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
@@ -320,8 +320,8 @@ func TestReplayUsaOMesmoCodePathDoWritePath(t *testing.T) {
 		return m.Segments
 	}
 
-	escrito := monta(t, true)
-	replayado := monta(t, false)
+	escrito := build(t, true)
+	replayado := build(t, false)
 	if len(escrito) != len(replayado) {
 		t.Fatalf("número de segmentos: escrito=%d replayado=%d", len(escrito), len(replayado))
 	}
@@ -353,24 +353,24 @@ func TestCorrupcaoNoMeioDaCadeiaEhFatalENaoTrunca(t *testing.T) {
 	}
 
 	// Corrompe o PRIMEIRO record do segmento 1, que já foi selado.
-	raw, err := os.ReadFile(audSegPath(dir, 1))
+	raw, err := os.ReadFile(audSecPath(dir, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw[segment.HeaderSize+40] ^= 0xFF
-	if err := os.WriteFile(audSegPath(dir, 1), raw, 0o644); err != nil {
+	if err := os.WriteFile(audSecPath(dir, 1), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tamanhos := map[uint32]int64{}
+	sizes := map[uint32]int64{}
 	for id := uint32(1); id <= 3; id++ {
-		tamanhos[id] = fileSizeAud(t, audSegPath(dir, id))
+		sizes[id] = fileSizeAud(t, audSecPath(dir, id))
 	}
 
 	if _, err := Open(opts); !errors.Is(err, ErrDatasetCorrupt) {
 		t.Fatalf("corrupção antes do último segmento deveria ser fatal, obtido %v", err)
 	}
-	for id, want := range tamanhos {
-		if got := fileSizeAud(t, audSegPath(dir, id)); got != want {
+	for id, want := range sizes {
+		if got := fileSizeAud(t, audSecPath(dir, id)); got != want {
 			t.Fatalf("o Open recusado não pode truncar nada: segmento %d %d → %d", id, want, got)
 		}
 	}
@@ -392,13 +392,13 @@ func TestRotacaoSeguinteAposAdotarOrfao(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Forja o órfão de uma rotação interrompida: header do 1 com ID trocado.
-	raw, err := os.ReadFile(audSegPath(dir, 1))
+	raw, err := os.ReadFile(audSecPath(dir, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
 	hdr := append([]byte(nil), raw[:segment.HeaderSize]...)
 	hdr[8] = 2
-	if err := os.WriteFile(audSegPath(dir, 2), hdr, 0o644); err != nil {
+	if err := os.WriteFile(audSecPath(dir, 2), hdr, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -428,7 +428,7 @@ func TestPhantomCommitEmUpdateMaterializaEstadoNovo(t *testing.T) {
 	// row que já existia. O replay tem que promover esse estado E reexecutar
 	// a transição de bitmap que o Put falho deixou pela metade.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := audOpen(t, opts)
 	id, _ := mustPut(t, s, "phu", 1, statusPayload(t, s, "phu", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {

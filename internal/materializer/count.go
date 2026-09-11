@@ -6,17 +6,17 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// contagemTipo nomeia o contador que uma contagem adiada representa.
-type contagemTipo uint8
+// countTipo nomeia o contador que uma contagem adiada representa.
+type countTipo uint8
 
 const (
-	contaOcorrencia contagemTipo = iota
-	contaCoercao
-	contaDivergencia
-	contaCongelada
+	countOcorrencia countTipo = iota
+	countCoercao
+	countDivergencia
+	countCongelada
 )
 
-// contagem é um incremento de contador ADIADO até a aplicação.
+// count é um incremento de contador ADIADO até a aplicação.
 //
 // POR QUE ADIAR o que é só um atomic.Add. Não é concorrência: os contadores já
 // são atômicos e somas comutam, então N decodificadores incrementando em
@@ -34,19 +34,19 @@ const (
 //
 // O custo é um append por chave num slice reusado, e uma passada no fim: zero
 // alocação em regime, travado pelos gates de alocação do pacote.
-type contagem struct {
-	coluna *schema.CompiledField
+type count struct {
+	column *schema.CompiledField
 	// veio é o tipo que a origem mandou, e só a divergência o usa.
 	veio types.FieldType
-	tipo contagemTipo
+	tipo countTipo
 }
 
-// conta registra um incremento para a aplicação executar.
-func (b *PatchBuffer) conta(tipo contagemTipo, coluna *schema.CompiledField, veio types.FieldType) {
-	b.contagens = append(b.contagens, contagem{coluna: coluna, veio: veio, tipo: tipo})
+// count registra um incremento para a aplicação executar.
+func (b *PatchBuffer) count(tipo countTipo, column *schema.CompiledField, veio types.FieldType) {
+	b.contagens = append(b.contagens, count{column: column, veio: veio, tipo: tipo})
 }
 
-// contaSeDivergiu registra a divergência de tipo SÓ quando houve divergência de
+// countSeDivergiu registra a divergência de tipo SÓ quando houve divergência de
 // verdade.
 //
 // O caso que ele exclui é o `null` EXPLÍCITO no documento. Convert devolve
@@ -65,15 +65,15 @@ func (b *PatchBuffer) conta(tipo contagemTipo, coluna *schema.CompiledField, vei
 // número que decide quais chaves ganham tipo declarado. Inflado por null, ele
 // aponta para colunas cujo problema não é o tipo — e a decisão sai errada
 // justamente onde ela deveria sair de medição.
-func (b *PatchBuffer) contaSeDivergiu(coluna *schema.CompiledField, f jsonp.Field) {
+func (b *PatchBuffer) countSeDivergiu(column *schema.CompiledField, f jsonp.Field) {
 	veio := InferType(f)
 	if veio == types.TypeNull {
 		return
 	}
-	b.conta(contaDivergencia, coluna, veio)
+	b.count(countDivergencia, column, veio)
 }
 
-// contaSeCoergiu registra que o valor chegou noutra forma JSON e ainda assim
+// countSeCoergiu registra que o valor chegou noutra forma JSON e ainda assim
 // entrou na coluna — número numa coluna de texto, string numérica numa coluna
 // int64 ou double.
 //
@@ -102,12 +102,12 @@ func (b *PatchBuffer) contaSeDivergiu(coluna *schema.CompiledField, f jsonp.Fiel
 //
 // Só é chamado no caminho de SUCESSO. Ocorrência que falhou é divergência e já
 // tem contador; ocorrência que veio `null` não é nem uma coisa nem outra.
-func (b *PatchBuffer) contaSeCoergiu(coluna *schema.CompiledField, f jsonp.Field, alvo types.FieldType) {
-	nativo, temNativo := kindNativo(alvo)
-	if !temNativo || f.Kind == nativo {
+func (b *PatchBuffer) countSeCoergiu(column *schema.CompiledField, f jsonp.Field, target types.FieldType) {
+	nativo, hasNativo := kindNativo(target)
+	if !hasNativo || f.Kind == nativo {
 		return
 	}
-	b.conta(contaCoercao, coluna, types.TypeNull)
+	b.count(countCoercao, column, types.TypeNull)
 }
 
 // aplicaContagens executa os incrementos adiados e esvazia a lista.
@@ -123,13 +123,13 @@ func (b *PatchBuffer) aplicaContagens(met *Metrics) {
 	for i := range b.contagens {
 		k := &b.contagens[i]
 		switch k.tipo {
-		case contaOcorrencia:
-			k.coluna.CountOccurrence()
-		case contaCoercao:
-			k.coluna.CountCoercion()
-		case contaDivergencia:
-			b.compilado.CountIncompatibleValue(k.coluna, k.veio)
-		case contaCongelada:
+		case countOcorrencia:
+			k.column.CountOccurrence()
+		case countCoercao:
+			k.column.CountCoercion()
+		case countDivergencia:
+			b.compilado.CountIncompatibleValue(k.column, k.veio)
+		case countCongelada:
 			if met != nil {
 				met.congeladasCapturadas.Add(1)
 			}

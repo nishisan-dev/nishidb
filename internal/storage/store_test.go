@@ -16,7 +16,7 @@ import (
 )
 
 // Ordem de criação dos campos nos testes: "id"=1, "status"=2, "counter"=3.
-// CamposIndexados usa IDs (contrato do brief); o dicionário é determinístico
+// FieldsIndexados usa IDs (contrato do brief); o dicionário é determinístico
 // na ordem de LookupOrCreate, fixada pelo statusPayload.
 const (
 	fldID      types.FieldID = 1
@@ -177,7 +177,7 @@ func TestPutComPrevConfiaNoRowIDSemRefazerFind(t *testing.T) {
 }
 
 func TestPutSemPrevParaKeyExistenteFazFallback(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	mustPut(t, s, "fb", 1, statusPayload(t, s, "fb", "Start", 1), nil)
 
 	// prev=nil com key existente: o Store lê o prev sozinho e não cria rowId
@@ -208,7 +208,7 @@ func TestPutSemPrevParaKeyExistenteFazFallback(t *testing.T) {
 }
 
 func TestBitmapDiffEmUpdate(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	for i, k := range []string{"k1", "k2", "k3"} {
 		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", 0), nil)
 	}
@@ -257,7 +257,7 @@ func TestBitmapDiffEmUpdate(t *testing.T) {
 }
 
 func TestLookupCampoNaoIndexadoEValorDesconhecido(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	mustPut(t, s, "x", 1, statusPayload(t, s, "x", "Start", 0), nil)
 
 	if _, err := s.Lookup(999, strVal("qualquer")); err == nil {
@@ -468,20 +468,20 @@ func TestStatsParaDeContarSegmentoAposentado(t *testing.T) {
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	antes := s.Stats()
-	if antes.SegmentsTotal < 2 {
-		t.Fatalf("o cenário precisa de um segmento SELADO para aposentar: %+v", antes)
+	before := s.Stats()
+	if before.SegmentsTotal < 2 {
+		t.Fatalf("o cenário precisa de um segmento SELADO para aposentar: %+v", before)
 	}
-	if antes.SegmentsTotal != antes.CurrentSegmentID {
-		t.Fatalf("sem remoção os dois têm de coincidir; %+v", antes)
+	if before.SegmentsTotal != before.CurrentSegmentID {
+		t.Fatalf("sem remoção os dois têm de coincidir; %+v", before)
 	}
 
-	alvo := filepath.Join(dir, "data", "segment-00000001.dat")
-	info, err := os.Stat(alvo)
+	target := filepath.Join(dir, "data", "segment-00000001.dat")
+	info, err := os.Stat(target)
 	if err != nil {
 		t.Fatalf("stat do segmento a aposentar: %v", err)
 	}
-	if err := os.Rename(alvo, alvo+".retired"); err != nil {
+	if err := os.Rename(target, target+".retired"); err != nil {
 		t.Fatalf("aposentar por rename: %v", err)
 	}
 	// O checkpoint é o ponto de reconciliação: é ele que relista o diretório
@@ -491,19 +491,19 @@ func TestStatsParaDeContarSegmentoAposentado(t *testing.T) {
 	}
 	depois := s.Stats()
 
-	if depois.CurrentSegmentID != antes.CurrentSegmentID {
-		t.Fatalf("o ID corrente não regride: %d -> %d", antes.CurrentSegmentID, depois.CurrentSegmentID)
+	if depois.CurrentSegmentID != before.CurrentSegmentID {
+		t.Fatalf("o ID corrente não regride: %d -> %d", before.CurrentSegmentID, depois.CurrentSegmentID)
 	}
 	if depois.SegmentsTotal >= depois.CurrentSegmentID {
 		t.Errorf("SegmentsTotal = %d ainda acompanha CurrentSegmentID = %d: a contagem continua derivada do ID",
 			depois.SegmentsTotal, depois.CurrentSegmentID)
 	}
-	if depois.SegmentsTotal != antes.SegmentsTotal-1 {
-		t.Errorf("SegmentsTotal = %d, queria %d (um segmento a menos)", depois.SegmentsTotal, antes.SegmentsTotal-1)
+	if depois.SegmentsTotal != before.SegmentsTotal-1 {
+		t.Errorf("SegmentsTotal = %d, queria %d (um segmento a menos)", depois.SegmentsTotal, before.SegmentsTotal-1)
 	}
-	if depois.StorageBytes != antes.StorageBytes-info.Size() {
+	if depois.StorageBytes != before.StorageBytes-info.Size() {
 		t.Errorf("StorageBytes = %d, queria %d (%d - %d do arquivo aposentado)",
-			depois.StorageBytes, antes.StorageBytes-info.Size(), antes.StorageBytes, info.Size())
+			depois.StorageBytes, before.StorageBytes-info.Size(), before.StorageBytes, info.Size())
 	}
 }
 
@@ -532,21 +532,21 @@ func TestStatsDeDatasetSemRecordContaOSegmentoInicial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ler data/: %v", err)
 	}
-	var emDisco int64
+	var inDisk int64
 	for _, e := range entradas {
 		fi, err := e.Info()
 		if err != nil {
 			t.Fatalf("stat de %s: %v", e.Name(), err)
 		}
-		emDisco += fi.Size()
+		inDisk += fi.Size()
 	}
-	if emDisco <= 0 {
+	if inDisk <= 0 {
 		t.Fatalf("data/ vazio: o cenário não é o que o teste descreve")
 	}
 	// Exatidão, e não "> 0": StorageBytes é tamanho de arquivo, então logo
 	// após o checkpoint do Open ele tem de bater com o diretório byte a byte.
-	if got.StorageBytes != emDisco {
-		t.Errorf("StorageBytes = %d, queria %d (soma dos arquivos em data/)", got.StorageBytes, emDisco)
+	if got.StorageBytes != inDisk {
+		t.Errorf("StorageBytes = %d, queria %d (soma dos arquivos em data/)", got.StorageBytes, inDisk)
 	}
 	if got.LiveBytesUpperBound != 0 {
 		t.Errorf("LiveBytesUpperBound = %d, queria 0: nenhum record foi escrito", got.LiveBytesUpperBound)
@@ -556,7 +556,7 @@ func TestStatsDeDatasetSemRecordContaOSegmentoInicial(t *testing.T) {
 func TestVisibilidadeLeitorConcorrente(t *testing.T) {
 	// A location é o commit point: um leitor em loop nunca vê estado
 	// parcial — a key sempre confere e a sequence nunca regride.
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	key := []byte("concurrent")
 	mustPut(t, s, "concurrent", 0, statusPayload(t, s, "concurrent", "Start", 0), nil)
 
@@ -668,8 +668,8 @@ func TestStatsNaoBloqueiaAtrasDoCheckpoint(t *testing.T) {
 	// o seam armado transformaria um checkpoint futuro em panic de
 	// close-of-closed-channel.
 	defer s.SetCheckpointTraceForTest(nil)
-	cpFim := make(chan error, 1)
-	go func() { cpFim <- s.Checkpoint() }()
+	cpEnd := make(chan error, 1)
+	go func() { cpEnd <- s.Checkpoint() }()
 	<-entrou
 
 	pronto := make(chan Stats, 1)
@@ -681,11 +681,11 @@ func TestStatsNaoBloqueiaAtrasDoCheckpoint(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		close(liberado)
-		<-cpFim
+		<-cpEnd
 		t.Fatal("Stats bloqueou atrás do checkpoint: o painel cega justamente sob pressão")
 	}
 	close(liberado)
-	if err := <-cpFim; err != nil {
+	if err := <-cpEnd; err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 }

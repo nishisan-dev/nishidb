@@ -43,7 +43,7 @@ func TestOrderByComDuasChaves(t *testing.T) {
 // O DESEMPATE por rowID é o que torna a paginação correta: sem ordem TOTAL,
 // duas páginas de um resultado com empates podem se sobrepor e omitir linhas.
 func TestEmpateDesempataPorRowIDCrescente(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	h.ingere(
 		`{"id":"A","_SEQ":1,"User-Name":"igual","Connect-Info":1}`,
 		`{"id":"B","_SEQ":1,"User-Name":"igual","Connect-Info":2}`,
@@ -68,7 +68,7 @@ func TestEmpateDesempataPorRowIDCrescente(t *testing.T) {
 // `ORDER BY x DESC LIMIT 10` significa "os 10 maiores" e não "10 linhas sem
 // valor". NULLS FIRST existe para quem quiser a convenção alheia.
 func TestAusenteVaiPorUltimoNasDuasDirecoes(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	h.ingere(
 		`{"id":"COM-B","_SEQ":1,"User-Name":"b"}`,
 		`{"id":"SEM","_SEQ":1,"Connect-Info":1}`,
@@ -132,7 +132,7 @@ func TestOrderByPorColunaForaDaProjecao(t *testing.T) {
 		t.Errorf("got = %v", got)
 	}
 	// E a coluna de ordenação NÃO vaza para a saída.
-	if _, tem := rows[0]["Acct-Session-Time"]; tem {
+	if _, has := rows[0]["Acct-Session-Time"]; has {
 		t.Error("a coluna de ordenação apareceu na projeção")
 	}
 }

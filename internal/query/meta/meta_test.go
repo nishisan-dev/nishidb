@@ -17,7 +17,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-const alvoYAML = `version: 1
+const targetYAML = `version: 1
 name: eventos
 materialization:
   key:
@@ -37,9 +37,9 @@ schema:
       type: auto
 `
 
-func alvo(t *testing.T) *schema.Compiled {
+func target(t *testing.T) *schema.Compiled {
 	t.Helper()
-	s, err := schema.Parse([]byte(alvoYAML), schema.BuiltinDefaults)
+	s, err := schema.Parse([]byte(targetYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,9 +50,9 @@ func alvo(t *testing.T) *schema.Compiled {
 	return c
 }
 
-// linhas roda a query contra a tabela virtual e devolve as linhas como mapas
+// rows roda a query contra a tabela virtual e devolve as rows como mapas
 // de nome→texto, que é a forma em que as asserções ficam legíveis.
-func linhas(t *testing.T, sql string, c *schema.Compiled) []map[string]string {
+func rows(t *testing.T, sql string, c *schema.Compiled) []map[string]string {
 	t.Helper()
 	st, err := parser.Parse(sql)
 	if err != nil {
@@ -61,9 +61,9 @@ func linhas(t *testing.T, sql string, c *schema.Compiled) []map[string]string {
 	if !meta.Reconhece(st) {
 		t.Fatalf("Reconhece(%q) = false", sql)
 	}
-	it, err := meta.Abre(context.Background(), st, c, nil, nil)
+	it, err := meta.Open(context.Background(), st, c, nil, nil)
 	if err != nil {
-		t.Fatalf("Abre: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() {
 		if err := it.Close(); err != nil {
@@ -78,7 +78,7 @@ func linhas(t *testing.T, sql string, c *schema.Compiled) []map[string]string {
 				m[col.Name] = ""
 				continue
 			}
-			m[col.Name] = texto(col.Val)
+			m[col.Name] = text(col.Val)
 		}
 		out = append(out, m)
 	}
@@ -88,7 +88,7 @@ func linhas(t *testing.T, sql string, c *schema.Compiled) []map[string]string {
 	return out
 }
 
-func texto(v types.Value) string {
+func text(v types.Value) string {
 	switch v.Type {
 	case types.TypeString:
 		return string(v.Bytes)
@@ -112,20 +112,20 @@ func texto(v types.Value) string {
 // A tabela responde "o que este dataset tem", que hoje não tem resposta por
 // SQL nenhuma. O campo declarado sai com o tipo declarado e auto=false.
 func TestFieldsListaOsCamposDoDataset(t *testing.T) {
-	got := linhas(t, "SELECT name, type, auto FROM _meta.fields", alvo(t))
-	porNome := map[string]map[string]string{}
+	got := rows(t, "SELECT name, type, auto FROM _meta.fields", target(t))
+	byNome := map[string]map[string]string{}
 	for _, l := range got {
-		porNome[l["name"]] = l
+		byNome[l["name"]] = l
 	}
-	for _, nome := range []string{"id", "status", "doc", "livre"} {
-		if _, ok := porNome[nome]; !ok {
-			t.Fatalf("campo %q ausente; veio %v", nome, porNome)
+	for _, name := range []string{"id", "status", "doc", "livre"} {
+		if _, ok := byNome[name]; !ok {
+			t.Fatalf("campo %q ausente; veio %v", name, byNome)
 		}
 	}
-	if got := porNome["status"]["type"]; got != "string" {
+	if got := byNome["status"]["type"]; got != "string" {
 		t.Errorf("status.type = %q, quer string", got)
 	}
-	if got := porNome["status"]["auto"]; got != "false" {
+	if got := byNome["status"]["auto"]; got != "false" {
 		t.Errorf("status.auto = %q, quer false", got)
 	}
 }
@@ -135,7 +135,7 @@ func TestFieldsListaOsCamposDoDataset(t *testing.T) {
 // desconhecido porque nenhum evento o fixou. É o mesmo vocabulário que o
 // /v1/metadata já publica.
 func TestCampoAutoSemObservacaoSaiComoUnknown(t *testing.T) {
-	got := linhas(t, "SELECT name, type, auto FROM _meta.fields", alvo(t))
+	got := rows(t, "SELECT name, type, auto FROM _meta.fields", target(t))
 	for _, l := range got {
 		if l["name"] != "livre" {
 			continue
@@ -155,7 +155,7 @@ func TestCampoAutoSemObservacaoSaiComoUnknown(t *testing.T) {
 // mesmo binder e pelo mesmo executor. É o que dispensa suporte em cliente
 // nenhum — DBeaver, CLI e driver já sabem executar SELECT.
 func TestFieldsAceitaWhereEProjecao(t *testing.T) {
-	got := linhas(t, "SELECT name FROM _meta.fields WHERE index = 'bitmap'", alvo(t))
+	got := rows(t, "SELECT name FROM _meta.fields WHERE index = 'bitmap'", target(t))
 	if len(got) != 1 || got[0]["name"] != "status" {
 		t.Fatalf("filtro por index = %v, quer só status", got)
 	}
@@ -172,7 +172,7 @@ func TestColunaInexistenteNomeiaATabelaVirtual(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = meta.Abre(context.Background(), st, alvo(t), nil, nil)
+	_, err = meta.Open(context.Background(), st, target(t), nil, nil)
 	if err == nil {
 		t.Fatal("esperava recusa")
 	}
@@ -196,7 +196,7 @@ func TestNamespaceDesconhecidoERecusado(t *testing.T) {
 	if !meta.Reconhece(st) {
 		t.Fatal("Reconhece devia aceitar qualquer namespace reservado para poder recusá-lo com nome")
 	}
-	_, err = meta.Abre(context.Background(), st, alvo(t), nil, nil)
+	_, err = meta.Open(context.Background(), st, target(t), nil, nil)
 	if err == nil {
 		t.Fatal("esperava recusa de namespace desconhecido")
 	}
@@ -212,7 +212,7 @@ func TestTabelaDesconhecidaNoMetaERecusadaComoErroDeBind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = meta.Abre(context.Background(), st, alvo(t), nil, nil)
+	_, err = meta.Open(context.Background(), st, target(t), nil, nil)
 	if err == nil {
 		t.Fatal("esperava recusa de tabela desconhecida")
 	}
@@ -237,7 +237,7 @@ func TestReconheceIgnoraQuerySemNamespace(t *testing.T) {
 
 var _ executor.RowIterator = (executor.RowIterator)(nil)
 
-const alvoComExtract = `version: 1
+const targetWithExtract = `version: 1
 name: eventos
 materialization:
   key:
@@ -256,9 +256,9 @@ schema:
           type: string
 `
 
-func alvoExtract(t *testing.T) *schema.Compiled {
+func targetExtract(t *testing.T) *schema.Compiled {
 	t.Helper()
-	s, err := schema.Parse([]byte(alvoComExtract), schema.BuiltinDefaults)
+	s, err := schema.Parse([]byte(targetWithExtract), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func alvoExtract(t *testing.T) *schema.Compiled {
 // lugar onde ela é descoberta. Escondê-la aqui também deixaria o operador sem
 // nenhuma forma de saber que ela existe.
 func TestFieldsListaAColunaDerivadaComOPai(t *testing.T) {
-	got := linhas(t, "SELECT name, parent FROM _meta.fields WHERE parent = 'doc'", alvoExtract(t))
+	got := rows(t, "SELECT name, parent FROM _meta.fields WHERE parent = 'doc'", targetExtract(t))
 	if len(got) != 1 {
 		t.Fatalf("filtro por parent = %v, quer só a derivada", got)
 	}
@@ -285,7 +285,7 @@ func TestFieldsListaAColunaDerivadaComOPai(t *testing.T) {
 // Campo de topo tem parent NULL, e não string vazia: vazio diria "tem pai, e
 // o nome dele é nada".
 func TestCampoDeTopoTemParentNulo(t *testing.T) {
-	got := linhas(t, "SELECT name, parent FROM _meta.fields WHERE parent IS NULL", alvoExtract(t))
+	got := rows(t, "SELECT name, parent FROM _meta.fields WHERE parent IS NULL", targetExtract(t))
 	for _, l := range got {
 		if l["name"] == "probe_ip" {
 			t.Fatal("a derivada apareceu entre as de parent nulo")
@@ -296,9 +296,9 @@ func TestCampoDeTopoTemParentNulo(t *testing.T) {
 	}
 }
 
-// alvoComDerivadasYAML declara um campo json com extração e descoberta, que é
+// targetWithDerivedYAML declara um campo json com extração e descoberta, que é
 // o que faz as colunas de contador terem sobre o que falar.
-const alvoComDerivadasYAML = `version: 1
+const targetWithDerivedYAML = `version: 1
 name: eventos
 materialization:
   key:
@@ -317,9 +317,9 @@ schema:
           type: int64
 `
 
-func alvoComDerivadas(t *testing.T) *schema.Compiled {
+func targetWithDerived(t *testing.T) *schema.Compiled {
 	t.Helper()
-	s, err := schema.Parse([]byte(alvoComDerivadasYAML), schema.BuiltinDefaults)
+	s, err := schema.Parse([]byte(targetWithDerivedYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func alvoComDerivadas(t *testing.T) *schema.Compiled {
 // "2.085.138 valores perdidos" e não diz qual das ~1.700 colunas respondeu por
 // isso. Sem atribuição, o número é alarme sem endereço.
 func TestContadoresDeColunaSaemPorSQL(t *testing.T) {
-	c := alvoComDerivadas(t)
+	c := targetWithDerived(t)
 	m, err := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
 	if err != nil {
 		t.Fatal(err)
@@ -355,7 +355,7 @@ func TestContadoresDeColunaSaemPorSQL(t *testing.T) {
 	}
 
 	achou := false
-	for _, l := range linhas(t, "SELECT name, occurrences, typeMismatches FROM _meta.fields", c) {
+	for _, l := range rows(t, "SELECT name, occurrences, typeMismatches FROM _meta.fields", c) {
 		if l["name"] != "tally" {
 			continue
 		}
@@ -379,7 +379,7 @@ func TestContadoresDeColunaSaemPorSQL(t *testing.T) {
 // cabeça de quem consulta — e a tabela existe justamente para que a decisão de
 // tipo saia de SQL em vez de script.
 func TestDivergenciaEhSubconjuntoDaOcorrencia(t *testing.T) {
-	c := alvoComDerivadas(t)
+	c := targetWithDerived(t)
 	m, err := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
 	if err != nil {
 		t.Fatal(err)
@@ -392,7 +392,7 @@ func TestDivergenciaEhSubconjuntoDaOcorrencia(t *testing.T) {
 			t.Fatalf("Apply(%s): %v", ev, r.Err)
 		}
 	}
-	for _, l := range linhas(t, "SELECT name, occurrences, typeMismatches FROM _meta.fields", c) {
+	for _, l := range rows(t, "SELECT name, occurrences, typeMismatches FROM _meta.fields", c) {
 		if l["name"] != "tally" {
 			continue
 		}
@@ -409,8 +409,8 @@ func TestDivergenciaEhSubconjuntoDaOcorrencia(t *testing.T) {
 // topo. Efeito colateral bem-vindo: `WHERE typeMismatches > 0` filtra o topo
 // naturalmente.
 func TestCampoDeTopoTemContadoresNulosENaoZerados(t *testing.T) {
-	c := alvoComDerivadas(t)
-	for _, l := range linhas(t, "SELECT name, parent, occurrences, typeMismatches, coercions FROM _meta.fields", c) {
+	c := targetWithDerived(t)
+	for _, l := range rows(t, "SELECT name, parent, occurrences, typeMismatches, coercions FROM _meta.fields", c) {
 		if l["parent"] != "" {
 			continue // é derivada
 		}
@@ -435,7 +435,7 @@ func TestCampoDeTopoTemContadoresNulosENaoZerados(t *testing.T) {
 // As três colunas são afirmações diferentes sobre a mesma chave, e o teste
 // afirma as três de uma vez: apareceu 4 vezes, 2 delas coergidas, 1 perdida.
 func TestCoercoesSaemPorSQLSeparadasDasDivergencias(t *testing.T) {
-	c := alvoComDerivadas(t)
+	c := targetWithDerived(t)
 	m, err := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
 	if err != nil {
 		t.Fatal(err)
@@ -452,7 +452,7 @@ func TestCoercoesSaemPorSQLSeparadasDasDivergencias(t *testing.T) {
 	}
 
 	achou := false
-	for _, l := range linhas(t, "SELECT name, occurrences, typeMismatches, coercions FROM _meta.fields", c) {
+	for _, l := range rows(t, "SELECT name, occurrences, typeMismatches, coercions FROM _meta.fields", c) {
 		if l["name"] != "tally" {
 			continue
 		}
@@ -476,11 +476,11 @@ func TestCoercoesSaemPorSQLSeparadasDasDivergencias(t *testing.T) {
 // porque `SELECT *` é como a tabela é descoberta na prática — quem abre o DBeaver
 // não sabe o nome de uma coluna que acabou de nascer.
 func TestCoercionsApareceNoCuringaDaTabelaVirtual(t *testing.T) {
-	linhas := linhas(t, "SELECT * FROM _meta.fields", alvoComDerivadas(t))
-	if len(linhas) == 0 {
+	rows := rows(t, "SELECT * FROM _meta.fields", targetWithDerived(t))
+	if len(rows) == 0 {
 		t.Fatal("a tabela virtual não devolveu linha nenhuma")
 	}
-	if _, ok := linhas[0]["coercions"]; !ok {
-		t.Errorf("`coercions` fora do SELECT *; veio %v", linhas[0])
+	if _, ok := rows[0]["coercions"]; !ok {
+		t.Errorf("`coercions` fora do SELECT *; veio %v", rows[0])
 	}
 }

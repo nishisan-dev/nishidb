@@ -12,17 +12,17 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-func chaveDeServico(i int) string { return fmt.Sprintf("c-%04d", i) }
+func keyOfServico(i int) string { return fmt.Sprintf("c-%04d", i) }
 
-// relatorioDe devolve o relatório do contador nomeado.
-func relatorioDe(t *testing.T, rs []counter.Report, nome string) counter.Report {
+// relatorioOf devolve o relatório do contador nomeado.
+func relatorioOf(t *testing.T, rs []counter.Report, name string) counter.Report {
 	t.Helper()
 	for _, r := range rs {
-		if r.Name == nome {
+		if r.Name == name {
 			return r
 		}
 	}
-	t.Fatalf("relatório de %q não veio: %+v", nome, rs)
+	t.Fatalf("relatório de %q não veio: %+v", name, rs)
 	return counter.Report{}
 }
 
@@ -31,10 +31,10 @@ func relatorioDe(t *testing.T, rs []counter.Report, nome string) counter.Report 
 // e lápides sendo gravadas DURANTE a varredura, a auditoria nunca reporta
 // divergência.
 func TestAuditoriaSemDivergenciaComIngestaoConcorrente(t *testing.T) {
-	s, rel := storeComContadores(t, t.TempDir(), porOLT("aut", true), porOLT("serv", false))
+	s, rel := storeWithCounters(t, t.TempDir(), byOLT("aut", true), byOLT("serv", false))
 	const n = 300
 	for i := 0; i < n; i++ {
-		k := chaveDeServico(i)
+		k := keyOfServico(i)
 		mustPut(t, s, k, 1, payloadServico(t, s, k, "A", i%2 == 0, rel.agora()), nil)
 	}
 	pare := make(chan struct{})
@@ -49,7 +49,7 @@ func TestAuditoriaSemDivergenciaComIngestaoConcorrente(t *testing.T) {
 				return
 			default:
 			}
-			k := chaveDeServico(i % n)
+			k := keyOfServico(i % n)
 			prev, _, ok, err := s.GetByKey(s.presente(), []byte(k), nil)
 			if err != nil {
 				t.Error(err)
@@ -79,7 +79,7 @@ func TestAuditoriaSemDivergenciaComIngestaoConcorrente(t *testing.T) {
 		}
 	}()
 	for rodada := 0; rodada < 20; rodada++ {
-		rs, err := s.AuditaContadores(context.Background())
+		rs, err := s.AuditaCounters(context.Background())
 		if err != nil {
 			close(pare)
 			wg.Wait()
@@ -110,16 +110,16 @@ func TestAuditoriaSemDivergenciaComIngestaoConcorrente(t *testing.T) {
 // entrar no meio: o snapshot ainda mostraria a linha em A, e a cópia já a
 // contaria em B.
 func TestAuditoriaCopiaOsTotaisNoMesmoInstanteDoSnapshot(t *testing.T) {
-	s, rel := storeComContadores(t, t.TempDir(), porOLT("aut", true))
+	s, rel := storeWithCounters(t, t.TempDir(), byOLT("aut", true))
 	for i := 0; i < 10; i++ {
-		k := chaveDeServico(i)
+		k := keyOfServico(i)
 		mustPut(t, s, k, 1, payloadServico(t, s, k, "A", true, rel.agora()), nil)
 	}
-	fim := make(chan struct{})
-	s.SetAuditoriaAntesDaCopiaForTest(func() {
+	end := make(chan struct{})
+	s.SetAuditBeforeOfCopyForTest(func() {
 		go func() {
-			defer close(fim)
-			k := chaveDeServico(0)
+			defer close(end)
+			k := keyOfServico(0)
 			prev, _, _, _ := s.GetByKey(s.presente(), []byte(k), nil)
 			mustPut(t, s, k, 2, payloadServico(t, s, k, "B", true, rel.agora()), &prev)
 		}()
@@ -127,12 +127,12 @@ func TestAuditoriaCopiaOsTotaisNoMesmoInstanteDoSnapshot(t *testing.T) {
 		// que o seam segura; no mutante ele completa aqui.
 		time.Sleep(50 * time.Millisecond)
 	})
-	rs, err := s.AuditaContadores(context.Background())
-	<-fim
+	rs, err := s.AuditaCounters(context.Background())
+	<-end
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := relatorioDe(t, rs, "aut")
+	r := relatorioOf(t, rs, "aut")
 	if r.DivergentGroups != 0 {
 		t.Fatalf("a cópia dos totais não é do instante do snapshot: %+v", r)
 	}
@@ -154,16 +154,16 @@ func TestAuditoriaCopiaOsTotaisNoMesmoInstanteDoSnapshot(t *testing.T) {
 // depois de soltar o writer, ele viria 9 contra um recalculado de 10, e a
 // auditoria acusaria divergência onde só houve escrita concorrente.
 func TestAuditoriaCongelaOsAgregadosNoMesmoInstante(t *testing.T) {
-	s, rel := storeComContadores(t, t.TempDir(), porOLT("aut", true))
+	s, rel := storeWithCounters(t, t.TempDir(), byOLT("aut", true))
 	for i := 0; i < 10; i++ {
-		k := chaveDeServico(i)
+		k := keyOfServico(i)
 		mustPut(t, s, k, 1, payloadServico(t, s, k, "A", true, rel.agora()), nil)
 	}
-	fim := make(chan struct{})
-	s.SetAuditoriaAntesDaCopiaForTest(func() {
+	end := make(chan struct{})
+	s.SetAuditBeforeOfCopyForTest(func() {
 		go func() {
-			defer close(fim)
-			k := chaveDeServico(0)
+			defer close(end)
+			k := keyOfServico(0)
 			prev, _, _, _ := s.GetByKey(s.presente(), []byte(k), nil)
 			mustPut(t, s, k, 2, payloadServico(t, s, k, "A", false, rel.agora()), &prev)
 		}()
@@ -175,15 +175,15 @@ func TestAuditoriaCongelaOsAgregadosNoMesmoInstante(t *testing.T) {
 	// aqui, o mutante que lê o agregado depois de soltar o writer leria o
 	// número ANTIGO e passaria verde. O trace roda com o wmu já solto, então
 	// esperar aqui não trava o Put — ele precisa exatamente desse lock.
-	var umaVez sync.Once
-	s.SetAuditoriaTraceForTest(func(types.RowID) { umaVez.Do(func() { <-fim }) })
+	var oneVez sync.Once
+	s.SetAuditTraceForTest(func(types.RowID) { oneVez.Do(func() { <-end }) })
 
-	rs, err := s.AuditaContadores(context.Background())
-	<-fim
+	rs, err := s.AuditaCounters(context.Background())
+	<-end
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := relatorioDe(t, rs, "aut")
+	r := relatorioOf(t, rs, "aut")
 	if r.AggregateRows != 10 || r.AggregateTotal != 10 {
 		t.Fatalf("os agregados não são do instante do snapshot: %+v", r)
 	}
@@ -197,41 +197,41 @@ func TestAuditoriaCongelaOsAgregadosNoMesmoInstante(t *testing.T) {
 // coletor ainda não lapidou é invisível à consulta, mas continua contada — e
 // a auditoria a conta também, senão reportaria divergência onde não há.
 func TestAuditoriaContaLinhaVencidaSemLapide(t *testing.T) {
-	s, rel := storeComContadores(t, t.TempDir(), porOLT("aut", true))
+	s, rel := storeWithCounters(t, t.TempDir(), byOLT("aut", true))
 	rowID, _ := mustPut(t, s, "k", 1, payloadServico(t, s, "k", "A", true, rel.agora()), nil)
-	rel.avanca(2 * time.Hour)
+	rel.advance(2 * time.Hour)
 	if _, _, ok, _ := s.GetByRowID(s.presente(), rowID, nil); ok {
 		t.Fatal("a linha vencida não pode ser visível à leitura")
 	}
 	exigeTotal(t, s, "aut", "A", 1, 1)
-	rs, err := s.AuditaContadores(context.Background())
+	rs, err := s.AuditaCounters(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := relatorioDe(t, rs, "aut")
+	r := relatorioOf(t, rs, "aut")
 	if r.DivergentGroups != 0 || r.Maintained != 1 || r.Recomputed != 1 || r.RowsScanned != 1 {
 		t.Fatalf("a linha vencida sem lápide tem de contar dos dois lados: %+v", r)
 	}
 }
 
 func TestAuditoriaDetectaDeriva(t *testing.T) {
-	s, rel := storeComContadores(t, t.TempDir(), porOLT("aut", true))
+	s, rel := storeWithCounters(t, t.TempDir(), byOLT("aut", true))
 	var ultima types.RowID
 	for i := 0; i < 10; i++ {
-		k := chaveDeServico(i)
+		k := keyOfServico(i)
 		ultima, _ = mustPut(t, s, k, 1, payloadServico(t, s, k, "A", true, rel.agora()), nil)
 	}
 	// Deriva injetada por FORA do Store: o contador passa a acreditar que a
 	// última linha está em B, enquanto o record diz A.
-	c := contadorChamado(t, s, "aut")
+	c := counterChamado(t, s, "aut")
 	if err := c.Transition(ultima, payloadServico(t, s, "x", "B", true, rel.agora()), false); err != nil {
 		t.Fatal(err)
 	}
-	rs, err := s.AuditaContadores(context.Background())
+	rs, err := s.AuditaCounters(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := relatorioDe(t, rs, "aut")
+	r := relatorioOf(t, rs, "aut")
 	if r.DivergentGroups != 2 {
 		t.Fatalf("A e B tinham de divergir: %+v", r)
 	}
@@ -261,17 +261,17 @@ func TestAuditoriaDetectaDeriva(t *testing.T) {
 }
 
 func TestReconstruirZeraADeriva(t *testing.T) {
-	s, rel := storeComContadores(t, t.TempDir(), porOLT("aut", true))
+	s, rel := storeWithCounters(t, t.TempDir(), byOLT("aut", true))
 	var ultima types.RowID
 	for i := 0; i < 10; i++ {
-		k := chaveDeServico(i)
+		k := keyOfServico(i)
 		ultima, _ = mustPut(t, s, k, 1, payloadServico(t, s, k, "A", true, rel.agora()), nil)
 	}
-	c := contadorChamado(t, s, "aut")
+	c := counterChamado(t, s, "aut")
 	if err := c.Transition(ultima, payloadServico(t, s, "x", "B", true, rel.agora()), false); err != nil {
 		t.Fatal(err)
 	}
-	recs, err := s.ReconstroiContadores(context.Background())
+	recs, err := s.ReconstroiCounters(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,11 +280,11 @@ func TestReconstruirZeraADeriva(t *testing.T) {
 	}
 	exigeTotal(t, s, "aut", "A", 10, 10)
 	exigeTotal(t, s, "aut", "B", 0, 0)
-	rs, err := s.AuditaContadores(context.Background())
+	rs, err := s.AuditaCounters(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := relatorioDe(t, rs, "aut"); r.DivergentGroups != 0 {
+	if r := relatorioOf(t, rs, "aut"); r.DivergentGroups != 0 {
 		t.Fatalf("depois de reconstruir: %+v", r)
 	}
 	// E o writer continua aceitando escrita.
@@ -296,50 +296,50 @@ func TestReconstruirZeraADeriva(t *testing.T) {
 // teto, e a auditoria segura um snapshot pela varredura inteira. Estourado, a
 // resposta é ERRO — nunca um relatório com divergência inventada.
 func TestAuditoriaInconclusivaQuandoOSnapshotEstoura(t *testing.T) {
-	opts := opcoesComContadores(t.TempDir(), porOLT("aut", true))
+	opts := optionsWithCounters(t.TempDir(), byOLT("aut", true))
 	opts.SnapshotMaxBytes = 1
 	s := openStore(t, opts)
-	rel := &relogioDeTeste{t: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
+	rel := &relogioOfTest{t: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 	for i := 0; i < 50; i++ {
-		k := chaveDeServico(i)
+		k := keyOfServico(i)
 		mustPut(t, s, k, 1, payloadServico(t, s, k, "A", true, rel.agora()), nil)
 	}
 	// No meio da varredura, um update registra uma versão no journal — que
 	// com o teto de 1 byte invalida o snapshot mais antigo: o da auditoria.
-	s.SetAuditoriaTraceForTest(func(linha types.RowID) {
-		if linha != 10 {
+	s.SetAuditTraceForTest(func(row types.RowID) {
+		if row != 10 {
 			return
 		}
-		k := chaveDeServico(0)
+		k := keyOfServico(0)
 		prev, _, _, _ := s.GetByKey(s.presente(), []byte(k), nil)
 		mustPut(t, s, k, 2, payloadServico(t, s, k, "B", true, rel.agora()), &prev)
 	})
-	_, err := s.AuditaContadores(context.Background())
-	if !errors.Is(err, ErrSnapshotExpirado) {
+	_, err := s.AuditaCounters(context.Background())
+	if !errors.Is(err, ErrExpiredSnapshot) {
 		t.Fatalf("a auditoria tinha de sair inconclusiva com ErrSnapshotExpirado, veio %v", err)
 	}
 }
 
 func TestAuditoriaRespeitaOContexto(t *testing.T) {
-	s, rel := storeComContadores(t, t.TempDir(), porOLT("aut", true))
+	s, rel := storeWithCounters(t, t.TempDir(), byOLT("aut", true))
 	for i := 0; i < 50; i++ {
-		k := chaveDeServico(i)
+		k := keyOfServico(i)
 		mustPut(t, s, k, 1, payloadServico(t, s, k, "A", true, rel.agora()), nil)
 	}
-	ctx, cancela := context.WithCancel(context.Background())
-	cancela()
-	if _, err := s.AuditaContadores(ctx); !errors.Is(err, context.Canceled) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.AuditaCounters(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("contexto cancelado tem de interromper a auditoria: %v", err)
 	}
-	if _, err := s.ReconstroiContadores(ctx); !errors.Is(err, context.Canceled) {
+	if _, err := s.ReconstroiCounters(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("contexto cancelado tem de interromper a reconstrução: %v", err)
 	}
 }
 
 func TestAuditoriaSemContadoresEhVazia(t *testing.T) {
-	s, _ := storeComContadores(t, t.TempDir())
-	rs, err := s.AuditaContadores(context.Background())
+	s, _ := storeWithCounters(t, t.TempDir())
+	rs, err := s.AuditaCounters(context.Background())
 	if err != nil || len(rs) != 0 {
 		t.Fatalf("sem contadores: %v, %v", rs, err)
 	}
@@ -356,22 +356,22 @@ func TestAuditoriaSemContadoresEhVazia(t *testing.T) {
 // separação que prova contra QUEM o agregado é conferido: comparado com o
 // mantido ele bateria, e a conferência não valeria nada.
 func TestAuditoriaAcusaOAgregadoContraORecalculado(t *testing.T) {
-	s, rel := storeComContadores(t, t.TempDir(), porOLT("aut", true))
+	s, rel := storeWithCounters(t, t.TempDir(), byOLT("aut", true))
 	var ultima types.RowID
 	for i := 0; i < 10; i++ {
-		k := chaveDeServico(i)
+		k := keyOfServico(i)
 		ultima, _ = mustPut(t, s, k, 1, payloadServico(t, s, k, "A", true, rel.agora()), nil)
 	}
-	c := contadorChamado(t, s, "aut")
+	c := counterChamado(t, s, "aut")
 	if err := c.Transition(ultima, payloadServico(t, s, "x", "A", false, rel.agora()), false); err != nil {
 		t.Fatal(err)
 	}
 
-	rs, err := s.AuditaContadores(context.Background())
+	rs, err := s.AuditaCounters(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := relatorioDe(t, rs, "aut")
+	r := relatorioOf(t, rs, "aut")
 	if r.Maintained != 9 || r.Recomputed != 10 {
 		t.Fatalf("a bancada não separa mantido de recalculado: %+v", r)
 	}

@@ -102,9 +102,9 @@ type Config struct {
 // cara, e quem lê events_per_sec não sabe se está olhando para vazão ou para
 // fim de corpus.
 const (
-	pararPorEventos   = "events"
-	pararPorDuracao   = "duration"
-	pararPorFonteSeca = "source_drained"
+	stopByEventos    = "events"
+	stopByDuration   = "duration"
+	stopBySourceSeca = "source_drained"
 )
 
 type PhaseReport struct {
@@ -175,8 +175,8 @@ const (
 	GateNaoAvaliado GateStatus = "skip"
 )
 
-// statusDe traduz o booleano de um critério já avaliado.
-func statusDe(passou bool) GateStatus {
+// statusOf traduz o booleano de um critério já avaliado.
+func statusOf(passou bool) GateStatus {
 	if passou {
 		return GatePassou
 	}
@@ -218,10 +218,10 @@ func gatesDurosPendentes(gates []GateResult) (violados, naoAvaliados []string) {
 	return violados, naoAvaliados
 }
 
-// rotuloDoGate é o rótulo impresso no resumo. O gate duro NÃO AVALIADO tem
+// rotuloOfGate é o rótulo impresso no resumo. O gate duro NÃO AVALIADO tem
 // rótulo próprio: reutilizar SKIP o faria parecer inofensivo como o soft, e
 // reutilizar FAIL esconderia que ninguém mediu nada.
-func rotuloDoGate(g GateResult) string {
+func rotuloOfGate(g GateResult) string {
 	switch g.Status {
 	case GatePassou:
 		return "PASS"
@@ -316,7 +316,7 @@ type CorpusProfile struct {
 	Sequential        bool    `json:"sequential"`
 }
 
-func perfilDoCorpus(c radiusgen.Config) CorpusProfile {
+func perfilOfCorpus(c radiusgen.Config) CorpusProfile {
 	return CorpusProfile{
 		SeqOffset:         c.SeqOffset,
 		PatchRatio:        c.PatchRatio,
@@ -338,7 +338,7 @@ type StoreStatsReport struct {
 	// que a rodada PEDIU, estes registram o que aconteceu.
 	//
 	// A distinção não é acadêmica. Enquanto a única evidência era a linha
-	// "COMPACTION: ligada" na saída, remover a chamada de IniciaCompaction e
+	// "COMPACTION: ligada" na saída, remover a chamada de StartCompaction e
 	// manter o Fprintf deixava a suíte inteira verde — e o artefato publicava
 	// `compaction_min_live_ratio: 0.50` para uma rodada de append-only puro.
 	// É a família do débito 6: instrumento que afirma sem ter medido, aqui na
@@ -400,7 +400,7 @@ const (
 	heapNegligibleBytes uint64 = 16 * mib
 )
 
-// Run executa a rodada completa e devolve o relatório. Erro só para falha
+// Run executa a rodada completa e devolve o relatório. Err só para falha
 // operacional (dataset não abre, disco cheio); gate violado NÃO é erro — vira
 // veredito no Report, que o caller transforma em exit code.
 func Run(cfg Config) (*Report, error) {
@@ -434,21 +434,21 @@ func Run(cfg Config) (*Report, error) {
 	// cópia do laço que o godoc de schema.IndexedFieldNames descreve, e a cópia
 	// não conhecia coluna derivada. Um benchmark que abrisse o dataset com um
 	// conjunto de índices diferente do que o servidor usa mediria outro produto.
-	camposIndexados := schema.IndexedFieldNames(spec)
+	fieldsIndexados := schema.IndexedFieldNames(spec)
 
-	st, err := abreStore(cfg, camposIndexados)
+	st, err := openStore(cfg, fieldsIndexados)
 	if err != nil {
 		return nil, err
 	}
 	defer st.Close()
 
 	// A compaction sobe ANTES da primeira fase, pela mesma razão que o servidor
-	// a liga antes do consumidor (server.ligaCompaction): quem produz o garbage
+	// a liga antes do consumidor (server.turnonCompaction): quem produz o garbage
 	// é a ingestão, e ligá-la depois abriria uma janela em que o dataset cresce
 	// sem ninguém devolvendo nada — janela que cairia inteira dentro da série
 	// que o gate lê. Quem a cancela e aguarda é o Close (decisão D7).
 	if cfg.CompactionRatio > 0 {
-		st.IniciaCompaction(context.Background(), cfg.CompactionRatio)
+		st.StartCompaction(context.Background(), cfg.CompactionRatio)
 		_, _ = fmt.Fprintf(cfg.Out, "COMPACTION: ligada com minimumLiveRatio %.2f (§53-55)\n", cfg.CompactionRatio)
 	} else {
 		_, _ = fmt.Fprintln(cfg.Out, "COMPACTION: DESLIGADA — o gate de disco vai medir o append-only puro")
@@ -497,23 +497,23 @@ func Run(cfg Config) (*Report, error) {
 	loadCfg.Seed = cfg.Seed
 	loadCfg.Entities = cfg.Entities
 	loadCfg.Sequential = true
-	rep.Config.LoadCorpus = perfilDoCorpus(loadCfg)
+	rep.Config.LoadCorpus = perfilOfCorpus(loadCfg)
 	loadGen, err := radiusgen.New(loadCfg)
 	if err != nil {
 		return nil, err
 	}
 	fmt.Fprintf(cfg.Out, "LOAD: criando %d entidades...\n", cfg.Entities)
-	fonteLoad, kfk, err := montaFonte(cfg, loadGen, int64(cfg.Entities), 0)
+	sourceLoad, kfk, err := buildSource(cfg, loadGen, int64(cfg.Entities), 0)
 	if err != nil {
 		return nil, err
 	}
 	rep.Load, err = runPhase(phaseArgs{
-		name: "load", cfg: cfg, m: m, gen: fonteLoad, col: col,
+		name: "load", cfg: cfg, m: m, gen: sourceLoad, col: col,
 		events: int64(cfg.Entities), rate: 0, st: st,
 	})
 	if kfk != nil {
-		registraKafka(rep, kfk)
-		kfk.Fecha()
+		registerKafka(rep, kfk)
+		kfk.Close()
 	}
 	if err != nil {
 		return nil, err
@@ -535,16 +535,16 @@ func Run(cfg Config) (*Report, error) {
 		// relatório publica "carga mista" descrevendo outra coisa (débito
 		// M2 #3): medido, 15.000 eventos oferecidos e 12 escritas efetivas.
 		steadyCfg.SeqOffset = 1
-		rep.Config.SteadyCorpus = perfilDoCorpus(steadyCfg)
+		rep.Config.SteadyCorpus = perfilOfCorpus(steadyCfg)
 		steadyGen, err := radiusgen.New(steadyCfg)
 		if err != nil {
 			return nil, err
 		}
 		readers := startReaders(cfg, st, c)
-		sqlReaders := startSQLReaders(cfg, st, c, amostraDeKeys(cfg))
+		sqlReaders := startSQLReaders(cfg, st, c, amostraOfKeys(cfg))
 		fmt.Fprintf(cfg.Out, "STEADY: %s a %d ev/s com %d leitores e %d consultas SQL...\n",
 			cfg.SteadyDuration, cfg.SteadyRate, cfg.Readers, cfg.SQLReaders)
-		fonteSteady, kfkSteady, err := montaFonte(cfg, steadyGen,
+		sourceSteady, kfkSteady, err := buildSource(cfg, steadyGen,
 			int64(cfg.SteadyDuration.Seconds())*int64(cfg.SteadyRate), cfg.SteadyRate)
 		if err != nil {
 			readers.stop()
@@ -552,12 +552,12 @@ func Run(cfg Config) (*Report, error) {
 			return nil, err
 		}
 		rep.Steady, err = runPhase(phaseArgs{
-			name: "steady", cfg: cfg, m: m, gen: fonteSteady, col: col,
+			name: "steady", cfg: cfg, m: m, gen: sourceSteady, col: col,
 			duration: cfg.SteadyDuration, rate: cfg.SteadyRate, st: st,
 		})
 		if kfkSteady != nil {
-			registraKafka(rep, kfkSteady)
-			kfkSteady.Fecha()
+			registerKafka(rep, kfkSteady)
+			kfkSteady.Close()
 		}
 		if err != nil {
 			readers.stop()
@@ -573,11 +573,11 @@ func Run(cfg Config) (*Report, error) {
 			rep.FullScanBytes = bytes
 			fmt.Fprintf(cfg.Out, "STEADY: varredura completa em %s\n", dur.Round(time.Millisecond))
 		}
-		statsSQL, errosSQL := sqlReaders.stop()
+		statsSQL, errorsSQL := sqlReaders.stop()
 		rep.Queries = append(rep.Queries, statsSQL...)
-		rep.SQLErrors = errosSQL
+		rep.SQLErrors = errorsSQL
 		fmt.Fprintf(cfg.Out, "STEADY: %d eventos, RSS max %s, %d erros de query\n",
-			rep.Steady.Events, humanBytes(rep.Steady.MaxRSSBytes), errosSQL)
+			rep.Steady.Events, humanBytes(rep.Steady.MaxRSSBytes), errorsSQL)
 	}
 
 	// §125 manda medir o restart time, e nenhum relatório do M1 o tinha. É
@@ -585,7 +585,7 @@ func Run(cfg Config) (*Report, error) {
 	// exatamente o que um `systemctl restart` custa em indisponibilidade.
 	rep.Samples = col.samples
 	stats := st.Stats()
-	discoFinal, err := dirBytes(cfg.DataDir)
+	diskFinal, err := dirBytes(cfg.DataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -593,7 +593,7 @@ func Run(cfg Config) (*Report, error) {
 		RowCount:          stats.RowCount,
 		SegmentsTotal:     stats.SegmentsTotal,
 		PrimaryLoadFactor: stats.PrimaryLoadFactor,
-		DiskBytes:         discoFinal,
+		DiskBytes:         diskFinal,
 		// O `stats` acima foi colhido com o Store ABERTO, e é por isso que
 		// estes três campos são leitura e não suposição — ver o bloco na
 		// declaração do StoreStatsReport.
@@ -608,7 +608,7 @@ func Run(cfg Config) (*Report, error) {
 	if err := st.Checkpoint(); err != nil {
 		return nil, fmt.Errorf("ingest-bench: checkpoint antes de medir o restart: %w", err)
 	}
-	rep.RestartSec = medeRestart(cfg, st, camposIndexados)
+	rep.RestartSec = medeRestart(cfg, st, fieldsIndexados)
 	fmt.Fprintf(cfg.Out, "RESTART: %.2fs (§125)\n", rep.RestartSec)
 
 	rep.Gates = evaluateGates(cfg, rep)
@@ -620,7 +620,7 @@ type phaseArgs struct {
 	name     string
 	cfg      Config
 	m        *materializer.Materializer
-	gen      fonte
+	gen      source
 	col      *collector
 	st       *storage.Store
 	events   int64         // parar após N eventos (0 = usar duration)
@@ -631,7 +631,7 @@ type phaseArgs struct {
 // runPhase roda uma fase, amostrando memória e contabilizando desfechos.
 func runPhase(a phaseArgs) (PhaseReport, error) {
 	rep := PhaseReport{Name: a.name}
-	antes, err := memprof.Read()
+	before, err := memprof.Read()
 	if err != nil {
 		return rep, fmt.Errorf("ingest-bench: amostra inicial: %w", err)
 	}
@@ -639,13 +639,13 @@ func runPhase(a phaseArgs) (PhaseReport, error) {
 	var (
 		buf       []byte
 		início    = time.Now()
-		fim       time.Time
+		end       time.Time
 		próxima   = início.Add(a.cfg.SampleInterval)
 		limiter   *rateLimiter
 		desdeCkpt int
 	)
 	if a.duration > 0 {
-		fim = início.Add(a.duration)
+		end = início.Add(a.duration)
 	}
 	if a.rate > 0 {
 		limiter = newRateLimiter(a.rate)
@@ -661,19 +661,19 @@ func runPhase(a phaseArgs) (PhaseReport, error) {
 	// tópico esvaziava: o Next bloqueava para sempre e a fase não terminava.
 	// É o débito 67, e ele contaminou a rodada de aceite do M4.
 	ctxFase := context.Background()
-	if !fim.IsZero() {
-		var cancela context.CancelFunc
-		ctxFase, cancela = context.WithDeadline(ctxFase, fim)
-		defer cancela()
+	if !end.IsZero() {
+		var cancel context.CancelFunc
+		ctxFase, cancel = context.WithDeadline(ctxFase, end)
+		defer cancel()
 	}
 
 	for i := int64(0); ; i++ {
 		if a.events > 0 && i >= a.events {
-			rep.StopReason = pararPorEventos
+			rep.StopReason = stopByEventos
 			break
 		}
-		if !fim.IsZero() && time.Now().After(fim) {
-			rep.StopReason = pararPorDuracao
+		if !end.IsZero() && time.Now().After(end) {
+			rep.StopReason = stopByDuration
 			break
 		}
 		if limiter != nil {
@@ -688,9 +688,9 @@ func runPhase(a phaseArgs) (PhaseReport, error) {
 			// events_per_sec não sabe se olha para vazão ou para fim de
 			// corpus.
 			if ctxFase.Err() != nil {
-				rep.StopReason = pararPorDuracao
+				rep.StopReason = stopByDuration
 			} else {
-				rep.StopReason = pararPorFonteSeca
+				rep.StopReason = stopBySourceSeca
 			}
 			break
 		}
@@ -729,9 +729,9 @@ func runPhase(a phaseArgs) (PhaseReport, error) {
 		// Amostra por TEMPO ou por CONTAGEM, o que vier primeiro: o tempo
 		// cobre a fase lenta (checkpoint, fsync), a contagem garante
 		// resolução na curva independentemente de quanto a rodada durou.
-		porTempo := time.Now().After(próxima)
-		porEventos := rep.Events%int64(a.cfg.SampleEveryEvents) == 0
-		if porTempo || porEventos {
+		byTime := time.Now().After(próxima)
+		byEventos := rep.Events%int64(a.cfg.SampleEveryEvents) == 0
+		if byTime || byEventos {
 			próxima = time.Now().Add(a.cfg.SampleInterval)
 			if err := a.col.sample(a.name, rep.Events, &rep); err != nil {
 				return rep, err
@@ -765,10 +765,10 @@ func runPhase(a phaseArgs) (PhaseReport, error) {
 	if rep.Events > 0 {
 		// Inclui as alocações do próprio harness (gerador não aloca; o
 		// memprof.Read de cada amostra aloca ~2, diluídas em milhões).
-		rep.AllocsPerEven = float64(depois.Mallocs-antes.Mallocs) / float64(rep.Events)
+		rep.AllocsPerEven = float64(depois.Mallocs-before.Mallocs) / float64(rep.Events)
 	}
 	if d := rep.DurationSec / 60; d > 0 {
-		rep.GCPerMin = float64(depois.NumGC-antes.NumGC) / d
+		rep.GCPerMin = float64(depois.NumGC-before.NumGC) / d
 	}
 	return rep, nil
 }
@@ -785,12 +785,12 @@ func (c *collector) sample(phase string, events int64, rep *PhaseReport) error {
 	if err != nil {
 		return fmt.Errorf("ingest-bench: amostra de memória: %w", err)
 	}
-	// O disco entra na MESMA amostra da memória, e uma leitura que falhou
+	// O disk entra na MESMA amostra da memória, e uma leitura que falhou
 	// aborta a rodada em vez de virar um ponto inventado na curva — o mesmo
 	// tratamento que o memprof.Read sempre teve. Carregar o último valor bom
 	// para frente seria pior que abortar: a série ficaria PLANA no trecho não
 	// medido, e plano é o desenho que o gate aprova.
-	disco, err := dirBytes(c.cfg.DataDir)
+	disk, err := dirBytes(c.cfg.DataDir)
 	if err != nil {
 		return err
 	}
@@ -804,7 +804,7 @@ func (c *collector) sample(phase string, events int64, rep *PhaseReport) error {
 		HeapAlloc:   s.HeapAlloc,
 		HeapObjects: s.HeapObjects,
 		NumGC:       s.NumGC,
-		DiskBytes:   disco,
+		DiskBytes:   disk,
 	})
 	if s.VmRSSBytes > rep.MaxRSSBytes {
 		rep.MaxRSSBytes = s.VmRSSBytes
@@ -847,10 +847,10 @@ type readerPool struct {
 
 var classNames = [3]string{"point_lookup", "bitmap_limit_100", "scan_1k"}
 
-// amostraDeKeys devolve keys REAIS do dataset, tiradas do mesmo gerador
+// amostraOfKeys devolve keys REAIS do dataset, tiradas do mesmo gerador
 // determinístico da fase LOAD — é o que garante que o point lookup medido
 // encontra row, em vez de medir o caminho de "não achou".
-func amostraDeKeys(cfg Config) [][]byte {
+func amostraOfKeys(cfg Config) [][]byte {
 	gen, err := radiusgen.New(radiusgen.Config{
 		Seed: cfg.Seed + 2, Entities: cfg.Entities, Sequential: true,
 	})
@@ -919,7 +919,7 @@ func startReaders(cfg Config, st *storage.Store, c *schema.Compiled) *readerPool
 					st.CloseSnapshot(snap)
 					rbuf = out
 				case 1:
-					rbuf = lookupIndexadoLimit(st, statusField.ID, rbuf, 100)
+					rbuf = lookupIndexedLimit(st, statusField.ID, rbuf, 100)
 				default:
 					rbuf = scanLimit(st, rbuf, 1000)
 				}
@@ -943,7 +943,7 @@ func (p *readerPool) stop() []QueryStats {
 	return out
 }
 
-func lookupIndexadoLimit(st *storage.Store, field types.FieldID, buf []byte, limit int) []byte {
+func lookupIndexedLimit(st *storage.Store, field types.FieldID, buf []byte, limit int) []byte {
 	v := types.Value{Type: types.TypeString, Bytes: []byte("Interim-Update")}
 	snap := st.OpenSnapshot()
 	defer st.CloseSnapshot(snap)
@@ -1048,9 +1048,9 @@ func (l *latencyRec) stats(class string) (QueryStats, bool) {
 // evaluateGates aplica os critérios de aceite. Gate DURO violado OU não
 // avaliado reprova a rodada; gate soft entra no relatório para acompanhamento.
 func evaluateGates(cfg Config, rep *Report) []GateResult {
-	limite := cfg.RSSLimitBytes
-	if limite == 0 {
-		limite = defaultRSSLimit
+	limit := cfg.RSSLimitBytes
+	if limit == 0 {
+		limit = defaultRSSLimit
 	}
 	maxRSS := rep.Load.MaxRSSBytes
 	if rep.Steady.MaxRSSBytes > maxRSS {
@@ -1059,8 +1059,8 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 
 	gates := []GateResult{{
 		Name: "rss_limit", Spec: "§109", Hard: true,
-		Status: statusDe(maxRSS < limite),
-		Detail: fmt.Sprintf("max(VmRSS) = %s, limite %s", humanBytes(maxRSS), humanBytes(limite)),
+		Status: statusOf(maxRSS < limit),
+		Detail: fmt.Sprintf("max(VmRSS) = %s, limite %s", humanBytes(maxRSS), humanBytes(limit)),
 	}}
 
 	// §110: o heap não pode acompanhar o dataset. Exige o report de uma
@@ -1085,18 +1085,18 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 			heapGate.Detail = fmt.Sprintf("baseline tem %d entidades, esta rodada %d: a referência precisa ser MENOR",
 				base.Config.Entities, cfg.Entities)
 		default:
-			heapAtual := rep.Steady.HeapStable
-			if heapAtual == 0 {
-				heapAtual = rep.Load.HeapStable
+			heapCurrent := rep.Steady.HeapStable
+			if heapCurrent == 0 {
+				heapCurrent = rep.Load.HeapStable
 			}
 			heapBase := base.Steady.HeapStable
 			if heapBase == 0 {
 				heapBase = base.Load.HeapStable
 			}
 			var passouHeap bool
-			passouHeap, heapGate.Detail = avaliaHeap(
-				heapAtual, heapBase, cfg.Entities, base.Config.Entities)
-			heapGate.Status = statusDe(passouHeap)
+			passouHeap, heapGate.Detail = evaluateHeap(
+				heapCurrent, heapBase, cfg.Entities, base.Config.Entities)
+			heapGate.Status = statusOf(passouHeap)
 		}
 	}
 	gates = append(gates, heapGate)
@@ -1104,7 +1104,7 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 	// §88: throughput de ingestão.
 	gates = append(gates, GateResult{
 		Name: "ingest_throughput", Spec: "§88", Hard: true,
-		Status: statusDe(rep.Load.EventsPerSec >= 2000),
+		Status: statusOf(rep.Load.EventsPerSec >= 2000),
 		Detail: fmt.Sprintf("LOAD a %.0f ev/s, mínimo 2000", rep.Load.EventsPerSec),
 	})
 
@@ -1130,7 +1130,7 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 	}
 	gates = append(gates, GateResult{
 		Name: "allocs_per_event", Spec: "§111", Hard: false,
-		Status: statusDe(allocs <= 9),
+		Status: statusOf(allocs <= 9),
 		Detail: fmt.Sprintf("%.4f allocs/evento na fase %s (alvo 9; soft no M1)%s", allocs, fase, misto),
 	})
 
@@ -1140,7 +1140,7 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 	if rep.Config.SQLReaders > 0 {
 		gates = append(gates, GateResult{
 			Name: "no_query_error", Spec: "§106", Hard: true,
-			Status: statusDe(rep.SQLErrors == 0),
+			Status: statusOf(rep.SQLErrors == 0),
 			Detail: fmt.Sprintf("%d erros nas consultas SQL concorrentes com a ingestão", rep.SQLErrors),
 		})
 		// O ORÁCULO, e o gate que fecha o débito 6.
@@ -1168,13 +1168,13 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 		}
 		gates = append(gates, GateResult{
 			Name: "query_oracle", Spec: "débito 6", Hard: true,
-			Status: statusDe(falhas == 0),
+			Status: statusOf(falhas == 0),
 			Detail: detalhe.String(),
 		})
 	}
 	gates = append(gates, GateResult{
 		Name: "no_event_loss", Spec: "§101", Hard: true,
-		Status: statusDe(perdidos == 0),
+		Status: statusOf(perdidos == 0),
 		Detail: fmt.Sprintf("%d eventos descartados (skipped+failed)", perdidos),
 	})
 
@@ -1182,11 +1182,11 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 	// série existe, inclusive com a compaction desligada — e é assim que ele se
 	// prova: `-compaction-ratio 0` produz o append-only puro, e uma rodada em
 	// que ele passasse mesmo assim não estaria medindo nada.
-	gates = append(gates, avaliaGateDeDisco(serieDeDiscoDoSteady(rep.Samples)))
+	gates = append(gates, evaluateGateOfDisk(serieOfDiskOfSteady(rep.Samples)))
 
 	// Latências (§89/§90) — soft no M1: sem o executor, medem o storage.
 	for _, q := range rep.Queries {
-		var teto float64
+		var ceiling float64
 		var spec string
 		// As rotas SQL são DURAS: a §89 e a §90 falam da latência que o
 		// usuário paga, e o caminho dele é o completo (parse → bind → plan →
@@ -1195,36 +1195,36 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 		duro := false
 		switch q.Class {
 		case "sql_point_lookup":
-			teto, spec, duro = 10_000, "§89", true
+			ceiling, spec, duro = 10_000, "§89", true
 		case "sql_bitmap_limit_100":
-			teto, spec, duro = 50_000, "§90", true
+			ceiling, spec, duro = 50_000, "§90", true
 		case "sql_intersect_limit_100", "sql_union_limit_100", "sql_full_scan_limit_100":
-			teto, spec = 50_000, "§90"
+			ceiling, spec = 50_000, "§90"
 		case "point_lookup":
-			teto, spec = 10_000, "§89 (baixo nível, referência)"
+			ceiling, spec = 10_000, "§89 (baixo nível, referência)"
 		case "bitmap_limit_100":
-			teto, spec = 50_000, "§90 (baixo nível, referência)"
+			ceiling, spec = 50_000, "§90 (baixo nível, referência)"
 		default:
 			continue
 		}
-		passou := teto == 0 || q.P95Micr <= teto
+		passou := ceiling == 0 || q.P95Micr <= ceiling
 		gates = append(gates, GateResult{
 			Name: "latency_" + q.Class, Spec: spec, Hard: duro,
-			Status: statusDe(passou),
-			Detail: fmt.Sprintf("p95 = %.0f µs, teto %.0f µs (%d amostras)", q.P95Micr, teto, q.Count),
+			Status: statusOf(passou),
+			Detail: fmt.Sprintf("p95 = %.0f µs, teto %.0f µs (%d amostras)", q.P95Micr, ceiling, q.Count),
 		})
 	}
 	return gates
 }
 
 const (
-	// amostrasMinimasDeDisco é o piso para o gate ter DUAS METADES em vez de
+	// samplesMinimasOfDisk é o piso para o gate ter DUAS METADES em vez de
 	// duas leituras. Com seis amostras a primeira metade tem três variações e
 	// a segunda tem duas; abaixo disso uma das metades vira uma variação só, e
 	// uma variação só de um dente de serra cai no pico ou no vale conforme o
 	// instante — o veredito passaria a ser sorteio.
-	amostrasMinimasDeDisco = 6
-	// fracaoDeCrescimentoTolerada é o quanto a segunda metade da janela pode
+	samplesMinimasOfDisk = 6
+	// fractionOfGrowthTolerada é o quanto a segunda metade da janela pode
 	// crescer, por amostra, em relação à primeira.
 	//
 	// O número não sai de ajuste fino: ele separa os dois regimes que o gate
@@ -1289,7 +1289,7 @@ const (
 	//     4% de erro para uma estimativa com um k aproximado é acordo, não
 	//     coincidência. É esta espera, e não a agenda de checkpoint, que ocupa
 	//     os 82,8% de janela indistinguível do append-only puro.
-	//  3. A cascata depois do primeiro dente é do produto: o aposentaSegmento
+	//  3. A cascata depois do primeiro dente é do produto: o aposentaSegment
 	//     checkpointa antes do rename e outra vez depois dele (compaction.go),
 	//     e cada um repovoa o segSize com o tamanho REAL de todos os segmentos
 	//     selados — que até ali não tinham entrada alguma. Daí em diante a
@@ -1315,19 +1315,19 @@ const (
 	// é sobre exatamente isto: uma série que cresça para sempre a um terço da
 	// inclinação inicial passa neste gate. Ele afere DESACELERAÇÃO, e o que
 	// aterrissa aqui quando a compaction não roda é razão ~1, não razão 0,4.
-	fracaoDeCrescimentoTolerada = 0.35
+	fractionOfGrowthTolerada = 0.35
 )
 
-// serieDeDiscoDoSteady extrai a curva de disco da fase STEADY, e só dela.
+// serieOfDiskOfSteady extrai a curva de disco da fase STEADY, e só dela.
 //
 // O LOAD fica de fora por construção: ele CRIA o dataset, cresce do zero ao
 // tamanho vivo e não tem garbage para a compaction devolver. Deixá-lo entrar
 // encheria a primeira metade da janela com a inclinação da carga inicial, e
 // qualquer segunda metade pareceria plateau em comparação — o gate aprovaria
 // por artefato de recorte.
-func serieDeDiscoDoSteady(amostras []Sample) []int64 {
+func serieOfDiskOfSteady(samples []Sample) []int64 {
 	var serie []int64
-	for _, s := range amostras {
+	for _, s := range samples {
 		if s.Phase == "steady" {
 			serie = append(serie, s.DiskBytes)
 		}
@@ -1335,7 +1335,7 @@ func serieDeDiscoDoSteady(amostras []Sample) []int64 {
 	return serie
 }
 
-// avaliaGateDeDisco é a prova que importa neste milestone: sob carga de regime
+// evaluateGateOfDisk é a prova que importa neste milestone: sob carga de regime
 // — updates sobre key set FIXO, que geram garbage sem gerar row nova —, o disco
 // tem de parar de crescer. A compaction pode passar em todo teste unitário do
 // §53-55 e não devolver disco em regime; é esta série que discorda.
@@ -1352,19 +1352,19 @@ func serieDeDiscoDoSteady(amostras []Sample) []int64 {
 // AVALIADO reprova a rodada e manda repetir com STEADY mais longo, que é a ação
 // correta. Aprovar ali seria dizer "o disco estabilizou" sobre uma janela em
 // que nada foi escrito.
-func avaliaGateDeDisco(serie []int64) GateResult {
+func evaluateGateOfDisk(serie []int64) GateResult {
 	g := GateResult{Name: "disk_plateau", Spec: "§53-55", Hard: true}
-	if len(serie) < amostrasMinimasDeDisco {
+	if len(serie) < samplesMinimasOfDisk {
 		g.Status = GateNaoAvaliado
 		g.Detail = fmt.Sprintf("%d amostras de disco no STEADY, mínimo %d: "+
 			"rode com -steady mais longo ou -sample menor — janela curta não prova plateau nenhum",
-			len(serie), amostrasMinimasDeDisco)
+			len(serie), samplesMinimasOfDisk)
 		return g
 	}
 	meio := len(serie) / 2
-	primeira := taxaPorAmostra(serie[0], serie[meio], meio)
-	segunda := taxaPorAmostra(serie[meio], serie[len(serie)-1], len(serie)-1-meio)
-	janela := fmt.Sprintf("%d amostras, disco de %s a %s (pico da 1ª metade em %s)",
+	primeira := taxaByAmostra(serie[0], serie[meio], meio)
+	segunda := taxaByAmostra(serie[meio], serie[len(serie)-1], len(serie)-1-meio)
+	window := fmt.Sprintf("%d amostras, disco de %s a %s (pico da 1ª metade em %s)",
 		len(serie), humanBytes(uint64(max(serie[0], 0))), humanBytes(uint64(max(serie[len(serie)-1], 0))),
 		humanBytes(uint64(max(slices.Max(serie[:meio+1]), 0))))
 
@@ -1372,14 +1372,14 @@ func avaliaGateDeDisco(serie []int64) GateResult {
 		g.Status = GateNaoAvaliado
 		g.Detail = fmt.Sprintf("a primeira metade da janela não cresceu (%.0f B/amostra) — %s. "+
 			"Sem crescimento para absorver, a segunda metade plana não diz nada sobre a compaction",
-			primeira, janela)
+			primeira, window)
 		return g
 	}
-	razao := segunda / primeira
-	g.Status = statusDe(razao < fracaoDeCrescimentoTolerada)
+	ratio := segunda / primeira
+	g.Status = statusOf(ratio < fractionOfGrowthTolerada)
 	g.Detail = fmt.Sprintf("crescimento de %.0f B/amostra na 1ª metade contra %.0f B/amostra na 2ª "+
 		"(razão %.3f, teto %.2f) — %s",
-		primeira, segunda, razao, fracaoDeCrescimentoTolerada, janela)
+		primeira, segunda, ratio, fractionOfGrowthTolerada, window)
 	if g.Status == GateReprovou {
 		// A dica manda o operador ao artefato antes de mandá-lo ao produto,
 		// porque as duas hipóteses pedem ações opostas e o relatório já sabe
@@ -1397,7 +1397,7 @@ func avaliaGateDeDisco(serie []int64) GateResult {
 		// ANTES do único checkpoint (amostra 497 contra amostra 500 do
 		// gate-disco-compaction-on-50k-20260822.json). Quem manda no instante
 		// do primeiro dente é o esgotamento do primeiro segmento selado — ver a
-		// aritmética junto de fracaoDeCrescimentoTolerada —, e mandar o
+		// aritmética junto de fractionOfGrowthTolerada —, e mandar o
 		// operador mexer no checkpoint o faria calibrar o parâmetro errado.
 		//
 		// RESSALVA sobre os dois artefatos citados neste arquivo: eles são
@@ -1423,17 +1423,17 @@ func avaliaGateDeDisco(serie []int64) GateResult {
 	return g
 }
 
-// taxaPorAmostra é a inclinação média de um trecho da curva. Pode ser negativa,
+// taxaByAmostra é a inclinação média de um trecho da curva. Pode ser negativa,
 // e ela é: aposentar um segmento devolve disco, e a metade que contém a
 // aposentadoria encolhe.
-func taxaPorAmostra(de, ate int64, variacoes int) float64 {
+func taxaByAmostra(of, until int64, variacoes int) float64 {
 	if variacoes <= 0 {
 		return 0
 	}
-	return float64(ate-de) / float64(variacoes)
+	return float64(until-of) / float64(variacoes)
 }
 
-// avaliaHeap decide o §110 comparando o heap estável das duas rodadas.
+// evaluateHeap decide o §110 comparando o heap estável das duas rodadas.
 //
 // Dois regimes, e a distinção importa: enquanto o heap for grande o bastante
 // para significar acoplamento, vale a razão da spec (teto 2x). Abaixo do piso
@@ -1442,11 +1442,11 @@ func taxaPorAmostra(de, ate int64, variacoes int) float64 {
 // rodada cujo heap é 0,1% do orçamento de RSS. O que a §110 quer garantir é
 // que o heap NÃO acompanhe o dataset, e o valor absoluto desprezível prova
 // isso com mais força do que qualquer razão.
-func avaliaHeap(heapAtual, heapBase uint64, entAtual, entBase int) (bool, string) {
-	razãoDados := float64(entAtual) / float64(entBase)
-	razão := math.Inf(1)
+func evaluateHeap(heapCurrent, heapBase uint64, entCurrent, entBase int) (bool, string) {
+	ratioData := float64(entCurrent) / float64(entBase)
+	ratio := math.Inf(1)
 	if heapBase > 0 {
-		razão = float64(heapAtual) / float64(heapBase)
+		ratio = float64(heapCurrent) / float64(heapBase)
 	}
 	// A razão e os valores absolutos entram no detalhe nos DOIS regimes,
 	// inclusive quando o piso decide. Passar não pode significar esconder: um
@@ -1454,14 +1454,14 @@ func avaliaHeap(heapAtual, heapBase uint64, entAtual, entBase int) (bool, string
 	// neste gate — 15 MiB é 1,5% do orçamento, e o RSS tem gate próprio —,
 	// mas quem comparar duas rodadas precisa VER a regressão.
 	medida := fmt.Sprintf("heap %s (%d entidades) vs %s (%d entidades): %.2fx de heap para %.1fx de dados",
-		humanBytes(heapAtual), entAtual, humanBytes(heapBase), entBase, razão, razãoDados)
+		humanBytes(heapCurrent), entCurrent, humanBytes(heapBase), entBase, ratio, ratioData)
 
-	if heapAtual <= heapNegligibleBytes {
+	if heapCurrent <= heapNegligibleBytes {
 		return true, fmt.Sprintf("%s — abaixo do piso de %s, onde a razão vira ruído de GC "+
 			"e o desacoplamento está provado pela grandeza absoluta",
 			medida, humanBytes(heapNegligibleBytes))
 	}
-	return razão < 2, medida + ", teto 2x"
+	return ratio < 2, medida + ", teto 2x"
 }
 
 func loadReport(path string) (*Report, error) {
@@ -1478,12 +1478,12 @@ func loadReport(path string) (*Report, error) {
 
 // extractKey lê o valor do campo "id" do evento sem parsear o JSON inteiro.
 func extractKey(event []byte) []byte {
-	const marca = `"id":"`
-	i := indexOf(event, marca)
+	const mark = `"id":"`
+	i := indexOf(event, mark)
 	if i < 0 {
 		return nil
 	}
-	rest := event[i+len(marca):]
+	rest := event[i+len(mark):]
 	for j := 0; j < len(rest); j++ {
 		if rest[j] == '"' {
 			return append([]byte(nil), rest[:j]...)
@@ -1588,12 +1588,12 @@ func humanBytes(n uint64) string {
 // O Store devolvido pelo Open substitui o anterior no lugar certo: quem
 // chamou o Run tem um defer Close, e fechar duas vezes é seguro (o Close é
 // idempotente), mas deixar o segundo Store aberto vazaria o flock.
-func abreStore(cfg Config, indexados []string) (*storage.Store, error) {
+func openStore(cfg Config, indexados []string) (*storage.Store, error) {
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DataDir,
-		SegmentSize:            cfg.SegmentSize,
-		EstimatedRows:          uint64(cfg.Entities),
-		CamposIndexadosPorNome: indexados,
+		Dir:                 cfg.DataDir,
+		SegmentSize:         cfg.SegmentSize,
+		EstimatedRows:       uint64(cfg.Entities),
+		IndexedFieldsByName: indexados,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ingest-bench: abrindo dataset: %w", err)
@@ -1602,18 +1602,18 @@ func abreStore(cfg Config, indexados []string) (*storage.Store, error) {
 }
 
 func medeRestart(cfg Config, st *storage.Store, indexados []string) float64 {
-	inicio := time.Now()
+	start := time.Now()
 	if err := st.Close(); err != nil {
 		fmt.Fprintf(cfg.Out, "AVISO: Close falhou ao medir o restart: %v\n", err)
 		return 0
 	}
-	novo, err := abreStore(cfg, indexados)
+	nw, err := openStore(cfg, indexados)
 	if err != nil {
 		fmt.Fprintf(cfg.Out, "AVISO: reabertura falhou ao medir o restart: %v\n", err)
 		return 0
 	}
-	dur := time.Since(inicio)
-	if err := novo.Close(); err != nil {
+	dur := time.Since(start)
+	if err := nw.Close(); err != nil {
 		fmt.Fprintf(cfg.Out, "AVISO: fechar o Store da medição de restart: %v\n", err)
 	}
 	return dur.Seconds()

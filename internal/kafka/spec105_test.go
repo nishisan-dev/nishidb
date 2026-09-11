@@ -23,26 +23,26 @@ const prazo = 30 * time.Second
 // At-least-once é consequência do §48 (`consume → materialize → persist →
 // durable checkpoint → commit`): a duplicata é normal e tem de ser INÓCUA.
 func TestSpec105DuplicateDelivery(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(evento("A", 1, "Start"), evento("A", 2, "Stop"))
-	if _, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 2 }); err != nil {
+	b.produz(event("A", 1, "Start"), event("A", 2, "Stop"))
+	if _, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 2 }); err != nil {
 		t.Fatal(err)
 	}
-	estado := leEstado(t, b, "A")
+	state := readState(t, b, "A")
 
 	// Reentrega dos MESMOS eventos, na mesma ordem de partição.
-	b.produz(evento("A", 1, "Start"), evento("A", 2, "Stop"))
-	d, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 2 })
+	b.produz(event("A", 1, "Start"), event("A", 2, "Stop"))
+	d, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 2 })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.Stale != 2 {
 		t.Errorf("stale = %d, quer 2: com sequence, a duplicata tem de ser descartada pelo gate do §25", d.Stale)
 	}
-	if depois := leEstado(t, b, "A"); depois != estado {
-		t.Errorf("a reentrega mudou o estado:\n antes: %s\ndepois: %s", estado, depois)
+	if depois := readState(t, b, "A"); depois != state {
+		t.Errorf("a reentrega mudou o estado:\n antes: %s\ndepois: %s", state, depois)
 	}
 }
 
@@ -51,15 +51,15 @@ func TestSpec105DuplicateDelivery(t *testing.T) {
 // O §126.9 é literal ("recuperar offsets"), e é o que separa retomar de
 // reprocessar o tópico inteiro a cada reinício.
 func TestSpec105OffsetRecovery(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(evento("A", 1, "Start"), evento("B", 1, "Start"), evento("C", 1, "Start"))
-	if _, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 }); err != nil {
+	b.produz(event("A", 1, "Start"), event("B", 1, "Start"), event("C", 1, "Start"))
+	if _, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 }); err != nil {
 		t.Fatal(err)
 	}
-	offsets, existe := b.leOffsets()
-	if !existe {
+	offsets, exists := b.readOffsets()
+	if !exists {
 		t.Fatal("kafka.offsets não foi criado")
 	}
 	if offsets[0] != 3 {
@@ -70,7 +70,7 @@ func TestSpec105OffsetRecovery(t *testing.T) {
 
 	// Nada novo no tópico: um consumidor que retomasse do zero reprocessaria
 	// os três eventos.
-	d, err := b.consomeAte(3*time.Second, func(d kafka.Desfecho) bool { return d.Eventos > 0 })
+	d, err := b.consomeUntil(3*time.Second, func(d kafka.Desfecho) bool { return d.Eventos > 0 })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,22 +81,22 @@ func TestSpec105OffsetRecovery(t *testing.T) {
 
 // §105.3 — multiple partitions.
 func TestSpec105MultiplePartitions(t *testing.T) {
-	b := novaBancada(t, 4)
-	defer b.fecha()
+	b := newBench(t, 4)
+	defer b.close()
 
 	var recs []*kgo.Record
 	for p := int32(0); p < 4; p++ {
 		for i := 0; i < 5; i++ {
-			recs = append(recs, eventoNaParticao(
+			recs = append(recs, eventNaPartition(
 				string(rune('A'+int(p))), int64(i+1), "Start", p))
 		}
 	}
 	b.produz(recs...)
 
-	if _, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 20 }); err != nil {
+	if _, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 20 }); err != nil {
 		t.Fatal(err)
 	}
-	offsets, _ := b.leOffsets()
+	offsets, _ := b.readOffsets()
 	if len(offsets) != 4 {
 		t.Fatalf("offsets = %v, quer as 4 partições", offsets)
 	}
@@ -112,19 +112,19 @@ func TestSpec105MultiplePartitions(t *testing.T) {
 // Distinto do 105.5: aqui nada foi tornado durável, então o offset não existe
 // e o consumo recomeça do começo — sem buraco.
 func TestSpec105CrashBeforeCheckpoint(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(evento("A", 1, "Start"), evento("B", 1, "Start"))
+	b.produz(event("A", 1, "Start"), event("B", 1, "Start"))
 
-	// Fecha o dataset SEM nunca ter consumido: é o crash antes de qualquer
+	// Close o dataset SEM nunca ter consumido: é o crash antes de qualquer
 	// persistência de posição.
 	b.reinicia()
-	if _, existe := b.leOffsets(); existe {
+	if _, exists := b.readOffsets(); exists {
 		t.Fatal("kafka.offsets existe sem nunca ter havido consumo")
 	}
 
-	d, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 2 })
+	d, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 2 })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,14 +139,14 @@ func TestSpec105CrashBeforeCheckpoint(t *testing.T) {
 // segmento, a posição ainda não. O offset REGRIDE e a duplicata resultante
 // tem de ser inócua.
 func TestSpec105CrashAfterAppend(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(evento("A", 1, "Start"), evento("A", 2, "Stop"), evento("A", 3, "Interim"))
-	if _, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 }); err != nil {
+	b.produz(event("A", 1, "Start"), event("A", 2, "Stop"), event("A", 3, "Interim"))
+	if _, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 }); err != nil {
 		t.Fatal(err)
 	}
-	estado := leEstado(t, b, "A")
+	state := readState(t, b, "A")
 
 	// Regride a posição à força, como um crash entre o rename do manifest e o
 	// rename do kafka.offsets teria feito.
@@ -163,38 +163,38 @@ func TestSpec105CrashAfterAppend(t *testing.T) {
 	}
 	b.reinicia()
 
-	d, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 })
+	d, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.Eventos != 3 {
 		t.Fatalf("eventos reprocessados = %d, quer 3", d.Eventos)
 	}
-	if depois := leEstado(t, b, "A"); depois != estado {
-		t.Errorf("o reprocessamento NÃO foi inócuo:\n antes: %s\ndepois: %s", estado, depois)
+	if depois := readState(t, b, "A"); depois != state {
+		t.Errorf("o reprocessamento NÃO foi inócuo:\n antes: %s\ndepois: %s", state, depois)
 	}
 }
 
 // §105.6 — restart.
 func TestSpec105Restart(t *testing.T) {
-	b := novaBancada(t, 2)
-	defer b.fecha()
+	b := newBench(t, 2)
+	defer b.close()
 
-	b.produz(eventoNaParticao("A", 1, "Start", 0), eventoNaParticao("B", 1, "Start", 1))
-	if _, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 2 }); err != nil {
+	b.produz(eventNaPartition("A", 1, "Start", 0), eventNaPartition("B", 1, "Start", 1))
+	if _, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 2 }); err != nil {
 		t.Fatal(err)
 	}
 	b.reinicia()
 
-	b.produz(eventoNaParticao("A", 2, "Stop", 0))
-	d, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 1 })
+	b.produz(eventNaPartition("A", 2, "Stop", 0))
+	d, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 1 })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.Eventos != 1 {
 		t.Errorf("eventos após restart = %d, quer 1 (só o novo)", d.Eventos)
 	}
-	if got := leEstado(t, b, "A"); !strings.Contains(got, "Stop") {
+	if got := readState(t, b, "A"); !strings.Contains(got, "Stop") {
 		t.Errorf("estado de A após restart = %s, quer o patch novo aplicado", got)
 	}
 }
@@ -204,11 +204,11 @@ func TestSpec105Restart(t *testing.T) {
 // O §25 é explícito: `incoming > current` é o único gate, e o descarte por
 // sequence NÃO é erro — tem métrica própria e não dispara política.
 func TestSpec105StaleEvent(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
-	b.produz(evento("A", 5, "Stop"), evento("A", 2, "Start"), evento("A", 5, "Start"))
-	d, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 })
+	b.produz(event("A", 5, "Stop"), event("A", 2, "Start"), event("A", 5, "Start"))
+	d, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 3 })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestSpec105StaleEvent(t *testing.T) {
 	if d.Descartados != 0 || d.Falhas != 0 {
 		t.Errorf("stale contou como descarte ou falha: %+v", d)
 	}
-	if got := leEstado(t, b, "A"); !strings.Contains(got, "Stop") {
+	if got := readState(t, b, "A"); !strings.Contains(got, "Stop") {
 		t.Errorf("estado = %s, quer o do evento de sequence maior", got)
 	}
 }
@@ -229,8 +229,8 @@ func TestSpec105StaleEvent(t *testing.T) {
 // mensagem. O que se prova aqui é o "sem perder mensagem": com fila
 // minúscula, todo evento ainda chega.
 func TestSpec105QueueBackpressure(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
 	// Fila de 1 registro e 1 byte: todo envio bloqueia no gate de bytes até o
 	// writer drenar.
@@ -241,11 +241,11 @@ func TestSpec105QueueBackpressure(t *testing.T) {
 	const total = 50
 	var recs []*kgo.Record
 	for i := 0; i < total; i++ {
-		recs = append(recs, evento(string(rune('a'+i%26))+string(rune('0'+i/26)), int64(i+1), "Start"))
+		recs = append(recs, event(string(rune('a'+i%26))+string(rune('0'+i/26)), int64(i+1), "Start"))
 	}
 	b.produz(recs...)
 
-	d, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= total })
+	d, err := b.consomeUntil(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= total })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,15 +255,15 @@ func TestSpec105QueueBackpressure(t *testing.T) {
 	if d.Falhas != 0 {
 		t.Errorf("falhas = %d, quer 0", d.Falhas)
 	}
-	offsets, _ := b.leOffsets()
+	offsets, _ := b.readOffsets()
 	if offsets[0] != total {
 		t.Errorf("offset = %d, quer %d", offsets[0], total)
 	}
 }
 
-// leEstado devolve o payload materializado da entidade, para comparar
+// readState devolve o payload materializado da entidade, para comparar
 // convergência antes e depois de um reprocessamento.
-func leEstado(t *testing.T, b *bancada, id string) string {
+func readState(t *testing.T, b *bench, id string) string {
 	t.Helper()
 	rec, _, ok, err := b.st.GetByKey(b.st.OpenSnapshot(), []byte(id), nil)
 	if err != nil {
@@ -278,8 +278,8 @@ func leEstado(t *testing.T, b *bancada, id string) string {
 // A guarda do D10: sem ela, duas instâncias no mesmo group dividem partições,
 // cada dataset materializa metade e nenhuma métrica do §92 acusa.
 func TestAssignmentParcialRecusaASubida(t *testing.T) {
-	b := novaBancada(t, 4)
-	defer b.fecha()
+	b := newBench(t, 4)
+	defer b.close()
 
 	// Um segundo membro no mesmo group força a divisão das partições.
 	rival, err := kgo.NewClient(
@@ -294,12 +294,12 @@ func TestAssignmentParcialRecusaASubida(t *testing.T) {
 
 	// Produzir ANTES faz o poll do rival voltar na hora; sem isso ele
 	// bloquearia até o prazo só para entrar no group.
-	b.produz(evento("A", 1, "Start"))
-	ctxRival, cancelaRival := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelaRival()
+	b.produz(event("A", 1, "Start"))
+	ctxRival, cancelRival := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelRival()
 	rival.PollRecords(ctxRival, 1) // entra no group
 
-	_, err = b.consomeAte(20*time.Second, func(kafka.Desfecho) bool { return false })
+	_, err = b.consomeUntil(20*time.Second, func(kafka.Desfecho) bool { return false })
 	if !errors.Is(err, kafka.ErrAssignmentParcial) {
 		t.Errorf("erro = %v, quer ErrAssignmentParcial", err)
 	}

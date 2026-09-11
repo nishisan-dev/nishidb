@@ -18,7 +18,7 @@ import (
 // dublê vive no teste e não no dataset.
 func TestCampoAutoSobreviveAoRestartEFiltra(t *testing.T) {
 	ig := &integracao{t: t, dir: t.TempDir() + "/auto", oracle: oraculo{}}
-	ig.abre()
+	ig.open()
 
 	mat, err := materializer.New(ig.sch, ig.store)
 	if err != nil {
@@ -44,18 +44,18 @@ func TestCampoAutoSobreviveAoRestartEFiltra(t *testing.T) {
 	}
 
 	// REINICIA.
-	ig.fecha()
-	ig.abre()
+	ig.close()
+	ig.open()
 
-	campo, ok := ig.sch.FieldByName([]byte("X-Vendor-Attr"))
+	field, ok := ig.sch.FieldByName([]byte("X-Vendor-Attr"))
 	if !ok {
 		t.Fatal("após o restart, o campo auto sumiu do Compiled: " +
 			"a query responderia \"coluna não existe\" para uma coluna com dados")
 	}
-	if !campo.IsAuto {
+	if !field.IsAuto {
 		t.Error("o campo deveria ser auto")
 	}
-	if got := campo.EffectiveType(); got != types.TypeString {
+	if got := field.EffectiveType(); got != types.TypeString {
 		t.Fatalf("EffectiveType após restart = %v, want string (o tipo fixado é durável)", got)
 	}
 
@@ -66,18 +66,18 @@ func TestCampoAutoSobreviveAoRestartEFiltra(t *testing.T) {
 	}
 
 	// IS NULL sobre ele encontra quem nunca o teve.
-	semCampo := ig.ids(`SELECT id FROM radius_sessions WHERE "X-Vendor-Attr" IS NULL`)
-	if len(semCampo) != 1 || semCampo[0] != "C" {
-		t.Errorf("IS NULL sobre campo auto = %v, want [C]", semCampo)
+	withoutField := ig.ids(`SELECT id FROM radius_sessions WHERE "X-Vendor-Attr" IS NULL`)
+	if len(withoutField) != 1 || withoutField[0] != "C" {
+		t.Errorf("IS NULL sobre campo auto = %v, want [C]", withoutField)
 	}
 
 	// E o SELECT * o inclui como coluna.
-	linhas := ig.consulta(`SELECT * FROM radius_sessions WHERE id = 'A'`)
-	if len(linhas) != 1 {
-		t.Fatalf("SELECT * = %v", linhas)
+	rows := ig.consulta(`SELECT * FROM radius_sessions WHERE id = 'A'`)
+	if len(rows) != 1 {
+		t.Fatalf("SELECT * = %v", rows)
 	}
-	if got := linhas[0]["X-Vendor-Attr"]; got != "alpha" {
-		t.Errorf("SELECT * não trouxe o campo auto: %v", linhas[0]["X-Vendor-Attr"])
+	if got := rows[0]["X-Vendor-Attr"]; got != "alpha" {
+		t.Errorf("SELECT * não trouxe o campo auto: %v", rows[0]["X-Vendor-Attr"])
 	}
 }
 
@@ -87,7 +87,7 @@ func TestCampoAutoSobreviveAoRestartEFiltra(t *testing.T) {
 // procurar erro de digitação numa coluna que existe.
 func TestCampoAutoSemTipoRecusaComMensagemCerta(t *testing.T) {
 	ig := &integracao{t: t, dir: t.TempDir() + "/auto2", oracle: oraculo{}}
-	ig.abre()
+	ig.open()
 
 	mat, err := materializer.New(ig.sch, ig.store)
 	if err != nil {
@@ -100,14 +100,14 @@ func TestCampoAutoSemTipoRecusaComMensagemCerta(t *testing.T) {
 	if err := ig.store.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	ig.fecha()
-	ig.abre()
+	ig.close()
+	ig.open()
 
-	campo, ok := ig.sch.FieldByName([]byte("X-Nunca-Visto"))
+	field, ok := ig.sch.FieldByName([]byte("X-Nunca-Visto"))
 	if !ok {
 		t.Fatal("o campo criado no dicionário deveria existir no Compiled após o restart")
 	}
-	if got := campo.EffectiveType(); got != types.TypeNull {
+	if got := field.EffectiveType(); got != types.TypeNull {
 		t.Errorf("EffectiveType = %v, want null (nunca observado com valor)", got)
 	}
 

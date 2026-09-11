@@ -2,13 +2,13 @@ package materializer
 
 import "testing"
 
-// contadores devolve o trio da coluna derivada, que é como o `_meta.fields` o
+// counters devolve o trio da coluna derivada, que é como o `_meta.fields` o
 // publica: ocorrências, divergências e coerções.
-func contadores(t *testing.T, h *harness, nome string) (ocorr, diverg, coerc uint64) {
+func counters(t *testing.T, h *harness, name string) (ocorr, diverg, coerc uint64) {
 	t.Helper()
-	f, ok := h.c.FieldByName([]byte(nome))
+	f, ok := h.c.FieldByName([]byte(name))
 	if !ok {
-		t.Fatalf("coluna %q não compilada", nome)
+		t.Fatalf("coluna %q não compilada", name)
 	}
 	return f.OccurrenceCount(), f.DivergenceCount(), f.CoercionCount()
 }
@@ -31,7 +31,7 @@ func TestCoercaoEContadaSeparadaDaDivergencia(t *testing.T) {
 	h := newHarness(t, descobreYAML)
 	// Primeira observação fixa `doc.podName` como string.
 	h.apply(`{"id":"A","doc":{"podName":"pod-1"}}`)
-	if _, _, coerc := contadores(t, h, "doc.podName"); coerc != 0 {
+	if _, _, coerc := counters(t, h, "doc.podName"); coerc != 0 {
 		t.Fatalf("contador de coerção nasceu em %d", coerc)
 	}
 
@@ -40,7 +40,7 @@ func TestCoercaoEContadaSeparadaDaDivergencia(t *testing.T) {
 	h.apply(`{"id":"B","doc":{"podName":7}}`)
 	h.apply(`{"id":"C","doc":{"podName":true}}`)
 
-	ocorr, diverg, coerc := contadores(t, h, "doc.podName")
+	ocorr, diverg, coerc := counters(t, h, "doc.podName")
 	if coerc != 2 {
 		t.Errorf("coercions = %d, quer 2 (o número e o boolean)", coerc)
 	}
@@ -63,7 +63,7 @@ func TestValorNaFormaNativaNaoContaCoercao(t *testing.T) {
 	h.apply(`{"id":"A","doc":{"podName":"pod-1"}}`)
 	h.apply(`{"id":"B","doc":{"podName":"pod-2"}}`)
 	h.apply(`{"id":"C","doc":{"podName":"pod-3"}}`)
-	ocorr, _, coerc := contadores(t, h, "doc.podName")
+	ocorr, _, coerc := counters(t, h, "doc.podName")
 	if coerc != 0 {
 		t.Errorf("coercions = %d, quer 0: as três vieram como string", coerc)
 	}
@@ -85,7 +85,7 @@ func TestStringNumericaEmColunaInt64ContaCoercao(t *testing.T) {
 	h.apply(`{"id":"A","doc":{"tally":7}}`)
 	h.apply(`{"id":"B","doc":{"tally":"1000000000"}}`)
 
-	ocorr, diverg, coerc := contadores(t, h, "tally")
+	ocorr, diverg, coerc := counters(t, h, "tally")
 	if coerc != 1 {
 		t.Errorf("coercions = %d, quer 1 (a string numérica)", coerc)
 	}
@@ -107,7 +107,7 @@ func TestCoercaoContadaNaExtracaoDeclarada(t *testing.T) {
 	h.apply(`{"id":"A","doc":{"probeIpNode":"10.0.0.1"}}`)
 	h.apply(`{"id":"B","doc":{"probeIpNode":42}}`)
 
-	_, diverg, coerc := contadores(t, h, "probe_ip")
+	_, diverg, coerc := counters(t, h, "probe_ip")
 	if coerc != 1 {
 		t.Errorf("coercions = %d, quer 1", coerc)
 	}
@@ -129,7 +129,7 @@ func TestDivergenciaNaoContaComoCoercao(t *testing.T) {
 	h.apply(`{"id":"B","doc":{"podName":{"a":1}}}`)
 	h.apply(`{"id":"C","doc":{"podName":[1,2]}}`)
 
-	ocorr, diverg, coerc := contadores(t, h, "doc.podName")
+	ocorr, diverg, coerc := counters(t, h, "doc.podName")
 	if diverg != 2 {
 		t.Errorf("typeMismatches = %d, quer 2 (o objeto e o array)", diverg)
 	}
@@ -155,7 +155,7 @@ func TestNullNaoContaCoercaoENemDivergencia(t *testing.T) {
 	h.wantString(h.state("MESMA"), "doc.podName", "pod-1")
 
 	h.apply(`{"id":"MESMA","doc":{"podName":null}}`)
-	_, diverg, coerc := contadores(t, h, "doc.podName")
+	_, diverg, coerc := counters(t, h, "doc.podName")
 	if diverg != 0 || coerc != 0 {
 		t.Errorf("typeMismatches=%d coercions=%d, quer os dois em 0", diverg, coerc)
 	}

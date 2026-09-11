@@ -140,11 +140,11 @@ schema:
 }
 
 func TestParseValidationErrors(t *testing.T) {
-	repl := func(old, new string) string {
+	repl := func(old, nw string) string {
 		if !strings.Contains(baseYAML, old) {
 			t.Fatalf("baseYAML não contém %q", old)
 		}
-		return strings.Replace(baseYAML, old, new, 1)
+		return strings.Replace(baseYAML, old, nw, 1)
 	}
 	cases := []struct {
 		name string

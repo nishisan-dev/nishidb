@@ -30,7 +30,7 @@ func TestResolveSenhaComPasswordEnvAusenteNomeiaAVariavel(t *testing.T) {
 	os.Unsetenv(variavel) //nolint:errcheck // ausência é o próprio setup do teste
 
 	u := config.UserSpec{Username: "op", PasswordEnv: variavel, Role: config.RoleRead}
-	_, err := resolveSenha(u)
+	_, err := resolvePassword(u)
 	if err == nil {
 		t.Fatal("quer recusa: passwordEnv não definida no ambiente")
 	}
@@ -47,7 +47,7 @@ func TestResolveSenhaComPasswordEnvVaziaNomeiaAVariavel(t *testing.T) {
 	t.Setenv(variavel, "")
 
 	u := config.UserSpec{Username: "op", PasswordEnv: variavel, Role: config.RoleRead}
-	_, err := resolveSenha(u)
+	_, err := resolvePassword(u)
 	if err == nil {
 		t.Fatal("quer recusa: passwordEnv definida e vazia")
 	}
@@ -57,23 +57,23 @@ func TestResolveSenhaComPasswordEnvVaziaNomeiaAVariavel(t *testing.T) {
 }
 
 func TestResolveSenhaComPasswordFileInexistenteNomeiaOCaminho(t *testing.T) {
-	caminho := filepath.Join(t.TempDir(), "nao-existe.txt")
+	path := filepath.Join(t.TempDir(), "nao-existe.txt")
 
-	u := config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead}
-	_, err := resolveSenha(u)
+	u := config.UserSpec{Username: "op", PasswordFile: path, Role: config.RoleRead}
+	_, err := resolvePassword(u)
 	if err == nil {
 		t.Fatal("quer recusa: passwordFile inexistente")
 	}
-	if !strings.Contains(err.Error(), caminho) {
-		t.Errorf("a mensagem não nomeia o caminho %s: %v", caminho, err)
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("a mensagem não nomeia o caminho %s: %v", path, err)
 	}
 }
 
-// Regra NOVA em relação ao molde do kafka.Resolve: lá security.caFile é
+// Regra NOVA em relação ao molde do kafka.ResolveKafkaConfig: lá security.caFile é
 // pública; senha não. group/world-readable recusa nomeando caminho E modo.
 func TestResolveSenhaComPasswordFileGroupOuWorldReadableRecusaNomeandoCaminhoEModo(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		modo os.FileMode
 	}{
 		{"legível pelo group", 0o640},
@@ -82,24 +82,24 @@ func TestResolveSenhaComPasswordFileGroupOuWorldReadableRecusaNomeandoCaminhoEMo
 		{"legível por outros sem group", 0o604},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			caminho := filepath.Join(dir, "senha.txt")
-			if err := os.WriteFile(caminho, []byte("segredo\n"), c.modo); err != nil {
+			path := filepath.Join(dir, "senha.txt")
+			if err := os.WriteFile(path, []byte("segredo\n"), c.modo); err != nil {
 				t.Fatal(err)
 			}
 			// WriteFile aplica umask; força o modo exato que o caso quer
 			// exercitar.
-			if err := os.Chmod(caminho, c.modo); err != nil {
+			if err := os.Chmod(path, c.modo); err != nil {
 				t.Fatal(err)
 			}
 
-			u := config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead}
-			_, err := resolveSenha(u)
+			u := config.UserSpec{Username: "op", PasswordFile: path, Role: config.RoleRead}
+			_, err := resolvePassword(u)
 			if err == nil {
 				t.Fatalf("quer recusa: passwordFile com modo %04o", c.modo)
 			}
-			if !strings.Contains(err.Error(), caminho) {
+			if !strings.Contains(err.Error(), path) {
 				t.Errorf("a mensagem não nomeia o caminho: %v", err)
 			}
 			if !strings.Contains(err.Error(), "0640") && !strings.Contains(err.Error(), "0644") &&
@@ -113,13 +113,13 @@ func TestResolveSenhaComPasswordFileGroupOuWorldReadableRecusaNomeandoCaminhoEMo
 // chmod 600 continua aceito: é o modo que a mensagem de recusa recomenda.
 func TestResolveSenhaComPasswordFileModo600EhAceito(t *testing.T) {
 	dir := t.TempDir()
-	caminho := filepath.Join(dir, "senha.txt")
-	if err := os.WriteFile(caminho, []byte("segredo\n"), 0o600); err != nil {
+	path := filepath.Join(dir, "senha.txt")
+	if err := os.WriteFile(path, []byte("segredo\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	u := config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead}
-	if _, err := resolveSenha(u); err != nil {
+	u := config.UserSpec{Username: "op", PasswordFile: path, Role: config.RoleRead}
+	if _, err := resolvePassword(u); err != nil {
 		t.Fatalf("passwordFile 0600 deveria ser aceito: %v", err)
 	}
 }
@@ -130,42 +130,42 @@ func TestResolveSenhaComPasswordFileModo600EhAceito(t *testing.T) {
 // quebra de linha, tem de resolver para o mesmo hash.
 func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 	dir := t.TempDir()
-	semQuebra := filepath.Join(dir, "sem-quebra.txt")
-	comLF := filepath.Join(dir, "com-lf.txt")
-	comCRLF := filepath.Join(dir, "com-crlf.txt")
+	withoutQuebra := filepath.Join(dir, "sem-quebra.txt")
+	withLF := filepath.Join(dir, "com-lf.txt")
+	withCRLF := filepath.Join(dir, "com-crlf.txt")
 
-	if err := os.WriteFile(semQuebra, []byte("segredo123"), 0o600); err != nil {
+	if err := os.WriteFile(withoutQuebra, []byte("segredo123"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(comLF, []byte("segredo123\n"), 0o600); err != nil {
+	if err := os.WriteFile(withLF, []byte("segredo123\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(comCRLF, []byte("segredo123\r\n"), 0o600); err != nil {
+	if err := os.WriteFile(withCRLF, []byte("segredo123\r\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	base, err := resolveSenha(config.UserSpec{Username: "op", PasswordFile: semQuebra, Role: config.RoleRead})
+	base, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: withoutQuebra, Role: config.RoleRead})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	casos := []struct {
-		nome    string
-		caminho string
+		name string
+		path string
 	}{
-		{"LF", comLF},
-		{"CRLF", comCRLF},
+		{"LF", withLF},
+		{"CRLF", withCRLF},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
-			digest, err := resolveSenha(config.UserSpec{Username: "op", PasswordFile: c.caminho, Role: config.RoleRead})
+		t.Run(c.name, func(t *testing.T) {
+			digest, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: c.path, Role: config.RoleRead})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if digest != base {
 				t.Errorf("digest com quebra de linha final diverge do digest sem quebra: "+
 					"a mesma senha 'autenticaria' diferente dependendo de como o operador a escreveu no arquivo (base=%x, %s=%x)",
-					base, c.nome, digest)
+					base, c.name, digest)
 			}
 		})
 	}
@@ -180,7 +180,7 @@ func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 // da recusa de passwordEnv vazia, aplicada ao vizinho de baixo.
 func TestResolveSenhaComPasswordFileVazioOuSoNewlineRecusaNomeandoOCaminho(t *testing.T) {
 	casos := []struct {
-		nome      string
+		name      string
 		conteudo  string
 		descricao string
 	}{
@@ -189,19 +189,19 @@ func TestResolveSenhaComPasswordFileVazioOuSoNewlineRecusaNomeandoOCaminho(t *te
 		{"só CRLF", "\r\n", "arquivo que só contém um CRLF"},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			caminho := filepath.Join(dir, "senha.txt")
-			if err := os.WriteFile(caminho, []byte(c.conteudo), 0o600); err != nil {
+			path := filepath.Join(dir, "senha.txt")
+			if err := os.WriteFile(path, []byte(c.conteudo), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
-			u := config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead}
-			_, err := resolveSenha(u)
+			u := config.UserSpec{Username: "op", PasswordFile: path, Role: config.RoleRead}
+			_, err := resolvePassword(u)
 			if err == nil {
 				t.Fatalf("quer recusa: %s não pode resolver para senha vazia em silêncio", c.descricao)
 			}
-			if !strings.Contains(err.Error(), caminho) {
+			if !strings.Contains(err.Error(), path) {
 				t.Errorf("a mensagem não nomeia o caminho: %v", err)
 			}
 		})
@@ -216,17 +216,17 @@ func TestResolveSenhaPasswordEnvNaoEhAparada(t *testing.T) {
 	const variavel = "NISHIDB_TESTE_SENHA_COM_NEWLINE_B2"
 	t.Setenv(variavel, "segredo123\n")
 
-	digestEnv, err := resolveSenha(config.UserSpec{Username: "op", PasswordEnv: variavel, Role: config.RoleRead})
+	digestEnv, err := resolvePassword(config.UserSpec{Username: "op", PasswordEnv: variavel, Role: config.RoleRead})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	dir := t.TempDir()
-	caminho := filepath.Join(dir, "com-newline.txt")
-	if err := os.WriteFile(caminho, []byte("segredo123\n"), 0o600); err != nil {
+	path := filepath.Join(dir, "com-newline.txt")
+	if err := os.WriteFile(path, []byte("segredo123\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	digestArquivo, err := resolveSenha(config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead})
+	digestFile, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: path, Role: config.RoleRead})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,12 +234,12 @@ func TestResolveSenhaPasswordEnvNaoEhAparada(t *testing.T) {
 	// O arquivo com o MESMO newline literal apara para "segredo123"; a env
 	// var não apara, então os dois digests têm de DIVERGIR — a prova de que
 	// só passwordFile é aparado.
-	if digestEnv == digestArquivo {
+	if digestEnv == digestFile {
 		t.Error("passwordEnv com newline literal não deveria coincidir com passwordFile aparado: a env var não deveria ser aparada")
 	}
 }
 
-// resolveCredenciais só faz I/O quando a autenticação está LIGADA: um
+// resolveCredentials só faz I/O quando a autenticação está LIGADA: um
 // usuário com FORMA válida mas passwordEnv apontando para uma variável
 // inexistente não pode travar a subida enquanto authentication.enabled é
 // false ou ausente (débito 49, mesma doutrina da B1 aplicada à ativação).
@@ -251,9 +251,9 @@ func TestResolveCredenciaisIgnoraUsuariosQuandoAutenticacaoDesligada(t *testing.
 		{Username: "op", PasswordEnv: "NISHIDB_TESTE_VARIAVEL_QUE_NAO_EXISTE_B2", Role: config.RoleRead},
 	}
 
-	out, err := resolveCredenciais(cfg)
+	out, err := resolveCredentials(cfg)
 	if err != nil {
-		t.Fatalf("com autenticação desligada, resolveCredenciais não deveria tocar o ambiente: %v", err)
+		t.Fatalf("com autenticação desligada, resolveCredentials não deveria tocar o ambiente: %v", err)
 	}
 	if out != nil {
 		t.Errorf("quer nil com autenticação desligada, veio %v", out)
@@ -265,8 +265,8 @@ func TestResolveCredenciaisMapeiaUsernameParaDigestEPapel(t *testing.T) {
 	t.Setenv(variavelAdmin, "senha-do-admin")
 
 	dir := t.TempDir()
-	arquivoLeitor := filepath.Join(dir, "leitor.txt")
-	if err := os.WriteFile(arquivoLeitor, []byte("senha-do-leitor\n"), 0o600); err != nil {
+	fileReader := filepath.Join(dir, "leitor.txt")
+	if err := os.WriteFile(fileReader, []byte("senha-do-leitor\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -275,10 +275,10 @@ func TestResolveCredenciaisMapeiaUsernameParaDigestEPapel(t *testing.T) {
 	cfg.Server.Authentication.Enabled = &ligado
 	cfg.Server.Authentication.Users = []config.UserSpec{
 		{Username: "admin", PasswordEnv: variavelAdmin, Role: config.RoleAdmin},
-		{Username: "leitor", PasswordFile: arquivoLeitor, Role: config.RoleRead},
+		{Username: "leitor", PasswordFile: fileReader, Role: config.RoleRead},
 	}
 
-	out, err := resolveCredenciais(cfg)
+	out, err := resolveCredentials(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,33 +292,33 @@ func TestResolveCredenciaisMapeiaUsernameParaDigestEPapel(t *testing.T) {
 	if admin.role != config.RoleAdmin {
 		t.Errorf("papel de admin = %q, quer %q", admin.role, config.RoleAdmin)
 	}
-	leitor, ok := out["leitor"]
+	reader, ok := out["leitor"]
 	if !ok {
 		t.Fatal("username \"leitor\" ausente do mapa resolvido")
 	}
-	if leitor.role != config.RoleRead {
-		t.Errorf("papel de leitor = %q, quer %q", leitor.role, config.RoleRead)
+	if reader.role != config.RoleRead {
+		t.Errorf("papel de leitor = %q, quer %q", reader.role, config.RoleRead)
 	}
-	if admin.digestSenha == leitor.digestSenha {
+	if admin.digestPassword == reader.digestPassword {
 		t.Error("dois usuários com senhas diferentes resolveram para o mesmo digest")
 	}
 	var zero [32]byte
-	if admin.digestSenha == zero || leitor.digestSenha == zero {
+	if admin.digestPassword == zero || reader.digestPassword == zero {
 		t.Error("digest resolvido não pode ser o valor zero")
 	}
 }
 
-// certificadoDeTesteComValidade gera um certificado autoassinado (ECDSA
+// certOfTestWithValidade gera um certificado autoassinado (ECDSA
 // P-256) EM MEMÓRIA, com o NotBefore/NotAfter que o teste pedir — é
-// exatamente o que avisaValidadeDoCertificado parseia para decidir entre
-// silêncio, WARN e ERRO. Ao contrário de geraCertificadoDeTeste
+// exatamente o que avisaValidadeOfCert parseia para decidir entre
+// silêncio, WARN e ERRO. Ao contrário de generateCertOfTest
 // (security_test.go, que escreve em disco para exercitar
 // tls.LoadX509KeyPair via arquivo), este helper devolve o tls.Certificate
-// pronto: os testes abaixo chamam avisaValidadeDoCertificado diretamente,
+// pronto: os testes abaixo chamam avisaValidadeOfCert diretamente,
 // sem passar pela subida inteira do servidor.
-func certificadoDeTesteComValidade(t *testing.T, notBefore, notAfter time.Time) tls.Certificate {
+func certOfTestWithValidade(t *testing.T, notBefore, notAfter time.Time) tls.Certificate {
 	t.Helper()
-	chave, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,16 +330,16 @@ func certificadoDeTesteComValidade(t *testing.T, notBefore, notAfter time.Time) 
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &chave.PublicKey, chave)
+	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	chaveBytes, err := x509.MarshalECPrivateKey(chave)
+	keyBytes, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: chaveBytes})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		t.Fatal(err)
@@ -348,19 +348,19 @@ func certificadoDeTesteComValidade(t *testing.T, notBefore, notAfter time.Time) 
 }
 
 // O ramo central do brief: certificado JÁ expirado loga ERRO (nunca recusa
-// a subida — isso é provado à parte, em tls_test.go, com server.Novo de
+// a subida — isso é provado à parte, em tls_test.go, com server.New de
 // verdade) e publica a gauge de expiração com o NotAfter exato, epoch
 // segundos.
 func TestAvisaValidadeDoCertificadoJaExpiradoLogaErroEPublicaGauge(t *testing.T) {
 	notAfter := time.Now().Add(-time.Hour)
-	cert := certificadoDeTesteComValidade(t, time.Now().Add(-48*time.Hour), notAfter)
+	cert := certOfTestWithValidade(t, time.Now().Add(-48*time.Hour), notAfter)
 
 	var buf bytes.Buffer
 	log := logging.New(&buf, logging.FormatJSON, slog.LevelInfo)
 	reg := metrics.NewRegistry()
 
-	if err := avisaValidadeDoCertificado(cert, log, reg); err != nil {
-		t.Fatalf("avisaValidadeDoCertificado: %v", err)
+	if err := avisaValidadeOfCert(cert, log, reg); err != nil {
+		t.Fatalf("avisaValidadeOfCert: %v", err)
 	}
 
 	saida := buf.String()
@@ -388,13 +388,13 @@ func TestAvisaValidadeDoCertificadoJaExpiradoLogaErroEPublicaGauge(t *testing.T)
 // ERRO, e o NotAfter aparece no evento (o brief pede explicitamente).
 func TestAvisaValidadeDoCertificadoExpirandoEmBreveLogaWarnComNotAfter(t *testing.T) {
 	notAfter := time.Now().Add(10 * 24 * time.Hour)
-	cert := certificadoDeTesteComValidade(t, time.Now().Add(-time.Hour), notAfter)
+	cert := certOfTestWithValidade(t, time.Now().Add(-time.Hour), notAfter)
 
 	var buf bytes.Buffer
 	log := logging.New(&buf, logging.FormatJSON, slog.LevelInfo)
 	reg := metrics.NewRegistry()
 
-	if err := avisaValidadeDoCertificado(cert, log, reg); err != nil {
+	if err := avisaValidadeOfCert(cert, log, reg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -414,13 +414,13 @@ func TestAvisaValidadeDoCertificadoExpirandoEmBreveLogaWarnComNotAfter(t *testin
 // server_test.go): um certificado saudável não pode logar nada, mas a gauge
 // segue publicada — o operador deriva "quanto falta" dela em qualquer caso.
 func TestAvisaValidadeDoCertificadoSaudavelNaoLogaMasPublicaGauge(t *testing.T) {
-	cert := certificadoDeTesteComValidade(t, time.Now().Add(-time.Hour), time.Now().Add(365*24*time.Hour))
+	cert := certOfTestWithValidade(t, time.Now().Add(-time.Hour), time.Now().Add(365*24*time.Hour))
 
 	var buf bytes.Buffer
 	log := logging.New(&buf, logging.FormatJSON, slog.LevelInfo)
 	reg := metrics.NewRegistry()
 
-	if err := avisaValidadeDoCertificado(cert, log, reg); err != nil {
+	if err := avisaValidadeOfCert(cert, log, reg); err != nil {
 		t.Fatal(err)
 	}
 	if saida := buf.String(); strings.Contains(saida, "tls.certificado_") {
@@ -436,11 +436,11 @@ func TestAvisaValidadeDoCertificadoSaudavelNaoLogaMasPublicaGauge(t *testing.T) 
 	}
 }
 
-// enderecoLoopback desligado (default) não monta endereço nenhum — nenhum
+// loopbackAddress desligado (default) não monta endereço nenhum — nenhum
 // listener a mais sobe.
 func TestEnderecoLoopbackDesligadoDevolveVazio(t *testing.T) {
 	var cfg config.Config
-	addr, err := enderecoLoopback(&cfg)
+	addr, err := loopbackAddress(&cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestEnderecoLoopbackDesligadoDevolveVazio(t *testing.T) {
 func TestEnderecoLoopbackLigadoSemPortaRecusa(t *testing.T) {
 	var cfg config.Config
 	cfg.Server.Loopback.Enabled = true
-	_, err := enderecoLoopback(&cfg)
+	_, err := loopbackAddress(&cfg)
 	if err == nil {
 		t.Fatal("quer recusa: loopback ligado sem porta declarada")
 	}
@@ -474,7 +474,7 @@ func TestEnderecoLoopbackLigadoComPortaMontaEnderecoNoLoopback(t *testing.T) {
 	cfg.Server.Loopback.Enabled = true
 	porta := 9143
 	cfg.Server.Loopback.Port = &porta
-	addr, err := enderecoLoopback(&cfg)
+	addr, err := loopbackAddress(&cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

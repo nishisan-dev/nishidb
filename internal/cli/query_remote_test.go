@@ -14,9 +14,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/cli"
 )
 
-// configComServidor é o nishidb.yaml do ciclo de operação desta fase: um
+// configWithServer é o nishidb.yaml do ciclo de operação desta fase: um
 // servidor de verdade, em porta livre, com o teto de linhas que o teste quiser.
-const configComServidor = `version: 1
+const configWithServer = `version: 1
 storage:
   path: %s
 datasets:
@@ -26,23 +26,23 @@ server:
   port: %d
 `
 
-type ambienteRemoto struct {
-	*ambiente
+type envRemote struct {
+	*env
 	porta int
 }
 
-// novoAmbienteRemoto monta config + dataset com um teto de linhas escolhido
+// newEnvRemote monta config + dataset com um teto de linhas escolhido
 // pelo teste.
 //
 // O teto vai no YAML do DATASET, e não em query.defaultMaxRows: o fixture do
 // §12 declara `maxRows: 100000`, e o dataset que declara VENCE o default
 // global — é o contrato da errata do débito 37. Mexer no global aqui não
 // mudaria nada, e o teste passaria a afirmar o oposto do que verifica.
-func novoAmbienteRemoto(t *testing.T, maxRows int) *ambienteRemoto {
+func newEnvRemote(t *testing.T, maxRows int) *envRemote {
 	t.Helper()
-	a := novoAmbiente(t)
+	a := newEnv(t)
 	porta := portaLivre(t)
-	corpo := fmt.Sprintf(configComServidor,
+	corpo := fmt.Sprintf(configWithServer,
 		filepath.Join(a.dir, "dados"), filepath.Join(a.dir, "datasets"), porta)
 	if err := os.WriteFile(a.config, []byte(corpo), 0o644); err != nil {
 		t.Fatal(err)
@@ -53,33 +53,33 @@ func novoAmbienteRemoto(t *testing.T, maxRows int) *ambienteRemoto {
 	if err != nil {
 		t.Fatal(err)
 	}
-	novo := strings.Replace(string(yml), "maxRows: 100000", fmt.Sprintf("maxRows: %d", maxRows), 1)
-	if novo == string(yml) && maxRows != 100000 {
+	nw := strings.Replace(string(yml), "maxRows: 100000", fmt.Sprintf("maxRows: %d", maxRows), 1)
+	if nw == string(yml) && maxRows != 100000 {
 		t.Fatal("o fixture mudou: `maxRows: 100000` não está mais no YAML do dataset")
 	}
-	if err := os.WriteFile(spec, []byte(novo), 0o644); err != nil {
+	if err := os.WriteFile(spec, []byte(nw), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return &ambienteRemoto{ambiente: a, porta: porta}
+	return &envRemote{env: a, porta: porta}
 }
 
-func (a *ambienteRemoto) endereco() string {
+func (a *envRemote) endereco() string {
 	return fmt.Sprintf("127.0.0.1:%d", a.porta)
 }
 
-// sobeServidor roda `nishidb server` como o operador o roda, e espera o
+// risesServer roda `nishidb server` como o operador o roda, e espera o
 // /v1/health responder antes de devolver.
-func (a *ambienteRemoto) sobeServidor(t *testing.T) {
+func (a *envRemote) risesServer(t *testing.T) {
 	t.Helper()
-	ctx, cancela := context.WithCancel(context.Background())
-	fim := make(chan int, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	end := make(chan int, 1)
 	go func() {
-		fim <- cli.Run([]string{"server", "--config", a.config},
-			cli.Ambiente{Stdin: strings.NewReader(""), Stdout: os.Stdout, Stderr: os.Stderr, Ctx: ctx})
+		end <- cli.Run([]string{"server", "--config", a.config},
+			cli.Context{Stdin: strings.NewReader(""), Stdout: os.Stdout, Stderr: os.Stderr, Ctx: ctx})
 	}()
 	t.Cleanup(func() {
-		cancela()
-		if code := <-fim; code != 0 {
+		cancel()
+		if code := <-end; code != 0 {
 			t.Errorf("nishidb server saiu com %d", code)
 		}
 	})
@@ -112,15 +112,15 @@ func portaLivre(t *testing.T) int {
 // pelo flock e a REMOTA responde. É a diferença entre alternar servidor e
 // consulta e operar as duas ao mesmo tempo.
 func TestConsultaRemotaFuncionaComOServidorNoAr(t *testing.T) {
-	a := novoAmbienteRemoto(t, 100000)
-	if code := a.rodaComEntrada(corpus(t, 50), "ingest",
+	a := newEnvRemote(t, 100000)
+	if code := a.runWithEntry(corpus(t, 50), "ingest",
 		"--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != 0 {
 		t.Fatalf("ingest saiu com %d: %s", code, a.stderr.String())
 	}
-	a.sobeServidor(t)
+	a.risesServer(t)
 
 	// Local: barrado pelo flock, com a dica de como prosseguir.
-	code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
+	code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 		"SELECT id FROM radius_sessions LIMIT 3")
 	if code != 3 {
 		t.Fatalf("consulta local com o servidor no ar saiu %d, quer 3", code)
@@ -130,16 +130,16 @@ func TestConsultaRemotaFuncionaComOServidorNoAr(t *testing.T) {
 	}
 
 	// Remota: responde, com o servidor de pé e sem tocar no flock.
-	code = a.roda("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+	code = a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
 		"SELECT id FROM radius_sessions LIMIT 3")
 	if code != 0 {
 		t.Fatalf("consulta remota saiu %d: %s", code, a.stderr.String())
 	}
-	linhas := strings.Split(strings.TrimSpace(a.stdout.String()), "\n")
-	if len(linhas) != 3 {
-		t.Fatalf("linhas = %d, quer 3:\n%s", len(linhas), a.stdout.String())
+	rows := strings.Split(strings.TrimSpace(a.stdout.String()), "\n")
+	if len(rows) != 3 {
+		t.Fatalf("linhas = %d, quer 3:\n%s", len(rows), a.stdout.String())
 	}
-	for _, l := range linhas {
+	for _, l := range rows {
 		// O stdout é o NDJSON cru do §69: nada de moldura vazando para quem
 		// consome a saída do comando.
 		if !strings.HasPrefix(l, `{"id":"`) {
@@ -151,16 +151,16 @@ func TestConsultaRemotaFuncionaComOServidorNoAr(t *testing.T) {
 // A tabela de exit codes é a MESMA nos dois caminhos: é o que permite trocar
 // --config por --server num script sem reescrever o tratamento de $?.
 func TestOsExitCodesDaConsultaRemota(t *testing.T) {
-	a := novoAmbienteRemoto(t, 3)
-	if code := a.rodaComEntrada(corpus(t, 50), "ingest",
+	a := newEnvRemote(t, 3)
+	if code := a.runWithEntry(corpus(t, 50), "ingest",
 		"--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != 0 {
 		t.Fatalf("ingest saiu com %d: %s", code, a.stderr.String())
 	}
-	a.sobeServidor(t)
+	a.risesServer(t)
 
 	t.Run("truncado no teto do dataset", func(t *testing.T) {
 		// maxRows: 3 no YAML do dataset contra 50 linhas materializadas.
-		code := a.roda("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+		code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
 			"SELECT id FROM radius_sessions")
 		if code != 5 {
 			t.Fatalf("exit = %d, quer 5 (truncado)", code)
@@ -171,7 +171,7 @@ func TestOsExitCodesDaConsultaRemota(t *testing.T) {
 	})
 
 	t.Run("erro de query", func(t *testing.T) {
-		code := a.roda("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+		code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
 			"SELECT coluna_que_nao_existe FROM radius_sessions")
 		if code != 2 {
 			t.Fatalf("exit = %d, quer 2", code)
@@ -182,7 +182,7 @@ func TestOsExitCodesDaConsultaRemota(t *testing.T) {
 	})
 
 	t.Run("sintaxe com posição", func(t *testing.T) {
-		code := a.roda("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+		code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
 			"SELECT FROM radius_sessions")
 		if code != 2 {
 			t.Fatalf("exit = %d, quer 2", code)
@@ -193,7 +193,7 @@ func TestOsExitCodesDaConsultaRemota(t *testing.T) {
 	})
 
 	t.Run("dataset desconhecido", func(t *testing.T) {
-		code := a.roda("query", "--server", a.endereco(), "--dataset", "fantasma",
+		code := a.run("query", "--server", a.endereco(), "--dataset", "fantasma",
 			"SELECT id FROM fantasma")
 		if code != 1 {
 			t.Fatalf("exit = %d, quer 1", code)
@@ -201,7 +201,7 @@ func TestOsExitCodesDaConsultaRemota(t *testing.T) {
 	})
 
 	t.Run("servidor inalcançável", func(t *testing.T) {
-		code := a.roda("query", "--server", "127.0.0.1:1", "--dataset", "radius_sessions",
+		code := a.run("query", "--server", "127.0.0.1:1", "--dataset", "radius_sessions",
 			"SELECT id FROM radius_sessions")
 		if code != 1 {
 			t.Fatalf("exit = %d, quer 1", code)
@@ -215,14 +215,14 @@ func TestOsExitCodesDaConsultaRemota(t *testing.T) {
 // O --limit continua valendo no caminho remoto: ele reescreve o SQL antes do
 // envio, então o servidor recebe a query já com o LIMIT.
 func TestLimitValeNaConsultaRemota(t *testing.T) {
-	a := novoAmbienteRemoto(t, 100000)
-	if code := a.rodaComEntrada(corpus(t, 30), "ingest",
+	a := newEnvRemote(t, 100000)
+	if code := a.runWithEntry(corpus(t, 30), "ingest",
 		"--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != 0 {
 		t.Fatalf("ingest saiu com %d: %s", code, a.stderr.String())
 	}
-	a.sobeServidor(t)
+	a.risesServer(t)
 
-	if code := a.roda("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+	if code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
 		"--limit", "2", "SELECT id FROM radius_sessions"); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}
@@ -234,9 +234,9 @@ func TestLimitValeNaConsultaRemota(t *testing.T) {
 // --config e --server descrevem caminhos diferentes para a mesma pergunta;
 // aceitá-los juntos deixaria o operador sem saber qual venceu.
 func TestConfigEServerSaoExclusivos(t *testing.T) {
-	a := novoAmbienteRemoto(t, 10)
+	a := newEnvRemote(t, 10)
 
-	code := a.roda("query", "--config", a.config, "--server", "127.0.0.1:9142",
+	code := a.run("query", "--config", a.config, "--server", "127.0.0.1:9142",
 		"--dataset", "radius_sessions", "SELECT id FROM radius_sessions")
 	if code != 1 {
 		t.Fatalf("exit = %d, quer 1", code)
@@ -245,7 +245,7 @@ func TestConfigEServerSaoExclusivos(t *testing.T) {
 		t.Fatalf("a mensagem não explica o conflito:\n%s", a.stderr.String())
 	}
 
-	code = a.roda("query", "--dataset", "radius_sessions", "SELECT id FROM radius_sessions")
+	code = a.run("query", "--dataset", "radius_sessions", "SELECT id FROM radius_sessions")
 	if code != 1 {
 		t.Fatalf("sem --config e sem --server: exit = %d, quer 1", code)
 	}

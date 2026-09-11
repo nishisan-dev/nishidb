@@ -13,10 +13,10 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
-// blocoDeContadores são dois contadores sobre o corpus RADIUS: o denominador
+// blockOfCounters são dois contadores sobre o corpus RADIUS: o denominador
 // (sessões por NAS) e o numerador (sessões cujo último pacote é Start) — a
 // mesma forma do caso de uso da proposta, sobre os campos que o corpus tem.
-const blocoDeContadores = `
+const blockOfCounters = `
 counters:
   - name: sessoes_por_nas
     groupBy: [NAS-Identifier]
@@ -25,31 +25,31 @@ counters:
     where: status = 'Start'
 `
 
-// realSetupCom é o realSetup com o logger silenciado (o INFO de subida dos
+// realSetupWith é o realSetup com o logger silenciado (o INFO de subida dos
 // contadores quebra a linha de resultado do benchmark) e, opcionalmente, o
 // bloco counters acrescentado ao YAML de produção com o callback de
 // compilação ligado — o mesmo caminho do servidor.
-func realSetupCom(tb testing.TB, dir string, estimatedRows uint64, comContadores bool) *materializer.Materializer {
+func realSetupWith(tb testing.TB, dir string, estimatedRows uint64, withCounters bool) *materializer.Materializer {
 	tb.Helper()
 	yml, err := os.ReadFile(specPath)
 	if err != nil {
 		tb.Fatal(err)
 	}
-	if comContadores {
-		yml = append(yml, blocoDeContadores...)
+	if withCounters {
+		yml = append(yml, blockOfCounters...)
 	}
 	spec, err := schema.Parse(yml, schema.BuiltinDefaults)
 	if err != nil {
 		tb.Fatalf("spec: %v", err)
 	}
-	comp := counters.NovoCompilador(spec)
+	comp := counters.NewCompiler(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    dir,
-		SegmentSize:            64 << 20,
-		EstimatedRows:          estimatedRows,
-		CamposIndexadosPorNome: indexNames(spec),
-		CompilaContadores:      comp.Callback(),
-		Log:                    logging.New(io.Discard, logging.FormatText, slog.LevelError),
+		Dir:                             dir,
+		SegmentSize:                     64 << 20,
+		EstimatedRows:                   estimatedRows,
+		IndexedFieldsByName:             indexNames(spec),
+		CompileCountersCallbackFunction: comp.Callback(),
+		Log:                             logging.New(io.Discard, logging.FormatText, slog.LevelError),
 	})
 	if err != nil {
 		tb.Fatalf("abrindo store em %s: %v", dir, err)
@@ -59,7 +59,7 @@ func realSetupCom(tb testing.TB, dir string, estimatedRows uint64, comContadores
 			tb.Errorf("fechando store: %v", err)
 		}
 	})
-	m, err := materializer.New(comp.Compilado(), st)
+	m, err := materializer.New(comp.Compiled(), st)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -80,28 +80,28 @@ func realSetupCom(tb testing.TB, dir string, estimatedRows uint64, comContadores
 // Todos exigem NISHIDB_BENCH_DIR em disco real.
 
 func BenchmarkApplyIngestRealRegime(b *testing.B) {
-	m := realSetupCom(b, writableBenchDir(b), corpusEntities, false)
+	m := realSetupWith(b, writableBenchDir(b), corpusEntities, false)
 	events := corpusMisto(b, 11, 8192)
 	aplicaTudo(b, m, events)
 	aplicaCiclando(b, m, events, materializer.ActionFailed)
 }
 
 func BenchmarkApplyIngestRealRegimeComContadores(b *testing.B) {
-	m := realSetupCom(b, writableBenchDir(b), corpusEntities, true)
+	m := realSetupWith(b, writableBenchDir(b), corpusEntities, true)
 	events := corpusMisto(b, 11, 8192)
 	aplicaTudo(b, m, events)
 	aplicaCiclando(b, m, events, materializer.ActionFailed)
 }
 
 func BenchmarkApplyIngestRealFrio(b *testing.B) {
-	m := realSetupCom(b, writableBenchDir(b), corpusEntities, false)
+	m := realSetupWith(b, writableBenchDir(b), corpusEntities, false)
 	events := corpusMisto(b, 11, 8192)
 	aplicaTudo(b, m, events[:512])
 	aplicaCiclando(b, m, events, materializer.ActionFailed)
 }
 
 func BenchmarkApplyIngestRealFrioComContadores(b *testing.B) {
-	m := realSetupCom(b, writableBenchDir(b), corpusEntities, true)
+	m := realSetupWith(b, writableBenchDir(b), corpusEntities, true)
 	events := corpusMisto(b, 11, 8192)
 	aplicaTudo(b, m, events[:512])
 	aplicaCiclando(b, m, events, materializer.ActionFailed)

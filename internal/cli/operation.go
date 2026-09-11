@@ -35,188 +35,188 @@ import (
 // divergem, e a divergência aparece como um operador que discorda do painel sem
 // nada estar quebrado.
 
-func runStatus(args []string, amb Ambiente) int {
+func runStatus(args []string, amb Context) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
-	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
-	credFlags := registraFlagsRemotas(fs)
+	server := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	credFlags := setupRemoteFlags(fs)
 	if err := fs.Parse(args); err != nil {
-		return ExitUso
+		return ExitUsageError
 	}
 	cred, err := credFlags.resolve()
 	if err != nil {
-		avisa(amb, "status: %v\n", err)
-		return ExitUso
+		notify(amb, "status: %v\n", err)
+		return ExitUsageError
 	}
 	if fs.NArg() != 0 {
-		avisa(amb, "status: não recebe argumentos posicionais\n")
-		return ExitUso
+		notify(amb, "status: não recebe argumentos posicionais\n")
+		return ExitUsageError
 	}
-	if code := exigeServidor("status", *servidor, amb); code != ExitOK {
+	if code := requiresServer("status", *server, amb); code != ExitOK {
 		return code
 	}
 
 	var e protocol.Stats
-	if code := buscaDocumento("status", *servidor, "/v1/stats", cred, &e, amb); code != ExitOK {
+	if code := searchDocument("status", *server, "/v1/stats", cred, &e, amb); code != ExitOK {
 		return code
 	}
-	return escreveSaida("status", amb, func(w io.Writer) { escreveStatus(w, *servidor, e) })
+	return writeOutputWithContext("status", amb, func(w io.Writer) { showStatsDetails(w, *server, e) })
 }
 
-func runDatasets(args []string, amb Ambiente) int {
+func runDatasets(args []string, amb Context) int {
 	fs := flag.NewFlagSet("datasets", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
-	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
-	credFlags := registraFlagsRemotas(fs)
+	server := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	credFlags := setupRemoteFlags(fs)
 	if err := fs.Parse(args); err != nil {
-		return ExitUso
+		return ExitUsageError
 	}
 	cred, err := credFlags.resolve()
 	if err != nil {
-		avisa(amb, "datasets: %v\n", err)
-		return ExitUso
+		notify(amb, "datasets: %v\n", err)
+		return ExitUsageError
 	}
 	if fs.NArg() != 0 {
-		avisa(amb, "datasets: não recebe argumentos posicionais\n")
-		return ExitUso
+		notify(amb, "datasets: não recebe argumentos posicionais\n")
+		return ExitUsageError
 	}
-	if code := exigeServidor("datasets", *servidor, amb); code != ExitOK {
+	if code := requiresServer("datasets", *server, amb); code != ExitOK {
 		return code
 	}
 
 	var m protocol.Metadata
-	if code := buscaDocumento("datasets", *servidor, "/v1/metadata", cred, &m, amb); code != ExitOK {
+	if code := searchDocument("datasets", *server, "/v1/metadata", cred, &m, amb); code != ExitOK {
 		return code
 	}
-	return escreveSaida("datasets", amb, func(w io.Writer) { escreveDatasets(w, *servidor, m) })
+	return writeOutputWithContext("datasets", amb, func(w io.Writer) { writeDatasetMetadata(w, *server, m) })
 }
 
-func runInspect(args []string, amb Ambiente) int {
+func runInspect(args []string, amb Context) int {
 	fs := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
-	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
-	credFlags := registraFlagsRemotas(fs)
+	server := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	credFlags := setupRemoteFlags(fs)
 	if err := fs.Parse(args); err != nil {
-		return ExitUso
+		return ExitUsageError
 	}
 	cred, err := credFlags.resolve()
 	if err != nil {
-		avisa(amb, "inspect: %v\n", err)
-		return ExitUso
+		notify(amb, "inspect: %v\n", err)
+		return ExitUsageError
 	}
 	// A flag vem ANTES do dataset porque é assim que o flag da stdlib para de
 	// parsear — no primeiro argumento que não é flag. A mensagem diz a ordem
 	// em vez de deixar o operador diante de "informe um dataset" tendo
 	// informado um.
 	if fs.NArg() != 1 {
-		avisa(amb, "inspect: informe exatamente um dataset\n")
-		avisa(amb, "  as flags vêm antes: nishidb inspect --server <host:porta> <dataset>\n")
-		return ExitUso
+		notify(amb, "inspect: informe exatamente um dataset\n")
+		notify(amb, "  as flags vêm antes: nishidb inspect --server <host:porta> <dataset>\n")
+		return ExitUsageError
 	}
-	if code := exigeServidor("inspect", *servidor, amb); code != ExitOK {
+	if code := requiresServer("inspect", *server, amb); code != ExitOK {
 		return code
 	}
-	nome := fs.Arg(0)
+	name := fs.Arg(0)
 
 	var m protocol.Metadata
-	caminho := "/v1/metadata?dataset=" + url.QueryEscape(nome)
-	if code := buscaDocumento("inspect", *servidor, caminho, cred, &m, amb); code != ExitOK {
+	path := "/v1/metadata?dataset=" + url.QueryEscape(name)
+	if code := searchDocument("inspect", *server, path, cred, &m, amb); code != ExitOK {
 		return code
 	}
 	// O filtro do §67 responde a MESMA forma com um elemento. Zero elementos
 	// não é resposta legítima — o servidor recusa dataset desconhecido com 404
 	// —, então chegar aqui vazio é o protocolo tendo mudado sob o comando.
 	if len(m.Datasets) != 1 {
-		avisa(amb, "inspect: o servidor respondeu %d datasets para %q; esperava exatamente um\n", len(m.Datasets), nome)
+		notify(amb, "inspect: o servidor respondeu %d datasets para %q; esperava exatamente um\n", len(m.Datasets), name)
 		return ExitDataset
 	}
-	return escreveSaida("inspect", amb, func(w io.Writer) { escreveInspect(w, m.Datasets[0]) })
+	return writeOutputWithContext("inspect", amb, func(w io.Writer) { writeDatasetInfo(w, m.Datasets[0]) })
 }
 
-// exigeServidor recusa o comando sem `--server` explicando POR QUE não existe
+// requiresServer recusa o comando sem `--server` explicando POR QUE não existe
 // caminho local — sem isso o operador procuraria um `--config` que estes
 // comandos não têm.
-func exigeServidor(cmd, endereco string, amb Ambiente) int {
+func requiresServer(cmd, endereco string, amb Context) int {
 	if endereco != "" {
 		return ExitOK
 	}
-	avisa(amb, "%s: --server <host:porta> é obrigatório\n", cmd)
-	avisa(amb, "  os comandos de leitura do §96 nascem remotos: o flock do dataset é\n"+
+	notify(amb, "%s: --server <host:porta> é obrigatório\n", cmd)
+	notify(amb, "  os comandos de leitura do §96 nascem remotos: o flock do dataset é\n"+
 		"  exclusivo por processo, e perguntar pelo caminho local exigiria derrubar\n"+
 		"  o servidor sobre o qual se pergunta\n")
-	return ExitUso
+	return ExitUsageError
 }
 
-// buscaDocumento faz o GET e decodifica o corpo no destino.
+// searchDocument faz o GET e decodifica o corpo no destino.
 //
-// Reusa o `normalizaEndereco` e a tradução código→exit code da consulta
+// Reusa o `normalizeAddress` e a tradução código→exit code da consulta
 // remota, e é isso que mantém UMA tabela de $? para o binário inteiro: um
 // script que decide pelo código de saída não pode precisar de uma segunda
 // tabela porque trocou `query` por `status`.
 //
-// Sem timeout no cliente, pelo mesmo argumento do consultaRemota: quem impõe
+// Sem timeout no cliente, pelo mesmo argumento do remoteQuery: quem impõe
 // prazo é o servidor, e um prazo local faria o operador culpá-lo por uma
 // decisão da máquina de onde ele pergunta.
 //
-// cred entra pelo MESMO clienteRemoto/aplicaCredencial que consultaRemota e
-// postaMutacao usam (Task B6) — o client HTTP compartilhado com Proxy: nil e
+// cred entra pelo MESMO remoteClient/aplicaCredencial que remoteQuery e
+// postMutation usam (Task B6) — o client HTTP compartilhado com Proxy: nil e
 // o CertPool de --tls-ca, e o Authorization quando --user foi dado.
-func buscaDocumento(cmd, endereco, caminho string, cred credencialRemota, destino any, amb Ambiente) int {
-	client, err := clienteRemoto(cred)
+func searchDocument(cmd, endereco, path string, cred remoteCredential, destination any, amb Context) int {
+	client, err := remoteClient(cred)
 	if err != nil {
-		avisa(amb, "%s: %v\n", cmd, err)
-		return ExitUso
+		notify(amb, "%s: %v\n", cmd, err)
+		return ExitUsageError
 	}
-	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodGet, normalizaEndereco(endereco)+caminho, nil)
+	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodGet, normalizeAddress(endereco)+path, nil)
 	if err != nil {
-		avisa(amb, "%s: %v\n", cmd, err)
-		return ExitUso
+		notify(amb, "%s: %v\n", cmd, err)
+		return ExitUsageError
 	}
-	aplicaCredencial(req, cred)
+	applyCredential(req, cred)
 	resp, err := client.Do(req)
 	if err != nil {
-		avisa(amb, "%s: falando com %s: %v\n", cmd, endereco, err)
-		return ExitUso
+		notify(amb, "%s: falando com %s: %v\n", cmd, endereco, err)
+		return ExitUsageError
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			avisa(amb, "%s: fechando a resposta: %v\n", cmd, err)
+			notify(amb, "%s: fechando a resposta: %v\n", cmd, err)
 		}
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return recusaRemota(cmd, resp, amb)
+		return remoteRefusal(cmd, resp, amb)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(destino); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(destination); err != nil {
 		// Corpo 200 que não decodifica é falha de TRANSPORTE, não de uso: o
 		// comando estava certo e a resposta veio quebrada. É a mesma distinção
-		// que o leStream faz, e o mesmo código.
-		avisa(amb, "%s: resposta ilegível de %s: %v\n", cmd, endereco, err)
+		// que o readStream faz, e o mesmo código.
+		notify(amb, "%s: resposta ilegível de %s: %v\n", cmd, endereco, err)
 		return ExitDataset
 	}
 	return ExitOK
 }
 
-// recusaRemota trata a resposta de erro de QUALQUER rota do protocolo
+// remoteRefusal trata a resposta de erro de QUALQUER rota do protocolo
 // remoto — leitura (status/datasets/inspect) e mutante (compact/checkpoint,
 // Task B5) por igual: um JSON único com o código estável, e o cliente casa
 // por código, nunca pelo texto. Renomeada na revisão da B5 (Minor 6): o
 // nome antigo, recusaDeLeitura, já não descrevia os dois comandos mutantes
 // que a B5 acrescentou como chamadores.
-func recusaRemota(cmd string, resp *http.Response, amb Ambiente) int {
-	corpo, dica, ok := leCorpoErro(resp)
+func remoteRefusal(cmd string, resp *http.Response, amb Context) int {
+	corpo, dica, ok := readErrorBody(resp)
 	if !ok {
-		avisa(amb, "%s: o servidor respondeu %s sem corpo legível\n", cmd, resp.Status)
+		notify(amb, "%s: o servidor respondeu %s sem corpo legível\n", cmd, resp.Status)
 		if dica != "" {
-			avisa(amb, "%s", dica)
+			notify(amb, "%s", dica)
 		}
-		return ExitUso
+		return ExitUsageError
 	}
-	avisa(amb, "%s: %s\n", cmd, corpo.Error.Message)
-	return codigoDoProtocolo(corpo.Error.Code)
+	notify(amb, "%s: %s\n", cmd, corpo.Error.Message)
+	return codigoOfProtocolo(corpo.Error.Code)
 }
 
-// escreveSaida monta a saída inteira em memória e a entrega ao stdout num
+// writeOutputWithContext monta a saída inteira em memória e a entrega ao stdout num
 // write só.
 //
 // Ela NÃO é streaming, ao contrário da consulta, e a diferença é de tamanho: o
@@ -224,8 +224,8 @@ func recusaRemota(cmd string, resp *http.Response, amb Ambiente) int {
 // proporcional ao número de linhas —, enquanto estes três comandos escrevem um
 // punhado de linhas por dataset. Montar antes compra duas coisas: o tabwriter
 // alinha as colunas, que ele não consegue fazer sem ver a maior célula, e a
-// falha de escrita ganha UM ponto de tratamento em vez de um por linha.
-func escreveSaida(cmd string, amb Ambiente, corpo func(w io.Writer)) int {
+// falha de escrita ganha UM ponto de tratamento em vez de um por line.
+func writeOutputWithContext(cmd string, amb Context, corpo func(w io.Writer)) int {
 	var buf bytes.Buffer
 	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
 	corpo(tw)
@@ -235,81 +235,81 @@ func escreveSaida(cmd string, amb Ambiente, corpo func(w io.Writer)) int {
 	_ = tw.Flush()
 
 	if _, err := amb.Stdout.Write(buf.Bytes()); err != nil {
-		avisa(amb, "%s: escrevendo a saída: %v\n", cmd, err)
-		return ExitUso
+		notify(amb, "%s: escrevendo a saída: %v\n", cmd, err)
+		return ExitUsageError
 	}
 	return ExitOK
 }
 
-func escreveStatus(w io.Writer, endereco string, e protocol.Stats) {
-	titulo(w, "servidor %s", endereco)
-	titulo(w, "")
+func showStatsDetails(w io.Writer, endereco string, e protocol.Stats) {
+	title(w, "servidor %s", endereco)
+	title(w, "")
 
 	// Os contadores do motor são do PROCESSO e não de um dataset (ver o godoc
 	// de protocol.Stats): repeti-los por dataset publicaria o mesmo
 	// número N vezes, e alguém somaria os N.
-	titulo(w, "processo")
+	title(w, "processo")
 	q := e.Process.Query
-	campo(w, "full scans", strconv.FormatInt(q.FullScans, 10))
-	campo(w, "point lookups", strconv.FormatInt(q.PointLookups, 10))
-	campo(w, "bitmap scans", strconv.FormatInt(q.BitmapScans, 10))
-	campo(w, "index unions", strconv.FormatInt(q.IndexUnions, 10))
-	campo(w, "linhas emitidas", strconv.FormatInt(q.Emitted, 10))
-	campo(w, "linhas truncadas", strconv.FormatInt(q.Truncated, 10))
-	escreveEmVoo(w, e.Process.InFlight)
+	field(w, "full scans", strconv.FormatInt(q.FullScans, 10))
+	field(w, "point lookups", strconv.FormatInt(q.PointLookups, 10))
+	field(w, "bitmap scans", strconv.FormatInt(q.BitmapScans, 10))
+	field(w, "index unions", strconv.FormatInt(q.IndexUnions, 10))
+	field(w, "linhas emitidas", strconv.FormatInt(q.Emitted, 10))
+	field(w, "linhas truncadas", strconv.FormatInt(q.Truncated, 10))
+	reportInFlightQueries(w, e.Process.InFlight)
 
 	for _, d := range e.Datasets {
-		titulo(w, "")
-		titulo(w, "dataset %s", d.Name)
-		campo(w, "rows", strconv.FormatUint(d.Storage.Rows, 10))
-		campo(w, "segmentos", strconv.FormatUint(uint64(d.Storage.Segments), 10))
+		title(w, "")
+		title(w, "dataset %s", d.Name)
+		field(w, "rows", strconv.FormatUint(d.Storage.Rows, 10))
+		field(w, "segmentos", strconv.FormatUint(uint64(d.Storage.Segments), 10))
 		// O segmento CORRENTE já não é o número de segmentos: o ID nunca
 		// regride e a compaction aposenta arquivos, então a distância entre os
 		// dois é o que ela devolveu. Publicar só um dos dois esconderia isso.
-		campo(w, "corrente", strconv.FormatUint(uint64(d.Storage.CurrentSegment), 10))
-		campo(w, "carga do primário", strconv.FormatFloat(d.Storage.PrimaryLoadFactor, 'f', 2, 64))
-		campo(w, "overlay", strconv.Itoa(d.Storage.Overlay))
-		campo(w, "disco", bytesLegiveis(d.Storage.Bytes))
-		campo(w, "garbage (>=)", bytesLegiveis(int64(d.Storage.GarbageBytes)))
-		campo(w, "compaction", estadoDaCompaction(d.Storage.Compaction))
-		campo(w, "bytes lidos", bytesLegiveis(d.Storage.Compaction.BytesRead))
-		campo(w, "bytes escritos", bytesLegiveis(d.Storage.Compaction.BytesWritten))
-		campo(w, "consultas", fmt.Sprintf("%d (%d ativas, %d com erro)",
+		field(w, "corrente", strconv.FormatUint(uint64(d.Storage.CurrentSegment), 10))
+		field(w, "carga do primário", strconv.FormatFloat(d.Storage.PrimaryLoadFactor, 'f', 2, 64))
+		field(w, "overlay", strconv.Itoa(d.Storage.Overlay))
+		field(w, "disco", bytesToReadableString(d.Storage.Bytes))
+		field(w, "garbage (>=)", bytesToReadableString(int64(d.Storage.GarbageBytes)))
+		field(w, "compaction", compactionStatus(d.Storage.Compaction))
+		field(w, "bytes lidos", bytesToReadableString(d.Storage.Compaction.BytesRead))
+		field(w, "bytes escritos", bytesToReadableString(d.Storage.Compaction.BytesWritten))
+		field(w, "consultas", fmt.Sprintf("%d (%d ativas, %d com erro)",
 			d.Query.Total, d.Query.Active, d.Query.Errors))
-		campo(w, "ingestão", resumoDaIngestao(d.Ingestion))
+		field(w, "ingestão", ingestionStatsSummary(d.Ingestion))
 	}
 
-	titulo(w, "")
+	title(w, "")
 	// A ressalva viaja JUNTO do número, e não num manual: `garbage` é limite
 	// inferior porque a liveness é limite superior (débitos 38 e 45), e sem
 	// isto escrito o operador dimensionaria compaction por um número que não
 	// promete o que ele leria nele.
-	titulo(w, "(>=) o garbage é limite INFERIOR: a liveness é limite superior, então há")
-	titulo(w, "     PELO MENOS isto de lixo em disco — nunca menos.")
+	title(w, "(>=) o garbage é limite INFERIOR: a liveness é limite superior, então há")
+	title(w, "     PELO MENOS isto de lixo em disco — nunca menos.")
 }
 
-func escreveDatasets(w io.Writer, endereco string, m protocol.Metadata) {
-	titulo(w, "servidor %s", endereco)
-	titulo(w, "")
-	linha(w, "DATASET", "KEY", "COLUNAS", "MAXROWS", "TIMEOUT")
+func writeDatasetMetadata(w io.Writer, endereco string, m protocol.Metadata) {
+	title(w, "servidor %s", endereco)
+	title(w, "")
+	line(w, "DATASET", "KEY", "COLUNAS", "MAXROWS", "TIMEOUT")
 	for _, d := range m.Datasets {
-		linha(w, d.Name, d.Key, strconv.Itoa(len(d.Columns)),
-			strconv.Itoa(d.MaxRows), duracao(d.TimeoutMs))
+		line(w, d.Name, d.Key, strconv.Itoa(len(d.Columns)),
+			strconv.Itoa(d.MaxRows), duration(d.TimeoutMs))
 	}
 }
 
-func escreveInspect(w io.Writer, d protocol.DatasetMeta) {
-	titulo(w, "dataset %s", d.Name)
-	campo(w, "key", d.Key)
+func writeDatasetInfo(w io.Writer, d protocol.DatasetMeta) {
+	title(w, "dataset %s", d.Name)
+	field(w, "key", d.Key)
 	// Os dois limites são os EFETIVOS — o do dataset, ou o default global que
 	// ele herdou. Quem consulta precisa do teto que VAI VALER, não de onde ele
 	// foi declarado.
-	campo(w, "maxRows", strconv.Itoa(d.MaxRows))
-	campo(w, "timeout", duracao(d.TimeoutMs))
-	campo(w, "colunas", strconv.Itoa(len(d.Columns)))
-	titulo(w, "")
+	field(w, "maxRows", strconv.Itoa(d.MaxRows))
+	field(w, "timeout", duration(d.TimeoutMs))
+	field(w, "colunas", strconv.Itoa(len(d.Columns)))
+	title(w, "")
 
-	linha(w, "COLUNA", "ALIAS", "TIPO", "JDBC", "ÍNDICE", "AUTO")
+	line(w, "COLUNA", "ALIAS", "TIPO", "JDBC", "ÍNDICE", "AUTO")
 	for _, c := range d.Columns {
 		alias := "-"
 		if c.Alias != nil {
@@ -327,28 +327,28 @@ func escreveInspect(w io.Writer, d protocol.DatasetMeta) {
 		// quando o motor único tornou a distinção inexistente. As outras duas
 		// ficaram por serem contrato — ver o godoc de protocol.EngineStats e de
 		// schema.CompiledField.IndexName.
-		linha(w, c.Name, alias, c.Type, c.JDBC, c.Index, auto)
+		line(w, c.Name, alias, c.Type, c.JDBC, c.Index, auto)
 	}
 }
 
-// estadoDaCompaction traduz o 0/1 do §92 em palavra.
+// compactionStatus traduz o 0/1 do §92 em palavra.
 //
 // "ligada" afirma que o LAÇO está de pé para o dataset, não que há varredura
 // em voo neste instante — a passada dura dezenas de milissegundos contra um
 // cochilo de segundos. O caso que importa é o inverso: "desligada" com a chave
 // ligada no YAML é a falha sticky do writer (§14.14), em que a goroutine parou
 // sozinha e o disco voltou a crescer com o processo de pé.
-func estadoDaCompaction(c protocol.CompactionStats) string {
+func compactionStatus(c protocol.CompactionStats) string {
 	if c.Running {
 		return "ligada"
 	}
 	return "desligada"
 }
 
-// resumoDaIngestao usa o vocabulário do §94 — o mesmo do /v1/health —, para
+// ingestionStatsSummary usa o vocabulário do §94 — o mesmo do /v1/health —, para
 // que as duas leituras não descrevam a mesma realidade com palavras
 // diferentes.
-func resumoDaIngestao(i protocol.IngestionStats) string {
+func ingestionStatsSummary(i protocol.IngestionStats) string {
 	if !i.Enabled {
 		return i.State
 	}
@@ -360,7 +360,7 @@ func resumoDaIngestao(i protocol.IngestionStats) string {
 	return s
 }
 
-// bytesLegiveis escreve o número EXATO e, ao lado, a grandeza que se lê de
+// bytesToReadableString escreve o número EXATO e, ao lado, a grandeza que se lê de
 // relance.
 //
 // O exato vem primeiro de propósito. O §86 raciocina em GB/dia e o operador
@@ -368,22 +368,22 @@ func resumoDaIngestao(i protocol.IngestionStats) string {
 // DUAS medições — antes e depois de uma passada de compaction — precisa do
 // byte, e "1.2 MiB" antes e "1.2 MiB" depois esconderia a diferença que ele
 // veio medir.
-func bytesLegiveis(n int64) string {
+func bytesToReadableString(n int64) string {
 	if n < 1024 {
 		return strconv.FormatInt(n, 10) + " B"
 	}
 	unidades := []string{"KiB", "MiB", "GiB", "TiB", "PiB"}
-	valor, i := float64(n)/1024, 0
-	for valor >= 1024 && i < len(unidades)-1 {
-		valor /= 1024
+	value, i := float64(n)/1024, 0
+	for value >= 1024 && i < len(unidades)-1 {
+		value /= 1024
 		i++
 	}
-	return fmt.Sprintf("%d B (%.1f %s)", n, valor, unidades[i])
+	return fmt.Sprintf("%d B (%.1f %s)", n, value, unidades[i])
 }
 
-func duracao(ms int64) string { return (time.Duration(ms) * time.Millisecond).String() }
+func duration(ms int64) string { return (time.Duration(ms) * time.Millisecond).String() }
 
-// escreveEmVoo lista as consultas que estão correndo NESTE instante.
+// reportInFlightQueries lista as consultas que estão correndo NESTE instante.
 //
 // Existe porque `consultas: 12 (3 ativas, 0 com erro)` é a mesma frase para
 // três point lookups de 2 ms e para um full scan de oito minutos, e as duas
@@ -392,48 +392,48 @@ func duracao(ms int64) string { return (time.Duration(ms) * time.Millisecond).St
 // consulta está lá e HÁ QUANTO TEMPO antes de decidir se reinicia o processo.
 //
 // A lista vem do servidor já ordenada da mais antiga para a mais nova, e a
-// ordem é preservada: a linha que interessa é a primeira, não uma que se
+// ordem é preservada: a line que interessa é a primeira, não uma que se
 // procura.
 //
 // Silêncio quando não há nenhuma: um bloco "em voo" vazio em toda chamada de
 // `nishidb status` seria ruído, e ruído treina o operador a pular a seção
 // justamente no dia em que ela tem conteúdo.
-func escreveEmVoo(w io.Writer, voos []protocol.InFlightQuery) {
+func reportInFlightQueries(w io.Writer, voos []protocol.InFlightQuery) {
 	if len(voos) == 0 {
 		return
 	}
-	titulo(w, "")
-	titulo(w, "consultas em voo (%d)", len(voos))
+	title(w, "")
+	title(w, "consultas em voo (%d)", len(voos))
 	// O SQL não aparece — nem aqui nem no /v1/stats: ele pode carregar
 	// literais com dado do cliente, e o §95 proíbe publicar payload por
 	// default. O hash responde o que o operador pergunta de fato, que é se as
 	// consultas presas são a mesma ou várias diferentes.
-	linha(w, "DATASET", "SQL", "HÁ", "LONGA")
+	line(w, "DATASET", "SQL", "HÁ", "LONGA")
 	for _, v := range voos {
-		marca := "-"
+		mark := "-"
 		if v.Long {
-			marca = "sim"
+			mark = "sim"
 		}
-		linha(w, v.Dataset, v.SQLHash, duracao(v.RunningMs), marca)
+		line(w, v.Dataset, v.SQLHash, duration(v.RunningMs), mark)
 	}
 }
 
-// titulo, campo e linha são os três formatos desta saída: cabeçalho sem
-// coluna, par rótulo/valor e linha de tabela.
+// title, field e line são os três formatos desta saída: cabeçalho sem
+// coluna, par rótulo/valor e line de tabela.
 //
 // Os três descartam o erro de escrita com `_` explícito porque o destino é o
-// buffer do escreveSaida, que não falha — o Write de verdade acontece uma vez
+// buffer do writeOutputWithContext, que não falha — o Write de verdade acontece uma vez
 // só, lá, e é lá que o erro é tratado.
-func titulo(w io.Writer, formato string, args ...any) {
-	_, _ = fmt.Fprintf(w, formato+"\n", args...)
+func title(w io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(w, format+"\n", args...)
 }
 
-func campo(w io.Writer, rotulo, valor string) {
-	_, _ = fmt.Fprintf(w, "  %s\t%s\n", rotulo, valor)
+func field(w io.Writer, label, value string) {
+	_, _ = fmt.Fprintf(w, "  %s\t%s\n", label, value)
 }
 
-func linha(w io.Writer, celulas ...string) {
-	for i, c := range celulas {
+func line(w io.Writer, cells ...string) {
+	for i, c := range cells {
 		if i > 0 {
 			_, _ = io.WriteString(w, "\t")
 		}
@@ -442,12 +442,12 @@ func linha(w io.Writer, celulas ...string) {
 	_, _ = io.WriteString(w, "\n")
 }
 
-// avisa escreve no stderr do comando.
+// notify escreve no stderr do comando.
 //
 // O erro do write é descartado com `_` EXPLÍCITO, e não engolido: não há para
 // onde reportar a falha de escrever uma mensagem de falha, e o gate de lint
 // deste projeto cobra 0 apontamentos novos — um `fmt.Fprintf` solto aqui viraria
 // mais um errcheck na conta que a Task 0 acabou de tornar visível.
-func avisa(amb Ambiente, formato string, args ...any) {
-	_, _ = fmt.Fprintf(amb.Stderr, formato, args...)
+func notify(amb Context, format string, args ...any) {
+	_, _ = fmt.Fprintf(amb.Stderr, format, args...)
 }

@@ -15,7 +15,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// slotsIniciaisDoWIP dimensiona o diretório de um .widx recém-criado.
+// slotsIniciaisOfWIP dimensiona o diretório de um .widx recém-criado.
 //
 // O número de valores DISTINTOS que um segmento vai ter é desconhecido no
 // instante em que o arquivo nasce, e não há de onde derivá-lo: EstimatedRows
@@ -25,39 +25,39 @@ import (
 // por dataset, e errar para baixo custa apenas os rehashes amortizados que o
 // próprio WIP faz. O que 1.024 compra é pular a dezena de rehashes iniciais que
 // um piso de 16 slots pagaria em todo segmento de todo campo.
-const slotsIniciaisDoWIP = 1024
+const slotsIniciaisOfWIP = 1024
 
-// dirDeDados é onde o índice por segmento mora: AO LADO do .dat, e não num
+// dirOfData é onde o índice por segmento mora: AO LADO do .dat, e não num
 // diretório próprio, porque o par (dado, índice) nasce e morre junto — é essa
 // vizinhança que faz "purgar o segmento leva o índice junto" ser uma linha de
 // código. O segment.ListSegments casa só o nome canônico exato, então os
 // arquivos novos não perturbam a listagem, a recovery nem o manifest.
-func (s *Store) dirDeDados() string { return filepath.Join(s.opts.Dir, "data") }
+func (s *Store) dirOfData() string { return filepath.Join(s.opts.Dir, "data") }
 
-// CamposIndexados devolve, em ordem crescente, os campos com índice por
+// FieldsIndexados devolve, em ordem crescente, os campos com índice por
 // segmento. O conjunto é resolvido no Open e IMUTÁVEL na vida do Store, então a
 // resposta é estável — é a mesma promessa que o Indexed faz.
 //
 // Cópia, e não o slice interno: o conjunto é imutável por contrato, e devolver
 // a fatia de dentro deixaria qualquer chamador quebrar a promessa por engano.
-func (s *Store) CamposIndexados() []types.FieldID { return slices.Clone(s.camposIndexados) }
+func (s *Store) FieldsIndexados() []types.FieldID { return slices.Clone(s.fieldsIndexados) }
 
-// abreIndicesDeSegmento fixa o conjunto indexado, descarta os WIPs herdados do
+// openIndicesOfSegment fixa o conjunto indexado, descarta os WIPs herdados do
 // processo anterior, abre os do segmento corrente e os RECONSTRÓI a partir dos
 // records dele. É a §2.5 inteira, num ponto só.
 //
 // Roda no Open DEPOIS do ramo de recovery, e a posição não é escolha de estilo:
-// os campos vêm do resolveCamposIndexados (cuja ordem de LookupOrCreate é
+// os campos vêm do resolveFieldsIndexados (cuja ordem de LookupOrCreate é
 // contratual e não pode ser tocada), mas os WIPs precisam do SEGMENTO CORRENTE,
-// e quem o decide é o ramo de recovery — antes dele, curSegID ainda é zero num
+// e quem o decide é o ramo de recovery — antes dele, curSecID ainda é zero num
 // dataset existente. E roda ANTES de o Open devolver o Store, o que é a outra
 // metade do requisito: o primeiro Put não pode ser aceito sobre um WIP vazio,
 // porque a rotação seguinte selaria esse vazio num .sidx IMUTÁVEL — falso
 // negativo petrificado, e a revalidação do §44 só sabe descartar candidato a
 // mais.
-func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
-	s.camposIndexados = campos
-	if err := s.descartaTodosOsWIPs(); err != nil {
+func (s *Store) openIndicesOfSegment(fields []types.FieldID) error {
+	s.fieldsIndexados = fields
+	if err := s.discardTodosOsWIPs(); err != nil {
 		return err
 	}
 	// Os temporários da forma SELADA saem no mesmo ponto, e pela mesma razão que
@@ -67,7 +67,7 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 	// disso é que a escrita seguinte já não os trunca por cima. Sem esta limpeza,
 	// cada crash entre o WriteFile e o rename deixaria em disco um arquivo que
 	// o IndexBytes conta e ninguém explica.
-	if err := segindex.RemoveTempFiles(s.dirDeDados()); err != nil {
+	if err := segindex.RemoveTempFiles(s.dirOfData()); err != nil {
 		return err
 	}
 	// O .sidx ÓRFÃO — de segmento que já não tem .dat — sai aqui, no mesmo
@@ -78,20 +78,20 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 	// disco que nada explica. Roda ANTES do early-return de campos vazios de
 	// propósito: um dataset que deixou de indexar continua tendo órfãos a
 	// limpar.
-	if err := s.apagaSidxOrfaos(); err != nil {
+	if err := s.deleteSidxOrfaos(); err != nil {
 		return err
 	}
-	if len(campos) == 0 {
+	if len(fields) == 0 {
 		return nil
 	}
 	s.selados = make(map[uint32]*segindex.Sealed)
-	if err := s.abreWIPsDoCorrente(); err != nil {
+	if err := s.openWIPsOfCurrent(); err != nil {
 		return err
 	}
-	return s.reconstroiOIndiceDoCorrente()
+	return s.reconstroiOIndexOfCurrent()
 }
 
-// descartaTodosOsWIPs apaga TODO .widx que o diretório de dados carregue de uma
+// discardTodosOsWIPs apaga TODO .widx que o diretório de dados carregue de uma
 // execução anterior — do segmento corrente e de qualquer outro.
 //
 // O .widx NUNCA é confiado através de um restart (spec §2.5), e a razão não é
@@ -107,9 +107,9 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 // do diretório inteiro: o que muda entre eles não é o descarte, é o que vem
 // DEPOIS dele.
 //
-//	corrente               → reconstroiOIndiceDoCorrente, aqui mesmo, lendo o
+//	corrente               → reconstroiOIndexOfCurrent, aqui mesmo, lendo o
 //	                         próprio segmento antes do primeiro Put;
-//	não corrente, com .dat → SegmentosPendentesDeReconstrucao o devolve, e o
+//	não corrente, com .dat → SegmentosPendentesOfRebuild o devolve, e o
 //	                         laço de fundo (§2.4) o refaz quando puder;
 //	sem .dat               → nada. O segmento foi aposentado, e o .widx é o
 //	                         resíduo de um crash entre o unlink do dado e a
@@ -117,20 +117,20 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 //	                         em disco PARA SEMPRE, porque nenhuma enumeração que
 //	                         parta dos dados o alcança — e o IndexBytes o
 //	                         contaria como disco que nada explica.
-func (s *Store) descartaTodosOsWIPs() error {
-	segs, err := segindex.SegmentsWithWIP(s.dirDeDados())
+func (s *Store) discardTodosOsWIPs() error {
+	segs, err := segindex.SegmentsWithWIP(s.dirOfData())
 	if err != nil {
-		return classificaNomeIlegivelDeIndice(err, s.dirDeDados())
+		return classificaNameIlegivelOfIndex(err, s.dirOfData())
 	}
-	for _, seg := range segs {
-		if err := s.apagaWIPsPeloNome(seg); err != nil {
-			return classificaNomeIlegivelDeIndice(err, s.dirDeDados())
+	for _, sec := range segs {
+		if err := s.deleteWIPsPeloName(sec); err != nil {
+			return classificaNameIlegivelOfIndex(err, s.dirOfData())
 		}
 	}
 	return nil
 }
 
-// apagaSidxOrfaos remove todo .sidx cujo segmento já não tem .dat — o resíduo
+// deleteSidxOrfaos remove todo .sidx cujo segmento já não tem .dat — o resíduo
 // de um crash entre o unlink do dado e a remoção do índice na aposentadoria
 // (spec §2.3). Por NOME, como toda limpeza de lixo deste arquivo: um .sidx
 // rasgado é justamente o que não se deixa abrir.
@@ -138,41 +138,41 @@ func (s *Store) descartaTodosOsWIPs() error {
 // A comparação é contra a listagem canônica de segmentos (segment.ListSegments,
 // a mesma que a recovery usa), e não contra o manifest: o filesystem é a
 // verdade sobre quais segmentos existem (spec §5.3).
-func (s *Store) apagaSidxOrfaos() error {
-	comSelado, err := segindex.SegmentsWithSealed(s.dirDeDados())
+func (s *Store) deleteSidxOrfaos() error {
+	withSealed, err := segindex.SegmentsWithSealed(s.dirOfData())
 	if err != nil {
-		return classificaNomeIlegivelDeIndice(err, s.dirDeDados())
+		return classificaNameIlegivelOfIndex(err, s.dirOfData())
 	}
-	if len(comSelado) == 0 {
+	if len(withSealed) == 0 {
 		return nil
 	}
-	refs, err := segment.ListSegments(s.dirDeDados())
+	refs, err := segment.ListSegments(s.dirOfData())
 	if err != nil {
 		return err
 	}
-	comDat := make(map[uint32]struct{}, len(refs))
+	withDat := make(map[uint32]struct{}, len(refs))
 	for _, ref := range refs {
-		comDat[ref.ID] = struct{}{}
+		withDat[ref.ID] = struct{}{}
 	}
-	for _, seg := range comSelado {
-		if _, ok := comDat[seg]; ok {
+	for _, sec := range withSealed {
+		if _, ok := withDat[sec]; ok {
 			continue
 		}
-		caminho := segindex.SealedPath(s.dirDeDados(), seg)
-		if err := os.Remove(caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("storage: remover o índice órfão %s: %w", caminho, err)
+		path := segindex.SealedPath(s.dirOfData(), sec)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("storage: remover o índice órfão %s: %w", path, err)
 		}
 		s.opts.Log.Info("indice.orfao_removido",
 			"o índice de um segmento aposentado sobrou de um crash e saiu na abertura",
-			"segmento", seg)
+			"segmento", sec)
 	}
 	return nil
 }
 
-// classificaNomeIlegivelDeIndice põe o ErrFormat do espaço de nomes .widx na
+// classificaNameIlegivelOfIndex põe o ErrFormat do espaço de nomes .widx na
 // sentinela que o exit code entende.
 //
-// Sem isto o erro sobe cru e cai no default do codigoDoErro (cli.go) — exit 1,
+// Sem isto o erro sobe cru e cai no default do errorCode (cli.go) — exit 1,
 // "erro de uso", o único código que manda o operador olhar a LINHA DE COMANDO em
 // vez do dataset. E aqui a linha de comando está certa: o que há é um arquivo em
 // data/ que este binário não escreveu, e ele impede a abertura porque a varredura
@@ -185,7 +185,7 @@ func (s *Store) apagaSidxOrfaos() error {
 // Erro que não é de formato passa intacto: EIO ao listar o diretório é falha de
 // infra, e chamá-la de corrupção induz a resposta destrutiva (restaurar backup).
 // São os três baldes do §101, e este só mexe no primeiro.
-func classificaNomeIlegivelDeIndice(err error, dir string) error {
+func classificaNameIlegivelOfIndex(err error, dir string) error {
 	if err == nil || !errors.Is(err, segindex.ErrFormat) {
 		return err
 	}
@@ -193,7 +193,7 @@ func classificaNomeIlegivelDeIndice(err error, dir string) error {
 		ErrDatasetCorrupt, dir, err)
 }
 
-// apagaWIPsPeloNome remove os .widx do segmento SEM abrir nenhum deles.
+// deleteWIPsPeloName remove os .widx do segmento SEM abrir nenhum deles.
 //
 // É o único lugar que apaga .widx fora da selagem, e ele é um só de propósito:
 // os dois consumidores — o descarte da abertura e a aposentadoria do segmento —
@@ -204,21 +204,21 @@ func classificaNomeIlegivelDeIndice(err error, dir string) error {
 // OpenWIP, que mapeia e valida o header antes de remover. Um .widx rasgado por
 // crash é justamente o que não se deixa abrir — a limpeza do lixo não pode
 // depender de o lixo estar íntegro (spec §2.5).
-func (s *Store) apagaWIPsPeloNome(seg uint32) error {
-	campos, err := segindex.ListWIP(s.dirDeDados(), seg)
+func (s *Store) deleteWIPsPeloName(sec uint32) error {
+	fields, err := segindex.ListWIP(s.dirOfData(), sec)
 	if err != nil {
 		return err
 	}
-	for _, campo := range campos {
-		caminho := segindex.WIPPath(s.dirDeDados(), seg, campo)
-		if err := os.Remove(caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("storage: remover o índice WIP %s: %w", caminho, err)
+	for _, field := range fields {
+		path := segindex.WIPPath(s.dirOfData(), sec, field)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("storage: remover o índice WIP %s: %w", path, err)
 		}
 	}
 	return nil
 }
 
-// abreWIPsDoCorrente abre um .widx por campo indexado para o segmento corrente.
+// openWIPsOfCurrent abre um .widx por campo indexado para o segmento corrente.
 //
 // Falha no meio fecha o que já abriu: um WIP órfão manteria mapeamento de pé
 // depois de o Open ter desistido, e o Close do Store não teria como alcançá-lo
@@ -227,30 +227,30 @@ func (s *Store) apagaWIPsPeloNome(seg uint32) error {
 // Os arquivos são abertos FORA do selMu e o mapa é publicado sob ele: a
 // consulta lê s.wips pelo mesmo lock, e segurá-lo por N mmaps travaria toda
 // leitura do dataset atrás de uma rotação de segmento.
-func (s *Store) abreWIPsDoCorrente() error {
-	if len(s.camposIndexados) == 0 {
+func (s *Store) openWIPsOfCurrent() error {
+	if len(s.fieldsIndexados) == 0 {
 		return nil
 	}
-	seg := s.curSegID.Load()
-	wips := make(map[types.FieldID]*segindex.WIP, len(s.camposIndexados))
-	for _, campo := range s.camposIndexados {
-		w, err := segindex.OpenWIP(s.dirDeDados(), seg, campo, slotsIniciaisDoWIP)
+	sec := s.curSecID.Load()
+	wips := make(map[types.FieldID]*segindex.WIP, len(s.fieldsIndexados))
+	for _, field := range s.fieldsIndexados {
+		w, err := segindex.OpenWIP(s.dirOfData(), sec, field, slotsIniciaisOfWIP)
 		if err != nil {
 			for _, aberto := range wips {
 				_ = aberto.Close()
 			}
 			return err
 		}
-		wips[campo] = w
+		wips[field] = w
 	}
 	s.selMu.Lock()
 	s.wips = wips
-	s.wipsSeg = seg
+	s.wipsSec = sec
 	s.selMu.Unlock()
 	return nil
 }
 
-// fechaWIPs desmonta os índices mutáveis do segmento que deixou de ser o
+// closeWIPs desmonta os índices mutáveis do segmento que deixou de ser o
 // corrente.
 //
 // O mapa é zerado SEMPRE, inclusive no erro: Fecha depois de Fecha é uso após o
@@ -264,14 +264,14 @@ func (s *Store) abreWIPsDoCorrente() error {
 // lock que a consulta segura durante o Lookup é o que torna a janela
 // inexistente em vez de improvável.
 //
-// Entre este fecha e o abreWIPsDoCorrente seguinte o mapa fica vazio, e a
+// Entre este fecha e o openWIPsOfCurrent seguinte o mapa fica vazio, e a
 // consulta trata isso como qualquer outro segmento sem índice: cai para o
 // caminho selado, que responde pelo .sidx quando ele existe ou manda enumerar.
 // A sub-janela seguinte — mapa REPOVOADO com os WIPs do segmento novo e uma
 // consulta ainda com snapshot velho do corrente — é fechada pela identidade
-// wipsSeg, conferida no fonteDoWIP: sem ela, a consulta receberia as postings
+// wipsSec, conferida no sourceOfWIP: sem ela, a consulta receberia as postings
 // do segmento errado com ok=true e o segmento antigo sumiria dos candidatos.
-func (s *Store) fechaWIPs() error {
+func (s *Store) closeWIPs() error {
 	s.selMu.Lock()
 	defer s.selMu.Unlock()
 	var errs []error
@@ -279,7 +279,7 @@ func (s *Store) fechaWIPs() error {
 		errs = append(errs, w.Close())
 	}
 	s.wips = nil
-	s.wipsSeg = 0
+	s.wipsSec = 0
 	return errors.Join(errs...)
 }
 
@@ -288,7 +288,7 @@ func (s *Store) fechaWIPs() error {
 //
 // Um ponto só, e não um por caller, porque a rotação acontece DENTRO do
 // segment.Writer.Append (segment.go:195) e é invisível a quem chama — os
-// callers só veem o segID de volta. Cópias divergiriam, e a que esquecesse de
+// callers só veem o secID de volta. Cópias divergiriam, e a que esquecesse de
 // selar deixaria um segmento com .widx que o Open descarta: um índice inteiro
 // jogado fora, sem erro e sem log.
 //
@@ -306,30 +306,30 @@ func (s *Store) fechaWIPs() error {
 // FALHO sticky, como faz com o applyRecord. Retentar a selagem depois de ela ter
 // falhado seria afirmar uma durabilidade que não aconteceu.
 //
-// Chamado sob wmu, como os curSegID.Store que substitui.
-func (s *Store) aposAppend(novoSeg uint32) error {
-	anterior := s.curSegID.Swap(novoSeg)
+// Chamado sob wmu, como os curSecID.Store que substitui.
+func (s *Store) aposAppend(newSeg uint32) error {
+	anterior := s.curSecID.Swap(newSeg)
 	// anterior == 0 é o Store que ainda não adotou segmento nenhum, e não
-	// acontece depois do Open — os dois ramos dele publicam um segID >= 1. A
+	// acontece depois do Open — os dois ramos dele publicam um secID >= 1. A
 	// guarda fica porque o preço dela é uma comparação e o preço de faltar é
 	// selar o "segmento 0", que não existe.
-	if anterior == novoSeg || anterior == 0 || len(s.camposIndexados) == 0 {
+	if anterior == newSeg || anterior == 0 || len(s.fieldsIndexados) == 0 {
 		return nil
 	}
-	if err := s.fechaWIPs(); err != nil {
+	if err := s.closeWIPs(); err != nil {
 		return err
 	}
 	// Fechar ANTES de selar não é ordem arbitrária: o postCount só vai para o
 	// header no Fecha (segindex/wip.go), e a selagem reabre o .widx pelo
 	// arquivo. Selar com o mapeamento ainda de pé leria um header atrasado e
 	// perderia as postings gravadas desde o último rehash.
-	if err := segindex.Seal(s.dirDeDados(), anterior); err != nil {
+	if err := segindex.Seal(s.dirOfData(), anterior); err != nil {
 		return err
 	}
-	return s.abreWIPsDoCorrente()
+	return s.openWIPsOfCurrent()
 }
 
-// aplicaIndiceSets liga, no índice do segmento CORRENTE, uma posting para cada
+// aplicaIndexSets liga, no índice do segmento CORRENTE, uma posting para cada
 // campo indexado presente no payload.
 //
 // Entra CADA campo indexado do payload novo, e não só o que mudou — é aqui que
@@ -354,7 +354,7 @@ func (s *Store) aposAppend(novoSeg uint32) error {
 //
 // Zero alocação por evento: o buffer da chave canônica é do Store e é sempre
 // reatribuído com o slice devolvido, como o resto do caminho de escrita.
-func (s *Store) aplicaIndiceSets(row types.RowID, payload []byte) error {
+func (s *Store) aplicaIndexSets(row types.RowID, payload []byte) error {
 	var r encoding.FieldReader
 	r.Reset(payload)
 	for {
@@ -366,11 +366,11 @@ func (s *Store) aplicaIndiceSets(row types.RowID, payload []byte) error {
 		if w == nil {
 			continue
 		}
-		chave, err := valuekey.Append(s.chaveIndiceBuf[:0], v)
+		key, err := valuekey.Append(s.keyIndiceBuf[:0], v)
 		if err != nil {
 			return err
 		}
-		s.chaveIndiceBuf = chave
+		s.keyIndiceBuf = key
 		// O seam de erro fica ANTES do Set, e é o único ponto do produto que
 		// produz o phantom commit do §14.12 sob demanda: um erro daqui é
 		// posterior ao Append e anterior à publicação da location, que é
@@ -383,13 +383,13 @@ func (s *Store) aplicaIndiceSets(row types.RowID, payload []byte) error {
 		// primary.HashKey é a MESMA função que o índice primário usa, e a
 		// escolha não é gosto: ela nunca devolve 0 nem 1, e o Set do WIP entra
 		// em pânico com hash 0 porque 0 é o sentinela de slot vazio.
-		if err := w.Set(primary.HashKey(chave), row); err != nil {
+		if err := w.Set(primary.HashKey(key), row); err != nil {
 			return err
 		}
 	}
 }
 
-// removeIndiceDoSegmento apaga o índice de um segmento aposentado: o .sidx e
+// removeIndexOfSegment apaga o índice de um segmento aposentado: o .sidx e
 // também os .widx que tenham sobrado dele.
 //
 // O .widx não é hipótese: um crash entre a rotação e a selagem deixa .widx de um
@@ -410,25 +410,25 @@ func (s *Store) aplicaIndiceSets(row types.RowID, payload []byte) error {
 //
 // Arquivo ausente não é anomalia: o segmento pode nunca ter tido índice (fora
 // da janela, ou gravado por um binário anterior).
-func (s *Store) removeIndiceDoSegmento(seg uint32) {
-	if _, err := s.removeSidxDoDisco(seg); err != nil {
+func (s *Store) removeIndexOfSegment(sec uint32) {
+	if _, err := s.removeSidxOfDisk(sec); err != nil {
 		s.opts.Log.Warn("indice.orfao_apos_aposentadoria",
 			"o índice do segmento aposentado continuou em disco; ele é inofensivo e sai na limpeza de órfãos",
-			"segmento", seg, "erro", err.Error())
+			"segmento", sec, "erro", err.Error())
 	}
-	if err := s.apagaWIPsPeloNome(seg); err != nil {
+	if err := s.deleteWIPsPeloName(sec); err != nil {
 		s.opts.Log.Warn("indice.wip_orfao_apos_aposentadoria",
 			"sobrou .widx de um segmento aposentado; ele ocupa disco que o IndexBytes conta e nada explica",
-			"segmento", seg, "erro", err.Error())
+			"segmento", sec, "erro", err.Error())
 	}
 }
 
-// removeSidxDoDisco apaga o .sidx do segmento e SÓ DEPOIS larga o mapeamento em
+// removeSidxOfDisk apaga o .sidx do segmento e SÓ DEPOIS larga o mapeamento em
 // cache — nesta ordem, e a ordem é a correção de uma corrida.
 //
 // Com o esquecimento primeiro, uma consulta que lesse a geração DEPOIS do bump
 // e abrisse o arquivo ANTES do unlink passava pelas duas guardas do
-// publicaSelado e instalava no cache o mapeamento de um arquivo já removido —
+// publicaSealed e instalava no cache o mapeamento de um arquivo já removido —
 // e nada o evictava até a próxima evição DESTE segmento: inode preso, e o
 // segmento respondendo por um índice que a expulsão tinha mandado embora. Com o
 // arquivo fora do disco primeiro, a abertura tardia falha com ENOENT; a que
@@ -445,12 +445,12 @@ func (s *Store) removeIndiceDoSegmento(seg uint32) {
 // vez que a ordem mudasse. Arquivo ausente não é erro — é o estado normal de
 // segmento que nunca teve índice —, mas volta como removido=false: a expulsão
 // da janela conta só o que de fato saiu do disco.
-func (s *Store) removeSidxDoDisco(seg uint32) (bool, error) {
-	err := os.Remove(segindex.SealedPath(s.dirDeDados(), seg))
+func (s *Store) removeSidxOfDisk(sec uint32) (bool, error) {
+	err := os.Remove(segindex.SealedPath(s.dirOfData(), sec))
 	if s.entreRemoverEEsquecerHook != nil {
-		s.entreRemoverEEsquecerHook(seg)
+		s.entreRemoverEEsquecerHook(sec)
 	}
-	s.esqueceSelado(seg)
+	s.esqueceSealed(sec)
 	switch {
 	case err == nil:
 		return true, nil
@@ -461,25 +461,25 @@ func (s *Store) removeSidxDoDisco(seg uint32) (bool, error) {
 	}
 }
 
-// esqueceSelado tira o índice do segmento do cache de mapeamentos, fechando-o.
+// esqueceSealed tira o índice do segmento do cache de mapeamentos, fechando-o.
 //
 // Os donos são os caminhos que mudam o .sidx por fora do cache — a remoção
-// (removeSidxDoDisco, que serve à aposentadoria, à expulsão da janela e ao
-// obsoleto da reconstrução) e a reescrita (ConstroiIndiceDoSegmento) — e todos
+// (removeSidxOfDisk, que serve à aposentadoria, à expulsão da janela e ao
+// obsoleto da reconstrução) e a reescrita (ConstroiIndexOfSegment) — e todos
 // precisam da MESMA sequência: fechar sob o selMu e tirar do mapa. A regra de
 // ORDEM vale para todos: o esquecimento vem DEPOIS da operação de arquivo
 // (unlink ou rename), senão uma consulta que abrisse o arquivo entre o bump da
 // geração e a operação publicaria o mapeamento do estado anterior sem ninguém
-// para evictá-lo — ver o godoc do removeSidxDoDisco.
+// para evictá-lo — ver o godoc do removeSidxOfDisk.
 //
-// O que ela usa é o mecanismo que já existe, e não um segundo: o Fecha do Selado
+// O que ela usa é o mecanismo que já existe, e não um segundo: o Fecha do Sealed
 // impede leitores NOVOS e adia o munmap até a última Fonte em voo sair (contagem
 // de vidas, segindex/sealed.go). Sem essa espera o desfecho não seria resultado
 // degradado, seria SIGSEGV — sinal incapturável, longe da linha que errou. O
-// selMu é o que impede um Lookup de entrar no Selado depois do Fecha; ele é lock
+// selMu é o que impede um Lookup de entrar no Sealed depois do Fecha; ele é lock
 // FOLHA, e nada sob ele toma o wmu.
 //
-// Depois dela, o segmento volta a ser resolvido pelo garanteSelado na consulta
+// Depois dela, o segmento volta a ser resolvido pelo garanteSealed na consulta
 // seguinte: sem cache, o arquivo é reaberto — que é exatamente o que a reescrita
 // precisa, porque o mmap antigo sobrevive ao rename e continuaria servindo o
 // conteúdo anterior.
@@ -494,27 +494,27 @@ func (s *Store) removeSidxDoDisco(seg uint32) (bool, error) {
 //
 // Erro do desmonte não sobe: quem chama está aposentando ou republicando um
 // índice, e não há resposta operacional para um munmap que falhou além do log.
-func (s *Store) esqueceSelado(seg uint32) {
+func (s *Store) esqueceSealed(sec uint32) {
 	s.selMu.Lock()
 	defer s.selMu.Unlock()
-	s.selGeracao++
-	sel := s.selados[seg]
+	s.selGeneration++
+	sel := s.selados[sec]
 	if sel == nil {
 		return
 	}
 	if err := sel.Close(); err != nil {
 		s.opts.Log.Warn("indice.selado_nao_fechou",
 			"o mapeamento do índice do segmento não pôde ser desmontado",
-			"segmento", seg, "erro", err.Error())
+			"segmento", sec, "erro", err.Error())
 	}
-	delete(s.selados, seg)
+	delete(s.selados, sec)
 }
 
-// fechaIndices desmonta tudo que o índice por segmento mantém mapeado. Roda no
+// closeIndices desmonta tudo que o índice por segmento mantém mapeado. Roda no
 // Close, junto do resto dos índices, e tolera Store meio aberto: o Open chama
 // Close no caminho de erro.
-func (s *Store) fechaIndices() error {
-	errs := []error{s.fechaWIPs()}
+func (s *Store) closeIndices() error {
+	errs := []error{s.closeWIPs()}
 	s.selMu.Lock()
 	for _, sel := range s.selados {
 		errs = append(errs, sel.Close())

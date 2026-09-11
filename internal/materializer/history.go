@@ -8,27 +8,27 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// EscritorDeHistorico é o que o materializer precisa da tabela irmã.
+// EscritorOfHistory é o que o materializer precisa da tabela irmã.
 //
 // Declarada aqui, e não importada do storage, pela mesma razão que a Store
 // deste pacote: manter o materializer testável com um dublê sem arrastar a
 // implementação real — e, neste caso, sem arrastar também a possibilidade de
 // alguém chamar Put no histórico por engano.
-type EscritorDeHistorico interface {
+type EscritorOfHistory interface {
 	Apenda(payload []byte) (types.RowID, error)
 }
 
-// LigaHistorico conecta a tabela irmã a este materializer.
+// TurnonHistory conecta a tabela irmã a este materializer.
 //
 // campoRaw é a coluna `_raw`, ou nil quando `rawPayload` está desligado. Ela
 // é o que permite gravar também o evento que NÃO parseia: sem ela não há o
 // que guardar de um JSON inválido, e o evento continua só contado.
-func (m *Materializer) LigaHistorico(h EscritorDeHistorico, campoRaw *schema.CompiledField) {
+func (m *Materializer) TurnonHistory(h EscritorOfHistory, fieldRaw *schema.CompiledField) {
 	m.hist = h
-	m.histRaw = campoRaw
+	m.histRaw = fieldRaw
 }
 
-// apendaNoHistorico grava a linha do evento e NUNCA propaga erro.
+// apendaInHistory grava a linha do evento e NUNCA propaga erro.
 //
 // O histórico é ferramenta; o produto é o dataset base. Uma falha aqui conta,
 // degrada e segue — derrubar a ingestão de produção porque o disco do debug
@@ -44,7 +44,7 @@ func (m *Materializer) LigaHistorico(h EscritorDeHistorico, campoRaw *schema.Com
 //     exatamente o que se quer ver ao depurar um descarte por stale.
 //  3. o `_expiresIn` ainda não foi emitido, então ele não entra na linha sem
 //     precisar de filtro: o prazo por entidade não significa nada aqui.
-func (m *Materializer) apendaNoHistorico(d *Decodificado) {
+func (m *Materializer) apendaInHistory(d *Decodificado) {
 	if m.hist == nil {
 		return
 	}
@@ -52,19 +52,19 @@ func (m *Materializer) apendaNoHistorico(d *Decodificado) {
 		m.metrics.histDescartadas.Add(1)
 		return
 	}
-	payload, err := encodePatchHistorico(d.entries, d.evento, m.histRaw, m.histBuf[:0])
+	payload, err := encodePatchHistory(d.entries, d.event, m.histRaw, m.histBuf[:0])
 	m.histBuf = payload
 	if err == nil {
 		_, err = m.hist.Apenda(payload)
 	}
 	if err != nil {
-		m.degradaHistorico(err)
+		m.degradaHistory(err)
 		return
 	}
-	m.metrics.histLinhas.Add(1)
+	m.metrics.histRows.Add(1)
 }
 
-// apendaEventoRuimNoHistorico grava a linha do evento que o schema não
+// apendaEventRuimInHistory grava a linha do evento que o schema não
 // conseguiu mapear.
 //
 // Só existe com `rawPayload: true`, e é a única razão de peso para ligá-lo:
@@ -74,7 +74,7 @@ func (m *Materializer) apendaNoHistorico(d *Decodificado) {
 //
 // A linha sai com `_writtenAt` e `_raw`, e mais nada. Ela não tem identifier,
 // porque a falha pode ter sido justamente ali.
-func (m *Materializer) apendaEventoRuimNoHistorico(evento []byte) {
+func (m *Materializer) apendaEventRuimInHistory(event []byte) {
 	if m.hist == nil || m.histRaw == nil {
 		return
 	}
@@ -82,19 +82,19 @@ func (m *Materializer) apendaEventoRuimNoHistorico(evento []byte) {
 		m.metrics.histDescartadas.Add(1)
 		return
 	}
-	payload, err := encodeEventoRuim(m.schema.WriteInstantField, m.histRaw, m.agora().UnixMilli(), evento, m.histBuf[:0])
+	payload, err := encodeEventRuim(m.schema.WriteInstantField, m.histRaw, m.agora().UnixMilli(), event, m.histBuf[:0])
 	m.histBuf = payload
 	if err == nil {
 		_, err = m.hist.Apenda(payload)
 	}
 	if err != nil {
-		m.degradaHistorico(err)
+		m.degradaHistory(err)
 		return
 	}
-	m.metrics.histLinhas.Add(1)
+	m.metrics.histRows.Add(1)
 }
 
-// degradaHistorico entra no modo falho STICKY.
+// degradaHistory entra no modo falho STICKY.
 //
 // Sticky pela mesma razão do writer do storage: o erro que chega aqui é disco
 // cheio, dataset fechado ou writer morto, e a chamada seguinte reencontraria
@@ -104,13 +104,13 @@ func (m *Materializer) apendaEventoRuimNoHistorico(evento []byte) {
 // A consulta ao histórico degradado continua respondendo, sobre o que já foi
 // gravado. Um histórico que some quando quebra é pior que um truncado com a
 // marca de que truncou.
-func (m *Materializer) degradaHistorico(causa error) {
+func (m *Materializer) degradaHistory(causa error) {
 	m.histCausa = causa
 	m.metrics.histDescartadas.Add(1)
 	m.metrics.histDegradado.Store(true)
 }
 
-// encodePatchHistorico serializa as entries do evento para a tabela irmã.
+// encodePatchHistory serializa as entries do evento para a tabela irmã.
 //
 // Difere do encodePatch em duas coisas, e as duas são o que separa "o que a
 // origem mandou" de "o que o merge decidiu":
@@ -124,7 +124,7 @@ func (m *Materializer) degradaHistorico(causa error) {
 // payload exige ordem estritamente crescente, e o id de `_raw` não é
 // necessariamente o maior — ele é atribuído quando o histórico compila, e
 // toda coluna descoberta depois disso ganha um id maior.
-func encodePatchHistorico(patch []patchEntry, evento []byte, raw *schema.CompiledField, out []byte) ([]byte, error) {
+func encodePatchHistory(patch []patchEntry, event []byte, raw *schema.CompiledField, out []byte) ([]byte, error) {
 	var (
 		lastID     types.FieldID
 		err        error
@@ -137,7 +137,7 @@ func encodePatchHistorico(patch []patchEntry, evento []byte, raw *schema.Compile
 		}
 		lastID = id
 		if raw != nil && !rawEscrito && raw.ID < id {
-			if out, err = encoding.AppendField(out, raw.ID, valorBruto(evento)); err != nil {
+			if out, err = encoding.AppendField(out, raw.ID, valueBruto(event)); err != nil {
 				return out, err
 			}
 			rawEscrito = true
@@ -153,35 +153,35 @@ func encodePatchHistorico(patch []patchEntry, evento []byte, raw *schema.Compile
 		}
 	}
 	if raw != nil && !rawEscrito {
-		if out, err = encoding.AppendField(out, raw.ID, valorBruto(evento)); err != nil {
+		if out, err = encoding.AppendField(out, raw.ID, valueBruto(event)); err != nil {
 			return out, err
 		}
 	}
 	return out, nil
 }
 
-// encodeEventoRuim monta a linha mínima do evento que não parseou.
-func encodeEventoRuim(escrita, raw *schema.CompiledField, agoraMs int64, evento []byte, out []byte) ([]byte, error) {
+// encodeEventRuim monta a linha mínima do evento que não parseou.
+func encodeEventRuim(write, raw *schema.CompiledField, agoraMs int64, event []byte, out []byte) ([]byte, error) {
 	var err error
 	// A ordem por FieldID crescente vale aqui como em qualquer payload, e os
 	// dois campos podem estar em qualquer ordem relativa: `_writtenAt` é
 	// registrado pelo dataset base e `_raw` pelo histórico, mas uma recriação
 	// de um dos dois muda quem veio antes.
-	if escrita != nil && escrita.ID > raw.ID {
-		if out, err = encoding.AppendField(out, raw.ID, valorBruto(evento)); err != nil {
+	if write != nil && write.ID > raw.ID {
+		if out, err = encoding.AppendField(out, raw.ID, valueBruto(event)); err != nil {
 			return out, err
 		}
-		return encoding.AppendField(out, escrita.ID, types.Value{Type: types.TypeTimestamp, I64: agoraMs})
+		return encoding.AppendField(out, write.ID, types.Value{Type: types.TypeTimestamp, I64: agoraMs})
 	}
-	if escrita != nil {
-		if out, err = encoding.AppendField(out, escrita.ID, types.Value{Type: types.TypeTimestamp, I64: agoraMs}); err != nil {
+	if write != nil {
+		if out, err = encoding.AppendField(out, write.ID, types.Value{Type: types.TypeTimestamp, I64: agoraMs}); err != nil {
 			return out, err
 		}
 	}
-	return encoding.AppendField(out, raw.ID, valorBruto(evento))
+	return encoding.AppendField(out, raw.ID, valueBruto(event))
 }
 
-// valorBruto embrulha os bytes do evento como documento json.
+// valueBruto embrulha os bytes do evento como documento json.
 //
 // json e não bytes, e a razão é o que sai na consulta: o tipo json serializa o
 // valor como OBJETO no NDJSON, enquanto bytes sairia como base64. Quem consulta
@@ -196,6 +196,6 @@ func encodeEventoRuim(escrita, raw *schema.CompiledField, agoraMs int64, evento 
 // escreve o que passa por ele. Quem precisar de uma chave do documento como
 // COLUNA declara um `extract` sobre o campo json de origem, que é onde ele
 // existe de verdade.
-func valorBruto(evento []byte) types.Value {
-	return types.Value{Type: types.TypeJSON, Bytes: evento}
+func valueBruto(event []byte) types.Value {
+	return types.Value{Type: types.TypeJSON, Bytes: event}
 }

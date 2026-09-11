@@ -13,29 +13,29 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
-// servidorComBlocoDeQuery sobe um servidor cujo dataset tem o bloco `query`
+// serverWithBlockOfQuery sobe um servidor cujo dataset tem o bloco `query`
 // que o teste quiser, já com n linhas materializadas.
 //
-// Existe porque servidorComDados fixa specConsultavel, que não declara `query`
+// Existe porque serverWithData fixa specConsultavel, que não declara `query`
 // nenhum — e toda esta frente é sobre a diferença entre `query.timeout` e
 // `query.maxTimeout`. O bloco é APENDADO à spec padrão, então os campos, a key
 // e o índice continuam os mesmos que semeia() alimenta.
-func servidorComBlocoDeQuery(t *testing.T, n int, blocoServer, blocoQuery string) *server.Servidor {
+func serverWithBlockOfQuery(t *testing.T, n int, blockServer, blockQuery string) *server.Server {
 	t.Helper()
-	a := novoAmbienteComStorage(t, blocoServer, "")
-	a.escreveDataset("d", strings.ReplaceAll(specConsultavel, "%s", "d")+blocoQuery)
-	semeia(t, a, "d", n)
+	a := newEnvWithStorage(t, blockServer, "")
+	a.writeDataset("d", strings.ReplaceAll(specConsultavel, "%s", "d")+blockQuery)
+	seed(t, a, "d", n)
 
-	cfg := a.carrega()
-	srv, err := server.Novo(cfg, server.Opcoes{})
+	cfg := a.load()
+	srv, err := server.Novo(cfg, server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 	return srv
 }
 
-// linhasQueNaoCabemNoSocket é quantas linhas o dataset precisa ter para que uma
+// rowsQueNaoCabemInSocket é quantas linhas o dataset precisa ter para que uma
 // consulta segure a vaga de verdade enquanto o cliente para de ler.
 //
 // O número não é folclore: cada row deste dataset serializa em ~60 bytes, e o
@@ -44,26 +44,26 @@ func servidorComBlocoDeQuery(t *testing.T, n int, blocoServer, blocoQuery string
 // consulta termina, a vaga volta — e um teste que supõe a consulta presa passa
 // a medir outra coisa, ou pisca. Com 100 mil (~6 MiB) a escrita bloqueia de
 // verdade no primeiro cliente que para de ler.
-const linhasQueNaoCabemNoSocket = 100000
+const rowsQueNaoCabemInSocket = 100000
 
 // streamAberto é uma consulta em voo: o cliente leu o começo e parou, o que
 // segura a vaga do servidor até o corpo ser fechado.
 type streamAberto struct {
 	resp   *http.Response
-	leitor *protocol.Reader
+	reader *protocol.Reader
 }
 
-// abreStream faz o POST e devolve o leitor SEM consumir o stream. É o que
+// openStream faz o POST e devolve o leitor SEM consumir o stream. É o que
 // permite a um teste manter uma consulta ocupando vaga enquanto faz outra.
-func abreStream(t *testing.T, srv *server.Servidor, corpo string) *streamAberto {
+func openStream(t *testing.T, srv *server.Server, corpo string) *streamAberto {
 	t.Helper()
 	resp := consulta(t, srv, corpo)
-	return &streamAberto{resp: resp, leitor: protocol.NewReader(resp.Body)}
+	return &streamAberto{resp: resp, reader: protocol.NewReader(resp.Body)}
 }
 
-// desfechoDoStream percorre a moldura e devolve quantas rows saíram e o código
+// desfechoOfStream percorre a moldura e devolve quantas rows saíram e o código
 // do fecho — "" quando o fecho foi de sucesso.
-func desfechoDoStream(t *testing.T, resp *http.Response) (int, string) {
+func desfechoOfStream(t *testing.T, resp *http.Response) (int, string) {
 	t.Helper()
 	defer fecha(t, resp)
 	l := protocol.NewReader(resp.Body)
@@ -91,8 +91,8 @@ func desfechoDoStream(t *testing.T, resp *http.Response) (int, string) {
 // do contexto recebido, este caso morria em TIMEOUT com o teto configurado
 // dizendo que ele podia.
 func TestTimeoutDoRequestPodeAlongarAteOMaxTimeoutENuncaAlemDele(t *testing.T) {
-	const linhas = 30000
-	srv := servidorComBlocoDeQuery(t, linhas, blocoPadrao,
+	const rows = 30000
+	srv := serverWithBlockOfQuery(t, rows, blockPadrao,
 		"query:\n  timeout: 1ms\n  maxTimeout: 30s\n")
 
 	t.Run("sem timeoutMs vale o prazo padrão, e ele é curto", func(t *testing.T) {
@@ -101,16 +101,16 @@ func TestTimeoutDoRequestPodeAlongarAteOMaxTimeoutENuncaAlemDele(t *testing.T) {
 		// do stream (200 + fecho de erro). As duas são o mesmo desfecho para
 		// quem chamou; o que não pode acontecer é a consulta terminar bem.
 		if resp.StatusCode == http.StatusGatewayTimeout {
-			f := falhaDe(t, resp)
+			f := failOf(t, resp)
 			if f.Code != protocol.CodeTimeout {
 				t.Fatalf("código = %q, quer %q", f.Code, protocol.CodeTimeout)
 			}
 			return
 		}
-		n, codigo := desfechoDoStream(t, resp)
+		n, codigo := desfechoOfStream(t, resp)
 		if codigo != protocol.CodeTimeout {
 			t.Fatalf("fecho = %q com %d rows, quer %q: o prazo padrão de 1ms não pode varrer %d linhas",
-				codigo, n, protocol.CodeTimeout, linhas)
+				codigo, n, protocol.CodeTimeout, rows)
 		}
 	})
 
@@ -120,12 +120,12 @@ func TestTimeoutDoRequestPodeAlongarAteOMaxTimeoutENuncaAlemDele(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, quer 200", resp.StatusCode)
 		}
-		n, codigo := desfechoDoStream(t, resp)
+		n, codigo := desfechoOfStream(t, resp)
 		if codigo != "" {
 			t.Fatalf("fecho = %q: o prazo pedido (20s) está dentro do teto (30s) e tem de valer", codigo)
 		}
-		if n != linhas {
-			t.Fatalf("rows = %d, quer %d", n, linhas)
+		if n != rows {
+			t.Fatalf("rows = %d, quer %d", n, rows)
 		}
 	})
 
@@ -144,7 +144,7 @@ func TestTimeoutDoRequestPodeAlongarAteOMaxTimeoutENuncaAlemDele(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("status = %d, quer 400", resp.StatusCode)
 		}
-		f := falhaDe(t, resp)
+		f := failOf(t, resp)
 		// A mensagem tem de mandar mexer no TETO, não no prazo padrão: subir o
 		// `query.timeout` para atender um pedido pontual daria prazo longo a
 		// todo cliente que nunca pediu — que é o defeito que a separação das
@@ -166,7 +166,7 @@ func TestTimeoutDoRequestPodeAlongarAteOMaxTimeoutENuncaAlemDele(t *testing.T) {
 // tivesse deixado o teto virar o default global (30s) ou desaparecer faria os
 // dois passarem, e o dataset ganharia prazo que ninguém lhe deu.
 func TestDatasetSemMaxTimeoutSeComportaExatamenteComoHoje(t *testing.T) {
-	srv := servidorComBlocoDeQuery(t, 3, blocoPadrao, "query:\n  timeout: 2s\n")
+	srv := serverWithBlockOfQuery(t, 3, blockPadrao, "query:\n  timeout: 2s\n")
 
 	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d","timeoutMs":2000}`)
 	if resp.StatusCode != http.StatusOK {
@@ -182,7 +182,7 @@ func TestDatasetSemMaxTimeoutSeComportaExatamenteComoHoje(t *testing.T) {
 
 	// E o metadata publica o MESMO número dos dois lados, que é o que faz o
 	// clamp do driver JDBC continuar aparando no ponto de sempre.
-	m := leJSON[protocol.Metadata](t, srv, "/v1/metadata").Datasets[0]
+	m := readJSON[protocol.Metadata](t, srv, "/v1/metadata").Datasets[0]
 	if m.TimeoutMs != 2000 {
 		t.Errorf("metadata timeoutMs = %d, quer 2000", m.TimeoutMs)
 	}
@@ -201,9 +201,9 @@ func TestDatasetSemMaxTimeoutSeComportaExatamenteComoHoje(t *testing.T) {
 // clampar em 2 s uma consulta que o dataset autoriza a durar 10 minutos, e o
 // teto novo não valeria para cliente nenhum. Zero linha de Java muda.
 func TestMetadataPublicaOTetoQueOClampDoDriverUsa(t *testing.T) {
-	srv := servidorComBlocoDeQuery(t, 1, blocoPadrao, "query:\n  timeout: 2s\n  maxTimeout: 10m\n")
+	srv := serverWithBlockOfQuery(t, 1, blockPadrao, "query:\n  timeout: 2s\n  maxTimeout: 10m\n")
 
-	m := leJSON[protocol.Metadata](t, srv, "/v1/metadata").Datasets[0]
+	m := readJSON[protocol.Metadata](t, srv, "/v1/metadata").Datasets[0]
 	if m.TimeoutMs != (10 * time.Minute).Milliseconds() {
 		t.Errorf("timeoutMs = %d, quer o TETO (%d): é contra este campo que o driver clampa",
 			m.TimeoutMs, (10 * time.Minute).Milliseconds())
@@ -232,16 +232,16 @@ func TestMetadataPublicaOTetoQueOClampDoDriverUsa(t *testing.T) {
 // aquela que responde em milissegundos e é a razão de o produto existir —
 // receberia 503 pelo tempo que as longas durassem.
 func TestQueryLongaNaoOcupaAUltimaVagaDaQueryCurta(t *testing.T) {
-	srv := servidorComBlocoDeQuery(t, linhasQueNaoCabemNoSocket,
-		blocoPadrao+"runtime:\n  query:\n    maxConcurrent: 2\n    maxLongRunning: 1\n",
+	srv := serverWithBlockOfQuery(t, rowsQueNaoCabemInSocket,
+		blockPadrao+"runtime:\n  query:\n    maxConcurrent: 2\n    maxLongRunning: 1\n",
 		"query:\n  timeout: 1s\n  maxTimeout: 60s\n")
 
 	// A primeira longa fica em voo: o cliente lê uma linha e para de ler, o que
 	// segura o servidor no meio do stream com as duas vagas na mão.
-	primeira := abreStream(t, srv, `{"dataset":"d","sql":"SELECT id, status, porta, ip FROM d","timeoutMs":30000}`)
+	primeira := openStream(t, srv, `{"dataset":"d","sql":"SELECT id, status, porta, ip FROM d","timeoutMs":30000}`)
 	defer fecha(t, primeira.resp)
-	if !primeira.leitor.Next() {
-		t.Fatalf("a primeira consulta não produziu row: %v", primeira.leitor.Err())
+	if !primeira.reader.Next() {
+		t.Fatalf("a primeira consulta não produziu row: %v", primeira.reader.Err())
 	}
 
 	// A segunda longa bate no sub-pool, com código e Retry-After próprios.
@@ -252,7 +252,7 @@ func TestQueryLongaNaoOcupaAUltimaVagaDaQueryCurta(t *testing.T) {
 	if resp.Header.Get("Retry-After") == "" {
 		t.Error("503 sem Retry-After: o cliente não sabe quando voltar")
 	}
-	f := falhaDe(t, resp)
+	f := failOf(t, resp)
 	if f.Code != protocol.CodeTooManyLongQueries {
 		t.Fatalf("código = %q, quer %q: a recusa do sub-pool tem código próprio porque a AÇÃO é outra",
 			f.Code, protocol.CodeTooManyLongQueries)
@@ -267,7 +267,7 @@ func TestQueryLongaNaoOcupaAUltimaVagaDaQueryCurta(t *testing.T) {
 	if curta.StatusCode != http.StatusOK {
 		t.Fatalf("consulta curta: status = %d, quer 200 — a vaga que sobrou é dela", curta.StatusCode)
 	}
-	n, codigo := desfechoDoStream(t, curta)
+	n, codigo := desfechoOfStream(t, curta)
 	if codigo != "" || n != 1 {
 		t.Fatalf("consulta curta: %d rows, fecho %q", n, codigo)
 	}
@@ -280,20 +280,20 @@ func TestQueryLongaNaoOcupaAUltimaVagaDaQueryCurta(t *testing.T) {
 // request contasse como longo, um maxLongRunning de 2 viraria o teto real de
 // concorrência do servidor e o maxConcurrent de 16 não valeria para nada.
 func TestConsultaNoPrazoPadraoNaoGastaVagaDoSubPool(t *testing.T) {
-	srv := servidorComBlocoDeQuery(t, linhasQueNaoCabemNoSocket,
-		blocoPadrao+"runtime:\n  query:\n    maxConcurrent: 4\n    maxLongRunning: 1\n",
+	srv := serverWithBlockOfQuery(t, rowsQueNaoCabemInSocket,
+		blockPadrao+"runtime:\n  query:\n    maxConcurrent: 4\n    maxLongRunning: 1\n",
 		"query:\n  timeout: 60s\n  maxTimeout: 120s\n")
 
 	// Três consultas no prazo padrão, todas em voo ao mesmo tempo. Com o
 	// sub-pool de UMA vaga, se elas contassem como longas a terceira sairia 503.
 	var abertas []*streamAberto
 	for i := 0; i < 3; i++ {
-		s := abreStream(t, srv, `{"dataset":"d","sql":"SELECT id, status, porta, ip FROM d"}`)
+		s := openStream(t, srv, `{"dataset":"d","sql":"SELECT id, status, porta, ip FROM d"}`)
 		if s.resp.StatusCode != http.StatusOK {
 			t.Fatalf("consulta %d no prazo padrão: status = %d, quer 200", i, s.resp.StatusCode)
 		}
-		if !s.leitor.Next() {
-			t.Fatalf("consulta %d não produziu row: %v", i, s.leitor.Err())
+		if !s.reader.Next() {
+			t.Fatalf("consulta %d não produziu row: %v", i, s.reader.Err())
 		}
 		abertas = append(abertas, s)
 	}
@@ -310,8 +310,8 @@ func TestConsultaNoPrazoPadraoNaoGastaVagaDoSubPool(t *testing.T) {
 // presa por MINUTOS, e num pool de 16 bastam 16 desistências para o servidor
 // parar de aceitar consulta com o processo saudável.
 func TestClienteQueDesisteLiberaAVaga(t *testing.T) {
-	srv := servidorComBlocoDeQuery(t, linhasQueNaoCabemNoSocket,
-		blocoPadrao+"runtime:\n  query:\n    maxConcurrent: 1\n",
+	srv := serverWithBlockOfQuery(t, rowsQueNaoCabemInSocket,
+		blockPadrao+"runtime:\n  query:\n    maxConcurrent: 1\n",
 		"query:\n  timeout: 1s\n  maxTimeout: 300s\n")
 
 	ctx, desiste := context.WithCancel(context.Background())
@@ -357,7 +357,7 @@ func TestClienteQueDesisteLiberaAVaga(t *testing.T) {
 	for {
 		livre := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d LIMIT 1"}`)
 		if livre.StatusCode == http.StatusOK {
-			n, codigo := desfechoDoStream(t, livre)
+			n, codigo := desfechoOfStream(t, livre)
 			if codigo != "" || n != 1 {
 				t.Fatalf("depois de a vaga voltar: %d rows, fecho %q", n, codigo)
 			}
@@ -374,8 +374,8 @@ func TestClienteQueDesisteLiberaAVaga(t *testing.T) {
 // O registro de queries em voo alimenta o /v1/stats: o operador precisa ver
 // QUAL consulta está correndo e HÁ QUANTO TEMPO, não só quantas.
 func TestStatsListaAConsultaEmVooComIdadeEMarcaDeLonga(t *testing.T) {
-	srv := servidorComBlocoDeQuery(t, linhasQueNaoCabemNoSocket,
-		blocoPadrao, "query:\n  timeout: 1s\n  maxTimeout: 60s\n")
+	srv := serverWithBlockOfQuery(t, rowsQueNaoCabemInSocket,
+		blockPadrao, "query:\n  timeout: 1s\n  maxTimeout: 60s\n")
 
 	// PRIMEIRO o caso vazio, e ele não é cerimônia: um registro que anota e não
 	// retira passaria em qualquer asserção feita com uma consulta em voo, e o
@@ -383,18 +383,18 @@ func TestStatsListaAConsultaEmVooComIdadeEMarcaDeLonga(t *testing.T) {
 	// de horas que terminaram há muito tempo, e o mapa crescendo sem teto por
 	// requisição atendida.
 	curta := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d LIMIT 1"}`)
-	if n, codigo := desfechoDoStream(t, curta); codigo != "" || n != 1 {
+	if n, codigo := desfechoOfStream(t, curta); codigo != "" || n != 1 {
 		t.Fatalf("consulta curta: %d rows, fecho %q", n, codigo)
 	}
-	esperaRegistroVazio(t, srv)
+	waitRecordVazio(t, srv)
 
-	aberta := abreStream(t, srv, `{"dataset":"d","sql":"SELECT id, status, porta, ip FROM d","timeoutMs":30000}`)
+	aberta := openStream(t, srv, `{"dataset":"d","sql":"SELECT id, status, porta, ip FROM d","timeoutMs":30000}`)
 	defer fecha(t, aberta.resp)
-	if !aberta.leitor.Next() {
-		t.Fatalf("a consulta não produziu row: %v", aberta.leitor.Err())
+	if !aberta.reader.Next() {
+		t.Fatalf("a consulta não produziu row: %v", aberta.reader.Err())
 	}
 
-	e := leJSON[protocol.Stats](t, srv, "/v1/stats")
+	e := readJSON[protocol.Stats](t, srv, "/v1/stats")
 	if len(e.Process.InFlight) != 1 {
 		t.Fatalf("inFlight = %d entradas, quer 1", len(e.Process.InFlight))
 	}
@@ -422,19 +422,19 @@ func TestStatsListaAConsultaEmVooComIdadeEMarcaDeLonga(t *testing.T) {
 	}
 }
 
-// esperaRegistroVazio bloqueia até o /v1/stats não listar mais consulta nenhuma.
+// waitRecordVazio bloqueia até o /v1/stats não listar mais consulta nenhuma.
 //
 // É laço com prazo, e não asserção direta, porque a saída do registro acontece
 // nos defers do handler — que rodam DEPOIS de o último byte chegar ao cliente.
 // Uma asserção imediata pegaria a consulta que acabou de terminar e piscaria; um
 // sleep fixo esconderia um registro que só esvazia em dez segundos, ou nunca.
-func esperaRegistroVazio(t *testing.T, srv *server.Servidor) {
+func waitRecordVazio(t *testing.T, srv *server.Server) {
 	t.Helper()
 	prazo := time.Now().Add(5 * time.Second)
 	for {
-		e := leJSON[protocol.Stats](t, srv, "/v1/stats")
+		e := readJSON[protocol.Stats](t, srv, "/v1/stats")
 		if len(e.Process.InFlight) == 0 {
-			if v := valorDaMetrica(t, srv, "nishidb_query_longest_running_seconds"); v != 0 {
+			if v := valueOfMetrica(t, srv, "nishidb_query_longest_running_seconds"); v != 0 {
 				t.Errorf("nishidb_query_longest_running_seconds = %v sem consulta em voo, quer 0", v)
 			}
 			return
@@ -454,19 +454,19 @@ func esperaRegistroVazio(t *testing.T, srv *server.Servidor) {
 // número para sempre — e o estado que a série existe para denunciar é
 // justamente aquele em que nada acontece e o tempo passa.
 func TestMetricasDeQueryLongaAparecemNoScrapeECrescem(t *testing.T) {
-	srv := servidorComBlocoDeQuery(t, linhasQueNaoCabemNoSocket,
-		blocoPadrao+"runtime:\n  query:\n    maxConcurrent: 2\n    maxLongRunning: 1\n",
+	srv := serverWithBlockOfQuery(t, rowsQueNaoCabemInSocket,
+		blockPadrao+"runtime:\n  query:\n    maxConcurrent: 2\n    maxLongRunning: 1\n",
 		"query:\n  timeout: 1s\n  maxTimeout: 60s\n")
 
-	aberta := abreStream(t, srv, `{"dataset":"d","sql":"SELECT id, status, porta, ip FROM d","timeoutMs":30000}`)
+	aberta := openStream(t, srv, `{"dataset":"d","sql":"SELECT id, status, porta, ip FROM d","timeoutMs":30000}`)
 	defer fecha(t, aberta.resp)
-	if !aberta.leitor.Next() {
-		t.Fatalf("a consulta não produziu row: %v", aberta.leitor.Err())
+	if !aberta.reader.Next() {
+		t.Fatalf("a consulta não produziu row: %v", aberta.reader.Err())
 	}
 
-	primeiro := valorDaMetrica(t, srv, "nishidb_query_longest_running_seconds")
+	primeiro := valueOfMetrica(t, srv, "nishidb_query_longest_running_seconds")
 	time.Sleep(150 * time.Millisecond)
-	segundo := valorDaMetrica(t, srv, "nishidb_query_longest_running_seconds")
+	segundo := valueOfMetrica(t, srv, "nishidb_query_longest_running_seconds")
 	if segundo <= primeiro {
 		t.Errorf("idade da consulta mais antiga: %v e depois %v — o medidor não anda com o relógio",
 			primeiro, segundo)
@@ -488,9 +488,9 @@ func TestMetricasDeQueryLongaAparecemNoScrapeECrescem(t *testing.T) {
 	// `absent(nishidb_query_long_rejected_total)` significava ao mesmo tempo
 	// "nunca recusou" e "o alvo caiu". Série que alarma não pode nascer no
 	// primeiro alarme (issue #47).
-	const nome = "nishidb_query_long_rejected_total"
-	if v := valorDaMetrica(t, srv, nome); v != 0 {
-		t.Errorf("%s = %v antes de qualquer recusa, quer 0 — a série tem de existir zerada", nome, v)
+	const name = "nishidb_query_long_rejected_total"
+	if v := valueOfMetrica(t, srv, name); v != 0 {
+		t.Errorf("%s = %v antes de qualquer recusa, quer 0 — a série tem de existir zerada", name, v)
 	}
 
 	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d","timeoutMs":30000}`)
@@ -498,7 +498,7 @@ func TestMetricasDeQueryLongaAparecemNoScrapeECrescem(t *testing.T) {
 		t.Fatalf("status = %d, quer 503", resp.StatusCode)
 	}
 	fecha(t, resp)
-	if v := valorDaMetrica(t, srv, nome); v != 1 {
-		t.Errorf("%s = %v, quer 1", nome, v)
+	if v := valueOfMetrica(t, srv, name); v != 1 {
+		t.Errorf("%s = %v, quer 1", name, v)
 	}
 }

@@ -307,7 +307,7 @@ const (
 	offDistinctValues = segindex.SealedHeaderSize + 4  // u32 da seção 0
 	offDirOff         = segindex.SealedHeaderSize + 8  // u64 da seção 0
 	offPostOff        = segindex.SealedHeaderSize + 16 // u64 da seção 0
-	offPostIdx        = 96                             // u32 do slot 0 do diretório
+	offPostIDx        = 96                             // u32 do slot 0 do diretório
 	offCount          = 100                            // u32 do slot 0 do diretório
 	corpusTableEnd    = 88
 	corpusBodyEnd     = 116
@@ -492,9 +492,9 @@ func TestPostingsForaDaFaixaDegradamEmVezDePanicar(t *testing.T) {
 	cases := map[string]func(b []byte){
 		"count zero":            func(b []byte) { putU32(b, offCount, 0) },
 		"count além das 3 rows": func(b []byte) { putU32(b, offCount, 999) },
-		"postIdx além do fim":   func(b []byte) { putU32(b, offPostIdx, 5) },
+		"postIdx além do fim":   func(b []byte) { putU32(b, offPostIDx, 5) },
 		"postIdx e count estourando juntos": func(b []byte) {
-			putU32(b, offPostIdx, 2)
+			putU32(b, offPostIDx, 2)
 			putU32(b, offCount, 3) // 2+3 = 5 > 3 postings
 		},
 	}

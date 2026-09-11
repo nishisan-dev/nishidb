@@ -118,7 +118,7 @@ type spy struct {
 
 func (s *spy) Indexed(f types.FieldID) bool { return s.inner.Indexed(f) }
 
-func (s *spy) Lookup(f types.FieldID, v types.Value) (types.RowIDIterator, error) {
+func (s *spy) Lookup(f types.FieldID, _ types.Value) (types.RowIDIterator, error) {
 	s.t.Fatalf("o planner consultou DADOS no plan-time: Lookup(%d)", f)
 	return nil, nil
 }

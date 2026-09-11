@@ -1,0 +1,5 @@
+pacote	especie	endereco	novo	motivo
+internal/storage/rowindex	local	TestLocationsConcorrencia.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/rowindex	field#gopls	TestPackUnpackRoundTrip.cases.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/rowindex	local#ambiguo	TestPackUnpackRoundTrip.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/rowindex	field#gopls	TestPackPanicaComLimitesEstourados.cases.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado

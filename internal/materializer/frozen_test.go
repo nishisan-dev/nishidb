@@ -27,10 +27,10 @@ schema:
       frozenFrom: "@writeTime"
 `
 
-// congeladaYAMLComTTL acrescenta a expiração, que é o que faz o writer
+// congeladaYAMLWithTTL acrescenta a expiração, que é o que faz o writer
 // injetar o _writtenAt — sem ela não há com que comparar o relógio da
 // congelada.
-const congeladaYAMLComTTL = `
+const congeladaYAMLWithTTL = `
 version: 1
 name: alarmes
 materialization:
@@ -50,9 +50,9 @@ schema:
       frozenFrom: "@writeTime"
 `
 
-// entryDe devolve a entry do campo, e ok=false quando o patch não a tem — a
+// entryOf devolve a entry do campo, e ok=false quando o patch não a tem — a
 // AUSÊNCIA é o que metade destes testes afirma, e entryByName aborta nela.
-func entryDe(b *PatchBuffer, name string) (patchEntry, bool) {
+func entryOf(b *PatchBuffer, name string) (patchEntry, bool) {
 	for _, e := range b.entries {
 		if e.field.Name == name {
 			return e, true
@@ -64,7 +64,7 @@ func entryDe(b *PatchBuffer, name string) (patchEntry, bool) {
 func TestCongeladaCapturaDoEvento(t *testing.T) {
 	c := compileYAML(t, congeladaYAML)
 	b := parsePatch(t, c, `{"id":"a","sev":5}`)
-	e, ok := entryDe(b, "origSev")
+	e, ok := entryOf(b, "origSev")
 	if !ok {
 		t.Fatal("a congelada não foi capturada")
 	}
@@ -81,7 +81,7 @@ func TestCongeladaCapturaDoEvento(t *testing.T) {
 func TestCongeladaNaoEmiteQuandoAOrigemNaoVeioNoEvento(t *testing.T) {
 	c := compileYAML(t, congeladaYAML)
 	b := parsePatch(t, c, `{"id":"a"}`)
-	if _, ok := entryDe(b, "origSev"); ok {
+	if _, ok := entryOf(b, "origSev"); ok {
 		t.Error("a congelada foi emitida sem a origem ter vindo no evento")
 	}
 }
@@ -89,7 +89,7 @@ func TestCongeladaNaoEmiteQuandoAOrigemNaoVeioNoEvento(t *testing.T) {
 func TestCongeladaNaoEmiteQuandoAOrigemVeioNull(t *testing.T) {
 	c := compileYAML(t, congeladaYAML)
 	b := parsePatch(t, c, `{"id":"a","sev":null}`)
-	if _, ok := entryDe(b, "origSev"); ok {
+	if _, ok := entryOf(b, "origSev"); ok {
 		t.Error("null explícito na origem não pode congelar nada")
 	}
 }
@@ -107,23 +107,23 @@ func TestEventoQueTrazONomeDaCongeladaEhRecusado(t *testing.T) {
 // Parse recebe: um `createdAt` que divergisse do instante de escrita do
 // próprio evento que o criou seria um fato inventado.
 func TestCongeladaDoRelogioUsaOMesmoInstanteQueOWrittenAt(t *testing.T) {
-	c := compileYAML(t, congeladaYAMLComTTL)
+	c := compileYAML(t, congeladaYAMLWithTTL)
 	agora := time.UnixMilli(1_700_000_000_000)
 	var b PatchBuffer
 	if err := b.Parse([]byte(`{"id":"a","sev":5}`), c, agora); err != nil {
 		t.Fatal(err)
 	}
-	criado, ok := entryDe(&b, "criadoEm")
+	criado, ok := entryOf(&b, "criadoEm")
 	if !ok {
 		t.Fatal("a congelada do relógio não foi emitida")
 	}
-	escrita, ok := entryDe(&b, schema.WriteInstantFieldName)
+	write, ok := entryOf(&b, schema.WriteInstantFieldName)
 	if !ok {
 		t.Fatal("o campo de sistema não foi emitido")
 	}
-	if criado.val.I64 != escrita.val.I64 {
+	if criado.val.I64 != write.val.I64 {
 		t.Errorf("criadoEm = %d, _writtenAt = %d: os dois têm de sair do mesmo instante",
-			criado.val.I64, escrita.val.I64)
+			criado.val.I64, write.val.I64)
 	}
 	if criado.val.Type != types.TypeTimestamp {
 		t.Errorf("tipo da congelada do relógio = %v, quero timestamp", criado.val.Type)
@@ -136,7 +136,7 @@ func TestCongeladaDoRelogioUsaOMesmoInstanteQueOWrittenAt(t *testing.T) {
 func TestCongeladaDoRelogioEhEmitidaMesmoSemOrigemNoEvento(t *testing.T) {
 	c := compileYAML(t, congeladaYAML)
 	b := parsePatch(t, c, `{"id":"a"}`)
-	if _, ok := entryDe(b, "criadoEm"); !ok {
+	if _, ok := entryOf(b, "criadoEm"); !ok {
 		t.Error("a congelada do relógio não depende de campo nenhum do evento")
 	}
 }
@@ -165,7 +165,7 @@ schema:
 	if f.EffectiveType() != types.TypeInt64 {
 		t.Errorf("tipo efetivo da congelada = %v, quero int64", f.EffectiveType())
 	}
-	e, ok := entryDe(b, "origSev")
+	e, ok := entryOf(b, "origSev")
 	if !ok || e.val.I64 != 5 {
 		t.Errorf("entry = %+v, ok = %v", e, ok)
 	}

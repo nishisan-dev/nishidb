@@ -18,12 +18,12 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// ChaveDoResumo é o `id` da linha de resumo — a que responde quando não há
+// KeyOfSummary é o `id` da linha de resumo — a que responde quando não há
 // partição nenhuma. Nunca colide com o id de uma partição, que é o número em
 // decimal e portanto só tem dígitos.
-const ChaveDoResumo = "source"
+const KeyOfSummary = "source"
 
-// especDaTabela é a spec da tabela, no MESMO YAML de um dataset de verdade,
+// especOfTable é a spec da tabela, no MESMO YAML de um dataset de verdade,
 // como o `_meta.fields` e o `_meta.counters`. Reusar o compilador é o que
 // garante que ela obedeça às mesmas regras — tipos, chave, ordem
 // determinística de FieldID — que qualquer outro dataset.
@@ -41,8 +41,8 @@ const ChaveDoResumo = "source"
 //
 // A key é `id`, e não `partition`: a key tem de ser string (a spec só suporta
 // isso) e tem de existir em TODA linha, e `partition` é NULL no resumo.
-const especDaTabela = `version: 1
-name: ` + TabelaMetaKafka + `
+const especOfTable = `version: 1
+name: ` + TableMetaKafka + `
 materialization:
   key:
     field: id
@@ -105,24 +105,24 @@ schema:
       type: boolean
 `
 
-// coluna identifica cada coluna, para a linha ser montada por um switch em vez
+// column identifica cada column, para a linha ser montada por um switch em vez
 // de por nome.
-type coluna uint8
+type column uint8
 
 const (
-	colID coluna = iota
+	colID column = iota
 	colTopic
 	colGroupID
 	colBootstrap
-	colParticao
+	colPartition
 	colEnabled
 	colState
 	colDetail
 	colOffsetAplicado
 	colOffsetDuravel
-	colFimDoLog
+	colEndOfLog
 	colLag
-	colMarcaEm
+	colMarkIn
 	colUltimoLote
 	colFilaRegistros
 	colFilaBytes
@@ -131,14 +131,14 @@ const (
 	colStale
 	colDescartados
 	colFalhas
-	colParticoesAtribuidas
-	colParticoesDoTopico
+	colPartitionsAtribuidas
+	colPartitionsOfTopic
 	colWatchdogTrips
 	colWatchdogDesistiu
 )
 
-// nomesDasColunas casa, posição a posição, com as constantes acima.
-var nomesDasColunas = [...]string{
+// nomesDasColumns casa, posição a posição, com as constantes acima.
+var nomesDasColumns = [...]string{
 	"id", "topic", "groupId", "bootstrap", "partition", "enabled", "state",
 	"detail", "appliedOffset", "committedOffset", "highWatermark", "lag",
 	"markAt", "lastBatchAt", "queueRecords", "queueBytes", "events", "applied",
@@ -146,81 +146,81 @@ var nomesDasColunas = [...]string{
 	"watchdogTrips", "watchdogGaveUp",
 }
 
-type colunaComID struct {
+type columnWithID struct {
 	id types.FieldID
-	k  coluna
+	k  column
 }
 
-// Tabela monta o schema sintético e o Store virtual de `_meta.kafka`.
-func Tabela(f Fonte) (*schema.Compiled, query.Store, error) {
-	spec, err := schema.Parse([]byte(especDaTabela), schema.BuiltinDefaults)
+// Table monta o schema sintético e o Store virtual de `_meta.kafka`.
+func Table(f Source) (*schema.Compiled, query.Store, error) {
+	spec, err := schema.Parse([]byte(especOfTable), schema.BuiltinDefaults)
 	if err != nil {
-		return nil, nil, fmt.Errorf("metakafka: spec da tabela %s.%s inválida: %w", meta.Namespace, TabelaMetaKafka, err)
+		return nil, nil, fmt.Errorf("metakafka: spec da tabela %s.%s inválida: %w", meta.Namespace, TableMetaKafka, err)
 	}
 	sc, err := spec.Compile(schema.NewInMemoryDict())
 	if err != nil {
-		return nil, nil, fmt.Errorf("metakafka: compilando a tabela %s.%s: %w", meta.Namespace, TabelaMetaKafka, err)
+		return nil, nil, fmt.Errorf("metakafka: compilando a tabela %s.%s: %w", meta.Namespace, TableMetaKafka, err)
 	}
-	fo := &fonte{
+	fo := &source{
 		f:         f,
-		topico:    []byte(f.Declarada.Topic),
+		topic:     []byte(f.Declarada.Topic),
 		grupo:     []byte(f.Declarada.GroupID),
 		bootstrap: []byte(f.Declarada.Bootstrap),
 		abertos:   map[uint64]*retrato{},
-		colunas:   make([]colunaComID, 0, len(nomesDasColunas)),
+		columns:   make([]columnWithID, 0, len(nomesDasColumns)),
 	}
-	for k, nome := range nomesDasColunas {
-		campo, ok := sc.FieldByName([]byte(nome))
+	for k, name := range nomesDasColumns {
+		field, ok := sc.FieldByName([]byte(name))
 		if !ok {
-			return nil, nil, erroDeColuna(nome)
+			return nil, nil, columnError(name)
 		}
-		fo.colunas = append(fo.colunas, colunaComID{id: campo.ID, k: coluna(k)})
+		fo.columns = append(fo.columns, columnWithID{id: field.ID, k: column(k)})
 	}
 	// O payload exige FieldID crescente; a ordem é resolvida UMA vez aqui, e a
 	// linha é montada sem ordenar.
-	sort.Slice(fo.colunas, func(i, j int) bool { return fo.colunas[i].id < fo.colunas[j].id })
+	sort.Slice(fo.columns, func(i, j int) bool { return fo.columns[i].id < fo.columns[j].id })
 	return sc, fo, nil
 }
 
 // comum são as colunas de dataset — iguais em toda linha do resultado.
 type comum struct {
-	estado, detalhe   string
-	temConsumidor     bool
-	filaRegistros     int
+	state, detalhe    string
+	hasConsumidor     bool
+	filaRecords       int
 	filaBytes         int64
 	ultimoLote        time.Time
 	desfecho          kafka.Desfecho
-	particoesAtrib    int64
-	particoesDoTopico int64
+	partitionsAtrib   int64
+	partitionsOfTopic int64
 	trips             uint64
 	desistiu          bool
-	temVigia          bool
+	hasVigia          bool
 }
 
-// linha é uma linha do retrato: a de resumo (Resumo=true) ou a de uma partição.
-type linha struct {
-	Resumo   bool
-	Posicao  kafka.PosicaoDaParticao
+// row é uma row do retrato: a de resumo (Summary=true) ou a de uma partição.
+type row struct {
+	Summary  bool
+	Position kafka.PositionOfPartition
 	Duravel  int64
-	TemDurav bool
-	MarcaEm  time.Time
+	HasDurav bool
+	MarkIn   time.Time
 }
 
 // retrato é o que UMA consulta enxerga: colhido no OpenSnapshot, IMUTÁVEL, e
 // devolvido no CloseSnapshot.
 type retrato struct {
-	comum  comum
-	linhas map[types.RowID]linha
-	limite types.RowID
+	comum comum
+	rows  map[types.RowID]row
+	limit types.RowID
 }
 
-// fonte é o Store virtual. Registrada UMA vez no motor, serve TODAS as
+// source é o Store virtual. Registrada UMA vez no motor, serve TODAS as
 // consultas concorrentes — então nada do que UMA consulta enxerga mora em
 // campo mutável compartilhado.
-type fonte struct {
-	f                        Fonte
-	colunas                  []colunaComID // em ordem crescente de FieldID
-	topico, grupo, bootstrap []byte
+type source struct {
+	f                       Source
+	columns                 []columnWithID // em ordem crescente de FieldID
+	topic, grupo, bootstrap []byte
 
 	mu        sync.Mutex
 	proxEpoca uint64
@@ -246,18 +246,18 @@ type fonte struct {
 // O retrato é guardado por ÉPOCA, mintada aqui. O executor fecha o par
 // OpenSnapshot/CloseSnapshot em todos os caminhos de saída, inclusive no Open
 // que falha depois de abrir.
-func (f *fonte) OpenSnapshot() types.Snapshot {
+func (f *source) OpenSnapshot() types.Snapshot {
 	var inst kafka.Instantaneo
 	c := f.consumidor()
 	if c != nil {
-		inst = c.Instantaneo(f.contextoDaMarca())
+		inst = c.Instantaneo(f.contextoOfMark())
 	}
 
 	r := &retrato{
-		comum:  f.colheComum(c != nil, inst),
-		linhas: map[types.RowID]linha{},
+		comum: f.colheComum(c != nil, inst),
+		rows:  map[types.RowID]row{},
 	}
-	duraveis, temDuraveis := f.colheDuraveis()
+	duraveis, hasDuraveis := f.colheDuraveis()
 
 	// Os rowIDs valem DENTRO deste retrato e são atribuídos na ordem em que
 	// as partições vêm, que já é crescente. Um registro estável entre
@@ -268,29 +268,29 @@ func (f *fonte) OpenSnapshot() types.Snapshot {
 	// partições, ela seria uma linha a mais no resultado —, e por isso as
 	// duas formas nunca coexistem: a numeração a partir de 2 não evita
 	// colisão (não há uma a evitar), só deixa o resumo sempre no rowID 1.
-	for i, p := range inst.Particoes {
-		l := linha{Posicao: p, MarcaEm: inst.MarcaEm}
-		if temDuraveis {
-			if off, ok := duraveis.Offsets[p.Particao]; ok {
-				l.Duravel, l.TemDurav = off, true
+	for i, p := range inst.Partitions {
+		l := row{Position: p, MarkIn: inst.MarkIn}
+		if hasDuraveis {
+			if off, ok := duraveis.Offsets[p.Partition]; ok {
+				l.Duravel, l.HasDurav = off, true
 			}
 		}
-		r.linhas[types.RowID(i)+2] = l
+		r.rows[types.RowID(i)+2] = l
 	}
-	if len(r.linhas) == 0 {
-		r.linhas[1] = linha{Resumo: true}
+	if len(r.rows) == 0 {
+		r.rows[1] = row{Summary: true}
 	}
-	r.limite = 2 + types.RowID(len(inst.Particoes))
+	r.limit = 2 + types.RowID(len(inst.Partitions))
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.proxEpoca++
 	epoca := f.proxEpoca
 	f.abertos[epoca] = r
-	return types.Snapshot{Epoch: epoca, LimitRowID: r.limite}
+	return types.Snapshot{Epoch: epoca, LimitRowID: r.limit}
 }
 
-// contextoDaMarca dá à ida ao broker um prazo PRÓPRIO, derivado do
+// contextoOfMark dá à ida ao broker um prazo PRÓPRIO, derivado do
 // context.Background(): a interface do query.Store não recebe context, e este
 // é o único jeito de a chamada ter teto. O preço está registrado: o
 // cancelamento da consulta não alcança essa ida, e o pior caso é segurar a
@@ -302,29 +302,29 @@ func (f *fonte) OpenSnapshot() types.Snapshot {
 // na hora e a consulta reusar a última marca — ou publicar NULL, se estiver
 // vencida, que é a resposta honesta. Sem isto, com o broker fora do ar, N
 // consultas simultâneas gastariam o prazo inteiro cada uma.
-func (f *fonte) contextoDaMarca() context.Context {
+func (f *source) contextoOfMark() context.Context {
 	if !f.medindo.CompareAndSwap(false, true) {
-		ctx, cancela := context.WithCancel(context.Background())
-		cancela()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
 		return ctx
 	}
-	ctx, cancela := context.WithTimeout(context.Background(), kafka.PrazoDaMarcaDagua)
+	ctx, cancel := context.WithTimeout(context.Background(), kafka.PrazoDaMarcaDagua)
 	go func() {
 		<-ctx.Done()
-		cancela()
+		cancel()
 		f.medindo.Store(false)
 	}()
 	return ctx
 }
 
-func (f *fonte) consumidor() Consumido {
+func (f *source) consumidor() Consumido {
 	if f.f.Consumidor == nil {
 		return nil
 	}
 	return f.f.Consumidor()
 }
 
-func (f *fonte) colheDuraveis() (checkpoint.SourceOffsets, bool) {
+func (f *source) colheDuraveis() (checkpoint.SourceOffsets, bool) {
 	if f.f.Duraveis == nil {
 		return checkpoint.SourceOffsets{}, false
 	}
@@ -337,94 +337,94 @@ func (f *fonte) colheDuraveis() (checkpoint.SourceOffsets, bool) {
 	return o, true
 }
 
-func (f *fonte) colheComum(temConsumidor bool, inst kafka.Instantaneo) comum {
-	c := comum{temConsumidor: temConsumidor}
-	if f.f.Estado != nil {
-		c.estado, c.detalhe = f.f.Estado()
+func (f *source) colheComum(hasConsumidor bool, inst kafka.Instantaneo) comum {
+	c := comum{hasConsumidor: hasConsumidor}
+	if f.f.State != nil {
+		c.state, c.detalhe = f.f.State()
 	} else {
-		c.estado, c.detalhe = EstadoDeclarado(f.f.Declarada)
+		c.state, c.detalhe = DeclaredState(f.f.Declarada)
 	}
-	if temConsumidor {
-		c.filaRegistros, c.filaBytes = inst.FilaRegistros, inst.FilaBytes
+	if hasConsumidor {
+		c.filaRecords, c.filaBytes = inst.FilaRecords, inst.FilaBytes
 		c.ultimoLote = inst.UltimoLote
 		c.desfecho = inst.Desfecho
-		c.particoesAtrib, c.particoesDoTopico = inst.ParticoesAtribuidas, inst.ParticoesDoTopico
+		c.partitionsAtrib, c.partitionsOfTopic = inst.PartitionsAtribuidas, inst.PartitionsOfTopic
 		if inst.Pausa != nil && c.detalhe == "" {
 			c.detalhe = inst.Pausa.Error()
 		}
 	}
 	if f.f.Vigia != nil {
-		c.trips, c.desistiu, c.temVigia = f.f.Vigia()
+		c.trips, c.desistiu, c.hasVigia = f.f.Vigia()
 	}
 	return c
 }
 
 // CloseSnapshot devolve o retrato desta consulta. O registro de partições NÃO
 // é podado: ele é a identidade dos rowIDs.
-func (f *fonte) CloseSnapshot(snap types.Snapshot) {
+func (f *source) CloseSnapshot(snap types.Snapshot) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.abertos, snap.Epoch)
 }
 
-func (f *fonte) retratoDe(snap types.Snapshot) (*retrato, bool) {
+func (f *source) retratoOf(snap types.Snapshot) (*retrato, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r, ok := f.abertos[snap.Epoch]
 	return r, ok
 }
 
-func (f *fonte) ScanLive(snap types.Snapshot) types.RowIDIterator {
-	r, ok := f.retratoDe(snap)
+func (f *source) ScanLive(snap types.Snapshot) types.RowIDIterator {
+	r, ok := f.retratoOf(snap)
 	if !ok {
 		return &iterador{}
 	}
-	ids := make([]types.RowID, 0, len(r.linhas))
-	for id := range r.linhas {
+	ids := make([]types.RowID, 0, len(r.rows))
+	for id := range r.rows {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return &iterador{ids: ids}
 }
 
-func (f *fonte) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
-	r, ok := f.retratoDe(snap)
+func (f *source) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+	r, ok := f.retratoOf(snap)
 	if !ok {
 		// Época desconhecida é DEFEITO de pareamento, não linha ausente:
 		// devolver ok=false faria a linha sumir do resultado sem nada acusar.
 		return types.Record{}, buf, false, fmt.Errorf("metakafka: snapshot %d não está aberto", snap.Epoch)
 	}
-	l, ok := r.linhas[id]
+	l, ok := r.rows[id]
 	if !ok {
 		return types.Record{}, buf, false, nil
 	}
 	return f.record(id, r, l, buf)
 }
 
-func (f *fonte) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
-	r, ok := f.retratoDe(snap)
+func (f *source) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
+	r, ok := f.retratoOf(snap)
 	if !ok {
 		return types.Record{}, buf, false, fmt.Errorf("metakafka: snapshot %d não está aberto", snap.Epoch)
 	}
 	// A busca é sobre as linhas DO RETRATO, e não sobre o registro de
 	// partições: o point lookup tem de enxergar exatamente o que o scan
 	// enxerga, senão devolveria falso negativo numa linha que o scan traria.
-	for id, l := range r.linhas {
-		if igualAChave(key, l) {
+	for id, l := range r.rows {
+		if equalsKey(key, l) {
 			return f.record(id, r, l, buf)
 		}
 	}
 	return types.Record{}, buf, false, nil
 }
 
-// igualAChave compara a key pedida com o `id` da linha SEM alocar: o resumo é
+// equalsKey compara a key pedida com o `id` da linha SEM alocar: o resumo é
 // a literal fixa, e a partição é o número em decimal.
-func igualAChave(key []byte, l linha) bool {
-	if l.Resumo {
-		return string(key) == ChaveDoResumo
+func equalsKey(key []byte, l row) bool {
+	if l.Summary {
+		return string(key) == KeyOfSummary
 	}
 	n, ok := decimal(key)
-	return ok && n == int64(l.Posicao.Particao)
+	return ok && n == int64(l.Position.Partition)
 }
 
 // decimal lê um inteiro não negativo de bytes ASCII. Devolve false para vazio,
@@ -446,11 +446,11 @@ func decimal(b []byte) (int64, bool) {
 // Indexed responde SEMPRE false, como nas outras tabelas virtuais: sem índice
 // declarado o planner varre as linhas — uma por partição — e a key dá o point
 // lookup por conta própria.
-func (f *fonte) Indexed(types.FieldID) bool { return false }
+func (f *source) Indexed(types.FieldID) bool { return false }
 
 // Lookup nunca é chamado: rede de segurança, como no _meta e no _counters.
-func (f *fonte) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
-	return nil, fmt.Errorf("metakafka: a tabela %s.%s não tem índice (campo %d)", meta.Namespace, TabelaMetaKafka, field)
+func (f *source) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
+	return nil, fmt.Errorf("metakafka: a tabela %s.%s não tem índice (campo %d)", meta.Namespace, TableMetaKafka, field)
 }
 
 type iterador struct {
@@ -485,20 +485,20 @@ func (it *iterador) Close() error { return nil }
 // colunas de partição saem NULL pela mesma razão. E o fim do log e o lag saem
 // NULL quando a marca d'água venceu ou o broker não respondeu por aquela
 // partição — um zero ali diria "está em dia" a quem perdeu o broker.
-func (f *fonte) record(row types.RowID, r *retrato, l linha, buf []byte) (types.Record, []byte, bool, error) {
+func (f *source) record(row types.RowID, r *retrato, l row, buf []byte) (types.Record, []byte, bool, error) {
 	buf = buf[:0]
-	chave := chaveDaLinha(l)
+	key := keyOfRow(l)
 	var err error
-	for _, col := range f.colunas {
+	for _, col := range f.columns {
 		var v types.Value
 		switch col.k {
 		case colID:
-			v = types.Value{Type: types.TypeString, Bytes: chave}
+			v = types.Value{Type: types.TypeString, Bytes: key}
 		case colTopic:
-			if len(f.topico) == 0 {
+			if len(f.topic) == 0 {
 				continue
 			}
-			v = types.Value{Type: types.TypeString, Bytes: f.topico}
+			v = types.Value{Type: types.TypeString, Bytes: f.topic}
 		case colGroupID:
 			if len(f.grupo) == 0 {
 				continue
@@ -514,121 +514,121 @@ func (f *fonte) record(row types.RowID, r *retrato, l linha, buf []byte) (types.
 			// fato, não uma ausência de medida.
 			v = types.Value{Type: types.TypeBool, I64: booleano(f.f.Declarada.Declarado && f.f.Declarada.Habilitado)}
 		case colState:
-			if r.comum.estado == "" {
+			if r.comum.state == "" {
 				continue
 			}
-			v = types.Value{Type: types.TypeString, Bytes: []byte(r.comum.estado)}
+			v = types.Value{Type: types.TypeString, Bytes: []byte(r.comum.state)}
 		case colDetail:
 			if r.comum.detalhe == "" {
 				continue
 			}
 			v = types.Value{Type: types.TypeString, Bytes: []byte(r.comum.detalhe)}
-		case colParticao:
-			if l.Resumo {
+		case colPartition:
+			if l.Summary {
 				continue
 			}
-			v = types.Value{Type: types.TypeInt64, I64: int64(l.Posicao.Particao)}
+			v = types.Value{Type: types.TypeInt64, I64: int64(l.Position.Partition)}
 		case colOffsetAplicado:
-			if l.Resumo {
+			if l.Summary {
 				continue
 			}
-			v = types.Value{Type: types.TypeInt64, I64: l.Posicao.Aplicado}
+			v = types.Value{Type: types.TypeInt64, I64: l.Position.Aplicado}
 		case colOffsetDuravel:
-			if l.Resumo || !l.TemDurav {
+			if l.Summary || !l.HasDurav {
 				continue
 			}
 			v = types.Value{Type: types.TypeInt64, I64: l.Duravel}
-		case colFimDoLog:
-			if l.Resumo || !l.Posicao.TemFim {
+		case colEndOfLog:
+			if l.Summary || !l.Position.TemEnd {
 				continue
 			}
-			v = types.Value{Type: types.TypeInt64, I64: l.Posicao.FimDoLog}
+			v = types.Value{Type: types.TypeInt64, I64: l.Position.EndDoLog}
 		case colLag:
-			if l.Resumo || !l.Posicao.TemFim {
+			if l.Summary || !l.Position.TemEnd {
 				continue
 			}
-			v = types.Value{Type: types.TypeInt64, I64: l.Posicao.Atraso}
-		case colMarcaEm:
-			if l.Resumo || !l.Posicao.TemFim || l.MarcaEm.IsZero() {
+			v = types.Value{Type: types.TypeInt64, I64: l.Position.Atraso}
+		case colMarkIn:
+			if l.Summary || !l.Position.TemEnd || l.MarkIn.IsZero() {
 				continue
 			}
-			v = types.Value{Type: types.TypeTimestamp, I64: l.MarcaEm.UnixMilli()}
+			v = types.Value{Type: types.TypeTimestamp, I64: l.MarkIn.UnixMilli()}
 		case colUltimoLote:
-			if !r.comum.temConsumidor || r.comum.ultimoLote.IsZero() {
+			if !r.comum.hasConsumidor || r.comum.ultimoLote.IsZero() {
 				continue
 			}
 			v = types.Value{Type: types.TypeTimestamp, I64: r.comum.ultimoLote.UnixMilli()}
 		case colFilaRegistros:
-			if !r.comum.temConsumidor {
+			if !r.comum.hasConsumidor {
 				continue
 			}
-			v = types.Value{Type: types.TypeInt64, I64: int64(r.comum.filaRegistros)}
+			v = types.Value{Type: types.TypeInt64, I64: int64(r.comum.filaRecords)}
 		case colFilaBytes:
-			if !r.comum.temConsumidor {
+			if !r.comum.hasConsumidor {
 				continue
 			}
 			v = types.Value{Type: types.TypeInt64, I64: r.comum.filaBytes}
 		case colEventos:
-			if !r.comum.temConsumidor {
+			if !r.comum.hasConsumidor {
 				continue
 			}
 			v = types.Value{Type: types.TypeInt64, I64: r.comum.desfecho.Eventos}
 		case colAplicados:
-			if !r.comum.temConsumidor {
+			if !r.comum.hasConsumidor {
 				continue
 			}
 			v = types.Value{Type: types.TypeInt64, I64: r.comum.desfecho.Aplicados}
 		case colStale:
-			if !r.comum.temConsumidor {
+			if !r.comum.hasConsumidor {
 				continue
 			}
 			v = types.Value{Type: types.TypeInt64, I64: r.comum.desfecho.Stale}
 		case colDescartados:
-			if !r.comum.temConsumidor {
+			if !r.comum.hasConsumidor {
 				continue
 			}
 			v = types.Value{Type: types.TypeInt64, I64: r.comum.desfecho.Descartados}
 		case colFalhas:
-			if !r.comum.temConsumidor {
+			if !r.comum.hasConsumidor {
 				continue
 			}
 			v = types.Value{Type: types.TypeInt64, I64: r.comum.desfecho.Falhas}
-		case colParticoesAtribuidas:
-			if !r.comum.temConsumidor {
+		case colPartitionsAtribuidas:
+			if !r.comum.hasConsumidor {
 				continue
 			}
-			v = types.Value{Type: types.TypeInt64, I64: r.comum.particoesAtrib}
-		case colParticoesDoTopico:
-			if !r.comum.temConsumidor {
+			v = types.Value{Type: types.TypeInt64, I64: r.comum.partitionsAtrib}
+		case colPartitionsOfTopic:
+			if !r.comum.hasConsumidor {
 				continue
 			}
-			v = types.Value{Type: types.TypeInt64, I64: r.comum.particoesDoTopico}
+			v = types.Value{Type: types.TypeInt64, I64: r.comum.partitionsOfTopic}
 		case colWatchdogTrips:
 			// NULL sem goroutine de ingestão: "não há watchdog" e "nunca
 			// recriou" são afirmações diferentes, e um zero as confundiria.
-			if !r.comum.temVigia {
+			if !r.comum.hasVigia {
 				continue
 			}
 			v = types.Value{Type: types.TypeInt64, I64: int64(r.comum.trips)} //nolint:gosec // contagem de recriações, nunca perto do teto do int64
 		case colWatchdogDesistiu:
-			if !r.comum.temVigia {
+			if !r.comum.hasVigia {
 				continue
 			}
 			v = types.Value{Type: types.TypeBool, I64: booleano(r.comum.desistiu)}
 		}
 		if buf, err = encoding.AppendField(buf, col.id, v); err != nil {
-			return types.Record{}, buf, false, fmt.Errorf("metakafka: codificando a coluna %s: %w", nomesDasColunas[col.k], err)
+			return types.Record{}, buf, false, fmt.Errorf("metakafka: codificando a coluna %s: %w", nomesDasColumns[col.k], err)
 		}
 	}
-	return types.Record{RowID: row, Sequence: int64(row), Key: chave, Payload: buf}, buf, true, nil
+	return types.Record{RowID: row, Sequence: int64(row), Key: key, Payload: buf}, buf, true, nil
 }
 
-// chaveDaLinha devolve o `id`: a literal do resumo, ou a partição em decimal.
-func chaveDaLinha(l linha) []byte {
-	if l.Resumo {
-		return []byte(ChaveDoResumo)
+// keyOfRow devolve o `id`: a literal do resumo, ou a partição em decimal.
+func keyOfRow(l row) []byte {
+	if l.Summary {
+		return []byte(KeyOfSummary)
 	}
-	return []byte(strconv.Itoa(int(l.Posicao.Particao)))
+	return []byte(strconv.Itoa(int(l.Position.Partition)))
 }
 
 // booleano converte para a representação de bool do payload (0 ou 1).

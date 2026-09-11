@@ -21,53 +21,53 @@ import (
 )
 
 // Testes de caixa branca do middleware (auth.go): tudo aqui exercita
-// comAutenticacao/autentica diretamente, contra um *Servidor mínimo e um
-// *roteador com handlers de teste — sem passar por server.Novo, config.Config
+// withAuth/autentica diretamente, contra um *Server mínimo e um
+// *roteador com handlers de teste — sem passar por server.New, config.Config
 // nem por um listener de verdade. É deliberado: a lógica de autenticação e
 // papel não depende de dataset, Store nem Engine nenhum, e montar tudo isso só
 // para testar um compare de credencial seria o disfarce de integração que
 // esconde qual PEDAÇO de código o teste realmente prende.
 //
 // Os testes que dependem do servidor de VERDADE (ordem contra a vaga do §80,
-// contra a leitura do corpo, scrape de métrica pela porta, log durante o Roda)
+// contra a leitura do corpo, scrape de métrica pela porta, log durante o Run)
 // estão em auth_test.go (package server_test).
 
-// senhaLeitorDeTeste e senhaChefeDeTeste são as senhas em texto claro por trás
-// dos dois digests de servidorDeTeste — nomeadas para os testes que precisam
+// passwordReaderOfTest e passwordChefeOfTest são as senhas em texto claro por trás
+// dos dois digests de serverOfTest — nomeadas para os testes que precisam
 // autenticar de verdade, e não só inspecionar a credencial.
 const (
-	senhaLeitorDeTeste = "senha-leitor"
-	senhaChefeDeTeste  = "senha-chefe"
+	passwordReaderOfTest = "senha-leitor"
+	passwordChefeOfTest  = "senha-chefe"
 )
 
-// servidorDeTeste é o *Servidor mínimo que comAutenticacao/autentica
+// serverOfTest é o *Server mínimo que withAuth/autentica
 // precisam: log, credenciais e a métrica de falha. Nenhum outro campo de
-// Servidor é tocado pelo middleware.
-func servidorDeTeste(log *logging.Logger) *Servidor {
+// Server é tocado pelo middleware.
+func serverOfTest(log *logging.Logger) *Server {
 	if log == nil {
 		log = logging.Discard()
 	}
-	return &Servidor{
+	return &Server{
 		log: log,
 		credenciais: map[string]credencial{
-			"leitor": {digestSenha: sha256.Sum256([]byte(senhaLeitorDeTeste)), role: config.RoleRead},
-			"chefe":  {digestSenha: sha256.Sum256([]byte(senhaChefeDeTeste)), role: config.RoleAdmin},
+			"leitor": {digestPassword: sha256.Sum256([]byte(passwordReaderOfTest)), role: config.RoleRead},
+			"chefe":  {digestPassword: sha256.Sum256([]byte(passwordChefeOfTest)), role: config.RoleAdmin},
 		},
-		authFalhas: registraMetricasDeAuth(metrics.NewRegistry()),
+		authFalhas: registerMetricsOfAuth(metrics.NewRegistry()),
 	}
 }
 
-// roteadorDeTeste é O HANDLER DE TESTE que o brief da B3 pede para travar o
+// routerOfTest é O HANDLER DE TESTE que o brief da B3 pede para travar o
 // mecanismo "rota exige papel X" antes de a B5 ter uma rota ADMIN-only de
 // verdade: /rota-read exige READ (o piso de toda rota hoje) e /rota-admin
 // exige ADMIN — a mesma chamada rt.registra que a B5 vai usar.
-func roteadorDeTeste() *roteador {
-	rt := novoRoteador()
-	rt.registra("/rota-read", config.RoleRead, func(w http.ResponseWriter, _ *http.Request) {
+func routerOfTest() *router {
+	rt := newRouter()
+	rt.register("/rota-read", config.RoleRead, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("read-ok"))
 	})
-	rt.registra("/rota-admin", config.RoleAdmin, func(w http.ResponseWriter, _ *http.Request) {
+	rt.register("/rota-admin", config.RoleAdmin, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("admin-ok"))
 	})
@@ -75,18 +75,18 @@ func roteadorDeTeste() *roteador {
 }
 
 // A paridade byte a byte do §77 provada estruturalmente, não por
-// comportamento: com autenticação desligada, comAutenticacao devolve o
+// comportamento: com autenticação desligada, withAuth devolve o
 // PRÓPRIO mux, não uma função que "deixa passar" — não existe função nenhuma
-// a mais no caminho do request além do que sobeHTTP já registrava antes desta
+// a mais no caminho do request além do que risesHTTP já registrava antes desta
 // task.
 func TestComAutenticacaoDesligadaDevolveOMuxCruSemEmbrulho(t *testing.T) {
-	s := &Servidor{log: logging.Discard()} // credenciais == nil: autenticação desligada
-	rt := roteadorDeTeste()
+	s := &Server{log: logging.Discard()} // credenciais == nil: autenticação desligada
+	rt := routerOfTest()
 
-	got := s.comAutenticacao(rt)
+	got := s.withAuth(rt)
 
-	if got != rt.Cru() {
-		t.Fatal("com autenticação desligada, comAutenticacao precisa devolver o PRÓPRIO mux (via Cru()): " +
+	if got != rt.Raw() {
+		t.Fatal("com autenticação desligada, withAuth precisa devolver o PRÓPRIO mux (via Raw()): " +
 			"qualquer wrapper, mesmo um que só delegasse, já não seria byte a byte igual ao caminho de hoje")
 	}
 }
@@ -94,26 +94,26 @@ func TestComAutenticacaoDesligadaDevolveOMuxCruSemEmbrulho(t *testing.T) {
 // O outro lado: ligada, o mux cru NUNCA é devolvido diretamente — senão não
 // haveria onde autenticar.
 func TestComAutenticacaoLigadaEmbrulhaOMux(t *testing.T) {
-	s := servidorDeTeste(nil)
-	rt := roteadorDeTeste()
+	s := serverOfTest(nil)
+	rt := routerOfTest()
 
-	got := s.comAutenticacao(rt)
+	got := s.withAuth(rt)
 
-	if got == rt.Cru() {
-		t.Fatal("com autenticação ligada, comAutenticacao não pode devolver o mux cru diretamente")
+	if got == rt.Raw() {
+		t.Fatal("com autenticação ligada, withAuth não pode devolver o mux cru diretamente")
 	}
 }
 
 // O fail-closed do mecanismo de papel (Important da revisão pós-implementação):
-// uma rota registrada por FORA de roteador.registra — direto em rt.mux, sem
+// uma rota registrada por FORA de router.registra — direto em rt.mux, sem
 // papel declarado — tem de ser RECUSADA, nunca servida sem checagem, mesmo
 // para o usuário ADMIN. Prova que a segurança do mecanismo vem da
-// CONSTRUÇÃO (comAutenticacao recusa padrão sem entrada em papeis), não da
+// CONSTRUÇÃO (withAuth recusa padrão sem entrada em papeis), não da
 // disciplina de quem registra rota nova — a B5 é quem primeiro acrescenta
 // rotas ADMIN-only de verdade sobre esta costura.
 func TestRotaRegistradaPorForaDeRegistraEhRecusadaFailClosed(t *testing.T) {
-	s := servidorDeTeste(nil)
-	rt := roteadorDeTeste()
+	s := serverOfTest(nil)
+	rt := routerOfTest()
 
 	// Bypass DELIBERADO: grava direto no mux, sem passar por rt.registra —
 	// exatamente o cenário que o mecanismo tem de fechar sozinho.
@@ -122,10 +122,10 @@ func TestRotaRegistradaPorForaDeRegistraEhRecusadaFailClosed(t *testing.T) {
 		_, _ = w.Write([]byte("nao-deveria-chegar-aqui"))
 	})
 
-	h := s.comAutenticacao(rt)
+	h := s.withAuth(rt)
 
 	req := httptest.NewRequest(http.MethodGet, "/rota-esquecida", nil)
-	req.SetBasicAuth("chefe", senhaChefeDeTeste) // ADMIN — nem o papel mais alto deveria bastar
+	req.SetBasicAuth("chefe", passwordChefeOfTest) // ADMIN — nem o papel mais alto deveria bastar
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -140,7 +140,7 @@ func TestRotaRegistradaPorForaDeRegistraEhRecusadaFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Retoque da revisão da B3 (dono natural: B4): o corpo HTTP é genérico —
-	// nomear a rota ou o símbolo interno (roteador.registra) para um cliente
+	// nomear a rota ou o símbolo interno (router.registra) para um cliente
 	// já AUTENTICADO devolveria detalhe de implementação sem relação com quem
 	// só tem uma credencial válida. TestRecusaRegistroSemPapelLogaODetalheQueNaoVaiAoCliente
 	// prova o outro lado: o detalhe existe, só que SÓ no log.
@@ -157,23 +157,23 @@ func TestRotaRegistradaPorForaDeRegistraEhRecusadaFailClosed(t *testing.T) {
 // só que SÓ no log estruturado, que é quem o operador lê.
 func TestRecusaRegistroSemPapelLogaODetalheQueNaoVaiAoCliente(t *testing.T) {
 	var buf bytes.Buffer
-	s := servidorDeTeste(logging.New(&buf, logging.FormatJSON, slog.LevelInfo))
-	rt := roteadorDeTeste()
+	s := serverOfTest(logging.New(&buf, logging.FormatJSON, slog.LevelInfo))
+	rt := routerOfTest()
 	rt.mux.HandleFunc("/rota-esquecida", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	h := s.comAutenticacao(rt)
+	h := s.withAuth(rt)
 
 	req := httptest.NewRequest(http.MethodGet, "/rota-esquecida", nil)
-	req.SetBasicAuth("chefe", senhaChefeDeTeste)
+	req.SetBasicAuth("chefe", passwordChefeOfTest)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
 	saida := buf.String()
 	if !strings.Contains(saida, "/rota-esquecida") {
 		t.Errorf("o log não nomeia a rota sem papel: %s", saida)
 	}
-	if !strings.Contains(saida, "roteador.registra") {
-		t.Errorf("o log não traz a dica de correção (roteador.registra): %s", saida)
+	if !strings.Contains(saida, "router.registra") {
+		t.Errorf("o log não traz a dica de correção (router.registra): %s", saida)
 	}
 	if !strings.Contains(saida, `"level":"ERROR"`) {
 		t.Errorf("o evento não saiu em nível Error: %s", saida)
@@ -184,12 +184,12 @@ func TestRecusaRegistroSemPapelLogaODetalheQueNaoVaiAoCliente(t *testing.T) {
 // usuário configurado "leitor". Trava a escolha atual (comparação exata de
 // mapa Go) contra regressão futura.
 func TestUsernameEhCaseSensitive(t *testing.T) {
-	s := servidorDeTeste(nil)
-	rt := roteadorDeTeste()
-	h := s.comAutenticacao(rt)
+	s := serverOfTest(nil)
+	rt := routerOfTest()
+	h := s.withAuth(rt)
 
 	req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
-	req.SetBasicAuth("Leitor", senhaLeitorDeTeste) // usuário configurado é "leitor", minúsculo
+	req.SetBasicAuth("Leitor", passwordReaderOfTest) // usuário configurado é "leitor", minúsculo
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -211,8 +211,8 @@ func TestPapelAutorizadoAdminAlcancaRead(t *testing.T) {
 		{config.RoleAdmin, config.RoleAdmin, true},
 	}
 	for _, c := range casos {
-		if got := papelAutorizado(c.usuario, c.exigido); got != c.quer {
-			t.Errorf("papelAutorizado(%s, %s) = %v, quer %v", c.usuario, c.exigido, got, c.quer)
+		if got := roleAuthorized(c.usuario, c.exigido); got != c.quer {
+			t.Errorf("roleAuthorized(%s, %s) = %v, quer %v", c.usuario, c.exigido, got, c.quer)
 		}
 	}
 }
@@ -221,14 +221,14 @@ func TestPapelAutorizadoAdminAlcancaRead(t *testing.T) {
 // como o brief da B3 pede para a B5 herdar — inclusive a ordem: autenticação
 // SEMPRE roda antes da decisão de papel, mesmo para a rota ADMIN-only.
 func TestMecanismoDeRotaExigePapelComHandlerDeTeste(t *testing.T) {
-	s := servidorDeTeste(nil)
-	rt := roteadorDeTeste()
-	h := s.comAutenticacao(rt)
+	s := serverOfTest(nil)
+	rt := routerOfTest()
+	h := s.withAuth(rt)
 
-	chama := func(caminho, usuario, senha string, comCredencial bool) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, caminho, nil)
-		if comCredencial {
-			req.SetBasicAuth(usuario, senha)
+	call := func(path, usuario, password string, withCredencial bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if withCredencial {
+			req.SetBasicAuth(usuario, password)
 		}
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -236,14 +236,14 @@ func TestMecanismoDeRotaExigePapelComHandlerDeTeste(t *testing.T) {
 	}
 
 	t.Run("READ chega na rota READ", func(t *testing.T) {
-		rec := chama("/rota-read", "leitor", senhaLeitorDeTeste, true)
+		rec := call("/rota-read", "leitor", passwordReaderOfTest, true)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, corpo = %s", rec.Code, rec.Body.String())
 		}
 	})
 
 	t.Run("READ nao chega na rota ADMIN", func(t *testing.T) {
-		rec := chama("/rota-admin", "leitor", senhaLeitorDeTeste, true)
+		rec := call("/rota-admin", "leitor", passwordReaderOfTest, true)
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status = %d, quer 403", rec.Code)
 		}
@@ -257,21 +257,21 @@ func TestMecanismoDeRotaExigePapelComHandlerDeTeste(t *testing.T) {
 	})
 
 	t.Run("ADMIN chega na rota ADMIN", func(t *testing.T) {
-		rec := chama("/rota-admin", "chefe", senhaChefeDeTeste, true)
+		rec := call("/rota-admin", "chefe", passwordChefeOfTest, true)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, corpo = %s", rec.Code, rec.Body.String())
 		}
 	})
 
 	t.Run("ADMIN tambem chega na rota READ (ADMIN contem READ)", func(t *testing.T) {
-		rec := chama("/rota-read", "chefe", senhaChefeDeTeste, true)
+		rec := call("/rota-read", "chefe", passwordChefeOfTest, true)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d", rec.Code)
 		}
 	})
 
 	t.Run("sem credencial nao chega em rota nenhuma, nem a ADMIN-only", func(t *testing.T) {
-		rec := chama("/rota-admin", "", "", false)
+		rec := call("/rota-admin", "", "", false)
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d, quer 401: autenticação vem antes de qualquer decisão de papel", rec.Code)
 		}
@@ -282,39 +282,39 @@ func TestMecanismoDeRotaExigePapelComHandlerDeTeste(t *testing.T) {
 // INDISTINGUÍVEIS pela resposta HTTP — mesmo status, mesmo corpo, byte a
 // byte, mesmos headers que o servidor controla.
 func TestAutenticacao401EhByteIdenticoEntreUsuarioInexistenteESenhaErrada(t *testing.T) {
-	s := servidorDeTeste(nil)
-	rt := roteadorDeTeste()
-	h := s.comAutenticacao(rt)
+	s := serverOfTest(nil)
+	rt := routerOfTest()
+	h := s.withAuth(rt)
 
-	gravaResposta := func(usuario, senha string) *httptest.ResponseRecorder {
+	gravaResposta := func(usuario, password string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
-		req.SetBasicAuth(usuario, senha)
+		req.SetBasicAuth(usuario, password)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		return rec
 	}
 
-	senhaErrada := gravaResposta("leitor", "senha-completamente-errada")
+	passwordErrada := gravaResposta("leitor", "senha-completamente-errada")
 	usuarioInexistente := gravaResposta("usuario-que-nao-existe-em-lugar-nenhum", "qualquer-coisa")
 
-	if senhaErrada.Code != http.StatusUnauthorized {
-		t.Fatalf("senha errada: status = %d, quer 401", senhaErrada.Code)
+	if passwordErrada.Code != http.StatusUnauthorized {
+		t.Fatalf("senha errada: status = %d, quer 401", passwordErrada.Code)
 	}
 	if usuarioInexistente.Code != http.StatusUnauthorized {
 		t.Fatalf("usuário inexistente: status = %d, quer 401", usuarioInexistente.Code)
 	}
-	if !bytes.Equal(senhaErrada.Body.Bytes(), usuarioInexistente.Body.Bytes()) {
+	if !bytes.Equal(passwordErrada.Body.Bytes(), usuarioInexistente.Body.Bytes()) {
 		t.Fatalf("corpos divergem — um atacante distinguiria usuário existente de inexistente pelo corpo:\n"+
-			"senha errada:        %q\nusuário inexistente: %q", senhaErrada.Body.String(), usuarioInexistente.Body.String())
+			"senha errada:        %q\nusuário inexistente: %q", passwordErrada.Body.String(), usuarioInexistente.Body.String())
 	}
 	// O CONJUNTO completo de headers, não só os dois óbvios (WWW-Authenticate,
 	// Content-Type): qualquer header a mais em um dos dois caminhos seria
 	// outro canal de distinção que o §77 pede fechado. httptest.ResponseRecorder
 	// não acrescenta Date sozinho (diferente de um http.Server de verdade),
 	// então a comparação pode ser exata sem falso negativo por relógio.
-	if !reflect.DeepEqual(senhaErrada.Header(), usuarioInexistente.Header()) {
+	if !reflect.DeepEqual(passwordErrada.Header(), usuarioInexistente.Header()) {
 		t.Fatalf("headers divergem entre os dois casos:\nsenha errada:        %v\nusuário inexistente: %v",
-			senhaErrada.Header(), usuarioInexistente.Header())
+			passwordErrada.Header(), usuarioInexistente.Header())
 	}
 }
 
@@ -323,9 +323,9 @@ func TestAutenticacao401EhByteIdenticoEntreUsuarioInexistenteESenhaErrada(t *tes
 // devolve ok=false para todos, e o teste trava que o middleware trata os
 // cinco da mesma forma (401, sem tentar resolver um username sequer).
 func TestCredencialMalformadaEmTodasAsFormasRecusaComRazaoHeader(t *testing.T) {
-	s := servidorDeTeste(nil)
-	rt := roteadorDeTeste()
-	h := s.comAutenticacao(rt)
+	s := serverOfTest(nil)
+	rt := routerOfTest()
+	h := s.withAuth(rt)
 
 	casos := map[string]func(*http.Request){
 		"sem header Authorization": func(_ *http.Request) {},
@@ -336,8 +336,8 @@ func TestCredencialMalformadaEmTodasAsFormasRecusaComRazaoHeader(t *testing.T) {
 			r.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("semdoispontosnenhum")))
 		},
 	}
-	for nome, ajusta := range casos {
-		t.Run(nome, func(t *testing.T) {
+	for name, ajusta := range casos {
+		t.Run(name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
 			ajusta(req)
 			rec := httptest.NewRecorder()
@@ -353,9 +353,9 @@ func TestCredencialMalformadaEmTodasAsFormasRecusaComRazaoHeader(t *testing.T) {
 // visada: um bug de comparação com string vazia não pode autenticar contra a
 // senha de verdade de um usuário configurado.
 func TestSenhaVaziaComUsuarioConfiguradoEhRecusada(t *testing.T) {
-	s := servidorDeTeste(nil)
-	rt := roteadorDeTeste()
-	h := s.comAutenticacao(rt)
+	s := serverOfTest(nil)
+	rt := routerOfTest()
+	h := s.withAuth(rt)
 
 	req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
 	req.SetBasicAuth("leitor", "") // decodifica para "leitor:"
@@ -371,19 +371,19 @@ func TestSenhaVaziaComUsuarioConfiguradoEhRecusada(t *testing.T) {
 // payload decodificado, então uma senha que CONTÉM ':' tem de sobreviver
 // inteira.
 func TestSenhaContendoDoisPontosAutenticaCorretamente(t *testing.T) {
-	const senhaComDoisPontos = "segredo:com:dois:pontos"
-	s := &Servidor{
+	const passwordWithDoisPontos = "segredo:com:dois:pontos"
+	s := &Server{
 		log: logging.Discard(),
 		credenciais: map[string]credencial{
-			"leitor": {digestSenha: sha256.Sum256([]byte(senhaComDoisPontos)), role: config.RoleRead},
+			"leitor": {digestPassword: sha256.Sum256([]byte(passwordWithDoisPontos)), role: config.RoleRead},
 		},
-		authFalhas: registraMetricasDeAuth(metrics.NewRegistry()),
+		authFalhas: registerMetricsOfAuth(metrics.NewRegistry()),
 	}
-	rt := roteadorDeTeste()
-	h := s.comAutenticacao(rt)
+	rt := routerOfTest()
+	h := s.withAuth(rt)
 
 	req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
-	req.SetBasicAuth("leitor", senhaComDoisPontos)
+	req.SetBasicAuth("leitor", passwordWithDoisPontos)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -396,34 +396,34 @@ func TestSenhaContendoDoisPontosAutenticaCorretamente(t *testing.T) {
 // scrape depois de uma falha de cada tipo.
 func TestRazaoDeFalhaFechaOEnumHeaderUsuarioSenha(t *testing.T) {
 	reg := metrics.NewRegistry()
-	s := &Servidor{
+	s := &Server{
 		log: logging.Discard(),
 		credenciais: map[string]credencial{
-			"leitor": {digestSenha: sha256.Sum256([]byte(senhaLeitorDeTeste)), role: config.RoleRead},
+			"leitor": {digestPassword: sha256.Sum256([]byte(passwordReaderOfTest)), role: config.RoleRead},
 		},
-		authFalhas: registraMetricasDeAuth(reg),
+		authFalhas: registerMetricsOfAuth(reg),
 	}
-	rt := roteadorDeTeste()
-	h := s.comAutenticacao(rt)
+	rt := routerOfTest()
+	h := s.withAuth(rt)
 
 	dispara := func(ajusta func(*http.Request)) {
 		req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
 		ajusta(req)
 		h.ServeHTTP(httptest.NewRecorder(), req)
 	}
-	dispara(func(_ *http.Request) {})                                                         // razaoHeader
-	dispara(func(r *http.Request) { r.SetBasicAuth("nao-existe", "qualquer") })               // razaoUsuario
-	dispara(func(r *http.Request) { r.SetBasicAuth("leitor", "senha-completamente-errada") }) // razaoSenha
+	dispara(func(_ *http.Request) {})                                                         // reasonHeader
+	dispara(func(r *http.Request) { r.SetBasicAuth("nao-existe", "qualquer") })               // reasonUser
+	dispara(func(r *http.Request) { r.SetBasicAuth("leitor", "senha-completamente-errada") }) // reasonPassword
 
 	var sb strings.Builder
 	if _, err := reg.WriteTo(&sb); err != nil {
 		t.Fatal(err)
 	}
 	saida := sb.String()
-	for _, razao := range []string{razaoHeader, razaoUsuario, razaoSenha} {
-		linha := fmt.Sprintf(`nishidb_auth_failures_total{reason=%q} 1`, razao)
-		if !strings.Contains(saida, linha) {
-			t.Errorf("scrape não tem %q:\n%s", linha, saida)
+	for _, ratio := range []string{reasonHeader, reasonUser, reasonPassword} {
+		row := fmt.Sprintf(`nishidb_auth_failures_total{reason=%q} 1`, ratio)
+		if !strings.Contains(saida, row) {
+			t.Errorf("scrape não tem %q:\n%s", row, saida)
 		}
 	}
 }
@@ -434,29 +434,29 @@ func TestRazaoDeFalhaFechaOEnumHeaderUsuarioSenha(t *testing.T) {
 func TestLogAuthRecusadaSoNomeiaUsuarioConfiguradoENuncaASenha(t *testing.T) {
 	var buf bytes.Buffer
 	log := logging.New(&buf, logging.FormatJSON, slog.LevelInfo)
-	s := &Servidor{
+	s := &Server{
 		log: log,
 		credenciais: map[string]credencial{
-			"leitor": {digestSenha: sha256.Sum256([]byte(senhaLeitorDeTeste)), role: config.RoleRead},
+			"leitor": {digestPassword: sha256.Sum256([]byte(passwordReaderOfTest)), role: config.RoleRead},
 		},
-		authFalhas: registraMetricasDeAuth(metrics.NewRegistry()),
+		authFalhas: registerMetricsOfAuth(metrics.NewRegistry()),
 	}
-	rt := roteadorDeTeste()
-	h := s.comAutenticacao(rt)
+	rt := routerOfTest()
+	h := s.withAuth(rt)
 
-	const senhaPlantada = "SENHA-SUPER-SECRETA-PLANTADA-9F3A"
+	const passwordPlantada = "SENHA-SUPER-SECRETA-PLANTADA-9F3A"
 
 	t.Run("usuario inexistente loga desconhecido", func(t *testing.T) {
 		buf.Reset()
 		req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
-		req.SetBasicAuth("usuario-que-nao-existe", senhaPlantada)
+		req.SetBasicAuth("usuario-que-nao-existe", passwordPlantada)
 		h.ServeHTTP(httptest.NewRecorder(), req)
 
 		saida := buf.String()
 		if !strings.Contains(saida, `"user":"desconhecido"`) {
 			t.Errorf("log não tem user=desconhecido: %s", saida)
 		}
-		if strings.Contains(saida, senhaPlantada) {
+		if strings.Contains(saida, passwordPlantada) {
 			t.Fatalf("a senha plantada vazou para o log: %s", saida)
 		}
 		if strings.Contains(saida, "usuario-que-nao-existe") {
@@ -467,14 +467,14 @@ func TestLogAuthRecusadaSoNomeiaUsuarioConfiguradoENuncaASenha(t *testing.T) {
 	t.Run("senha errada de usuario configurado loga o username, nunca a senha", func(t *testing.T) {
 		buf.Reset()
 		req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
-		req.SetBasicAuth("leitor", senhaPlantada)
+		req.SetBasicAuth("leitor", passwordPlantada)
 		h.ServeHTTP(httptest.NewRecorder(), req)
 
 		saida := buf.String()
 		if !strings.Contains(saida, `"user":"leitor"`) {
 			t.Errorf("log não tem user=leitor: %s", saida)
 		}
-		if strings.Contains(saida, senhaPlantada) {
+		if strings.Contains(saida, passwordPlantada) {
 			t.Fatalf("a senha plantada vazou para o log: %s", saida)
 		}
 	})
@@ -496,28 +496,28 @@ func TestLogAuthRecusadaSoNomeiaUsuarioConfiguradoENuncaASenha(t *testing.T) {
 // abaixo de 100ms — inalcançável se o sleep não tivesse rodado — e uma
 // comparação relativa para o caminho de sucesso, que não paga o atraso.
 func TestAtrasoFixoDeAproximadamente100msEmTodaFalhaDeAutenticacao(t *testing.T) {
-	s := servidorDeTeste(nil)
-	rt := roteadorDeTeste()
-	h := s.comAutenticacao(rt)
+	s := serverOfTest(nil)
+	rt := routerOfTest()
+	h := s.withAuth(rt)
 
 	const pisoSeguro = 80 * time.Millisecond
 
-	medeFalha := func(nome string, ajusta func(*http.Request)) time.Duration {
+	medeFail := func(name string, ajusta func(*http.Request)) time.Duration {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
 		ajusta(req)
 		rec := httptest.NewRecorder()
-		inicio := time.Now()
+		start := time.Now()
 		h.ServeHTTP(rec, req)
-		decorrido := time.Since(inicio)
+		decorrido := time.Since(start)
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("%s: status = %d, quer 401 para medir o atraso de falha", nome, rec.Code)
+			t.Fatalf("%s: status = %d, quer 401 para medir o atraso de falha", name, rec.Code)
 		}
 		return decorrido
 	}
 
 	casos := []struct {
-		nome   string
+		name   string
 		ajusta func(*http.Request)
 	}{
 		{"header ausente", func(_ *http.Request) {}},
@@ -525,9 +525,9 @@ func TestAtrasoFixoDeAproximadamente100msEmTodaFalhaDeAutenticacao(t *testing.T)
 		{"usuario inexistente", func(r *http.Request) { r.SetBasicAuth("nao-existe", "qualquer-coisa") }},
 	}
 	for _, c := range casos {
-		if d := medeFalha(c.nome, c.ajusta); d < pisoSeguro {
+		if d := medeFail(c.name, c.ajusta); d < pisoSeguro {
 			t.Errorf("%s respondeu em %s, quer >= %s: o atraso tem de valer para TODA falha, não só senha errada",
-				c.nome, d, pisoSeguro)
+				c.name, d, pisoSeguro)
 		}
 	}
 
@@ -535,11 +535,11 @@ func TestAtrasoFixoDeAproximadamente100msEmTodaFalhaDeAutenticacao(t *testing.T)
 	// usado acima, não um teto próprio, para não introduzir um segundo número
 	// mágico.
 	req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
-	req.SetBasicAuth("leitor", senhaLeitorDeTeste)
+	req.SetBasicAuth("leitor", passwordReaderOfTest)
 	rec := httptest.NewRecorder()
-	inicio := time.Now()
+	start := time.Now()
 	h.ServeHTTP(rec, req)
-	sucesso := time.Since(inicio)
+	sucesso := time.Since(start)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, credencial válida deveria autenticar", rec.Code)
 	}

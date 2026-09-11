@@ -16,52 +16,52 @@ import (
 // O motivo de serem o mesmo processo é o flock: ele é exclusivo por processo,
 // então um consumer separado tornaria o dataset inconsultável enquanto
 // rodasse. Ver o godoc do internal/server.
-func runServer(args []string, amb Ambiente) int {
+func runServer(args []string, amb Context) int {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
-		argConfig = fs.String("config", "", "caminho do nishidb.yaml")
-		logFormat = fs.String("log-format", "json", "json|texto")
-		logLevel  = fs.String("log-level", "info", "debug|info|warn|error")
-		pprofAddr = fs.String("pprof", "", "endereço dos endpoints de debug (§112); vazio desliga")
+		argConfig    = fs.String("config", "", "caminho do nishidb.yaml")
+		argLogFormat = fs.String("log-format", "json", "json|texto")
+		argLogLevel  = fs.String("log-level", "info", "debug|info|warn|error")
+		pprofAddr    = fs.String("pprof", "", "endereço dos endpoints de debug (§112); vazio desliga")
 	)
 	if err := fs.Parse(args); err != nil {
-		return ExitUso
+		return ExitUsageError
 	}
 	if *argConfig == "" {
 		fmt.Fprintln(amb.Stderr, "server: --config é obrigatório")
-		return ExitUso
+		return ExitUsageError
 	}
 
-	formato, err := formatoDeLog(*logFormat)
+	formato, err := logFormat(*argLogFormat)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
-		return ExitUso
+		return ExitUsageError
 	}
-	nivel, err := nivelDeLog(*logLevel)
+	nivel, err := logLevel(*argLogLevel)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	log := logging.New(amb.Stderr, formato, nivel)
 
 	cfg, err := nishiconfig.Load(*argConfig)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
-		return ExitUso
+		return ExitUsageError
 	}
 
-	srv, err := server.Novo(cfg, server.Opcoes{Log: log})
+	srv, err := server.Novo(cfg, server.Options{Log: log})
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
-		return codigoDoErro(err)
+		return errorCode(err)
 	}
 
 	// Roda bloqueia até o contexto ser cancelado pelo sinal. O encerramento é
 	// gracioso: drena a ingestão, checkpointa e devolve o flock.
-	if err := srv.Roda(amb.Ctx, *pprofAddr); err != nil {
+	if err := srv.Run(amb.Ctx, *pprofAddr); err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
-		return codigoDoErro(err)
+		return errorCode(err)
 	}
 
 	// Um dataset com ingestão parada não derruba o processo (§51), mas o
@@ -69,15 +69,15 @@ func runServer(args []string, amb Ambiente) int {
 	// inspeção — senão o único sinal seria o /v1/health, que ninguém lê depois
 	// que o processo já morreu.
 	if pausas := srv.Pausas(); len(pausas) > 0 {
-		for nome, motivo := range pausas {
-			fmt.Fprintf(amb.Stderr, "server: dataset %q com ingestão parada: %v\n", nome, motivo)
+		for name, motivo := range pausas {
+			fmt.Fprintf(amb.Stderr, "server: dataset %q com ingestão parada: %v\n", name, motivo)
 		}
-		return ExitParadoPorPolitica
+		return ExitPolicyStopped
 	}
 	return ExitOK
 }
 
-func formatoDeLog(v string) (logging.Format, error) {
+func logFormat(v string) (logging.Format, error) {
 	switch v {
 	case "json":
 		return logging.FormatJSON, nil
@@ -87,7 +87,7 @@ func formatoDeLog(v string) (logging.Format, error) {
 	return 0, fmt.Errorf("--log-format %q inválido (json|texto)", v)
 }
 
-func nivelDeLog(v string) (slog.Level, error) {
+func logLevel(v string) (slog.Level, error) {
 	switch v {
 	case "debug":
 		return slog.LevelDebug, nil

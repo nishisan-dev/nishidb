@@ -8,7 +8,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// tetoTopNPadrao é o maior N (= OFFSET + limite efetivo) que ainda escolhe o
+// ceilingTopNPadrao é o maior N (= OFFSET + limite efetivo) que ainda escolhe o
 // heap limitado.
 //
 // O número é MEDIDO — BenchmarkOrdena e BenchmarkOrdenaCorpusCurto, com
@@ -58,7 +58,7 @@ import (
 // Não confundir com o teto de MEMÓRIA (Options.SortMemory): este conta LINHAS
 // retidas, e é o que decide o modo no Open, antes de existir uma linha para
 // medir. O teto de bytes continua valendo dentro do modo — ver degradaTopN.
-const tetoTopNPadrao = 4096
+const ceilingTopNPadrao = 4096
 
 // bufInicialTopN é a capacidade com que o buffer de uma entrada nasce.
 //
@@ -69,11 +69,11 @@ const tetoTopNPadrao = 4096
 // estreita sem uma realocação de aquecimento.
 const bufInicialTopN = 64
 
-// bytesPorEntradaTopN é o custo fixo de uma entrada do heap, para o orçamento:
+// bytesByEntryTopN é o custo fixo de uma entrada do heap, para o orçamento:
 // rowID(8) + o slice do buffer(24) + dois int32.
-const bytesPorEntradaTopN = 40
+const bytesByEntryTopN = 40
 
-// entradaTopN é UMA linha retida pelo heap, com o SEU PRÓPRIO buffer.
+// entryTopN é UMA linha retida pelo heap, com o SEU PRÓPRIO buffer.
 //
 // # Por que um buffer por entrada, e não o arena compartilhado
 //
@@ -95,32 +95,32 @@ const bytesPorEntradaTopN = 40
 // A reescrita usa `append`, e um `append` que não cabe REALOCA o buffer da
 // entrada. (ini, fim) são a forma DURÁVEL da janela — sobrevivem à realocação —
 // e o ponteiro é a forma derivada, resolvida uma vez por reescrita, depois do
-// último append, quando o buffer já é final. Ver escreveEntradaTopN.
-type entradaTopN struct {
+// último append, quando o buffer já é final. Ver writeEntryTopN.
+type entryTopN struct {
 	rowID types.RowID
-	// buf carrega a mini-payload da linha em [0, payFim) e, logo depois dela,
+	// buf carrega a mini-payload da linha em [0, payEnd) e, logo depois dela,
 	// os bytes das chaves de texto. Um buffer só, e não dois, porque os dois
 	// nascem e morrem juntos.
 	buf    []byte
-	payFim int32
-	// chaveIdx é o índice do bloco desta entrada dentro de valsTN, e viaja
+	payEnd int32
+	// keyIDx é o índice do bloco desta entrada dentro de valsTN, e viaja
 	// DENTRO da entrada porque o heap a TROCA de lugar: derivar o bloco da
 	// posição no slice leria as chaves de outra linha depois da primeira troca.
-	// É a mesma disciplina do chaveIdx da tupla.
-	chaveIdx int32
+	// É a mesma disciplina do keyIDx da tupla.
+	keyIDx int32
 }
 
-// ativaTopN liga o caminho rápido com heap de n entradas.
+// activeTopN liga o caminho rápido com heap de n entradas.
 //
 // Os dois slices nascem com a capacidade FINAL: n é conhecido no Open, é no
 // máximo o teto, e crescer por append durante a varredura tiraria do modo a
 // única coisa que ele promete — consumo previsível. O custo de pedir
 // `LIMIT 4096` é reservar 4096 entradas; o custo de pedir `LIMIT 10` é reservar
 // dez.
-func (o *ordenador) ativaTopN(n int) {
+func (o *ordenador) activeTopN(n int) {
 	o.topN = n
-	o.heap = make([]entradaTopN, 0, n)
-	o.valsTN = make([]chaveVal, 0, n*o.nKeys)
+	o.heap = make([]entryTopN, 0, n)
+	o.valsTN = make([]keyVal, 0, n*o.nKeys)
 }
 
 // acrescentaTopN é o acrescenta do modo rápido.
@@ -134,36 +134,36 @@ func (o *ordenador) ativaTopN(n int) {
 func (o *ordenador) acrescentaTopN(slots []slot, rowID types.RowID) error {
 	if len(o.heap) < o.topN {
 		i := int32(len(o.valsTN))
-		// Sem append: a capacidade já foi reservada no ativaTopN, e reslicing
+		// Sem append: a capacidade já foi reservada no activeTopN, e reslicing
 		// mantém o bloco de chaves desta entrada estável pelo resto da query.
 		o.valsTN = o.valsTN[:int(i)+o.nKeys]
-		o.heap = append(o.heap, entradaTopN{buf: make([]byte, 0, bufInicialTopN), chaveIdx: i})
+		o.heap = append(o.heap, entryTopN{buf: make([]byte, 0, bufInicialTopN), keyIDx: i})
 		o.bytesTN += bufInicialTopN
-		if err := o.escreveEntradaTopN(&o.heap[len(o.heap)-1], slots, rowID); err != nil {
+		if err := o.writeEntryTopN(&o.heap[len(o.heap)-1], slots, rowID); err != nil {
 			return err
 		}
-		o.sobeTopN(len(o.heap) - 1)
-		return o.confereOrcamentoTopN()
+		o.risesTopN(len(o.heap) - 1)
+		return o.confereBudgetTopN()
 	}
 
 	// Comparar a linha nova com a raiz SEM materializá-la: os valores ainda
-	// estão nos slots do iterador, e o doSlot — o mesmo do merge de runs — os
+	// estão nos slots do iterador, e o ofSlot — o mesmo do merge de runs — os
 	// apresenta ao comparador sem cópia. Materializar antes de saber se ela
 	// serve gastaria uma reescrita de buffer por linha varrida.
-	if o.comparaSlotsComEntrada(slots, rowID, &o.heap[0]) >= 0 {
+	if o.comparaSlotsWithEntry(slots, rowID, &o.heap[0]) >= 0 {
 		return nil
 	}
-	if err := o.escreveEntradaTopN(&o.heap[0], slots, rowID); err != nil {
+	if err := o.writeEntryTopN(&o.heap[0], slots, rowID); err != nil {
 		return err
 	}
 	o.desceTopN(len(o.heap), 0)
-	return o.confereOrcamentoTopN()
+	return o.confereBudgetTopN()
 }
 
-// escreveEntradaTopN (re)preenche uma entrada REAPROVEITANDO o buffer que ela
+// writeEntryTopN (re)preenche uma entrada REAPROVEITANDO o buffer que ela
 // já tinha.
-func (o *ordenador) escreveEntradaTopN(e *entradaTopN, slots []slot, rowID types.RowID) error {
-	antes := int64(cap(e.buf))
+func (o *ordenador) writeEntryTopN(e *entryTopN, slots []slot, rowID types.RowID) error {
+	before := int64(cap(e.buf))
 	buf := e.buf[:0]
 	var err error
 	for i := range slots {
@@ -176,22 +176,22 @@ func (o *ordenador) escreveEntradaTopN(e *entradaTopN, slots []slot, rowID types
 		// completo produzirem valores diferentes.
 		if buf, err = encoding.AppendField(buf, slots[i].ID, slots[i].Val); err != nil {
 			e.buf = buf
-			o.bytesTN += int64(cap(buf)) - antes
+			o.bytesTN += int64(cap(buf)) - before
 			return fmt.Errorf("executor: serializando a row %d para ordenar: %w", rowID, err)
 		}
 	}
-	e.payFim = int32(len(buf))
+	e.payEnd = int32(len(buf))
 
-	vals := o.valsTN[e.chaveIdx : int(e.chaveIdx)+o.nKeys]
-	for i := range o.chaves {
-		k := &o.chaves[i]
+	vals := o.valsTN[e.keyIDx : int(e.keyIDx)+o.nKeys]
+	for i := range o.keys {
+		k := &o.keys[i]
 		s := &slots[k.Slot]
-		cv := chaveVal{presente: s.Present && s.Val.Type == k.Want}
+		cv := keyVal{presente: s.Present && s.Val.Type == k.Want}
 		if cv.presente {
 			if k.Kind == binder.CompareBytes {
 				cv.ini = int32(len(buf))
 				buf = append(buf, s.Val.Bytes...)
-				cv.fim = int32(len(buf))
+				cv.end = int32(len(buf))
 			} else {
 				cv.i64 = s.Val.I64
 			}
@@ -199,7 +199,7 @@ func (o *ordenador) escreveEntradaTopN(e *entradaTopN, slots []slot, rowID types
 		vals[i] = cv
 	}
 	e.buf, e.rowID = buf, rowID
-	o.bytesTN += int64(cap(buf)) - antes
+	o.bytesTN += int64(cap(buf)) - before
 
 	// SEGUNDA PASSADA, depois do último append, para que todo `direto` seja
 	// uma janela no buffer FINAL da entrada.
@@ -216,29 +216,29 @@ func (o *ordenador) escreveEntradaTopN(e *entradaTopN, slots []slot, rowID types
 	// passo disso — leria um array diferente do que o comparador lê. Uma
 	// passada de nKeys por linha aceita compra as duas.
 	for i := range vals {
-		if vals[i].presente && o.chaves[i].Kind == binder.CompareBytes {
-			vals[i].direto = e.buf[vals[i].ini:vals[i].fim]
+		if vals[i].presente && o.keys[i].Kind == binder.CompareBytes {
+			vals[i].direct = e.buf[vals[i].ini:vals[i].end]
 			continue
 		}
-		vals[i].direto = nil
+		vals[i].direct = nil
 	}
 	return nil
 }
 
-// comparaSlotsComEntrada compara a linha AINDA NOS SLOTS com uma entrada
+// comparaSlotsWithEntry compara a linha AINDA NOS SLOTS com uma entrada
 // retida.
 //
-// Usa a MESMA comparaChave do caminho completo e do merge de runs, com o mesmo
+// Usa a MESMA comparaKey do caminho completo e do merge de runs, com o mesmo
 // desempate final por rowID. Uma segunda regra de ordenação aqui divergiria da
 // primeira no primeiro empate, e o resultado passaria a depender de qual
 // caminho o Open escolheu — que é exatamente o defeito que o modo rápido não
 // pode introduzir.
-func (o *ordenador) comparaSlotsComEntrada(slots []slot, rowID types.RowID, e *entradaTopN) int {
-	base := int(e.chaveIdx)
-	for i := range o.chaves {
-		k := &o.chaves[i]
-		va := doSlot(&slots[k.Slot], k)
-		if c := o.comparaChave(k, &va, &o.valsTN[base+i]); c != 0 {
+func (o *ordenador) comparaSlotsWithEntry(slots []slot, rowID types.RowID, e *entryTopN) int {
+	base := int(e.keyIDx)
+	for i := range o.keys {
+		k := &o.keys[i]
+		va := ofSlot(&slots[k.Slot], k)
+		if c := o.comparaKey(k, &va, &o.valsTN[base+i]); c != 0 {
 			return c
 		}
 	}
@@ -246,24 +246,24 @@ func (o *ordenador) comparaSlotsComEntrada(slots []slot, rowID types.RowID, e *e
 }
 
 // comparaEntradasTopN é a mesma comparação entre duas entradas retidas.
-func (o *ordenador) comparaEntradasTopN(a, b *entradaTopN) int {
-	ia, ib := int(a.chaveIdx), int(b.chaveIdx)
-	for i := range o.chaves {
-		k := &o.chaves[i]
-		if c := o.comparaChave(k, &o.valsTN[ia+i], &o.valsTN[ib+i]); c != 0 {
+func (o *ordenador) comparaEntradasTopN(a, b *entryTopN) int {
+	ia, ib := int(a.keyIDx), int(b.keyIDx)
+	for i := range o.keys {
+		k := &o.keys[i]
+		if c := o.comparaKey(k, &o.valsTN[ia+i], &o.valsTN[ib+i]); c != 0 {
 			return c
 		}
 	}
 	return int(a.rowID) - int(b.rowID)
 }
 
-// sobeTopN e desceTopN mantêm a invariante do heap: o PAI é sempre pior ou
+// risesTopN e desceTopN mantêm a invariante do heap: o PAI é sempre pior ou
 // igual ao filho, segundo a ordem PEDIDA.
 //
 // É um heap de máximos sobre uma ordem que já embute ASC/DESC, ausentes e o
 // desempate — com `ORDER BY x ASC LIMIT 10` a raiz é o MAIOR dos dez menores.
 // Guardar a pior no topo é o que torna o teste de admissão uma comparação só.
-func (o *ordenador) sobeTopN(i int) {
+func (o *ordenador) risesTopN(i int) {
 	for i > 0 {
 		p := (i - 1) / 2
 		if o.comparaEntradasTopN(&o.heap[p], &o.heap[i]) >= 0 {
@@ -308,29 +308,29 @@ func (o *ordenador) ordenaTopN() {
 	}
 }
 
-// proximaDoTopN emite a próxima entrada já ordenada.
+// proximaOfTopN emite a próxima entrada já ordenada.
 //
 // A releitura é o MESMO `coleta` do caminho normal sobre a MESMA mini-payload —
 // nenhum desserializador novo entrou com este modo.
-func (o *ordenador) proximaDoTopN(slots []slot) (types.RowID, bool, error) {
+func (o *ordenador) proximaOfTopN(slots []slot) (types.RowID, bool, error) {
 	if o.pos >= len(o.heap) {
 		return 0, false, nil
 	}
 	e := &o.heap[o.pos]
 	o.pos++
-	if err := coleta(slots, &o.fr, e.buf[:e.payFim]); err != nil {
+	if err := coleta(slots, &o.fr, e.buf[:e.payEnd]); err != nil {
 		return 0, false, fmt.Errorf("executor: relendo a row %d ordenada: %w", e.rowID, err)
 	}
 	return e.rowID, true, nil
 }
 
-// confereOrcamentoTopN faz o teto de MEMÓRIA valer também no modo rápido.
+// confereBudgetTopN faz o teto de MEMÓRIA valer também no modo rápido.
 //
 // O teto por LINHAS decidido no Open não é teto de bytes: N linhas de 4 KiB de
 // JSON são uma ordem de grandeza diferente de N linhas de dois inteiros, e é o
 // mesmo argumento que fez SortMemory ser contado em bytes.
-func (o *ordenador) confereOrcamentoTopN() error {
-	if o.usado() <= o.orcamento {
+func (o *ordenador) confereBudgetTopN() error {
+	if o.usado() <= o.budget {
 		return nil
 	}
 	return o.degradaTopN()
@@ -358,22 +358,22 @@ func (o *ordenador) degradaTopN() error {
 	// recursão infinita.
 	o.topN, o.heap, o.valsTN, o.bytesTN = 0, nil, nil, 0
 	o.degradou = true
-	if o.slotsDaDegradacao == nil {
-		o.slotsDaDegradacao = novosSlots(o.slotsModelo)
+	if o.slotsOfDegradacao == nil {
+		o.slotsOfDegradacao = novosSlots(o.slotsModelo)
 	}
 	for i := range heap {
 		e := &heap[i]
-		if err := coleta(o.slotsDaDegradacao, &o.fr, e.buf[:e.payFim]); err != nil {
+		if err := coleta(o.slotsOfDegradacao, &o.fr, e.buf[:e.payEnd]); err != nil {
 			return fmt.Errorf("executor: relendo a row %d retida pelo top-N: %w", e.rowID, err)
 		}
-		if err := o.acrescenta(o.slotsDaDegradacao, e.rowID); err != nil {
+		if err := o.acrescenta(o.slotsOfDegradacao, e.rowID); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// tamanhoDoTopN decide, no Open, se a query cabe no caminho rápido.
+// sizeOfTopN decide, no Open, se a query cabe no caminho rápido.
 //
 // A regra é UMA: `OFFSET + limite efetivo` tem de caber no teto de linhas. O
 // OFFSET entra na conta porque as linhas PULADAS também precisam ser as certas
@@ -391,15 +391,15 @@ func (o *ordenador) degradaTopN() error {
 // O resultado é o mesmo nos dois modos inclusive na TRUNCAGEM: parar em maxRows
 // é teto de linhas ENTREGUES, e as maxRows melhores retidas pelo heap são as
 // mesmas maxRows primeiras que o caminho completo emitiria.
-func tamanhoDoTopN(bq *binder.BoundQuery, teto int64) (int, bool) {
-	if teto < 0 {
+func sizeOfTopN(bq *binder.BoundQuery, ceiling int64) (int, bool) {
+	if ceiling < 0 {
 		return 0, false
 	}
-	if teto == 0 {
-		teto = tetoTopNPadrao
+	if ceiling == 0 {
+		ceiling = ceilingTopNPadrao
 	}
 	n := bq.Offset + bq.EffectiveLimit
-	if n <= 0 || n > teto {
+	if n <= 0 || n > ceiling {
 		return 0, false
 	}
 	return int(n), true

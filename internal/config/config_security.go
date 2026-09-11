@@ -35,7 +35,7 @@ type TLSSpec struct {
 // mesmo que viesse (validateUsers recusa a chave por não estar na
 // whitelist). PasswordEnv/PasswordFile guardam ONDE a credencial mora — nome
 // de variável de ambiente ou caminho de arquivo —, nunca o valor; resolver o
-// valor é ativação (B2, em server.Novo), não parse.
+// valor é ativação (B2, em server.New), não parse.
 type UserSpec struct {
 	Username     string `yaml:"username"`
 	PasswordEnv  string `yaml:"passwordEnv"`
@@ -85,7 +85,7 @@ type LoopbackSpec struct {
 }
 
 // bindCollidesWithLoopback diz se o bind do listener PRINCIPAL alcança o mesmo
-// endereço que o listener loopback usa fixo (127.0.0.1, enderecoLoopback em
+// endereço que o listener loopback usa fixo (127.0.0.1, loopbackAddress em
 // internal/server/security.go) — a única condição em que os dois listeners
 // na MESMA porta colidiriam de fato no kernel.
 //

@@ -24,7 +24,7 @@ import (
 // mantém os bytes em disco até o manifest concordar em não precisar deles.
 const sufixoAposentado = ".retired"
 
-// nomeCanonicoDoSegmento repete o formato que o segment.ListSegments
+// nameCanonicoOfSegment repete o formato que o segment.ListSegments
 // reconhece (segment.go:249). A repetição é o preço de a aposentadoria ser
 // ciclo de vida de ARQUIVO, e não de record: o pacote segment não expõe o
 // caminho de um segmento, e inventar aqui um segundo formato "quase igual"
@@ -35,13 +35,13 @@ const sufixoAposentado = ".retired"
 // remova o arquivo errado —, e é a aposentadoria bem-sucedida do
 // TestAposentadoriaPodaOSegmentoDosMapasNaMesmaSecaoCritica que afirma o
 // acordo com o nome que o writer de fato criou.
-const nomeCanonicoDoSegmento = "segment-%08d.dat"
+const nameCanonicoOfSegment = "segment-%08d.dat"
 
-func caminhoCanonicoDoSegmento(dataDir string, seg uint32) string {
-	return filepath.Join(dataDir, fmt.Sprintf(nomeCanonicoDoSegmento, seg))
+func pathCanonicoOfSegment(dataDir string, sec uint32) string {
+	return filepath.Join(dataDir, fmt.Sprintf(nameCanonicoOfSegment, sec))
 }
 
-// idDoNomeAposentado devolve o segmento que um nome aposentado descreve, e
+// retiredNameID devolve o segmento que um nome aposentado descreve, e
 // recusa tudo o mais. A recusa por igualdade EXATA é a mesma do ListSegments
 // (segment.go:254) e pelo mesmo motivo: o Sscanf aceita padding divergente,
 // de modo que dois nomes diferentes responderiam o mesmo id — e aqui o id
@@ -65,16 +65,16 @@ func caminhoCanonicoDoSegmento(dataDir string, seg uint32) string {
 // O registro de por que isto está escrito: até a revisão desta tarefa nenhum
 // teste sustentava qualquer uma das duas, e apagar cada uma deixava
 // `go test ./... -count=1` INTEIRO verde.
-func idDoNomeAposentado(nome string) (uint32, bool) {
-	base, temSufixo := strings.CutSuffix(nome, sufixoAposentado)
-	if !temSufixo {
+func retiredNameID(name string) (uint32, bool) {
+	base, hasSufixo := strings.CutSuffix(name, sufixoAposentado)
+	if !hasSufixo {
 		return 0, false
 	}
 	var id uint32
-	if _, err := fmt.Sscanf(base, nomeCanonicoDoSegmento, &id); err != nil || id == 0 {
+	if _, err := fmt.Sscanf(base, nameCanonicoOfSegment, &id); err != nil || id == 0 {
 		return 0, false
 	}
-	if base != fmt.Sprintf(nomeCanonicoDoSegmento, id) {
+	if base != fmt.Sprintf(nameCanonicoOfSegment, id) {
 		return 0, false
 	}
 	return id, true
@@ -117,7 +117,7 @@ func idDoNomeAposentado(nome string) (uint32, bool) {
 // Checkpoint que sincroniza os segmentos. Quem mexer na ordem daquela tarefa
 // (aposentar segmento sem o Checkpoint antes) transforma esta assimetria em
 // perda de dado, e é por isso que ela está escrita aqui.
-func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool, n int, err error) {
+func (s *Store) reapendaSeVivo(sec, off uint32, rec types.Record) (copiado bool, n int, err error) {
 	if err := s.entra(); err != nil {
 		return false, 0, err
 	}
@@ -142,8 +142,8 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 		// TestCopyForwardRecusaResiduoSemLocationEmVezDeRessuscitarOEstado.
 		return false, 0, nil
 	}
-	curSeg, curOff, flags := rowindex.Unpack(packed)
-	if curSeg != seg || curOff != off {
+	curSec, curOff, flags := rowindex.Unpack(packed)
+	if curSec != sec || curOff != off {
 		return false, 0, nil // a row já migrou sozinha; copiar seria regredir
 	}
 	// As flags vêm da LOCATION, não do record. A justificativa anterior aqui
@@ -186,8 +186,8 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 	// pega o resto.
 	payload, flagsSaida := rec.Payload, flags
 	expirou := false
-	if s.escritas != nil && flags&types.FlagTombstone == 0 && s.prazoVencido(rec.RowID, s.relogioDaExpiracaoOportunista()) {
-		lapide, err := s.montaLapide(rec.Payload)
+	if s.writes != nil && flags&types.FlagTombstone == 0 && s.prazoVencido(rec.RowID, s.relogioOfExpirationOportunista()) {
+		lapide, err := s.buildLapide(rec.Payload)
 		if err != nil {
 			return false, 0, err
 		}
@@ -199,11 +199,11 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 	if err != nil {
 		return false, 0, err
 	}
-	novoSeg, novoOff, err := s.segW.Append(buf)
+	newSeg, newOff, err := s.secW.Append(buf)
 	if err != nil {
 		return false, 0, s.failWriter(err)
 	}
-	if err := s.aposAppend(novoSeg); err != nil {
+	if err := s.aposAppend(newSeg); err != nil {
 		return false, 0, s.failWriter(err)
 	}
 	// prevPayload é o PRÓPRIO payload, e hadPrevious é true, porque o "estado
@@ -223,19 +223,19 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 		prevPayload: rec.Payload,
 		hadPrevious: true,
 		countsAsNew: false,
-		seg:         novoSeg,
-		off:         novoOff,
+		sec:         newSeg,
+		off:         newOff,
 		recLen:      len(buf),
 	}); err != nil {
 		return false, 0, s.failWriter(err)
 	}
 	if expirou {
-		s.expiradas.Add(1)
+		s.expiredCount.Add(1)
 	}
 	return true, len(buf), nil
 }
 
-// compactaSegmento varre seg record a record e copia para frente todo record
+// compactaSegment varre seg record a record e copia para frente todo record
 // que a location ainda nomeia (§55). Streaming puro: um record por vez, com o
 // buffer do ScanFrom na leitura e o compactBuf do writer na escrita — nada
 // proporcional ao TAMANHO do segmento entra em memória, que é o que o §54
@@ -270,7 +270,7 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 //
 // A seleção do candidato NÃO mora aqui: quem decide qual segmento vale a pena
 // e nunca elege o corrente (decisão D6) é a Task 7. Esta função obedece.
-func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (copiados uint64, lidos, escritos int64, err error) {
+func (s *Store) compactaSegment(ctx context.Context, sec uint32) (copiados uint64, lidos, escritos int64, err error) {
 	// Os dois contadores do §92 sobem no RETORNO, inclusive quando ele é de
 	// erro, e o defer é o que garante isso por construção em vez de por
 	// disciplina de quem editar a função depois.
@@ -286,7 +286,7 @@ func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (copiados uint
 		s.compBytesLidos.Add(lidos)
 		s.compBytesEscritos.Add(escritos)
 	}()
-	fimValido, err := s.segR.ScanFrom(seg, segment.HeaderSize, func(off uint32, rec types.Record) error {
+	endValido, err := s.secR.ScanFrom(sec, segment.HeaderSize, func(off uint32, rec types.Record) error {
 		// O cancelamento é a PRIMEIRA coisa do callback, e sai pelo erro que
 		// o ScanFrom propaga: é assim que a goroutine da Task 7 desiste no
 		// Close sem que ninguém precise esperar um segmento inteiro terminar
@@ -297,7 +297,7 @@ func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (copiados uint
 			return err
 		}
 		lidos += int64(encoding.RecordHeaderSize + len(rec.Key) + len(rec.Payload))
-		copiou, n, err := s.reapendaSeVivo(seg, off, rec)
+		copiou, n, err := s.reapendaSeVivo(sec, off, rec)
 		if err != nil {
 			return err
 		}
@@ -326,14 +326,14 @@ func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (copiados uint
 	// corrupção de UM record na perda do segmento inteiro. É a mesma
 	// aferição, e o mesmo veredito, do `validEnd != ref.SizeBytes` do
 	// recoverFrom.
-	tamanho, err := s.tamanhoDoSegmento(seg)
+	size, err := s.sizeOfSegment(sec)
 	if err != nil {
 		return copiados, lidos, escritos, err
 	}
-	if fimValido != tamanho {
+	if endValido != size {
 		return copiados, lidos, escritos, fmt.Errorf(
 			"%w: a varredura do segmento %d parou em %d de %d bytes; o tally não é zerado por varredura incompleta (§53-55, D4)",
-			ErrDatasetCorrupt, seg, fimValido, tamanho)
+			ErrDatasetCorrupt, sec, endValido, size)
 	}
 
 	// O entra() é a MESMA recusa do reapendaSeVivo aplicada ao único trecho da
@@ -357,7 +357,7 @@ func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (copiados uint
 	defer s.sai()
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	if t := s.segTally[seg]; t != nil {
+	if t := s.secTally[sec]; t != nil {
 		// NORMATIVO (invariante 4 da Fase B): o espelho acompanha o mapa na
 		// MESMA seção crítica. Zerar só o mapa deixa o liveBytesAll à frente
 		// dele, e o conferaEspelhos() do próximo checkpoint acusa divergência
@@ -378,30 +378,30 @@ func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (copiados uint
 	return copiados, lidos, escritos, nil
 }
 
-// tamanhoDoSegmento devolve o tamanho em disco do arquivo de seg pelo mesmo
-// ListSegments que o checkpoint usa para reconciliar o segSize
+// sizeOfSegment devolve o tamanho em disco do arquivo de seg pelo mesmo
+// ListSegments que o checkpoint usa para reconciliar o secSize
 // (store_checkpoint.go:116).
 //
-// É consulta ao DIRETÓRIO, e não ao mapa segSize do writer, porque o mapa só
+// É consulta ao DIRETÓRIO, e não ao mapa secSize do writer, porque o mapa só
 // se move no checkpoint: um segmento selado depois do último checkpoint ainda
 // não tem entrada nele, e responder "não sei o tamanho" logo para o segmento
 // que a varredura acabou de ler seria trocar a medida por uma coincidência de
-// agenda. Um readdir por segmento compactado é ruído ao lado das milhares de
+// schedule. Um readdir por segmento compactado é ruído ao lado das milhares de
 // leituras da varredura que acabou de rodar.
-func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
+func (s *Store) sizeOfSegment(sec uint32) (int64, error) {
 	refs, err := segment.ListSegments(filepath.Join(s.opts.Dir, "data"))
 	if err != nil {
 		return 0, err
 	}
 	for _, ref := range refs {
-		if ref.ID == seg {
+		if ref.ID == sec {
 			return ref.SizeBytes, nil
 		}
 	}
-	return 0, fmt.Errorf("%w: o segmento %d saiu do diretório durante a própria compaction", ErrDatasetCorrupt, seg)
+	return 0, fmt.Errorf("%w: o segmento %d saiu do diretório durante a própria compaction", ErrDatasetCorrupt, sec)
 }
 
-// aposentaSegmento tira do dataset o segmento que a varredura esvaziou. É o
+// aposentaSegment tira do dataset o segmento que a varredura esvaziou. É o
 // primeiro código do projeto que APAGA arquivo, e a ordem dos quatro passos é
 // a decisão D5 inteira — cada um deles existe para que um crash no passo
 // seguinte deixe um estado que o Open saiba reparar.
@@ -426,12 +426,12 @@ func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
 //     perdeu o nome pelo qual o manifest o nomeia.
 //  2. rename          o segmento sai do ListSegments sem sair do disco. O
 //     manifest vigente ainda o nomeia — é a janela em que um
-//     crash exige o reparo do reparaAposentados, e é o preço
+//     crash exige o reparo do repairAposentados, e é o preço
 //     de NÃO destruir os bytes antes de o manifest concordar.
 //  3. Checkpoint      o manifest é reconstruído a partir do ListSegments, que
 //     já não enxerga o arquivo. Daqui em diante nenhum estado
 //     durável referencia o segmento.
-//  4. unlink          só agora os bytes saem, e o que um crash pode deixar é
+//  4. unlink          só now os bytes saem, e o que um crash pode deixar é
 //     um arquivo que ninguém referencia — resíduo, não perda.
 //
 // Inverter 3 e 4 é a troca que perde dado: o unlink com o manifest ainda
@@ -441,21 +441,21 @@ func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
 //
 // A seleção do candidato NÃO mora aqui: quem decide qual segmento vale a pena
 // e nunca elege o corrente (decisão D6) é a Task 7. Esta função obedece, e
-// pressupõe que a varredura completa do compactaSegmento já rodou — é ela que
+// pressupõe que a varredura completa do compactaSegment já rodou — é ela que
 // dá autoridade para afirmar que nenhuma location aponta para dentro deste
 // arquivo.
-// fechaODescritorEApaga é a SEÇÃO CRÍTICA da aposentadoria, e ela é só isto:
+// closeODescritorEDelete é a SEÇÃO CRÍTICA da aposentadoria, e ela é só isto:
 // fechar o descritor cacheado do segmento e apagar o arquivo, sob a barreira
 // que impede uma leitura de acontecer no meio.
 //
 // Por que o descritor precisa ser fechado. O unlink do POSIX remove o NOME e
 // nunca o INODE: enquanto qualquer descritor o mantiver aberto, os blocos
 // seguem alocados. E o cache de fds do segment.Reader não tem despejo, então o
-// descritor que a PRÓPRIA varredura desta compaction abriu (compactaSegmento
+// descritor que a PRÓPRIA varredura desta compaction abriu (compactaSegment
 // chama ScanFrom, que cacheia) ficaria aberto pela vida do processo. O efeito
 // era um inode preso por segmento aposentado, e a compaction devolvendo disco
 // ao listing do diretório sem devolver um byte ao dispositivo — invisível para
-// dirBytes, para discoDosSegmentos e para o Stats.StorageBytes, que somam o
+// dirBytes, para diskOfSegmentos e para o Stats.StorageBytes, que somam o
 // listing, e invisível até para o log desta função, que anuncia bytes
 // devolvidos. Provado pelo TestSegmentoAposentadoDevolveOsBlocosAoFilesystem.
 //
@@ -467,7 +467,7 @@ func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
 // vazamento e pôr a barreira não são duas tarefas: são uma.
 //
 // Por que a seção é CURTA e não cobre os passos vizinhos. Os dois Checkpoint
-// tomam wmu e podem levar dezenas de segundos; o podaSegmentoAposentado também
+// tomam wmu e podem levar dezenas de segundos; o podaSegmentAposentado também
 // toma wmu. Qualquer um deles aqui dentro inverteria a ordem de lock que o
 // godoc de aposMu fixa — wmu→aposMu de um lado, aposMu→wmu do outro — e isso é
 // deadlock. O rename fica fora por outra razão: descritor já aberto sobrevive a
@@ -477,32 +477,32 @@ func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
 // para que os testes de crash parem ENTRE passos que mudam estado durável, e
 // fechar um descritor não muda nenhum. Um crash entre o fechamento e o unlink
 // deixa um `.retired` sem manifest, que é exatamente o estado que o
-// reparaAposentados já trata. Rótulo que nenhum teste precisa é mecanismo sem
+// repairAposentados já trata. Rótulo que nenhum teste precisa é mecanismo sem
 // oráculo.
-func (s *Store) fechaODescritorEApaga(seg uint32, aposentado string) error {
+func (s *Store) closeODescritorEDelete(sec uint32, aposentado string) error {
 	s.aposMu.Lock()
 	defer s.aposMu.Unlock()
-	if err := s.segR.CloseSegment(seg); err != nil {
+	if err := s.secR.CloseSegment(sec); err != nil {
 		return err
 	}
 	if err := os.Remove(aposentado); err != nil {
-		return fmt.Errorf("storage: remover o segmento aposentado %d: %w", seg, err)
+		return fmt.Errorf("storage: remover o segmento aposentado %d: %w", sec, err)
 	}
 	return nil
 }
 
-func (s *Store) aposentaSegmento(seg uint32) error {
+func (s *Store) aposentaSegment(sec uint32) error {
 	dataDir := filepath.Join(s.opts.Dir, "data")
-	canonico := caminhoCanonicoDoSegmento(dataDir, seg)
+	canonico := pathCanonicoOfSegment(dataDir, sec)
 	aposentado := canonico + sufixoAposentado
 
 	if err := s.Checkpoint(); err != nil {
 		return err
 	}
-	s.passoDaAposentadoria("checkpointDasLocations")
+	s.passoOfRetirement("checkpointDasLocations")
 
 	if err := os.Rename(canonico, aposentado); err != nil {
-		return fmt.Errorf("storage: aposentar o segmento %d: %w", seg, err)
+		return fmt.Errorf("storage: aposentar o segmento %d: %w", sec, err)
 	}
 	// O fsync do diretório vem ANTES do checkpoint que deixa de listar o
 	// segmento, e não só junto do unlink lá embaixo, para que a ordem dos
@@ -522,22 +522,22 @@ func (s *Store) aposentaSegmento(seg uint32) error {
 	// reordenação que ele previne, essa não é alcançável pela suíte: exige
 	// perda de energia com writeback pela metade, e nem o kill -9 a produz
 	// (o SIGKILL não descarta page cache). É o mesmo tipo de registro dos
-	// ramos defensivos do entra() e do arquivoExiste() — a linha fica pelo
+	// ramos defensivos do entra() e do arquivoExists() — a linha fica pelo
 	// argumento, e o argumento fica escrito.
 	if err := s.durabilizaODiretorio(dataDir); err != nil {
 		return err
 	}
-	if err := s.podaSegmentoAposentado(seg); err != nil {
+	if err := s.podaSegmentAposentado(sec); err != nil {
 		return err
 	}
-	s.passoDaAposentadoria("rename")
+	s.passoOfRetirement("rename")
 
 	if err := s.Checkpoint(); err != nil {
 		return err
 	}
-	s.passoDaAposentadoria("checkpointDoManifest")
+	s.passoOfRetirement("checkpointDoManifest")
 
-	if err := s.fechaODescritorEApaga(seg, aposentado); err != nil {
+	if err := s.closeODescritorEDelete(sec, aposentado); err != nil {
 		return err
 	}
 	// O índice do segmento sai no MESMO passo que o .dat, e é isso que faz
@@ -545,14 +545,14 @@ func (s *Store) aposentaSegmento(seg uint32) error {
 	// antes, nada removia as postings de um segmento aposentado, e cada órfã
 	// alongava a cadeia de quem ainda estava vivo.
 	//
-	// Fora do fechaODescritorEApaga de propósito: aquela seção crítica segura o
+	// Fora do closeODescritorEDelete de propósito: aquela seção crítica segura o
 	// aposMu, e o mapa de índices selados tem lock próprio — aninhar os dois
 	// criaria uma ordem que ninguém precisa. Depois dele, e não antes, porque a
 	// janela sobrevivente é a inofensiva: dado sem índice ENUMERA, que é o
 	// estado normal de qualquer segmento fora da janela de indexação.
 	//
 	// O segundo fsync do diretório, logo abaixo, cobre também esta remoção.
-	s.removeIndiceDoSegmento(seg)
+	s.removeIndexOfSegment(sec)
 	// O segundo fsync é o `syncDir(dir)` do fim que o bloco da tarefa previa,
 	// e fecha a mesma pergunta na outra ponta: sem ele a REMOÇÃO fica só na
 	// entrada de diretório em cache, e o ciclo seguinte de compaction acharia
@@ -563,7 +563,7 @@ func (s *Store) aposentaSegmento(seg uint32) error {
 	if err := s.durabilizaODiretorio(dataDir); err != nil {
 		return err
 	}
-	s.passoDaAposentadoria("unlink")
+	s.passoOfRetirement("unlink")
 	return nil
 }
 
@@ -597,11 +597,11 @@ func (s *Store) durabilizaODiretorio(dir string) error {
 	return nil
 }
 
-// podaSegmentoAposentado tira o segmento dos dois mapas de contabilidade e
+// podaSegmentAposentado tira o segmento dos dois mapas de contabilidade e
 // ajusta os espelhos na MESMA seção crítica — invariante 4 da Fase B.
 //
 // A reconciliação do checkpoint se cura sozinha logo adiante (ela reconstrói
-// o segSize do ListSegments e poda o tally do que sobrou), e é por isso que a
+// o secSize do ListSegments e poda o tally do que sobrou), e é por isso que a
 // poda não muda o estado FINAL de nada. O que ela decide é a janela entre o
 // rename e esse checkpoint: sem ela, o /v1/stats e a nishidb_segments_total
 // publicam nesse intervalo um segmento que já não está no diretório e bytes
@@ -615,29 +615,29 @@ func (s *Store) durabilizaODiretorio(dir string) error {
 // do Stats. A subtração em complemento de dois é a forma que o applyRecord já
 // usa (store.go:948): Go não tem Sub atômico para inteiro sem sinal, e
 // ^(x-1) devolve 0 para x==0, então tally já vazio não vira underflow.
-func (s *Store) podaSegmentoAposentado(seg uint32) error {
+func (s *Store) podaSegmentAposentado(sec uint32) error {
 	if err := s.entra(); err != nil {
 		return err
 	}
 	defer s.sai()
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	if t := s.segTally[seg]; t != nil {
+	if t := s.secTally[sec]; t != nil {
 		s.liveBytesAll.Add(^(t.liveBytes - 1))
-		delete(s.segTally, seg)
-		// segCount espelha a QUANTIDADE de entradas do tally (é o que o
-		// agregadosDoTally conta), não o conjunto de arquivos: a baixa
+		delete(s.secTally, sec)
+		// secCount espelha a QUANTIDADE de entradas do tally (é o que o
+		// agregadosOfTally conta), não o conjunto de arquivos: a baixa
 		// acompanha a entrada que acabou de sair, e só ela.
-		s.segCount.Add(^uint32(0))
+		s.secCount.Add(^uint32(0))
 	}
-	if n, tinha := s.segSize[seg]; tinha {
+	if n, tinha := s.secSize[sec]; tinha {
 		s.diskBytesAll.Add(-n)
-		delete(s.segSize, seg)
+		delete(s.secSize, sec)
 	}
 	return nil
 }
 
-func (s *Store) passoDaAposentadoria(passo string) {
+func (s *Store) passoOfRetirement(passo string) {
 	if s.apTrace != nil {
 		s.apTrace(passo)
 	}
@@ -649,7 +649,7 @@ func (s *Store) passoDaAposentadoria(passo string) {
 // decisão do produto.
 //
 // O número sai da assimetria entre o custo de uma passada VAZIA e o de chegar
-// tarde. Passada vazia é uma iteração do segTally sob o wmu — dezenas de
+// tarde. Passada vazia é uma iteração do secTally sob o wmu — dezenas de
 // entradas num disco de 50-100 GB com segmentos de 512 MiB (§85), microssegundos
 // —, enquanto chegar tarde custa o disco do §86: a 500 ev/s são 30-43 GB/dia
 // escritos contra 5,6-8 GB vivos, ou seja meio gigabyte a cada vinte minutos
@@ -670,10 +670,10 @@ const intervaloEntrePassadas = 5 * time.Second
 // meio de um Append.
 //
 // DIVERGÊNCIA deliberada do esboço da tarefa, e ela é a diferença entre a D6
-// valer e não valer: o curSegID é lido DENTRO da seção crítica. Lido antes do
+// valer e não valer: o curSecID é lido DENTRO da seção crítica. Lido antes do
 // Lock, o valor descreve um instante em que ninguém segurava o wmu — e quem
 // espera esse lock quase sempre espera um CHECKPOINT, que o segura do início
-// ao fim. É esse mesmo checkpoint que instala no segSize o tamanho do segmento
+// ao fim. É esse mesmo checkpoint que instala no secSize o tamanho do segmento
 // recém-rotacionado, ou seja a janela entre a leitura e o Lock é exatamente
 // aquela em que o novo corrente ganha tamanho conhecido e vira elegível: a
 // seleção acordaria com o corrente ANTIGO na mão e elegeria o segmento em que
@@ -682,20 +682,20 @@ const intervaloEntrePassadas = 5 * time.Second
 // Fase B). Fixado pelo
 // TestCandidatosLeOSegmentoCorrenteDEPOISDeEntrarNaSecaoCritica.
 //
-// Segmento sem entrada no segSize é PULADO, e isso também é adiamento e não
-// omissão: o segSize só se move no checkpoint, então um segmento selado depois
+// Segmento sem entrada no secSize é PULADO, e isso também é adiamento e não
+// omissão: o secSize só se move no checkpoint, então um segmento selado depois
 // do último checkpoint ainda não tem tamanho medido, e eleger sem tamanho
 // seria dividir a liveness por um número inventado.
 func (s *Store) candidatos(ratio float64) []uint32 {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	corrente := s.curSegID.Load()
+	current := s.curSecID.Load()
 	var out []uint32
-	for id, t := range s.segTally {
-		if id == corrente {
+	for id, t := range s.secTally {
+		if id == current {
 			continue
 		}
-		tam, ok := s.segSize[id]
+		tam, ok := s.secSize[id]
 		if !ok || tam <= 0 {
 			continue
 		}
@@ -723,15 +723,15 @@ func (s *Store) candidatos(ratio float64) []uint32 {
 	return out
 }
 
-// IniciaCompaction sobe a goroutine que elege, varre e aposenta segmentos por
+// StartCompaction sobe a goroutine que elege, varre e aposenta segmentos por
 // conta própria (§53-55). É o que separa "a compaction funciona" de "a
 // compaction resolve": até aqui todo ciclo dependia de alguém chamá-lo.
 //
 // Chamar duas vezes não sobe duas goroutines. Duas varreduras concorrentes
 // disputariam o wmu record a record e poderiam eleger o mesmo segmento, com a
 // segunda aposentando um arquivo que a primeira ainda está varrendo.
-func (s *Store) IniciaCompaction(ctx context.Context, ratio float64) {
-	if s.EhHistorico() {
+func (s *Store) StartCompaction(ctx context.Context, ratio float64) {
+	if s.EhHistory() {
 		// Sem update não há garbage, e a compaction existe para recuperar
 		// versões superadas. Aqui o disco volta por descarte de segmento
 		// inteiro, que é o motor de retenção. Recusar dentro do Inicia — e não
@@ -741,19 +741,19 @@ func (s *Store) IniciaCompaction(ctx context.Context, ratio float64) {
 	}
 	s.compMu.Lock()
 	defer s.compMu.Unlock()
-	if s.compCancela != nil {
+	if s.compCancel != nil {
 		return
 	}
-	ctx, cancela := context.WithCancel(ctx)
-	s.compCancela = cancela
+	ctx, cancel := context.WithCancel(ctx)
+	s.compCancel = cancel
 	// O medidor do §92 sobe AQUI, e não dentro da goroutine: quem chamou tem
 	// direito de ver o estado que acabou de instalar, e um Stats() lido entre
 	// a chamada e o primeiro escalonamento não pode responder que a compaction
 	// não subiu.
-	s.compAtiva.Store(true)
-	s.compEmVoo.Add(1)
+	s.compActive.Store(true)
+	s.compInVoo.Add(1)
 	go func() {
-		defer s.compEmVoo.Done()
+		defer s.compInVoo.Done()
 		// E desce quando o LAÇO acaba, seja qual for o motivo — o
 		// cancelamento do Close ou a falha sticky do writer, que é a que
 		// importa: ali ninguém pediu para parar, o disco volta a crescer e a
@@ -761,14 +761,14 @@ func (s *Store) IniciaCompaction(ctx context.Context, ratio float64) {
 		// compaction.parou fala com quem já foi ler o log).
 		//
 		// O defer é declarado DEPOIS do Done e por isso roda ANTES dele: o
-		// ParaCompaction devolve o controle já com o medidor em 0, e não com
+		// ForCompaction devolve o controle já com o medidor em 0, e não com
 		// uma janela em que a goroutine acabou e a série ainda diz 1.
-		defer s.compAtiva.Store(false)
-		s.rodaCompaction(ctx, ratio)
+		defer s.compActive.Store(false)
+		s.runCompaction(ctx, ratio)
 	}()
 }
 
-// ParaCompaction cancela a goroutine e ESPERA por ela. As duas coisas, e nesta
+// ForCompaction cancela a goroutine e ESPERA por ela. As duas coisas, e nesta
 // ordem, são a decisão D7: o cancelamento sozinho devolveria o controle com a
 // varredura ainda apendando no segmento corrente e a aposentadoria ainda
 // renomeando arquivo.
@@ -778,33 +778,33 @@ func (s *Store) IniciaCompaction(ctx context.Context, ratio float64) {
 //
 // Marca compEncerrando ANTES de esperar (revisão da B5, round 2 —
 // Important): a partir daqui NENHUMA passada nova — do laço ou manual —
-// consegue reivindicar a vaga em tentaClaimarPassada, então compEmVoo só
+// consegue reivindicar a vaga em tentaClaimarPass, então compInVoo só
 // pode DIMINUIR entre este ponto e o Wait() retornar, nunca AUMENTAR de
 // novo depois. compEncerrando NUNCA volta a false: a única chamadora real
 // desta função é Close(), que também não desfaz o que faz — reabrir a vaga
 // depois do Wait() moveria a mesma janela para logo depois dele, onde
-// Close() já está fechando segR/segW (ver o godoc de CompactaUmaVez).
-func (s *Store) ParaCompaction() {
+// Close() já está fechando secR/secW (ver o godoc de CompactaUmaVez).
+func (s *Store) ForCompaction() {
 	s.compMu.Lock()
 	defer s.compMu.Unlock()
-	if s.compCancela != nil {
-		s.compCancela()
-		s.compCancela = nil
+	if s.compCancel != nil {
+		s.compCancel()
+		s.compCancel = nil
 	}
-	s.compPassadaMu.Lock()
+	s.compPassMu.Lock()
 	s.compEncerrando = true
-	s.compPassadaMu.Unlock()
+	s.compPassMu.Unlock()
 
-	s.compEmVoo.Wait()
+	s.compInVoo.Wait()
 }
 
-// rodaCompaction é o laço perpétuo: uma passada, um cochilo, outra passada.
+// runCompaction é o laço perpétuo: uma passada, um cochilo, outra passada.
 //
 // A primeira passada é IMEDIATA, e não depois do primeiro cochilo. Um dataset
 // reaberto depois de horas de ingestão já vem com o garbage acumulado, e fazê
 // -lo esperar o intervalo é adiar o único trabalho que devolve disco.
 //
-// Cada rodada DISPUTA a vaga do single-flight fino (tentaClaimarPassada)
+// Cada rodada DISPUTA a vaga do single-flight fino (tentaClaimarPass)
 // antes de rodar — e PULA a rodada, sem erro nem log, se uma chamada MANUAL
 // (CompactaUmaVez, Task B5) já a tiver. É a metade "laço em voo + manual"
 // da exclusão hermética: o laço nunca sobe uma segunda varredura por cima de
@@ -812,14 +812,14 @@ func (s *Store) ParaCompaction() {
 //
 // Para na PRIMEIRA falha, e para de vez. Não é impaciência: o erro que chega
 // aqui ou é o modo falho sticky do writer — que só sai com Close e reabertura
-// (§14.14) —, ou é a corrupção que o compactaSegmento recusa a varrer, e nos
+// (§14.14) —, ou é a corrupção que o compactaSegment recusa a varrer, e nos
 // dois casos a passada seguinte reencontraria o mesmo estado e o mesmo erro.
 // Um laço que insistisse transformaria uma falha em enxurrada de log e em
 // varredura perpétua sobre um dataset que já não pode ser compactado.
-func (s *Store) rodaCompaction(ctx context.Context, ratio float64) {
+func (s *Store) runCompaction(ctx context.Context, ratio float64) {
 	for {
-		if s.tentaClaimarPassada(false) {
-			if err := s.rodaUmaPassadaClaimada(ctx, ratio); err != nil {
+		if s.tentaClaimarPass(false) {
+			if err := s.runOnePassClaimada(ctx, ratio); err != nil {
 				if ctx.Err() != nil {
 					return // cancelamento não é falha: é o Close ou o SIGTERM
 				}
@@ -842,93 +842,93 @@ func (s *Store) rodaCompaction(ctx context.Context, ratio float64) {
 	}
 }
 
-// rodaUmaPassadaClaimada roda a passada já reivindicada por
-// tentaClaimarPassada(false) e libera a vaga via DEFER, não chamada
+// runOnePassClaimada roda a passada já reivindicada por
+// tentaClaimarPass(false) e libera a vaga via DEFER, não chamada
 // síncrona (revisão da B5, Minor — consistência com o release da chamada
 // manual, que já era via defer): uma passada que entrasse em pânico (não
-// deveria, mas defensivamente) deixaria compPassadaEmVoo travado em true
+// deveria, mas defensivamente) deixaria compPassInVoo travado em true
 // para sempre sem o defer, e nenhuma passada — automática ou manual —
 // conseguiria correr de novo neste Store. Função própria, e não um literal
-// inline em rodaCompaction, porque `defer` dentro do `for` de uma função de
+// inline em runCompaction, porque `defer` dentro do `for` de uma função de
 // vida longa só dispararia quando a função INTEIRA retornasse, não a cada
 // volta do laço.
-func (s *Store) rodaUmaPassadaClaimada(ctx context.Context, ratio float64) error {
-	defer s.liberaPassada(false)
-	_, err := s.passadaDeCompaction(ctx, ratio)
+func (s *Store) runOnePassClaimada(ctx context.Context, ratio float64) error {
+	defer s.releasePass(false)
+	_, err := s.passOfCompaction(ctx, ratio)
 	return err
 }
 
-// tentaClaimarPassada reivindica o direito de rodar UMA passada agora.
+// tentaClaimarPass reivindica o direito de rodar UMA passada now.
 // manual escolhe qual das duas flags do single-flight fino
-// (compPassadaEmVoo para o laço, compManualEmVoo para CompactaUmaVez) checar
+// (compPassInVoo para o laço, compManualInVoo para CompactaUmaVez) checar
 // e setar; devolve false se a OUTRA já estiver em voo, OU se compEncerrando
-// já tiver sido setado por ParaCompaction — Close em curso, e nenhuma
+// já tiver sido setado por ForCompaction — Close em curso, e nenhuma
 // passada nova pode começar depois disso (godoc do campo, store.go).
 //
-// Para a chamada MANUAL, compEmVoo.Add(1) acontece AQUI DENTRO, na MESMA
+// Para a chamada MANUAL, compInVoo.Add(1) acontece AQUI DENTRO, na MESMA
 // seção crítica que decide o claim — nunca como um passo separado depois
 // (revisão da B5, round 2 — Important). Um Add(1) que rodasse DEPOIS do
-// claim abriria uma janela em que o claim já vale (compManualEmVoo==true)
-// mas o WaitGroup ainda não sabe disso: ParaCompaction podia enxergar o
+// claim abriria uma janela em que o claim já vale (compManualInVoo==true)
+// mas o WaitGroup ainda não sabe disso: ForCompaction podia enxergar o
 // contador em zero e devolver o controle a Close() ANTES de esta chamada
-// sequer ter começado a tocar segR/segW — violação do contrato do
+// sequer ter começado a tocar secR/secW — violação do contrato do
 // WaitGroup ("um Add positivo que parte de zero deve happen-before o Wait
 // correspondente") e, na prática, Close() fechando arquivo debaixo de uma
-// passada que ainda ia rodar. Para o LAÇO (manual=false), compEmVoo já é
-// contado uma vez só, em IniciaCompaction, pela vida inteira da goroutine —
+// passada que ainda ia rodar. Para o LAÇO (manual=false), compInVoo já é
+// contado uma vez só, em StartCompaction, pela vida inteira da goroutine —
 // um Add(1) aqui contaria em dobro.
 //
-// Lock BLOQUEANTE em compPassadaMu é seguro aqui — ao contrário de compMu
-// (godoc do campo, store.go), compPassadaMu NUNCA é mantido além do tempo de
-// checar as flags e parear o Add/Done: nem tentaClaimarPassada nem
-// liberaPassada seguram o mutex durante a passada em si (que pode levar
+// Lock BLOQUEANTE em compPassMu é seguro aqui — ao contrário de compMu
+// (godoc do campo, store.go), compPassMu NUNCA é mantido além do tempo de
+// checar as flags e parear o Add/Done: nem tentaClaimarPass nem
+// releasePass seguram o mutex durante a passada em si (que pode levar
 // minutos), então não há goroutine nenhuma que fique presa nele por tempo
-// que importe, e portanto nenhum cenário em que ParaCompaction (via
-// compEmVoo.Wait()) esteja esperando por um goroutine bloqueado aqui.
-func (s *Store) tentaClaimarPassada(manual bool) bool {
-	s.compPassadaMu.Lock()
-	defer s.compPassadaMu.Unlock()
-	if s.compEncerrando || s.compPassadaEmVoo || s.compManualEmVoo {
+// que importe, e portanto nenhum cenário em que ForCompaction (via
+// compInVoo.Wait()) esteja esperando por um goroutine bloqueado aqui.
+func (s *Store) tentaClaimarPass(manual bool) bool {
+	s.compPassMu.Lock()
+	defer s.compPassMu.Unlock()
+	if s.compEncerrando || s.compPassInVoo || s.compManualInVoo {
 		return false
 	}
 	if manual {
-		s.compManualEmVoo = true
-		s.compEmVoo.Add(1)
+		s.compManualInVoo = true
+		s.compInVoo.Add(1)
 	} else {
-		s.compPassadaEmVoo = true
+		s.compPassInVoo = true
 	}
 	return true
 }
 
-// liberaPassada devolve a vaga que tentaClaimarPassada(manual) reivindicou
+// releasePass devolve a vaga que tentaClaimarPass(manual) reivindicou
 // — e, para a chamada manual, o Done() PAREADO com o Add(1) de lá, na MESMA
 // seção crítica, pela mesma razão de atomicidade do godoc acima.
-func (s *Store) liberaPassada(manual bool) {
-	s.compPassadaMu.Lock()
+func (s *Store) releasePass(manual bool) {
+	s.compPassMu.Lock()
 	if manual {
-		s.compEmVoo.Done()
-		s.compManualEmVoo = false
+		s.compInVoo.Done()
+		s.compManualInVoo = false
 	} else {
-		s.compPassadaEmVoo = false
+		s.compPassInVoo = false
 	}
-	s.compPassadaMu.Unlock()
+	s.compPassMu.Unlock()
 }
 
-// ResultadoCompactacao é o agregado de UMA passada — quantos segmentos ela
-// aposentou e quanto disco moveu. O laço automático (rodaCompaction) ignora
+// ResultCompactacao é o agregado de UMA passada — quantos segmentos ela
+// aposentou e quanto disco moveu. O laço automático (runCompaction) ignora
 // o valor e só olha o erro; CompactaUmaVez (Task B5, POST /v1/compact) o
 // devolve ao operador. Zeros em toda a struct é resultado LEGÍTIMO, não
 // ausência de resposta: uma eleição sem candidato (dataset já compactado, ou
 // ratio que nada alcança) é o mesmo "idempotente por efeito" do Checkpoint —
 // chamar de novo sobre um estado já compactado custa uma eleição vazia e não
 // muda nada.
-type ResultadoCompactacao struct {
+type ResultCompactacao struct {
 	SegmentosAposentados int
 	BytesLidos           int64
 	BytesEscritos        int64
 }
 
-// passadaDeCompaction varre e aposenta, em ordem, os candidatos de UMA
+// passOfCompaction varre e aposenta, em ordem, os candidatos de UMA
 // eleição.
 //
 // A lista é fotografada no começo e não é relida durante a passada. O
@@ -937,23 +937,23 @@ type ResultadoCompactacao struct {
 // cópias sem nunca terminar — e nunca chegaria ao cochilo que devolve a CPU.
 // O que a passada não alcançar, a próxima alcança.
 //
-// É privada do PACOTE, não do laço: rodaCompaction é uma chamadora, e
+// É privada do PACOTE, não do laço: runCompaction é uma chamadora, e
 // CompactaUmaVez (mais abaixo, Task B5) é a outra — as duas disputam o
-// single-flight fino de compPassadaMu (tentaClaimarPassada) ANTES de chegar
+// single-flight fino de compPassMu (tentaClaimarPass) ANTES de chegar
 // aqui, então quando esta função roda já não há a quem ela possa disputar
 // wmu record a record.
-func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) (ResultadoCompactacao, error) {
-	var out ResultadoCompactacao
-	for _, seg := range s.candidatos(ratio) {
+func (s *Store) passOfCompaction(ctx context.Context, ratio float64) (ResultCompactacao, error) {
+	var out ResultCompactacao
+	for _, sec := range s.candidatos(ratio) {
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		copiados, lidos, escritos, err := s.compactaSegmento(ctx, seg)
+		copiados, lidos, escritos, err := s.compactaSegment(ctx, sec)
 		if err != nil {
-			return out, fmt.Errorf("compactar o segmento %d: %w", seg, err)
+			return out, fmt.Errorf("compactar o segmento %d: %w", sec, err)
 		}
-		if err := s.aposentaSegmento(seg); err != nil {
-			return out, fmt.Errorf("aposentar o segmento %d: %w", seg, err)
+		if err := s.aposentaSegment(sec); err != nil {
+			return out, fmt.Errorf("aposentar o segmento %d: %w", sec, err)
 		}
 		out.SegmentosAposentados++
 		out.BytesLidos += lidos
@@ -972,7 +972,7 @@ func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) (Resulta
 		// pergunta do §86.
 		s.opts.Log.Info("compaction.segmento_aposentado",
 			"segmento varrido, esvaziado e removido",
-			"segmento", seg, "records_copiados", copiados,
+			"segmento", sec, "records_copiados", copiados,
 			"bytes_lidos", lidos, "bytes_escritos", escritos,
 			"bytes_devolvidos", lidos-escritos)
 	}
@@ -988,21 +988,21 @@ func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) (Resulta
 // configurado mas OCIOSO entre duas passadas, esta chamada funciona e
 // devolve trabalho de verdade.
 //
-// Disputa o MESMO single-flight fino de rodaCompaction — tentaClaimarPassada
-// — nunca um segundo, e NUNCA compCancela: compCancela fica não-nil da
+// Disputa o MESMO single-flight fino de runCompaction — tentaClaimarPass
+// — nunca um segundo, e NUNCA compCancel: compCancel fica não-nil da
 // primeira à última hora do laço (dormindo ou varrendo), e checá-lo
 // devolveria ErrCompactionBusy o tempo todo na config default, tornando esta
 // rota morta no caso majoritário — o bug que a revisão achou. "Em voo" quer
 // dizer que HÁ uma varredura de fato acontecendo NESTE INSTANTE (o laço
-// dentro de passadaDeCompaction, ou outra chamada manual) — nunca "existe um
+// dentro de passOfCompaction, ou outra chamada manual) — nunca "existe um
 // laço configurado". Em qualquer um dos dois casos de exclusão, devolve
 // ErrCompactionBusy NA HORA — não enfileira e não espera, porque quem chama
 // (a rota HTTP) tem de responder ao cliente sem segurar a conexão por uma
 // passada que pode durar minutos.
 //
-// A exclusão é HERMÉTICA NOS DOIS SENTIDOS (godoc de compPassadaMu,
+// A exclusão é HERMÉTICA NOS DOIS SENTIDOS (godoc de compPassMu,
 // store.go): com esta chamada em voo, a tentativa do laço de rodar sua
-// PRÓXIMA rodada falha e ele PULA (rodaCompaction) — nunca uma segunda
+// PRÓXIMA rodada falha e ele PULA (runCompaction) — nunca uma segunda
 // varredura concorrente; com o laço em voo, esta chamada falha aqui.
 //
 // ctx cancelado no meio interrompe a passada com segurança: o copy-forward é
@@ -1011,24 +1011,24 @@ func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) (Resulta
 // segurança que o cancelamento do Close já usa (decisão D7), só que aqui quem
 // cancela é o cliente HTTP desistindo, não o encerramento do processo.
 //
-// # Por que a janela entre ParaCompaction retornar e Close tomar vida.Lock() é segura
+// # Por que a janela entre ForCompaction retornar e Close tomar vida.Lock() é segura
 //
 // (Important 2 da revisão da B5; mecanismo corrigido no round 2 — ver
-// Important abaixo.) Close() chama ParaCompaction() ANTES de vida.Lock() —
+// Important abaixo.) Close() chama ForCompaction() ANTES de vida.Lock() —
 // não depois —, então existe uma janela, por menor que seja, em que
-// compCancela já é nil e vida ainda não está travada. O que impede uma
+// compCancel já é nil e vida ainda não está travada. O que impede uma
 // chamada nova a CompactaUmaVez de entrar nessa janela e correr contra
-// Close() fechando segR/segW NÃO é vida.RLock(): compactaSegmento chama
-// s.segR.ScanFrom SEM esse bracket (só reapendaSeVivo, por record, tem
+// Close() fechando secR/secW NÃO é vida.RLock(): compactaSegment chama
+// s.secR.ScanFrom SEM esse bracket (só reapendaSeVivo, por record, tem
 // entra()/sai()) — são DUAS coisas juntas: (1) o PAREAMENTO Add/Done de
-// compEmVoo, atômico com o claim (tentaClaimarPassada/liberaPassada, e não
+// compInVoo, atômico com o claim (tentaClaimarPass/releasePass, e não
 // mais dois passos soltos aqui — essa separação era exatamente o Important
 // que a revisão achou no round 2, ver abaixo); e (2) compEncerrando, que
-// ParaCompaction marca ANTES do Wait() e que faz tentaClaimarPassada recusar
+// ForCompaction marca ANTES do Wait() e que faz tentaClaimarPass recusar
 // qualquer reivindicação nova a partir dali. Entre as duas: nenhuma passada
-// pode COMEÇAR depois que ParaCompaction decidiu esperar, e nenhuma passada
-// que já tinha COMEÇADO escapa de ser contada por compEmVoo antes de tocar
-// segR/segW. É esse par — não vida.RLock() — que garante que nenhuma
+// pode COMEÇAR depois que ForCompaction decidiu esperar, e nenhuma passada
+// que já tinha COMEÇADO escapa de ser contada por compInVoo antes de tocar
+// secR/secW. É esse par — não vida.RLock() — que garante que nenhuma
 // varredura ainda está lendo/escrevendo segmento quando Close() chega a
 // fechar os arquivos.
 //
@@ -1036,31 +1036,31 @@ func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) (Resulta
 // do claim (por exemplo, um "compacta em background e responde 202" futuro
 // que reivindicasse a vaga num lugar e chamasse Add noutro), que resetasse
 // compEncerrando para false em algum ponto (não faz — é permanente, uma vez
-// que ParaCompaction é chamada), ou que fizesse Close() reordenar
-// ParaCompaction() para DEPOIS de tocar segR/segW. Enquanto claim e Add
-// continuarem ATÔMICOS sob compPassadaMu, e compEncerrando continuar
+// que ForCompaction é chamada), ou que fizesse Close() reordenar
+// ForCompaction() para DEPOIS de tocar secR/secW. Enquanto claim e Add
+// continuarem ATÔMICOS sob compPassMu, e compEncerrando continuar
 // permanente, a janela é segura; ela não é imposta pelo compilador — fica
 // registrado aqui para a próxima mudança tropeçar no comentário.
 //
 // # Important do round 2 da revisão: o Add(1) tinha descolado do claim
 //
-// Uma primeira versão desta função fazia `tentaClaimarPassada` devolver só
-// um bool, e chamava `compEmVoo.Add(1)` NA LINHA SEGUINTE, fora do lock de
-// compPassadaMu. Isso abria exatamente a janela que o parágrafo acima
-// fecha: entre o claim valer (compManualEmVoo==true) e o Add rodar, um
-// ParaCompaction concorrente podia enxergar compEmVoo em ZERO — a janela
+// Uma primeira versão desta função fazia `tentaClaimarPass` devolver só
+// um bool, e chamava `compInVoo.Add(1)` NA LINHA SEGUINTE, fora do lock de
+// compPassMu. Isso abria exatamente a janela que o parágrafo acima
+// fecha: entre o claim valer (compManualInVoo==true) e o Add rodar, um
+// ForCompaction concorrente podia enxergar compInVoo em ZERO — a janela
 // não durava mais que algumas instruções de máquina, mas o contrato do
 // WaitGroup não tem uma cláusula de "só um pouquinho", e o efeito prático,
-// se acontecesse, seria Close() liberado para fechar segR/segW enquanto
-// esta função ainda ia CHAMAR passadaDeCompaction. A correção: Add(1)
+// se acontecesse, seria Close() liberado para fechar secR/secW enquanto
+// esta função ainda ia CHAMAR passOfCompaction. A correção: Add(1)
 // (chamada manual) e Done() (no release) moraram para DENTRO de
-// tentaClaimarPassada/liberaPassada, na MESMA seção crítica que decide o
+// tentaClaimarPass/releasePass, na MESMA seção crítica que decide o
 // claim — nunca mais dois passos.
-func (s *Store) CompactaUmaVez(ctx context.Context, ratio float64) (ResultadoCompactacao, error) {
-	if !s.tentaClaimarPassada(true) {
-		return ResultadoCompactacao{}, ErrCompactionBusy
+func (s *Store) CompactaUmaVez(ctx context.Context, ratio float64) (ResultCompactacao, error) {
+	if !s.tentaClaimarPass(true) {
+		return ResultCompactacao{}, ErrCompactionBusy
 	}
-	defer s.liberaPassada(true)
+	defer s.releasePass(true)
 
-	return s.passadaDeCompaction(ctx, ratio)
+	return s.passOfCompaction(ctx, ratio)
 }

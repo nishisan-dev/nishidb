@@ -25,7 +25,7 @@ const PrazoDaMarcaDagua = 2 * time.Second
 // número divergem, e a divergência aparece como um painel que discorda do SQL
 // sem nada estar quebrado.
 //
-// O que é ausência viaja como ausência: fatia vazia, tempo zero, TemFim falso.
+// O que é ausência viaja como ausência: fatia vazia, tempo zero, HasEnd falso.
 // Quem monta a linha da tabela transforma isso em NULL, e "medi e deu zero"
 // nunca vira "não há o que medir".
 //
@@ -33,16 +33,16 @@ const PrazoDaMarcaDagua = 2 * time.Second
 // YAML do dataset, e um campo neste retrato seria um segundo caminho para o
 // mesmo fato.
 type Instantaneo struct {
-	// Particoes vem em ordem crescente de partição. Vazia quando o consumidor
+	// Partitions vem em ordem crescente de partição. Vazia quando o consumidor
 	// ainda não teve partição atribuída, o que NÃO é o mesmo que "todas as
 	// partições em zero".
-	Particoes []PosicaoDaParticao
-	// MarcaEm carimba a idade de FimDoLog e Atraso. Zero quando não há marca
-	// válida — e então nenhuma partição tem TemFim.
-	MarcaEm time.Time
+	Partitions []PositionOfPartition
+	// MarkIn carimba a idade de EndOfLog e Atraso. Zero quando não há marca
+	// válida — e então nenhuma partição tem HasEnd.
+	MarkIn time.Time
 
-	FilaRegistros int
-	FilaBytes     int64
+	FilaRecords int
+	FilaBytes   int64
 
 	// UltimoLote é o instante do último lote NÃO VAZIO entregue pelo poller.
 	// Zero enquanto nenhum chegou nesta subida.
@@ -52,8 +52,8 @@ type Instantaneo struct {
 	// Pausa é o motivo da parada por política (§101), ou nil.
 	Pausa error
 
-	ParticoesAtribuidas int64
-	ParticoesDoTopico   int64
+	PartitionsAtribuidas int64
+	PartitionsOfTopic    int64
 }
 
 // Instantaneo colhe o retrato AGORA, e atualiza a marca d'água no broker
@@ -66,20 +66,20 @@ type Instantaneo struct {
 //
 // O ctx limita EXCLUSIVAMENTE a ida ao broker.
 func (c *Consumidor) Instantaneo(ctx context.Context) Instantaneo {
-	if c.met.marcaVencida() {
-		c.AtualizaMarcaDagua(ctx)
+	if c.met.markVencida() {
+		c.AtualizaMarkDagua(ctx)
 	}
-	ps, em := c.met.posicoesDoInstante()
-	registros, bytes := c.fila.Profundidade()
+	ps, in := c.met.posicoesOfInstant()
+	records, bytes := c.fila.Profundidade()
 	return Instantaneo{
-		Particoes:           ps,
-		MarcaEm:             em,
-		FilaRegistros:       registros,
-		FilaBytes:           bytes,
-		UltimoLote:          c.met.ultimoLoteEm(),
-		Desfecho:            c.w.Desfecho(),
-		Pausa:               c.w.Pausa(),
-		ParticoesAtribuidas: int64(c.met.partAtribuidas.Value()),
-		ParticoesDoTopico:   int64(c.met.partTotal.Value()),
+		Partitions:           ps,
+		MarkIn:               in,
+		FilaRecords:          records,
+		FilaBytes:            bytes,
+		UltimoLote:           c.met.ultimoLoteIn(),
+		Desfecho:             c.w.Desfecho(),
+		Pausa:                c.w.Pausa(),
+		PartitionsAtribuidas: int64(c.met.partAtribuidas.Value()),
+		PartitionsOfTopic:    int64(c.met.partTotal.Value()),
 	}
 }

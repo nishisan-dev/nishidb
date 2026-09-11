@@ -58,7 +58,7 @@ func TestApplyOverlayFalhaParcialPreservaEntradas(t *testing.T) {
 func TestPackUnpackRoundTrip(t *testing.T) {
 	cases := []struct {
 		name  string
-		seg   uint32
+		sec   uint32
 		off   uint32
 		flags uint8
 	}{
@@ -71,14 +71,14 @@ func TestPackUnpackRoundTrip(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p := Pack(c.seg, c.off, c.flags)
+			p := Pack(c.sec, c.off, c.flags)
 			if p == 0 {
 				t.Fatal("packed válido nunca pode ser 0 (0 = sem location)")
 			}
-			seg, off, flags := Unpack(p)
-			if seg != c.seg || off != c.off || flags != c.flags {
+			sec, off, flags := Unpack(p)
+			if sec != c.sec || off != c.off || flags != c.flags {
 				t.Fatalf("roundtrip: esperado (%d,%d,%d), obtido (%d,%d,%d)",
-					c.seg, c.off, c.flags, seg, off, flags)
+					c.sec, c.off, c.flags, sec, off, flags)
 			}
 		})
 	}
@@ -87,7 +87,7 @@ func TestPackUnpackRoundTrip(t *testing.T) {
 func TestPackPanicaComLimitesEstourados(t *testing.T) {
 	cases := []struct {
 		name  string
-		seg   uint32
+		sec   uint32
 		off   uint32
 		flags uint8
 	}{
@@ -102,7 +102,7 @@ func TestPackPanicaComLimitesEstourados(t *testing.T) {
 					t.Fatal("esperado panic")
 				}
 			}()
-			Pack(c.seg, c.off, c.flags)
+			Pack(c.sec, c.off, c.flags)
 		})
 	}
 }
@@ -275,7 +275,7 @@ func TestLocationsConcorrencia(t *testing.T) {
 			}
 			for r := types.RowID(0); r < 200; r++ {
 				if p, ok := l.Get(r); ok {
-					if seg, _, _ := Unpack(p); seg == 0 {
+					if sec, _, _ := Unpack(p); sec == 0 {
 						t.Errorf("Get(%d) devolveu packed inválido %#x", r, p)
 						return
 					}

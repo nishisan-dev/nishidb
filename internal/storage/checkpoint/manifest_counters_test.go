@@ -87,7 +87,7 @@ func TestASecaoDosContadoresEhIgnoravel(t *testing.T) {
 // e por isso sai ANTES das críticas.
 func TestCaudaSaiEmOrdemCrescenteDeTagComContadores(t *testing.T) {
 	m := sampleManifest()
-	m.Mode, m.RowIDBase = 1, 500
+	m.StoreMode, m.RowIDBase = 1, 500
 	m.Schedule = &ScheduleInfo{FallbackDurationMs: 60_000, BlockShift: 6, Levels: 4}
 	m.Counters = sampleCounters()
 	raw := m.encode()

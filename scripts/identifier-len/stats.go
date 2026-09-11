@@ -17,27 +17,27 @@ import (
 type Histograma struct {
 	comprimentos map[int]int64
 	totalLido    int64
-	comCampo     int64
-	semCampo     int64
+	comField     int64
+	withoutField int64
 	invalidos    int64
 }
 
-// NovoHistograma devolve um histograma vazio, pronto para Registra.
-func NovoHistograma() *Histograma {
+// NewHistograma devolve um histograma vazio, pronto para Register.
+func NewHistograma() *Histograma {
 	return &Histograma{comprimentos: make(map[int]int64)}
 }
 
-// Registra soma uma mensagem ao histograma. `tamanho` só é significativo
+// Register soma uma mensagem ao histograma. `tamanho` só é significativo
 // quando `resultado == ExtraidoOK` — os outros dois desfechos não têm
 // comprimento de campo a contar.
-func (h *Histograma) Registra(resultado ResultadoExtracao, tamanho int) {
+func (h *Histograma) Register(result ResultExtracao, size int) {
 	h.totalLido++
-	switch resultado {
+	switch result {
 	case ExtraidoOK:
-		h.comCampo++
-		h.comprimentos[tamanho]++
-	case ExtraidoSemCampo:
-		h.semCampo++
+		h.comField++
+		h.comprimentos[size]++
+	case ExtraidoWithoutField:
+		h.withoutField++
 	default:
 		h.invalidos++
 	}
@@ -46,12 +46,12 @@ func (h *Histograma) Registra(resultado ResultadoExtracao, tamanho int) {
 // TotalLido é o total de mensagens processadas, nos quatro desfechos somados.
 func (h *Histograma) TotalLido() int64 { return h.totalLido }
 
-// ComCampo é o total de mensagens em que o campo foi extraído com sucesso —
+// WithField é o total de mensagens em que o campo foi extraído com sucesso —
 // o denominador dos buckets e dos percentis.
-func (h *Histograma) ComCampo() int64 { return h.comCampo }
+func (h *Histograma) WithField() int64 { return h.comField }
 
-// SemCampo é o total de mensagens cujo JSON parseou mas não tinha o campo.
-func (h *Histograma) SemCampo() int64 { return h.semCampo }
+// WithoutField é o total de mensagens cujo JSON parseou mas não tinha o campo.
+func (h *Histograma) WithoutField() int64 { return h.withoutField }
 
 // Invalidos é o total de mensagens cujo payload não parseou como JSON, ou
 // cujo campo não era uma string.
@@ -60,24 +60,24 @@ func (h *Histograma) Invalidos() int64 { return h.invalidos }
 // Bucket é uma faixa de comprimento do relatório final.
 type Bucket struct {
 	Rotulo     string
-	Contagem   int64
+	Count      int64
 	Percentual float64
 }
 
-// limitesDosBuckets são os tetos EXATOS do brief: as três frações do teto de
+// limitsDosBuckets são os tetos EXATOS do brief: as três frações do teto de
 // formato MaxKeySize (1024 = encoding.MaxKeySize) mais o próprio teto — a
 // quinta faixa (>1024) é o que a issue #15 existe para medir.
-var limitesDosBuckets = [4]int{256, 512, 768, 1024}
+var limitsDosBuckets = [4]int{256, 512, 768, 1024}
 
-var rotulosDosBuckets = [5]string{"≤256", "≤512", "≤768", "≤1024", ">1024"}
+var rotulosOfBuckets = [5]string{"≤256", "≤512", "≤768", "≤1024", ">1024"}
 
 // Buckets classifica cada comprimento observado nas cinco faixas do brief.
 // A percentagem é sobre o total COM CAMPO: é a distribuição do campo em si,
 // e mensagens sem_campo/inválidas não têm comprimento a distribuir.
 func (h *Histograma) Buckets() []Bucket {
-	contagens := make([]int64, len(rotulosDosBuckets))
+	contagens := make([]int64, len(rotulosOfBuckets))
 	for comprimento, n := range h.comprimentos {
-		i := sort.SearchInts(limitesDosBuckets[:], comprimento)
+		i := sort.SearchInts(limitsDosBuckets[:], comprimento)
 		// SearchInts devolve o primeiro índice cujo limite é >= comprimento
 		// só quando o limite bate exatamente por cima; um comprimento IGUAL
 		// a um limite (256, 512, 768, 1024) tem de cair no balde "≤", e
@@ -86,13 +86,13 @@ func (h *Histograma) Buckets() []Bucket {
 		// qualquer coisa acima de 1024 estoura para o último índice (4).
 		contagens[i] += n
 	}
-	buckets := make([]Bucket, len(rotulosDosBuckets))
-	for i, rotulo := range rotulosDosBuckets {
+	buckets := make([]Bucket, len(rotulosOfBuckets))
+	for i, rotulo := range rotulosOfBuckets {
 		var pct float64
-		if h.comCampo > 0 {
-			pct = float64(contagens[i]) / float64(h.comCampo) * 100
+		if h.comField > 0 {
+			pct = float64(contagens[i]) / float64(h.comField) * 100
 		}
-		buckets[i] = Bucket{Rotulo: rotulo, Contagem: contagens[i], Percentual: pct}
+		buckets[i] = Bucket{Rotulo: rotulo, Count: contagens[i], Percentual: pct}
 	}
 	return buckets
 }
@@ -100,12 +100,12 @@ func (h *Histograma) Buckets() []Bucket {
 // chavesOrdenadas devolve os comprimentos distintos observados, em ordem
 // crescente — a base de Percentil, Maximo e TopN.
 func (h *Histograma) chavesOrdenadas() []int {
-	chaves := make([]int, 0, len(h.comprimentos))
+	keys := make([]int, 0, len(h.comprimentos))
 	for c := range h.comprimentos {
-		chaves = append(chaves, c)
+		keys = append(keys, c)
 	}
-	sort.Ints(chaves)
-	return chaves
+	sort.Ints(keys)
+	return keys
 }
 
 // Percentil devolve o comprimento EXATO no percentil p (0–100), pelo método
@@ -113,10 +113,10 @@ func (h *Histograma) chavesOrdenadas() []int {
 // inventaria um comprimento que nenhuma mensagem tem; o brief pede exatos, e
 // map[int]int64 é o que permite isso sem custo, dada a cardinalidade baixa.
 func (h *Histograma) Percentil(p float64) int {
-	if h.comCampo == 0 {
+	if h.comField == 0 {
 		return 0
 	}
-	posto := int64(math.Ceil(p / 100 * float64(h.comCampo)))
+	posto := int64(math.Ceil(p / 100 * float64(h.comField)))
 	if posto < 1 {
 		posto = 1
 	}
@@ -127,18 +127,18 @@ func (h *Histograma) Percentil(p float64) int {
 			return c
 		}
 	}
-	// Só chega aqui se `posto` exceder comCampo por erro de arredondamento;
+	// Só chega aqui se `posto` exceder withField por erro de arredondamento;
 	// o maior comprimento observado é a resposta mais próxima possível.
 	return h.Maximo()
 }
 
 // Maximo é o maior comprimento observado, ou 0 se nada foi registrado.
 func (h *Histograma) Maximo() int {
-	chaves := h.chavesOrdenadas()
-	if len(chaves) == 0 {
+	keys := h.chavesOrdenadas()
+	if len(keys) == 0 {
 		return 0
 	}
-	return chaves[len(chaves)-1]
+	return keys[len(keys)-1]
 }
 
 // TopN devolve os N maiores comprimentos observados, maior primeiro,
@@ -148,10 +148,10 @@ func (h *Histograma) TopN(n int) []int {
 	if n <= 0 {
 		return nil
 	}
-	chaves := h.chavesOrdenadas()
+	keys := h.chavesOrdenadas()
 	out := make([]int, 0, n)
-	for i := len(chaves) - 1; i >= 0 && len(out) < n; i-- {
-		c := chaves[i]
+	for i := len(keys) - 1; i >= 0 && len(out) < n; i-- {
+		c := keys[i]
 		for k := int64(0); k < h.comprimentos[c] && len(out) < n; k++ {
 			out = append(out, c)
 		}

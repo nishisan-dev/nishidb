@@ -46,7 +46,7 @@ var (
 
 	ErrWriterFailed = types.ErrWriterFailed
 
-	// ErrSnapshotExpirado indica consulta cujo universo o dataset não consegue
+	// ErrExpiredSnapshot indica consulta cujo universo o dataset não consegue
 	// mais reconstruir: o journal de versões estourou o teto de memória e as
 	// versões que ela veria foram descartadas.
 	//
@@ -55,7 +55,7 @@ var (
 	// verdadeira. Um resultado que mistura estados sem avisar é o único
 	// desfecho que o isolamento não pode ter — quem pediu isolamento precisa
 	// saber quando não o recebeu.
-	ErrSnapshotExpirado = errors.New("storage: snapshot expirado: o journal de versões estourou o teto de memória")
+	ErrExpiredSnapshot = errors.New("storage: snapshot expirado: o journal de versões estourou o teto de memória")
 )
 
 // ErrDatasetCorrupt indica dataset que a recovery não consegue recuperar
@@ -67,17 +67,17 @@ var (
 var ErrDatasetCorrupt = errors.New("storage: dataset corrompido")
 
 // ErrCompactionBusy é o que CompactaUmaVez devolve quando já existe uma
-// passada em voo — do laço automático (IniciaCompaction de pé) ou de outra
+// passada em voo — do laço automático (StartCompaction de pé) ou de outra
 // chamada manual concorrente (Task B5, POST /v1/compact). Não é retentável
 // pelo MESMO chamador em loop apertado: é a restrição estrutural do godoc de
-// IniciaCompaction (duas varreduras concorrentes são PROIBIDAS) se
+// StartCompaction (duas varreduras concorrentes são PROIBIDAS) se
 // manifestando para quem pede uma passada avulsa em vez de ligar o laço.
 var ErrCompactionBusy = errors.New("storage: compaction já em voo")
 
-// semRecords informa se nenhum segmento do diretório tem record algum (só
+// emptySegmentDirectory informa se nenhum segmento do diretório tem record algum (só
 // header): é o que distingue um dataset recém-criado de um dataset com
 // dados cujo manifest se perdeu.
-func semRecords(refs []segment.SegmentRef) bool {
+func emptySegmentDirectory(refs []segment.Ref) bool {
 	for _, ref := range refs {
 		if ref.SizeBytes > segment.HeaderSize {
 			return false
@@ -86,25 +86,25 @@ func semRecords(refs []segment.SegmentRef) bool {
 	return true
 }
 
-// Modo é a engine do dataset. Ele é DURÁVEL: viaja numa seção crítica do
+// StoreMode é a engine do dataset. Ele é DURÁVEL: viaja numa seção crítica do
 // manifest, e abrir um dataset com o modo errado é recusado em vez de
 // tentado. O modo de falha que isso impede não é índice incompleto — é ler um
 // log append-only de eventos como se fosse estado corrente, com cada entidade
 // aparecendo dezenas de vezes e o CRC batendo em todas.
-type Modo uint8
+type StoreMode uint8
 
 const (
 	// ModoMaterializado é o dataset do produto: uma linha por entidade,
 	// deduplicada pela primary e atualizada por merge. É o zero value, e é
 	// por isso que todo dataset já em disco continua abrindo sem migração.
-	ModoMaterializado Modo = 0
-	// ModoHistorico é a tabela irmã append-only: uma linha por evento, sem
+	ModoMaterializado StoreMode = 0
+	// HistoryMode é a tabela irmã append-only: uma linha por evento, sem
 	// key, sem dedup e sem update. Ver o godoc de Apenda.
-	ModoHistorico Modo = 1
+	HistoryMode StoreMode = 1
 )
 
-func (m Modo) String() string {
-	if m == ModoHistorico {
+func (m StoreMode) String() string {
+	if m == HistoryMode {
 		return "historico"
 	}
 	return "materializado"
@@ -115,28 +115,28 @@ type Options struct {
 	Dir           string
 	SegmentSize   int64  // default 512 MiB; teto validado pelo segment
 	EstimatedRows uint64 // pre-sizing da primary (piso 1<<20 slots)
-	// CamposIndexados são os campos com índice por segmento, por ID.
+	// IndexedFields são os campos com índice por segmento, por ID.
 	//
 	// É UM par, e não mais os quatro campos de dois motores (BitmapFields,
 	// BitmapFieldNames, HashFields, HashFieldNames): com um motor só, os dois
 	// grupos alimentavam o MESMO índice, e o Store abria a união deles. Um par
 	// de campos que só sabe declarar o mesmo conjunto duas vezes é convite ao
 	// dia em que alguém preenche um e esquece o outro.
-	CamposIndexados []types.FieldID
-	// CamposIndexadosPorNome são os mesmos campos por NOME, resolvidos pelo
+	IndexedFields []types.FieldID
+	// IndexedFieldsByName são os mesmos campos por NOME, resolvidos pelo
 	// dicionário do próprio dataset durante o Open (criando a entry se
 	// necessário). Existe porque os FieldIDs nascem de schema.Compile, que
 	// precisa do dicionário — e o dicionário vive dentro do Store: exigir
 	// IDs aqui obrigaria a abrir o dataset sem índices, compilar, fechar e
 	// reabrir. Os dois campos se somam (união).
-	CamposIndexadosPorNome []string
+	IndexedFieldsByName []string
 
-	// Modo é a engine do dataset (ver o tipo). O default — o zero value — é o
+	// Mode é a engine do dataset (ver o tipo). O default — o zero value — é o
 	// dataset materializado, e é isso que faz todo dataset já em disco
 	// continuar abrindo sem migração nenhuma.
-	Modo Modo
+	Mode StoreMode
 
-	// DictCompartilhado faz este Store USAR o dicionário de campos de outro,
+	// SharedDictionary faz este Store USAR o dicionário de campos de outro,
 	// em vez de abrir o seu.
 	//
 	// Existe para a tabela histórica, e a razão é a identidade das colunas: o
@@ -151,25 +151,25 @@ type Options struct {
 	// Quem passa o dicionário CONTINUA dono dele: este Store não o fecha. A
 	// consequência operacional fica escrita — o dataset que compartilha não
 	// abre sozinho, e quem o abrir precisa abrir o dono primeiro.
-	DictCompartilhado *fielddict.Dict
+	SharedDictionary *fielddict.Dict
 
-	// ColunasDerivadas são os nomes declarados em `extract`. Chegam como
+	// DerivedColumnNames são os nomes declarados em `extract`. Chegam como
 	// STRING para não fazer o storage depender do schema: o que ele precisa
 	// saber é só se o nome já está no dicionário.
-	ColunasDerivadas []string
-	SyncEveryPut     bool // durability=sync (testes/config)
-	// TTLAtivo liga a expiração: o dataset declarou ao menos uma regra. Sem
+	DerivedColumnNames []string
+	SyncEveryPut       bool // durability=sync (testes/config)
+	// ActiveTTL liga a expiração: o dataset declarou ao menos uma regra. Sem
 	// ela nem os índices são abertos — o dataset não paga dois mmaps para não
 	// fazer nada.
-	TTLAtivo bool
-	// DuracaoDeFundo é a duração da regra SEM `when`, ou zero quando não há.
+	ActiveTTL bool
+	// FallbackDuration é a duração da regra SEM `when`, ou zero quando não há.
 	//
 	// Ela vale para a linha cuja entrada em prazos.idx é DESCONHECIDA — a que
 	// foi materializada antes de as regras existirem. É o que permite adotar
 	// as regras num dataset já populado sem que ele fique imortal da noite
 	// para o dia, e é o que faz a migração da forma escalar não mudar
 	// comportamento nenhum.
-	DuracaoDeFundo time.Duration
+	FallbackDuration time.Duration
 	// SnapshotMaxBytes é o teto de heap do journal de versões — a memória que
 	// o isolamento de leitura pode reter enquanto consultas estão abertas.
 	//
@@ -178,22 +178,22 @@ type Options struct {
 	// ingerir, e uma consulta recusada com código próprio é um resultado que o
 	// cliente sabe tratar.
 	SnapshotMaxBytes int64
-	// CampoDeEscrita é o NOME do campo de sistema que carrega o instante da
+	// WriteInstantFieldName é o NOME do campo de sistema que carrega o instante da
 	// escrita, resolvido pelo dicionário do próprio dataset durante o Open.
-	// Obrigatório quando TTLAtivo: é dele que o applyRecord tira o valor,
+	// Obrigatório quando ActiveTTL: é dele que o applyRecord tira o valor,
 	// tanto no Put quanto no replay do tail, e é por isso que o índice de
 	// expiração é reconstruível depois de um crash.
 	//
-	// Nome e não FieldID pela mesma razão do CamposIndexadosPorNome: os ids nascem
+	// Nome e não FieldID pela mesma razão do IndexedFieldsByName: os ids nascem
 	// de schema.Compile, que precisa do dicionário — e o dicionário vive
 	// dentro do Store. Exigir o id aqui obrigaria a abrir o dataset sem
 	// expiração, compilar, fechar e reabrir.
-	CampoDeEscrita string
-	// CampoDePrazo é o NOME do campo de sistema que carrega a DURAÇÃO de
-	// ociosidade da entidade, em millis. Obrigatório quando TTLAtivo, e pela
-	// mesma razão do CampoDeEscrita: os dois são lidos do payload.
-	CampoDePrazo string
-	// CompilaContadores devolve as definições dos contadores mantidos na
+	WriteInstantFieldName string
+	// TTLFieldName é o NOME do campo de sistema que carrega a DURAÇÃO de
+	// ociosidade da entidade, em millis. Obrigatório quando ActiveTTL, e pela
+	// mesma razão do WriteInstantFieldName: os dois são lidos do payload.
+	TTLFieldName string
+	// CompileCountersCallbackFunction devolve as definições dos contadores mantidos na
 	// escrita (o bloco `counters:` do YAML) compiladas contra o dicionário.
 	//
 	// É callback, e não lista, por uma dependência circular que nenhuma ordem
@@ -208,7 +208,7 @@ type Options struct {
 	// Nil é "sem contadores" — e um dataset cujo manifest declara contadores
 	// é RECUSADO nesse caso: abrir sem as definições deixaria o vetor parado
 	// enquanto o Put anda.
-	CompilaContadores func(dict *fielddict.Dict) ([]counter.Definition, error)
+	CompileCountersCallbackFunction func(dict *fielddict.Dict) ([]counter.Definition, error)
 	// Log é o logger estruturado do §95. Quando nil, o Store escreve em
 	// stderr no formato texto — que é o comportamento que os log.Printf
 	// tinham antes, e perder a divergência de recovery só porque o chamador
@@ -303,13 +303,13 @@ type Stats struct {
 	// trata com `rate()`.
 	// ExpiryRunning é o 0/1 do coletor do idle timeout; os três contadores
 	// abaixo são monotônicos e respondem, juntos, "ele está trabalhando?".
-	// Carencias importa isolada porque é a única coisa que acontece nos
+	// PendingCount importa isolada porque é a única coisa que acontece nos
 	// primeiros minutos depois de ligar a expiração num dataset já
-	// materializado — período em que Expiradas fica em zero por estar certo.
+	// materializado — período em que ExpiredCount fica em zero por estar certo.
 	ExpiryRunning          bool
-	Expiradas              uint64
-	Carencias              uint64
-	ExpiryExaminadas       uint64
+	ExpiredCount           uint64
+	PendingCount           uint64
+	ExpiredExamined        uint64
 	CompactionBytesRead    int64
 	CompactionBytesWritten int64
 }
@@ -329,92 +329,92 @@ type Store struct {
 	// false no dataset que recebeu DictCompartilhado: fechar o dicionário de
 	// outro derrubaria a ingestão do dono no meio de um LookupOrCreate.
 	dictProprio bool
-	segW        *segment.Writer
-	segR        *segment.Reader
+	secW        *segment.Writer
+	secR        *segment.Reader
 	prim        *primary.Index
 	locs        *rowindex.Locations
 	seqs        *rowindex.Sequences
-	// escritas é nil quando o dataset não declara expiração: sem ela não há
+	// writes é nil quando o dataset não declara expiração: sem ela não há
 	// o que indexar, e abrir o arquivo custaria mmap por nada.
-	escritas *rowindex.LastWrites
-	prazos   *rowindex.TTLs
-	// agenda é o índice de QUANDO cada linha vence, e acompanha o escritas:
+	writes     *rowindex.LastWrites
+	ttlMapping *rowindex.TTLs
+	// schedule é o índice de QUANDO cada linha vence, e acompanha o writes:
 	// nil junto com ele. Ela não é fonte de verdade de nada — prazoVencido
-	// continua lendo escritas e prazos —, é o que permite ao coletor
+	// continua lendo writes e ttlMapping —, é o que permite ao coletor
 	// perguntar pelo próximo vencimento em vez de varrer o dataset atrás
 	// dele.
-	agenda         *rowindex.Schedule
-	duracaoDeFundo time.Duration
-	campoDeEscrita types.FieldID
-	campoDePrazo   types.FieldID
-	// expiraBuf e tombBuf são do Expira, owned pelo wmu como o compactBuf:
+	schedule      *rowindex.Schedule
+	duration      time.Duration
+	writeFieldID  types.FieldID
+	writeFieldTTL types.FieldID
+	// expireBuffer e tempBuffer são do Expira, owned pelo wmu como o compactBuf:
 	// reter os dois evita realocar o record lido e o payload da lápide a cada
 	// expiração, e a varredura expira em rajada.
-	expiraBuf  []byte
-	tombBuf    []byte
-	expiradas  atomic.Uint64
-	carencias  atomic.Uint64
-	examinadas atomic.Uint64
-	// agendaReconstruida registra que esta abertura teve de construir a
-	// agenda em vez de adotar a que estava em disco. É o que permite ao teste
+	expireBuffer  []byte
+	tempBuffer    []byte
+	expiredCount  atomic.Uint64
+	lostCount     atomic.Uint64
+	examinedCount atomic.Uint64
+	// scheduleBuilt registra que esta abertura teve de construir a
+	// schedule em vez de adotar a que estava em disco. É o que permite ao teste
 	// afirmar a NÃO reconstrução — sem isso, "adotou" e "reconstruiu e
 	// chegou ao mesmo resultado" seriam indistinguíveis.
-	agendaReconstruida bool
+	scheduleBuilt bool
 
-	// contadores são os contadores mantidos na escrita, na ordem declarada;
+	// counters são os counters mantidos na escrita, na ordem declarada;
 	// vazio no dataset sem `counters:`. Transicionados no passo 7c do
 	// applyRecord, sob o wmu; lidos pela tabela virtual e pela auditoria sem
 	// lock do Store.
-	contadores []*counter.Counter
-	// contadoresARecriar são os que a abertura decidiu reconstruir; a
+	counters []*counter.Counter
+	// countersARecriar são os que a abertura decidiu reconstruir; a
 	// varredura roda depois do ramo de recovery e a lista é esvaziada.
-	contadoresARecriar []pendenciaDeContador
-	// contadoresConstruidos conta as reconstruções desta abertura — o
+	countersARecriar []pendenciaOfCounter
+	// countersConstruidos conta as reconstruções desta abertura — o
 	// observável que separa "adotou" de "reconstruiu e chegou ao mesmo
-	// resultado", como agendaReconstruida.
-	contadoresConstruidos int
+	// resultado", como scheduleBuilt.
+	countersConstruidos int
 	// audTrace é o seam de teste da auditoria dos contadores: chamado depois
 	// de cada linha varrida. Nil em produção.
 	audTrace func(linha types.RowID)
-	// audAntesDaCopia é o seam entre abrir o snapshot e copiar os totais —
+	// audBeforeOfCopy é o seam entre abrir o snapshot e copiar os totais —
 	// dentro do wmu, no código certo. Existe porque a janela que ele expõe é
 	// de microssegundos e nenhuma ingestão concorrente a acerta por sorte: é
 	// por ele que o teste prova que a cópia e o snapshot são do MESMO instante.
-	audAntesDaCopia func()
+	audBeforeOfCopy func()
 	// Ciclo de vida do laço de aposentadoria de grupos vazios, no molde do
-	// coletor de expiração: apGrupMu guarda o par cancela/emVoo, apGrupAtiva é
+	// coletor de expiração: apGrupMu guarda o par cancela/inVoo, apGrupActive é
 	// o medidor observável.
-	apGrupMu      sync.Mutex
-	apGrupCancela context.CancelFunc
-	apGrupEmVoo   sync.WaitGroup
-	apGrupAtiva   atomic.Bool
+	apGrupMu     sync.Mutex
+	apGrupCancel context.CancelFunc
+	apGrupInVoo  sync.WaitGroup
+	apGrupActive atomic.Bool
 
 	// Ciclo de vida do coletor, no molde do da compaction: expMu guarda o
-	// par cancela/emVoo, expAtiva é o medidor observável e expEmVoo é o que
+	// par cancela/inVoo, expActive é o medidor observável e expInVoo é o que
 	// o Close aguarda antes do quiesce.
-	expMu      sync.Mutex
-	expCancela context.CancelFunc
-	expEmVoo   sync.WaitGroup
-	expAtiva   atomic.Bool
-	// agora é o relógio da expiração. Campo, e não time.Now direto, porque um
+	expMu     sync.Mutex
+	expCancel context.CancelFunc
+	expInVoo  sync.WaitGroup
+	expActive atomic.Bool
+	// now é o relógio da expiração. Campo, e não time.Now direto, porque um
 	// teste de prazo precisa avançar o tempo sem dormir.
-	agora func() time.Time
+	now func() time.Time
 
 	// wips são os índices de segmento MUTÁVEIS — um por campo indexado, todos
 	// do segmento corrente. Mapa e não slice porque o applyRecord endereça por
 	// FieldID, uma vez por campo do payload.
 	//
-	// A LEITURA DO MAPA PELO CAMINHO DE ESCRITA (aplicaIndiceSets) dispensa o
-	// selMu, e a razão é que ele já tem o wmu na mão: as duas únicas escritas
-	// deste campo — abreWIPsDoCorrente e fechaWIPs — só acontecem sob o wmu, no
+	// A LEITURA DO MAPA PELO CAMINHO DE ESCRITA (aplicaIndexSets) dispensa o
+	// selMu, e a razão é que ele já tem o wmu na mão: as duas únicas writes
+	// deste campo — openWIPsOfCurrent e closeWIPs — só acontecem sob o wmu, no
 	// aposAppend, ou no Open, antes de existir concorrência. Contra a CONSULTA,
 	// que não toma o wmu por desenho, o que separa leitura de escrita é o selMu.
 	wips map[types.FieldID]*segindex.WIP
-	// wipsSeg é o segmento DONO dos WIPs publicados em wips, e existe porque a
-	// consulta decide "este segmento é o corrente?" com um snapshot do curSegID
+	// wipsSec é o segmento DONO dos WIPs publicados em wips, e existe porque a
+	// consulta decide "este segmento é o corrente?" com um snapshot do curSecID
 	// que a rotação pode ter tornado obsoleto. Sem a identidade, uma consulta
-	// que atravessasse a rotação inteira (Swap → fechaWIPs → Sela →
-	// abreWIPsDoCorrente) chegava ao segmento ANTIGO acreditando que ele era o
+	// que atravessasse a rotação inteira (Swap → closeWIPs → Sela →
+	// openWIPsOfCurrent) chegava ao segmento ANTIGO acreditando que ele era o
 	// corrente e recebia ok=true com os WIPs do segmento NOVO — o .sidx
 	// recém-selado nunca era consultado e nenhuma fonte de enumeração cobria o
 	// segmento: FALSO NEGATIVO, a única coisa que a revalidação do §44 não
@@ -423,15 +423,15 @@ type Store struct {
 	//
 	// Zero significa "não há WIP publicado" (o segmento 0 não existe depois do
 	// Open — ver aposAppend). Escrita junto com o mapa, sob o mesmo selMu.
-	wipsSeg uint32
+	wipsSec uint32
 	// selados são os índices imutáveis, abertos SOB DEMANDA e mantidos
 	// mapeados. Não há LRU: o mapeamento somente-leitura não retém descritor
 	// (open → mmap → close), e 500 VMAs num teto padrão de 65.530 não é
 	// pressão.
 	selados map[uint32]*segindex.Sealed
-	// selGeracao conta as EVIÇÕES do mapa de selados, e existe por causa de uma
+	// selGeneration conta as EVIÇÕES do mapa de selados, e existe por causa de uma
 	// janela que só passou a ser alcançável quando o laço da §2.4 subiu: o
-	// garanteSelado abre o arquivo FORA de lock nenhum (o crc32c de um índice
+	// garanteSealed abre o arquivo FORA de lock nenhum (o crc32c de um índice
 	// grande não pode rodar sob o selMu, que é o lock da rotação), então entre
 	// abrir e publicar cabe uma reescrita inteira da reconstrução. Sem a geração,
 	// o mapeamento VELHO era publicado depois da evição e o segmento respondia
@@ -445,7 +445,7 @@ type Store struct {
 	// segundo mapa a podar contra a lista de segmentos vivos.
 	//
 	// Protegida pelo selMu, como os dois mapas.
-	selGeracao uint64
+	selGeneration uint64
 	// selMu protege os DOIS mapas de índice por segmento — selados e wips —, e
 	// é FOLHA na ordem de locks: nada tomado sob ele toma wmu ou aposMu. Ele
 	// existe porque os mapas são escritos pela aposentadoria e pela rotação e
@@ -456,15 +456,15 @@ type Store struct {
 	// respeitar sem separar contenção nenhuma — os dois mapas são escritos pelo
 	// mesmo evento, a rotação de segmento.
 	selMu sync.RWMutex
-	// camposIndexados é o conjunto ordenado, resolvido no Open e IMUTÁVEL na
-	// vida do Store. É ele que responde Indexed e CamposIndexados, e a
+	// fieldsIndexados é o conjunto ordenado, resolvido no Open e IMUTÁVEL na
+	// vida do Store. É ele que responde Indexed e FieldsIndexados, e a
 	// imutabilidade é o que permite responder aos dois sem lock.
-	camposIndexados []types.FieldID
-	// chaveIndiceBuf é o buffer da chave canônica do índice por segmento,
+	fieldsIndexados []types.FieldID
+	// keyIndiceBuf é o buffer da chave canônica do índice por segmento,
 	// reusado a cada campo de cada evento. É do Store, e writer-only, pelo
 	// mesmo motivo dos outros buffers do caminho quente: uma alocação por campo
 	// por evento é o que separa o gate de zero alocação de uma regressão.
-	chaveIndiceBuf []byte
+	keyIndiceBuf []byte
 
 	nextRowID atomic.Uint64
 	rowCount  atomic.Uint64
@@ -492,7 +492,7 @@ type Store struct {
 	// snaps conta as consultas abertas por época. É ele que responde "ainda há
 	// leitor atrás desta versão?", que é a pergunta de que dependem o journal,
 	// a poda e a expiração oportunista da compaction.
-	snaps *registroDeSnapshots
+	snaps *recordOfSnapshots
 	// vers guarda as locations anteriores enquanto algum leitor as alcança.
 	vers *versions.Journal
 	// snapsExpirados conta as consultas invalidadas pelo teto do journal. É
@@ -501,18 +501,18 @@ type Store struct {
 	snapsExpirados atomic.Uint64
 
 	// Estado da goroutine de retenção do dataset histórico, no mesmo molde do
-	// da compaction: retMu guarda o cancelamento, retPassadaMu serializa as
+	// da compaction: retMu guarda o cancelamento, retPassMu serializa as
 	// passadas (duas concorrentes disputariam a mesma aposentadoria e a
-	// segunda encontraria o segmento já renomeado), retAtiva é o medidor que
+	// segunda encontraria o segmento já renomeado), retActive é o medidor que
 	// o Stats publica e retBuf é o destino reusado dos preads da busca
 	// binária.
 	//
-	// O retPassadaMu serializa MAIS que as passadas: ele é também a barreira
+	// O retPassMu serializa MAIS que as passadas: ele é também a barreira
 	// entre a expulsão da janela e a pendência de reconstrução, e é sob ele que
-	// o tamanhoExpulso vive. Ver o godoc de janelaDeSegmentos.
-	retMu        sync.Mutex
-	retPassadaMu sync.Mutex
-	// tamanhoExpulso lembra, POR SEGMENTO, quantos bytes o .sidx dele ocupava
+	// o sizeExpulso vive. Ver o godoc de windowOfSegmentos.
+	retMu     sync.Mutex
+	retPassMu sync.Mutex
+	// sizeExpulso lembra, POR SEGMENTO, quantos bytes o .sidx dele ocupava
 	// no instante em que a janela o expulsou.
 	//
 	// Existe porque o estimador da janela precisa ser MONÓTONO e "o maior .sidx
@@ -522,55 +522,55 @@ type Store struct {
 	// mapa não é estimativa nenhuma: é o tamanho que ele de fato teve.
 	//
 	// Em MEMÓRIA, e nunca em disco: um metadado a menos é uma janela de crash a
-	// menos, que é a mesma escolha do primeiroRowIDDoSeguinte e da §2.5. O preço
+	// menos, que é a mesma escolha do primeiroRowIDOfSeguinte e da §2.5. O preço
 	// é que um restart volta ao estimador conservador e paga UMA reconstrução
 	// desperdiçada por segmento atípico antes de estabilizar de novo — limitado,
 	// e barato ao lado de mais um arquivo durável a recuperar.
 	//
-	// Protegido pelo retPassadaMu. Podado na expulsão, contra a lista de
+	// Protegido pelo retPassMu. Podado na expulsão, contra a lista de
 	// segmentos vivos: sem isso ele cresceria para sempre num dataset que
 	// aposenta segmentos o dia inteiro.
-	tamanhoExpulso map[uint32]int64
-	retCancela     context.CancelFunc
-	retEmVoo       sync.WaitGroup
-	retAtiva       atomic.Bool
-	retBuf         []byte
+	sizeExpulso map[uint32]int64
+	retCancel   context.CancelFunc
+	retInVoo    sync.WaitGroup
+	retActive   atomic.Bool
+	retBuf      []byte
 
 	// Ciclo de vida do laço de RECONSTRUÇÃO do índice por segmento (§2.4), no
 	// molde do da compaction e do da retenção: recMu guarda o par
-	// cancela/emVoo, recAtiva é o medidor observável e recEmVoo é o que o Close
+	// cancela/inVoo, recActive é o medidor observável e recInVoo é o que o Close
 	// aguarda antes do quiesce.
 	//
 	// Ele é goroutine PRÓPRIA, e não mais um trecho da passada de retenção como a
 	// expulsão da janela, porque vale para os DOIS modos de dataset: o backfill de
 	// um campo acrescentado ao schema (§2.6) acontece no materializado, onde não
 	// há passada de retenção nenhuma.
-	recMu      sync.Mutex
-	recCancela context.CancelFunc
-	recEmVoo   sync.WaitGroup
-	recAtiva   atomic.Bool
-	// recPassadaMu serializa as passadas de reconstrução, como o retPassadaMu faz
+	recMu     sync.Mutex
+	recCancel context.CancelFunc
+	recInVoo  sync.WaitGroup
+	recActive atomic.Bool
+	// recPassMu serializa as passadas de reconstrução, como o retPassMu faz
 	// com as de retenção: duas concorrentes varreriam o mesmo segmento e
 	// publicariam o mesmo arquivo duas vezes.
 	//
 	// Ele é o lock MAIS EXTERNO das duas cadeias que a passada percorre —
-	// recPassadaMu → retPassadaMu (dentro da pendência) e recPassadaMu → vida
+	// recPassMu → retPassMu (dentro da pendência) e recPassMu → vida
 	// (dentro de cada reconstrução) —, e nada tomado sob os outros dois volta a
 	// tomá-lo. É também ele que dá o happens-before do recPontoFixo, tocado só
 	// dentro da passada.
-	recPassadaMu sync.Mutex
+	recPassMu sync.Mutex
 	// Os contadores atômicos das séries do índice por segmento (§6.6) — sem
 	// número no nome de propósito: contá-los aqui divergiria do bloco na
 	// primeira série nova, e quem precisa da lista tem os campos logo abaixo.
 	//
 	// São atômicos, e não uma coleta que vá ler o disco no scrape, por uma razão
 	// de LOCK e não de custo: os números de estado de segmento só existem sob o
-	// retPassadaMu, que fica ACIMA da cadeia vida → wmu → aposMu. Uma raspagem
+	// retPassMu, que fica ACIMA da cadeia vida → wmu → aposMu. Uma raspagem
 	// que fosse buscá-los pediria esse lock de fora da cadeia, e a inversão só
 	// apareceria sob carga — que é exatamente quando o /metrics precisa
 	// responder. Quem já segura o lock publica; o scrape lê átomo.
 	//
-	// segSelados/segCorrentes/segPendentes/segFora são os quatro estados, e eles
+	// secSelados/secCorrentes/secPendentes/secFora são os quatro estados, e eles
 	// PARTICIONAM os segmentos do dataset: corrente é o único cujo índice é o
 	// WIP; entre os selados, `fora` está deliberadamente sem índice (a janela o
 	// expulsou), `pendente` está na fila e `selado` tem o .sidx que descreve o
@@ -578,12 +578,12 @@ type Store struct {
 	// a série existir — com um rótulo só, o gauge não responde "o laço está
 	// avançando?", que é a única pergunta que uma migração faz.
 	//
-	// Escritos pelo SegmentosPendentesDeReconstrucao, que é o único lugar onde
+	// Escritos pelo SegmentosPendentesOfRebuild, que é o único lugar onde
 	// os quatro são decididos pela mesma conta; ver o godoc de lá.
-	segSelados   atomic.Int64
-	segCorrentes atomic.Int64
-	segPendentes atomic.Int64
-	segFora      atomic.Int64
+	secSelados   atomic.Int64
+	secCorrentes atomic.Int64
+	secPendentes atomic.Int64
+	secFora      atomic.Int64
 	// recFeitas conta os segmentos cujo índice a reconstrução PUBLICOU, e é
 	// diferente do varreduras: aquele conta leituras de segmento (inclusive a da
 	// abertura, e inclusive a que terminou sem posting nenhuma), este conta
@@ -594,10 +594,10 @@ type Store struct {
 	// taxa.
 	//
 	// Sobe uma vez por ABERTURA do arquivo, e a abertura acontece uma vez por
-	// segmento por processo: o garanteSelado PUBLICA no cache o mapeamento
+	// segmento por processo: o garanteSealed PUBLICA no cache o mapeamento
 	// reprovado (publicar mantém o sync.Once do crc cumprido; recusar obrigaria
 	// toda consulta a remapear e revarrer o arquivo podre inteiro). Da segunda
-	// consulta em diante o fonteIndexada acha o mapeamento no s.selados e volta
+	// consulta em diante o sourceIndexada acha o mapeamento no s.selados e volta
 	// antes de reconferir nada. Só há incremento novo se o mapeamento for evictado
 	// — reconstrução, aposentadoria — ou se o dataset for reaberto.
 	//
@@ -608,16 +608,16 @@ type Store struct {
 	// E não há série a que redirecionar, o que é o limite honesto a registrar. O
 	// gauge de estados é CEGO: o arquivo reprovado conta como `selado`, porque a
 	// pendência lê a tabela de seções sem conferir crc (débito 103). O
-	// segPorEnumeracao sobe, mas no MESMO balde de um segmento fora da janela, sem
+	// secByEnumeration sobe, mas no MESMO balde de um segmento fora da janela, sem
 	// rótulo que separe a causa. O sinal é o WARN indice.selado_corrompido; esta
 	// série diz "quantos foram pegos desde a subida".
 	crcFalhas atomic.Int64
-	// segPorIndice e segPorEnumeracao contam os segmentos que cada Lookup
+	// segByIndice e secByEnumeration contam os segmentos que cada Lookup
 	// resolveu por cada caminho (§3.4). São a ÚNICA coisa que o chamador enxerga
 	// da degradação: planner, executor e driver veem um iterador ascendente e
 	// nada mais.
-	segPorIndice     atomic.Int64
-	segPorEnumeracao atomic.Int64
+	segByIndice     atomic.Int64
+	segByEnumeracao atomic.Int64
 	// recPontoFixo é o que impede o MOINHO da fila-superconjunto.
 	//
 	// A fila é derivada do disco e é um superconjunto do trabalho real: um
@@ -647,19 +647,19 @@ type Store struct {
 	// está moendo" contando quantas ele fez. É também o que prova que os campos
 	// pendentes de um segmento são resolvidos numa leitura só.
 	varreduras atomic.Int64
-	// retPorTempo e retPorTamanho contam os segmentos aposentados por cada
+	// retByTime e retBySize contam os segmentos aposentados por cada
 	// política desde a subida. Duas séries e não uma: qual das duas está
 	// decidindo é a pergunta que separa "o prazo está sendo honrado" de "o
 	// teto está engolindo o prazo".
-	retPorTempo   atomic.Int64
-	retPorTamanho atomic.Int64
-	epoch         uint64 // último epoch de manifest gravado (writer-only)
+	retByTime atomic.Int64
+	retBySize atomic.Int64
+	epoch     uint64 // último epoch de manifest gravado (writer-only)
 
-	// curSegID espelha o segmento corrente para leitura concorrente em
+	// curSecID espelha o segmento corrente para leitura concorrente em
 	// Stats (segment.Writer não é thread-safe).
-	curSegID atomic.Uint32
-	// segCount/liveBytesAll/diskBytesAll espelham os AGREGADOS de segTally e
-	// segSize, no mesmo padrão do curSegID acima e pelo mesmo motivo: o que
+	curSecID atomic.Uint32
+	// secCount/liveBytesAll/diskBytesAll espelham os AGREGADOS de secTally e
+	// secSize, no mesmo padrão do curSecID acima e pelo mesmo motivo: o que
 	// atravessa a fronteira writer→leitor não pode ser a estrutura, tem de
 	// ser o número. Mapa Go não se lê sem sincronizar (é fatal error do
 	// runtime, não corrida benigna), e sincronizar aqui significaria tomar o
@@ -679,7 +679,7 @@ type Store struct {
 	// Custo no caminho quente, contado com precisão porque o número já saiu
 	// errado uma vez: DUAS somas atômicas no Put que é update — a do record
 	// que nasce e a da baixa do record que ele torna garbage — e UMA no Put
-	// que só cria. O Put que estreia um segmento paga mais uma, no segCount.
+	// que só cria. O Put que estreia um segmento paga mais uma, no secCount.
 	// Zero alocação nos três casos, então os gates de AllocsPerRun seguem
 	// valendo.
 	//
@@ -690,7 +690,7 @@ type Store struct {
 	// depende de os três descreverem o mesmo nanossegundo. Um snapshot
 	// coerente exigiria publicar uma struct por ponteiro atômico, ou seja uma
 	// alocação por Put, para servir uma raspagem de métrica.
-	segCount     atomic.Uint32
+	secCount     atomic.Uint32
 	liveBytesAll atomic.Uint64
 	diskBytesAll atomic.Int64
 	// espelhosDivergentes conta as vezes em que o checkpoint ENCONTROU os
@@ -738,7 +738,7 @@ type Store struct {
 	// INVARIANTE DE ORDEM, e ela é a parte perigosa: aposMu é sempre o lock
 	// MAIS INTERNO. Put, Expira e os dois validadores da primary tomam wmu (ou
 	// o RLock da primary) e só depois entram aqui. Nada tomado sob aposMu pode
-	// tomar wmu — em particular, o podaSegmentoAposentado toma wmu e por isso
+	// tomar wmu — em particular, o podaSegmentAposentado toma wmu e por isso
 	// roda FORA da seção crítica da aposentadoria. Invertida, a ordem é
 	// wmu→aposMu de um lado e aposMu→wmu do outro, que é deadlock.
 	//
@@ -749,7 +749,7 @@ type Store struct {
 	// não o inode.
 	aposMu sync.RWMutex
 
-	// compCancela e compEmVoo são o ciclo de vida da goroutine de compaction
+	// compCancel e compInVoo são o ciclo de vida da goroutine de compaction
 	// (§53-55, decisão D7). Ela NÃO se junta ao entra()/sai() pela duração da
 	// passada: o Close toma vida.Lock(), que é quiesce, e uma varredura de
 	// segmento leva minutos — o Close ficaria preso por todo esse tempo. O
@@ -762,72 +762,72 @@ type Store struct {
 	// WaitGroup que o Para está esperando, que é uso indevido do tipo.
 	//
 	// compMu NÃO decide mais (revisão da B5, achado Critical) se HÁ uma
-	// passada em voo — só se o LAÇO existe. compCancela fica não-nil da
+	// passada em voo — só se o LAÇO existe. compCancel fica não-nil da
 	// primeira à última hora do laço, dormindo ou varrendo, então checá-lo
 	// para decidir 409 tornava a rota morta o tempo todo na config default
-	// (storage.compaction.enabled ausente ⇒ true). Quem decide isso agora é
-	// compPassadaMu, abaixo — um mutex PRÓPRIO, de propósito: compMu fica
-	// preso do início ao fim de ParaCompaction (Lock → compCancela() →
-	// compEmVoo.Wait(), que pode durar minutos com uma passada em
+	// (storage.compaction.enabled ausente ⇒ true). Quem decide isso now é
+	// compPassMu, abaixo — um mutex PRÓPRIO, de propósito: compMu fica
+	// preso do início ao fim de ForCompaction (Lock → compCancel() →
+	// compInVoo.Wait(), que pode durar minutos com uma passada em
 	// andamento), e nem o laço nem CompactaUmaVez podem arriscar bloquear
 	// nele para reivindicar uma passada — um Lock bloqueante ali, na hora
-	// errada, prenderia o próprio goroutine que ParaCompaction está
-	// esperando via compEmVoo (deadlock).
-	compMu      sync.Mutex
-	compCancela context.CancelFunc
-	compEmVoo   sync.WaitGroup
+	// errada, prenderia o próprio goroutine que ForCompaction está
+	// esperando via compInVoo (deadlock).
+	compMu     sync.Mutex
+	compCancel context.CancelFunc
+	compInVoo  sync.WaitGroup
 
-	// compPassadaMu protege o trio (compPassadaEmVoo, compManualEmVoo,
+	// compPassMu protege o trio (compPassInVoo, compManualInVoo,
 	// compEncerrando) — o single-flight FINO que decide, a cada instante,
 	// se HÁ uma passada de verdade em andamento (ou se está proibido
 	// começar uma nova). As três flags:
 	//
-	//   - compPassadaEmVoo: true SÓ durante a chamada real a
-	//     passadaDeCompaction dentro de rodaCompaction (o laço automático).
-	//   - compManualEmVoo: true durante a chamada real a passadaDeCompaction
+	//   - compPassInVoo: true SÓ durante a chamada real a
+	//     passOfCompaction dentro de runCompaction (o laço automático).
+	//   - compManualInVoo: true durante a chamada real a passOfCompaction
 	//     dentro de CompactaUmaVez (Task B5, POST /v1/compact).
-	//   - compEncerrando: setada por ParaCompaction ANTES de compEmVoo.Wait()
+	//   - compEncerrando: setada por ForCompaction ANTES de compInVoo.Wait()
 	//     (revisão da B5, round 2 — Important). Enquanto true, NENHUM claim
 	//     novo é aceito, nem do laço nem manual — é o veto que fecha a
-	//     janela entre "compEmVoo pode estar em zero" e "uma reivindicação
-	//     nova está prestes a somar 1 nele": sem ele, ParaCompaction podia
+	//     janela entre "compInVoo pode estar em zero" e "uma reivindicação
+	//     nova está prestes a somar 1 nele": sem ele, ForCompaction podia
 	//     decidir que o WaitGroup estava vazio e devolver o controle a
 	//     Close() ENQUANTO uma chamada manual, já autorizada a prosseguir,
-	//     ainda não tinha chamado Add — e Close() fecharia segR/segW debaixo
+	//     ainda não tinha chamado Add — e Close() fecharia secR/secW debaixo
 	//     dela. Nunca é resetada para false: a única chamadora real de
-	//     ParaCompaction é Close(), que também não volta atrás, e reabrir a
+	//     ForCompaction é Close(), que também não volta atrás, e reabrir a
 	//     vaga depois do Wait() reabriria exatamente esta janela um passo
 	//     adiante (ver o godoc de CompactaUmaVez, compaction.go).
 	//
-	// tentaClaimarPassada/liberaPassada (compaction.go) são os dois únicos
+	// tentaClaimarPass/releasePass (compaction.go) são os dois únicos
 	// pontos que tocam este trio, e um Lock BLOQUEANTE neles é seguro — ao
-	// contrário de compMu (nota acima), compPassadaMu NUNCA é mantido além
+	// contrário de compMu (nota acima), compPassMu NUNCA é mantido além
 	// do tempo de checar as flags e (para a chamada manual) parear o
-	// Add/Done de compEmVoo: nenhuma das duas funções o segura DURANTE a
+	// Add/Done de compInVoo: nenhuma das duas funções o segura DURANTE a
 	// passada em si (que é o trecho que pode levar minutos), então não
 	// existe goroutine que fique presa nele por tempo que importe, e
-	// portanto nenhum risco de ParaCompaction (via compEmVoo.Wait())
+	// portanto nenhum risco de ForCompaction (via compInVoo.Wait())
 	// esperar por um goroutine bloqueado aqui.
 	//
-	// A exclusão é HERMÉTICA NOS DOIS SENTIDOS: com compManualEmVoo true, a
-	// tentativa do laço (rodaCompaction) de reivindicar a rodada FALHA e ele
-	// PULA — nunca sobe uma segunda varredura; com compPassadaEmVoo true,
+	// A exclusão é HERMÉTICA NOS DOIS SENTIDOS: com compManualInVoo true, a
+	// tentativa do laço (runCompaction) de reivindicar a rodada FALHA e ele
+	// PULA — nunca sobe uma segunda varredura; com compPassInVoo true,
 	// CompactaUmaVez devolve ErrCompactionBusy na hora.
 	//
-	// compEmVoo.Add(1)/Done() da chamada MANUAL vivem DENTRO de
-	// tentaClaimarPassada/liberaPassada — atômicos com o claim, na MESMA
+	// compInVoo.Add(1)/Done() da chamada MANUAL vivem DENTRO de
+	// tentaClaimarPass/releasePass — atômicos com o claim, na MESMA
 	// seção crítica — e não como dois passos separados em CompactaUmaVez:
-	// ver o godoc de tentaClaimarPassada para o porquê. É esse pareamento,
-	// mais o veto de compEncerrando, que faz ParaCompaction (chamado pelo
+	// ver o godoc de tentaClaimarPass para o porquê. É esse pareamento,
+	// mais o veto de compEncerrando, que faz ForCompaction (chamado pelo
 	// Close) esperar de verdade por uma passada manual antes de fechar
-	// segR/segW sob os pés dela — a análise completa está no godoc de
+	// secR/secW sob os pés dela — a análise completa está no godoc de
 	// CompactaUmaVez (compaction.go).
-	compPassadaMu    sync.Mutex
-	compPassadaEmVoo bool
-	compManualEmVoo  bool
-	compEncerrando   bool
+	compPassMu      sync.Mutex
+	compPassInVoo   bool
+	compManualInVoo bool
+	compEncerrando  bool
 
-	// compAtiva, compBytesLidos e compBytesEscritos são os alimentadores das
+	// compActive, compBytesLidos e compBytesEscritos são os alimentadores das
 	// três séries de compaction do §92, que até o M4 eram nome sem número
 	// (names.go). São atômicos e não campos sob o wmu pelo motivo dos
 	// espelhos logo acima: quem os lê é o /metrics, no instante do scrape, e
@@ -838,14 +838,14 @@ type Store struct {
 	// compaction move, e o servidor os lê pelo Stats() em vez de manter cópia
 	// própria — a doutrina do registry (metrics.go) é que quem publica lê a
 	// estrutura existente.
-	compAtiva         atomic.Bool
+	compActive        atomic.Bool
 	compBytesLidos    atomic.Int64
 	compBytesEscritos atomic.Int64
 
 	// wmu serializa as operações do writer (Put/Sync/Checkpoint): o
 	// contrato "writer único" deixa de ser convenção e vira mecanismo —
 	// um Checkpoint de coordenador concorrente com Put não pode mais
-	// corromper segTally/epoch nem ler offset além do fsyncado.
+	// corromper secTally/epoch nem ler offset além do fsyncado.
 	wmu sync.Mutex
 
 	// cpTrace é o seam de teste da ordem de durabilidade do checkpoint
@@ -866,7 +866,7 @@ type Store struct {
 	// ao lado.
 	//
 	// São TRÊS chamadas, não duas: as do rename e do unlink em
-	// aposentaSegmento, e a do fim do reparaAposentados. A terceira entrou
+	// aposentaSegment, e a do fim do repairAposentados. A terceira entrou
 	// depois, e o motivo está registrado porque ele é a lição: enquanto o
 	// reparo foi função de PACOTE, o seam não o alcançava, e apagar aquele
 	// fsync deixava `go test ./...` inteiro verde no único caminho da fase
@@ -899,23 +899,23 @@ type Store struct {
 	// nenhuma.
 	setErrHook func(types.FieldID) error
 
-	// entreRemoverEEsquecerHook é o seam de teste do removeSidxDoDisco (nil em
+	// entreRemoverEEsquecerHook é o seam de teste do removeSidxOfDisk (nil em
 	// produção): roda entre o unlink do .sidx e o esquecimento do cache. É o
 	// único jeito determinístico de pôr uma consulta DENTRO dessa janela — que
 	// é onde a ordem inversa (esquecer primeiro) deixava a consulta publicar o
 	// mapeamento de um arquivo já removido, sem ninguém para evictá-lo.
 	entreRemoverEEsquecerHook func(seg uint32)
 
-	// segTally acumula os totais por segmento que o writer conhece (para as
+	// secTally acumula os totais por segmento que o writer conhece (para as
 	// stats do manifest §9; em memória — a S12 os reconstrói no replay).
 	// Writer-only.
-	segTally map[uint32]*segStats
+	secTally map[uint32]*secStats
 
-	// segSize guarda o tamanho de cada arquivo de segmento visto pelo
+	// secSize guarda o tamanho de cada arquivo de segmento visto pelo
 	// último ListSegments do checkpoint. Writer-only, mesmo regime do
-	// segTally.
+	// secTally.
 	//
-	// É mapa à parte, e não um campo do segStats, porque as duas coisas têm
+	// É mapa à parte, e não um campo do secStats, porque as duas coisas têm
 	// FONTES diferentes e precisam continuar tendo: o tally é o que o writer
 	// contabilizou (limite superior, débito 38), enquanto isto é o que o
 	// diretório respondeu. Fundi-los faria a imprecisão de um contaminar o
@@ -924,7 +924,7 @@ type Store struct {
 	// tally acompanha cada Put, e isto só se move no checkpoint — que é
 	// justamente onde o CONJUNTO de chaves dos dois é reconciliado, porque só
 	// ali o Store sabe quais arquivos o diretório ainda tem.
-	segSize map[uint32]int64
+	secSize map[uint32]int64
 
 	// lock garante acesso exclusivo ao diretório do dataset.
 	lock *datasetLock
@@ -932,11 +932,11 @@ type Store struct {
 	// Séries do §92 sobre o checkpoint. São nil quando o chamador não passou
 	// registry (CLI, testes), e todo uso é guardado — a instrumentação não
 	// pode ser condição de funcionamento do storage.
-	cpDuracao *metrics.HistogramSeries
-	cpUltimo  *metrics.GaugeSeries
+	cpDuration *metrics.HistogramSeries
+	cpUltimo   *metrics.GaugeSeries
 
 	// srcOffsets é a posição no tópico Kafka amarrada a este checkpoint
-	// (§48, §50). WRITER-ONLY, sob wmu — mesmo regime de epoch e segTally.
+	// (§48, §50). WRITER-ONLY, sob wmu — mesmo regime de epoch e secTally.
 	//
 	// Mora no Store, e não num parâmetro do Checkpoint, por causa do Open:
 	// ele grava um checkpoint imediato, então qualquer estado que não viva
@@ -1043,16 +1043,16 @@ func Open(opts Options) (*Store, error) {
 	}
 	s := &Store{
 		opts:     opts,
-		segTally: make(map[uint32]*segStats),
-		segSize:  make(map[uint32]int64),
-		agora:    time.Now,
-		snaps:    novoRegistroDeSnapshots(),
+		secTally: make(map[uint32]*secStats),
+		secSize:  make(map[uint32]int64),
+		now:      time.Now,
+		snaps:    newRecordOfSnapshots(),
 		vers:     versions.New(),
 	}
 	if opts.Metrics != nil {
-		s.cpDuracao = opts.Metrics.Histogram(metrics.MetCheckpointDurationSeconds,
+		s.cpDuration = opts.Metrics.Histogram(metrics.MetCheckpointDurationSeconds,
 			"Duração do checkpoint em segundos, da chamada ao manifest durável (inclui a espera pelo mutex do writer, que é stall real).",
-			limitesDeCheckpoint, metrics.LabelDataset).With(opts.Dataset)
+			limitsDeCheckpoint, metrics.LabelDataset).With(opts.Dataset)
 		s.cpUltimo = opts.Metrics.Gauge(metrics.MetCheckpointLastSuccessTimestmp,
 			"Unix timestamp do último checkpoint bem-sucedido. Fica em 0 até o primeiro.",
 			metrics.LabelDataset).With(opts.Dataset)
@@ -1064,7 +1064,7 @@ func Open(opts Options) (*Store, error) {
 		}
 	}()
 
-	if err := validaOpcoesDoModo(opts); err != nil {
+	if err := validateModeOptions(opts); err != nil {
 		return nil, err
 	}
 
@@ -1083,8 +1083,8 @@ func Open(opts Options) (*Store, error) {
 	if err := spill.Cleanup(opts.Dir); err != nil {
 		return nil, fmt.Errorf("storage: abrir o dataset %s: %w", opts.Dir, err)
 	}
-	if opts.DictCompartilhado != nil {
-		s.dict = opts.DictCompartilhado
+	if opts.SharedDictionary != nil {
+		s.dict = opts.SharedDictionary
 	} else if s.dict, err = fielddict.Open(filepath.Join(metaDir, "fields.dict")); err != nil {
 		// O erro do dicionário já traz arquivo, versão e remediação; aqui entra
 		// o dataset, que é o identificador que o operador tem na mão.
@@ -1092,7 +1092,7 @@ func Open(opts Options) (*Store, error) {
 	} else {
 		s.dictProprio = true
 	}
-	if s.segR, err = segment.OpenReader(dataDir); err != nil {
+	if s.secR, err = segment.OpenReader(dataDir); err != nil {
 		return nil, err
 	}
 	// Piso de 1<<20 slots do design §5 aplica-se aqui, não no pacote primary.
@@ -1106,7 +1106,7 @@ func Open(opts Options) (*Store, error) {
 	// nem um nem outro, e abri-los seria pagar dois mmaps (um deles com rehash
 	// a 70% de ocupação, sobre dezenas de milhões de linhas) para não fazer
 	// nada. É a mesma economia que o TTLAtivo já faz com expiry.idx.
-	if opts.Modo != ModoHistorico {
+	if opts.Mode != HistoryMode {
 		minSlots := max(uint64(1<<20), opts.EstimatedRows*10/7)
 		if s.prim, err = primary.Open(filepath.Join(idxDir, "primary.idx"), minSlots); err != nil {
 			return nil, err
@@ -1118,23 +1118,23 @@ func Open(opts Options) (*Store, error) {
 	if s.locs, err = rowindex.OpenLocations(filepath.Join(idxDir, "locations.idx"), minRows); err != nil {
 		return nil, err
 	}
-	if opts.TTLAtivo {
-		if opts.CampoDeEscrita == "" || opts.CampoDePrazo == "" {
+	if opts.ActiveTTL {
+		if opts.WriteInstantFieldName == "" || opts.TTLFieldName == "" {
 			// Sem os campos o applyRecord não teria de onde tirar o instante
 			// nem a duração, e toda row ficaria com prazo desconhecido — a
 			// expiração nunca aconteceria, em silêncio.
-			return nil, fmt.Errorf("%w: TTLAtivo exige CampoDeEscrita e CampoDePrazo", ErrInvalidArgument)
+			return nil, fmt.Errorf("%w: TTLAtivo exige WriteInstantFieldName e TTLFieldName", ErrInvalidArgument)
 		}
-		if s.escritas, err = rowindex.OpenLastWrites(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
+		if s.writes, err = rowindex.OpenLastWrites(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
 			return nil, err
 		}
-		if s.prazos, err = rowindex.OpenTTLs(filepath.Join(idxDir, "prazos.idx"), minRows); err != nil {
+		if s.ttlMapping, err = rowindex.OpenTTLs(filepath.Join(idxDir, "prazos.idx"), minRows); err != nil {
 			return nil, err
 		}
-		if s.agenda, err = rowindex.OpenSchedule(idxDir, minRows); err != nil {
+		if s.schedule, err = rowindex.OpenSchedule(idxDir, minRows); err != nil {
 			return nil, err
 		}
-		s.duracaoDeFundo = opts.DuracaoDeFundo
+		s.duration = opts.FallbackDuration
 	}
 	m, mErr := checkpoint.Load(s.manifestPath())
 	refs, err := segment.ListSegments(dataDir)
@@ -1148,7 +1148,7 @@ func Open(opts Options) (*Store, error) {
 	// _writtenAt e os campos indexados são registrados logo abaixo, com fsync,
 	// e o dicionário é append-only. Uma subida abortada depois disso deixaria
 	// o nome registrado para sempre.
-	if err := validaDerivadasContraDicionario(m, s.dict, opts.ColunasDerivadas); err != nil {
+	if err := validateDerivedAgainstDictionary(m, s.dict, opts.DerivedColumnNames); err != nil {
 		return nil, err
 	}
 
@@ -1156,7 +1156,7 @@ func Open(opts Options) (*Store, error) {
 	// recovery: os dois governam o que é visível, e uma abertura que decidisse
 	// isso depois de já ter reconstruído índices leria linhas que a retenção
 	// tinha tirado da consulta.
-	if err := s.adotaModoDoManifest(m); err != nil {
+	if err := s.adotaModoOfManifest(m); err != nil {
 		return nil, err
 	}
 
@@ -1165,23 +1165,23 @@ func Open(opts Options) (*Store, error) {
 	// nome já está no dicionário compartilhado — o dataset base o registrou
 	// antes, porque declarar `history.expireAfterWrite` faz o Compile dele
 	// exigir o campo.
-	if s.escritas == nil && opts.Modo == ModoHistorico && opts.CampoDeEscrita != "" {
-		if s.campoDeEscrita, err = s.dict.LookupOrCreate([]byte(opts.CampoDeEscrita)); err != nil {
-			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDeEscrita, err)
+	if s.writes == nil && opts.Mode == HistoryMode && opts.WriteInstantFieldName != "" {
+		if s.writeFieldID, err = s.dict.LookupOrCreate([]byte(opts.WriteInstantFieldName)); err != nil {
+			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.WriteInstantFieldName, err)
 		}
 	}
-	if s.escritas != nil {
+	if s.writes != nil {
 		// LookupOrCreate e não Lookup, e nesta ORDEM. O id sai daqui e tem de
 		// ser o MESMO que o schema.Compile resolve depois, e a ordem das
 		// chamadas decide o mapeamento nome→id de um dataset NOVO, gravado
 		// para sempre: _writtenAt, _expiresIn, e só então os campos indexados,
 		// resolvidos logo abaixo (ver o comentário ali para o que mudou DENTRO
 		// desse último grupo desde a D5). Nunca reordene esta sequência.
-		if s.campoDeEscrita, err = s.dict.LookupOrCreate([]byte(opts.CampoDeEscrita)); err != nil {
-			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDeEscrita, err)
+		if s.writeFieldID, err = s.dict.LookupOrCreate([]byte(opts.WriteInstantFieldName)); err != nil {
+			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.WriteInstantFieldName, err)
 		}
-		if s.campoDePrazo, err = s.dict.LookupOrCreate([]byte(opts.CampoDePrazo)); err != nil {
-			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDePrazo, err)
+		if s.writeFieldTTL, err = s.dict.LookupOrCreate([]byte(opts.TTLFieldName)); err != nil {
+			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.TTLFieldName, err)
 		}
 	}
 
@@ -1198,7 +1198,7 @@ func Open(opts Options) (*Store, error) {
 	// contratual quanto a ordem DENTRO de cada um.
 	//
 	// Não existe mais "grupo bitmap" nem "grupo hash": existe UM grupo, os
-	// campos indexados, numa corrida alfabética só.
+	// fields indexados, numa corrida alfabética só.
 	//
 	// O que CONTINUA contrato: "mesmo spec → mesmo mapeamento" — para uma
 	// config dada, o conjunto indexado e a ordem alfabética dentro dele são
@@ -1227,12 +1227,12 @@ func Open(opts Options) (*Store, error) {
 	// indexado a um dataset povoado não só é aceito como AGENDA a reconstrução
 	// dos segmentos antigos, porque a pendência passou a ser decidida por
 	// (segmento, campo) — um .sidx sem a seção do campo declarado entra na fila
-	// (SegmentosPendentesDeReconstrucao). Remover um campo entra pela mesma
+	// (SegmentosPendentesOfRebuild). Remover um campo entra pela mesma
 	// porta, no sentido inverso: a seção que sobrou é apagada pela reescrita.
 	// O que ainda NÃO existe é quem CONSUMA a fila: a goroutine da §2.4. Sem ela
 	// o agendamento não vira trabalho, e os segmentos antigos enumeram
 	// indefinidamente — é por isso que o débito 22 continua aberto.
-	campos, err := s.resolveCamposIndexados(opts.CamposIndexados, opts.CamposIndexadosPorNome)
+	fields, err := s.resolveFieldsIndexados(opts.IndexedFields, opts.IndexedFieldsByName)
 	if err != nil {
 		return nil, err
 	}
@@ -1243,16 +1243,16 @@ func Open(opts Options) (*Store, error) {
 	// existir, com os totais do ponto S, quando a primeira linha do tail for
 	// reaplicada. Um manifest ilegível cai nos ramos abaixo; aqui ele só é
 	// consultado quando existe.
-	var manifestParaContadores *checkpoint.Manifest
+	var manifestForCounters *checkpoint.Manifest
 	if mErr == nil {
-		manifestParaContadores = m
+		manifestForCounters = m
 	}
-	if err := s.abreContadores(opts, manifestParaContadores, idxDir, minRows); err != nil {
+	if err := s.openCounters(opts, manifestForCounters, idxDir, minRows); err != nil {
 		return nil, err
 	}
 
 	switch {
-	case errors.Is(mErr, checkpoint.ErrNoManifest) && semRecords(refs):
+	case errors.Is(mErr, checkpoint.ErrInManifest) && emptySegmentDirectory(refs):
 		// Dataset novo. Entram aqui tanto o diretório virgem quanto o
 		// dataset que crashou DENTRO do primeiro Open: o segmento 1 nasce
 		// antes do manifest inicial, então "segmento sem record e sem
@@ -1260,17 +1260,17 @@ func Open(opts Options) (*Store, error) {
 		// dataset que nunca teve um único record nascer inacessível.
 		// Um segmento vazio já criado é ADOTADO (não recriado): o openNew usa
 		// O_EXCL e falharia contra o arquivo existente.
-		var segID uint32
+		var secID uint32
 		var off int64
 		if len(refs) > 0 {
-			segID, off = refs[len(refs)-1].ID, int64(segment.HeaderSize)
+			secID, off = refs[len(refs)-1].ID, int64(segment.HeaderSize)
 		}
-		if s.segW, err = segment.OpenWriter(dataDir, opts.SegmentSize, segID, off); err != nil {
+		if s.secW, err = segment.OpenWriter(dataDir, opts.SegmentSize, secID, off); err != nil {
 			return nil, fmt.Errorf("storage: abrir segmentos (SegmentSize=%d): %w", opts.SegmentSize, err)
 		}
-		cur, _ := s.segW.Current()
-		s.curSegID.Store(cur)
-	case errors.Is(mErr, checkpoint.ErrNoManifest):
+		cur, _ := s.secW.Current()
+		s.curSecID.Store(cur)
+	case errors.Is(mErr, checkpoint.ErrInManifest):
 		return nil, fmt.Errorf(
 			"%w: %s contém records mas o manifest está ausente (o manifest existe desde a criação do dataset; rebuild total é fase futura)",
 			ErrDatasetCorrupt, dataDir)
@@ -1301,13 +1301,13 @@ func Open(opts Options) (*Store, error) {
 	// varre as locations e elas ainda estavam sendo publicadas pelo replay; e
 	// antes do índice por segmento e da agenda, porque não depende de nenhum
 	// dos dois.
-	if err := s.reconstroiContadoresPendentes(); err != nil {
+	if err := s.reconstroiCountersPendentes(); err != nil {
 		return nil, err
 	}
-	if len(s.contadores) > 0 {
+	if len(s.counters) > 0 {
 		s.opts.Log.Info("contadores.abertos",
 			"contadores mantidos na escrita abertos com o dataset",
-			"contadores", descreveContadores(s.contadores))
+			"contadores", descreveCounters(s.counters))
 	}
 	// O índice por segmento cobre TODO campo indexado, sem distinção de motor:
 	// com um motor só, `hash` e `bitmap` deixam de nomear coisas diferentes
@@ -1316,10 +1316,10 @@ func Open(opts Options) (*Store, error) {
 	//
 	// Ele abre DEPOIS do ramo de recovery, e não junto dos outros dois, porque
 	// os WIPs pertencem ao SEGMENTO CORRENTE e é o ramo quem o decide: antes
-	// dele, curSegID ainda é zero num dataset existente. Os campos, esses, vêm
-	// do resolveCamposIndexados lá em cima, cuja ordem de LookupOrCreate é
+	// dele, curSecID ainda é zero num dataset existente. Os campos, esses, vêm
+	// do resolveFieldsIndexados lá em cima, cuja ordem de LookupOrCreate é
 	// contratual e não pode ser tocada.
-	if err := s.abreIndicesDeSegmento(campos); err != nil {
+	if err := s.openIndicesOfSegment(fields); err != nil {
 		return nil, err
 	}
 
@@ -1333,7 +1333,7 @@ func Open(opts Options) (*Store, error) {
 	// Offsets ANTES do checkpoint imediato: o Checkpoint reescreve o
 	// kafka.offsets a partir do estado em memória, então carregar depois
 	// apagaria a posição na primeira reabertura do dataset.
-	s.carregaOffsets()
+	s.loadOffsets()
 
 	// Checkpoint imediato: manifest desde a criação e estado limpo pós-
 	// recovery (novo S = tail; epoch nunca regride).
@@ -1346,24 +1346,24 @@ func Open(opts Options) (*Store, error) {
 	// dataset ainda pode ser aberto pelo binário que criou aqueles arquivos, e
 	// apagá-los ali deixaria justamente o índice INCOMPLETO que este ciclo
 	// inteiro existe para tornar impossível.
-	limparIndicesGlobaisLegados(s.opts.Log, idxDir)
+	cleanLegacyGlobalIndices(s.opts.Log, idxDir)
 	ok = true
 	return s, nil
 }
 
-// carregaOffsets semeia a posição Kafka a partir do disco.
+// loadOffsets semeia a posição Kafka a partir do disco.
 //
 // Nenhum modo de falha aqui impede a abertura. É deliberado e vem do §51, que
 // põe "start queries" ANTES de "seek Kafka offsets": um kafka.offsets
 // ilegível não torna os dados inacessíveis, torna a POSIÇÃO desconhecida — e
 // recusar a abertura por isso derrubaria também as consultas, que não têm
 // nada a ver com o problema. Quem for retomar o consumo consulta o erro.
-func (s *Store) carregaOffsets() {
+func (s *Store) loadOffsets() {
 	o, err := checkpoint.LoadOffsets(s.offsetsPath())
 	switch {
 	case err == nil:
 		s.srcOffsets = &o
-	case errors.Is(err, checkpoint.ErrNoOffsets):
+	case errors.Is(err, checkpoint.ErrInOffsets):
 		// Dataset que nunca consumiu de Kafka. Não é anomalia.
 	default:
 		s.srcOffsetsErr = err
@@ -1373,7 +1373,7 @@ func (s *Store) carregaOffsets() {
 	}
 }
 
-// resolveCamposIndexados devolve a união, ordenada e sem duplicatas, dos
+// resolveFieldsIndexados devolve a união, ordenada e sem duplicatas, dos
 // campos declarados por ID e por nome. Os nomes são resolvidos pelo
 // dicionário do dataset, criando a entry se ainda não existir (a regra
 // fsync-before-first-use vale, é o próprio LookupOrCreate que a aplica).
@@ -1382,7 +1382,7 @@ func (s *Store) carregaOffsets() {
 // dicionário — não é sobre motor de índice, é sobre a criação do dataset. Era
 // por isso que ela já era UMA função quando havia dois motores: um segundo laço
 // para o segundo motor seria a primeira cópia a divergir.
-func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []string) ([]types.FieldID, error) {
+func (s *Store) resolveFieldsIndexados(ids []types.FieldID, nomesDeclarados []string) ([]types.FieldID, error) {
 	set := make(map[types.FieldID]struct{}, len(ids)+len(nomesDeclarados))
 	for _, field := range ids {
 		if field == 0 {
@@ -1401,13 +1401,13 @@ func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []st
 	// colateral de uma função que promete só abrir o dataset.
 	nomes := slices.Clone(nomesDeclarados)
 	slices.Sort(nomes)
-	for _, nome := range nomes {
-		if nome == "" {
+	for _, name := range nomes {
+		if name == "" {
 			return nil, fmt.Errorf("%w: nome vazio nos campos indexados", ErrInvalidArgument)
 		}
-		id, err := s.dict.LookupOrCreate([]byte(nome))
+		id, err := s.dict.LookupOrCreate([]byte(name))
 		if err != nil {
-			return nil, fmt.Errorf("storage: resolver o campo indexado %q: %w", nome, err)
+			return nil, fmt.Errorf("storage: resolver o campo indexado %q: %w", name, err)
 		}
 		set[id] = struct{}{}
 	}
@@ -1419,7 +1419,7 @@ func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []st
 	return out, nil
 }
 
-// limparIndicesGlobaisLegados apaga os arquivos dos dois motores de índice que
+// cleanLegacyGlobalIndices apaga os arquivos dos dois motores de índice que
 // este binário não tem mais: indexes/bitmap/ e indexes/hash/.
 //
 // Eles não têm leitor nenhum a partir daqui, e por isso não podem ficar. O
@@ -1443,16 +1443,16 @@ func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []st
 // disco desperdiçado, não corretude. Recusar o Open por um RemoveAll que não deu
 // certo trocaria um dataset que funciona por um dataset fora do ar. Fica o WARN
 // nomeado, e a próxima abertura tenta de novo.
-func limparIndicesGlobaisLegados(log *logging.Logger, idxDir string) {
-	for _, motor := range []string{"bitmap", "hash"} {
-		dir := filepath.Join(idxDir, motor)
+func cleanLegacyGlobalIndices(log *logging.Logger, idxDir string) {
+	for _, engine := range []string{"bitmap", "hash"} {
+		dir := filepath.Join(idxDir, engine)
 		if _, err := os.Stat(dir); err != nil {
 			continue
 		}
 		// Medido ANTES do RemoveAll e pela MESMA função do IndexBytes: é assim
 		// que o número do log é o mesmo que o operador vê descer na
 		// nishidb_index_bytes, em vez de uma segunda contagem que diverge.
-		ocupado := blocosDoDiretorio(dir)
+		ocupado := blocosOfDiretorio(dir)
 		if err := os.RemoveAll(dir); err != nil {
 			log.Warn("indice.legado_nao_removido",
 				"o índice global de um binário anterior continuou em disco; ele não tem leitor e é contado pelo index_bytes",
@@ -1493,10 +1493,10 @@ func (s *Store) FieldDict() *fielddict.Dict { return s.dict }
 // motor só, e duas perguntas com uma resposta só é convite a alguém consultar
 // uma delas e concluir a outra.
 //
-// A enumeração do conjunto é o CamposIndexados (indices.go), que já era a
+// A enumeração do conjunto é o FieldsIndexados (indices.go), que já era a
 // terceira grafia da mesma coisa quando BitmapFields e HashFields existiam.
 func (s *Store) Indexed(field types.FieldID) bool {
-	return slices.Contains(s.camposIndexados, field)
+	return slices.Contains(s.fieldsIndexados, field)
 }
 
 // lookup resolve a key pela primary, lendo o record corrente em buf.
@@ -1538,10 +1538,10 @@ func (s *Store) lookup(key, buf []byte, snap types.Snapshot) (rec types.Record, 
 				return false, nil
 			}
 		}
-		seg, off, locFlags := rowindex.Unpack(packed)
+		sec, off, locFlags := rowindex.Unpack(packed)
 		var r types.Record
 		var rerr error
-		r, out, rerr = s.segR.ReadRecord(seg, off, out)
+		r, out, rerr = s.secR.ReadRecord(sec, off, out)
 		if rerr != nil {
 			return false, rerr
 		}
@@ -1570,8 +1570,8 @@ func (s *Store) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []
 		return types.Record{}, buf, false, err
 	}
 	defer s.sai()
-	if !s.snaps.valido(snap.Epoch) {
-		return types.Record{}, buf, false, ErrSnapshotExpirado
+	if !s.snaps.valid(snap.Epoch) {
+		return types.Record{}, buf, false, ErrExpiredSnapshot
 	}
 	rec, out, exists, live, err := s.lookup(key, buf, snap)
 	if err != nil || !exists || !live {
@@ -1615,8 +1615,8 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 		return types.Record{}, buf, false, err
 	}
 	defer s.sai()
-	if !s.snaps.valido(snap.Epoch) {
-		return types.Record{}, buf, false, ErrSnapshotExpirado
+	if !s.snaps.valid(snap.Epoch) {
+		return types.Record{}, buf, false, ErrExpiredSnapshot
 	}
 	// Par (Get, Read) sob a barreira de aposentadoria: ver o godoc de aposMu.
 	s.aposMu.RLock()
@@ -1638,11 +1638,11 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 			return types.Record{}, buf, false, nil
 		}
 	}
-	seg, off, locFlags := rowindex.Unpack(packed)
+	sec, off, locFlags := rowindex.Unpack(packed)
 	if locFlags&types.FlagTombstone != 0 || s.purgada(id) {
 		return types.Record{}, buf, false, nil
 	}
-	rec, out, err := s.segR.ReadRecord(seg, off, buf)
+	rec, out, err := s.secR.ReadRecord(sec, off, buf)
 	if err != nil {
 		return types.Record{}, out, false, err
 	}
@@ -1656,7 +1656,7 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	// o payload que manda: ele é a fonte da verdade de que os índices são
 	// derivados (ver o godoc de rowindex.LastWrites), então derivar daqui é a
 	// MESMA conta que o applyRecord faz, sobre a versão certa.
-	if s.escritas != nil && s.venceuNaVersao(rec, snap.Instant) {
+	if s.writes != nil && s.venceuNaVersao(rec, snap.Instant) {
 		return types.Record{}, out, false, nil
 	}
 	return rec, out, true, nil
@@ -1687,7 +1687,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	if s.stickyErr != nil {
 		return 0, false, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
-	if s.EhHistorico() {
+	if s.EhHistory() {
 		// Put resolve a key pela primary e decide entre criar e atualizar. A
 		// tabela histórica não faz nem uma coisa nem outra: ver Apenda.
 		return 0, false, fmt.Errorf("%w: %s é uma tabela histórica; use Apenda", ErrInvalidArgument, s.opts.Dataset)
@@ -1748,11 +1748,11 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	// a rotação embute fdatasync do segmento selado e fsync de diretório
 	// (erro de durabilidade ali não pode escapar do modo falho — fsyncgate),
 	// e um WriteAt parcial também não tem rollback confiável.
-	seg, off, err := s.segW.Append(rec)
+	sec, off, err := s.secW.Append(rec)
 	if err != nil {
 		return 0, false, s.failWriter(err)
 	}
-	if err := s.aposAppend(seg); err != nil {
+	if err := s.aposAppend(sec); err != nil {
 		return 0, false, s.failWriter(err)
 	}
 	// 3-8. aplicação do estado aos índices, até o commit da location.
@@ -1766,7 +1766,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		hadPrevious: !created,
 		countsAsNew: created,
 		versiona:    true,
-		seg:         seg,
+		sec:         sec,
 		off:         off,
 		recLen:      len(rec),
 	}); err != nil {
@@ -1810,7 +1810,7 @@ type recordApply struct {
 	// deixado a location de uma row nova no mmap sem que o manifest a
 	// contabilizasse.
 	countsAsNew bool
-	seg         uint32
+	sec         uint32
 	off         uint32
 	recLen      int
 	mode        applyMode
@@ -1833,16 +1833,16 @@ type recordApply struct {
 // tail (§10.3 passo 5) — o que garante que restart não diverge da escrita.
 func (s *Store) applyRecord(a recordApply) error {
 	// 3. offset accounting: packing + tally do segmento (stats do manifest).
-	packed := rowindex.Pack(a.seg, a.off, a.flags&types.FlagTombstone)
-	tally := s.segTally[a.seg]
+	packed := rowindex.Pack(a.sec, a.off, a.flags&types.FlagTombstone)
+	tally := s.secTally[a.sec]
 	if tally == nil {
-		tally = &segStats{}
-		s.segTally[a.seg] = tally
+		tally = &secStats{}
+		s.secTally[a.sec] = tally
 		// Nascimento de entrada no tally é nascimento de segmento aos olhos
 		// do writer — é por aqui que uma rotação aparece no Stats no instante
 		// em que acontece, sem esperar o checkpoint relistar o diretório
 		// (é o que o TestRotacaoDeSegmentoNoPut exige).
-		s.segCount.Add(1)
+		s.secCount.Add(1)
 	}
 	tally.totalRecords++
 	tally.liveRecords++
@@ -1854,8 +1854,8 @@ func (s *Store) applyRecord(a recordApply) error {
 	// do manifest pela recovery.
 	if a.hadPrevious {
 		if oldPacked, had := s.locs.Get(a.rowID); had {
-			oldSeg, _, _ := rowindex.Unpack(oldPacked)
-			if t := s.segTally[oldSeg]; t != nil {
+			oldSec, _, _ := rowindex.Unpack(oldPacked)
+			if t := s.secTally[oldSec]; t != nil {
 				oldLen := uint64(encoding.RecordHeaderSize + len(a.key) + len(a.prevPayload))
 				if t.liveRecords > 0 {
 					t.liveRecords--
@@ -1904,7 +1904,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// índice e location é sempre um SUPERSET de candidatos (falso positivo,
 	// filtrado pela revalidação §44) — nunca falso negativo.
 	if len(s.wips) > 0 {
-		if err := s.aplicaIndiceSets(a.rowID, a.payload); err != nil {
+		if err := s.aplicaIndexSets(a.rowID, a.payload); err != nil {
 			return err
 		}
 	}
@@ -1923,18 +1923,18 @@ func (s *Store) applyRecord(a recordApply) error {
 	// crash o replay repõe exatamente os mesmos instantes. Se o valor viesse
 	// do relógio, o replay empurraria todos os prazos para frente pelo tempo
 	// de queda — e um processo reiniciado em laço nunca expiraria nada.
-	if s.escritas != nil {
-		if ms, ok := instanteDeEscrita(a.payload, s.campoDeEscrita); ok {
-			if err := s.escritas.Set(a.rowID, ms); err != nil {
+	if s.writes != nil {
+		if ms, ok := writeInstant(a.payload, s.writeFieldID); ok {
+			if err := s.writes.Set(a.rowID, ms); err != nil {
 				return err
 			}
 		}
 	}
 	// 6c. duração de ociosidade da linha, LIDA DO PAYLOAD pela mesma razão do
 	// instante: o replay do tail repõe as MESMAS durações depois de um crash.
-	if s.prazos != nil {
-		if ms, ok := campoDoPayload(a.payload, s.campoDePrazo, types.TypeInt64); ok {
-			if err := s.prazos.Set(a.rowID, ms); err != nil {
+	if s.ttlMapping != nil {
+		if ms, ok := fieldOfPayload(a.payload, s.writeFieldTTL, types.TypeInt64); ok {
+			if err := s.ttlMapping.Set(a.rowID, ms); err != nil {
 				return err
 			}
 		}
@@ -1987,8 +1987,8 @@ func (s *Store) applyRecord(a recordApply) error {
 	// um instante, não uma referência a record. Uma janela entre o Publish e
 	// esta linha custaria, no pior caso, uma passada de atraso na expiração —
 	// e ela não existe, porque as duas rodam sob o mesmo wmu.
-	if s.agenda != nil {
-		if err := s.agenda.Update(a.rowID, s.vencimentoDe(a.rowID)); err != nil {
+	if s.schedule != nil {
+		if err := s.schedule.Update(a.rowID, s.vencimentoOf(a.rowID)); err != nil {
 			return err
 		}
 	}
@@ -2004,7 +2004,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// transição atrás — a próxima abertura dobra o vetor e reaplica a ponta,
 	// como um erro na agenda. Não é sticky.
 	lapide := a.flags&types.FlagTombstone != 0
-	for _, c := range s.contadores {
+	for _, c := range s.counters {
 		if err := c.Transition(a.rowID, a.payload, lapide); err != nil {
 			return err
 		}
@@ -2018,20 +2018,20 @@ func (s *Store) applyRecord(a recordApply) error {
 	return nil
 }
 
-// instanteDeEscrita extrai o campo de sistema do payload. Ausente devolve
+// writeInstant extrai o campo de sistema do payload. Ausente devolve
 // ok=false, que o índice registra como DESCONHECIDO — nunca como vencido.
-func instanteDeEscrita(payload []byte, campo types.FieldID) (int64, bool) {
-	return campoDoPayload(payload, campo, types.TypeTimestamp)
+func writeInstant(payload []byte, field types.FieldID) (int64, bool) {
+	return fieldOfPayload(payload, field, types.TypeTimestamp)
 }
 
-// campoDoPayload lê o I64 de um campo de sistema, exigindo o tipo esperado.
+// fieldOfPayload lê o I64 de um campo de sistema, exigindo o tipo esperado.
 //
 // É uma função só para os dois campos da expiração — o instante (timestamp) e
 // a duração (int64) — porque a varredura é idêntica e duplicá-la faria as duas
 // divergirem no dia em que o formato do payload mudar. O tipo entra por
 // parâmetro porque errá-lo é o modo de falha silencioso: um int64 lido como
 // timestamp devolveria um prazo que não é um prazo.
-func campoDoPayload(payload []byte, campo types.FieldID, esperado types.FieldType) (int64, bool) {
+func fieldOfPayload(payload []byte, field types.FieldID, expected types.FieldType) (int64, bool) {
 	var r encoding.FieldReader
 	r.Reset(payload)
 	for {
@@ -2039,10 +2039,10 @@ func campoDoPayload(payload []byte, campo types.FieldID, esperado types.FieldTyp
 		if !ok {
 			return 0, false
 		}
-		if id == campo {
-			return v.I64, v.Type == esperado
+		if id == field {
+			return v.I64, v.Type == expected
 		}
-		if id > campo {
+		if id > field {
 			return 0, false // payload é ordenado por FieldID: passou, não tem
 		}
 	}
@@ -2069,32 +2069,32 @@ func campoDoPayload(payload []byte, campo types.FieldID, esperado types.FieldTyp
 // pelo índice corrente. Ela não tem versão própria do instante para ser
 // avaliada por — não existe dado que a responda —, e a carência é a única
 // resposta que o dataset tem.
-func (s *Store) venceuNaVersao(rec types.Record, em time.Time) bool {
-	if s.escritas == nil {
+func (s *Store) venceuNaVersao(rec types.Record, in time.Time) bool {
+	if s.writes == nil {
 		return false
 	}
-	ms, declarado := instanteDeEscrita(rec.Payload, s.campoDeEscrita)
+	ms, declarado := writeInstant(rec.Payload, s.writeFieldID)
 	if !declarado {
-		return s.prazoVencido(rec.RowID, em)
+		return s.prazoVencido(rec.RowID, in)
 	}
-	d := s.duracaoDoPayload(rec.Payload)
+	d := s.durationOfPayload(rec.Payload)
 	if d <= 0 {
 		return false
 	}
-	return em.UnixMilli()-ms >= d.Milliseconds()
+	return in.UnixMilli()-ms >= d.Milliseconds()
 }
 
-// duracaoDoPayload devolve a duração de ociosidade que ESTE payload declara,
+// durationOfPayload devolve a duração de ociosidade que ESTE payload declara,
 // caindo na duração de fundo quando ele não declara nenhuma — a mesma
-// precedência de duracaoEfetiva, sobre o payload em vez do índice.
-func (s *Store) duracaoDoPayload(payload []byte) time.Duration {
-	if ms, ok := campoDoPayload(payload, s.campoDePrazo, types.TypeInt64); ok {
+// precedência de durationEfetiva, sobre o payload em vez do índice.
+func (s *Store) durationOfPayload(payload []byte) time.Duration {
+	if ms, ok := fieldOfPayload(payload, s.writeFieldTTL, types.TypeInt64); ok {
 		if ms <= 0 {
 			return 0 // imortal declarado pela regra `never`
 		}
 		return time.Duration(ms) * time.Millisecond
 	}
-	return s.duracaoDeFundo
+	return s.duration
 }
 
 // prazoVencido é o predicado de leitura da expiração, e ele existe para que a
@@ -2112,31 +2112,31 @@ func (s *Store) duracaoDoPayload(payload []byte) time.Duration {
 // abertura da consulta —, e é isso que impede uma linha viva em T0 de sumir do
 // meio do resultado. O writer passa s.agora(): a expiração oportunista é dele,
 // e ela decide sobre o presente.
-func (s *Store) prazoVencido(rowID types.RowID, em time.Time) bool {
-	if s.escritas == nil {
+func (s *Store) prazoVencido(rowID types.RowID, in time.Time) bool {
+	if s.writes == nil {
 		return false
 	}
-	d := s.duracaoEfetiva(rowID)
+	d := s.durationEfetiva(rowID)
 	if d <= 0 {
 		return false
 	}
-	ms, conhecido := s.escritas.Get(rowID)
+	ms, conhecido := s.writes.Get(rowID)
 	if !conhecido {
 		return false
 	}
-	return em.UnixMilli()-ms >= d.Milliseconds()
+	return in.UnixMilli()-ms >= d.Milliseconds()
 }
 
-// vencimentoDe calcula QUANDO esta linha vence, no formato que a agenda
-// guarda. É função pura do estado indexado — location, escritas, prazos e a
-// duração de fundo —, e é essa pureza que permite reconstruir a agenda inteira
+// vencimentoOf calcula QUANDO esta linha vence, no formato que a schedule
+// guarda. É função pura do estado indexado — location, writes, ttlMapping e a
+// duração de fundo —, e é essa pureza que permite reconstruir a schedule inteira
 // a partir dos arquivos que já existem, sem ler um record sequer.
 //
 // A relação com prazoVencido é deliberadamente de DERIVAÇÃO, não de
 // substituição: prazoVencido continua sendo o predicado que decide
-// visibilidade, lendo os mesmos dois índices. A agenda só decide quando o
+// visibilidade, lendo os mesmos dois índices. A schedule só decide quando o
 // coletor olha. Fazer prazoVencido ler o vencimento materializado
-// transformaria um bug de agenda em um bug de query — a linha sumiria da
+// transformaria um bug de schedule em um bug de query — a linha sumiria da
 // consulta por causa de uma entrada de árvore errada —, e é por isso que ele
 // não lê.
 //
@@ -2147,13 +2147,13 @@ func (s *Store) prazoVencido(rowID types.RowID, em time.Time) bool {
 //     propósito, então sem este ramo ela ficaria vencida para sempre.
 //   - instante DESCONHECIDO: rowindex.Grace. Ela não venceu, mas precisa da
 //     atenção do coletor para receber o prazo cheio. É o único caso em que a
-//     agenda pede uma visita sem que prazoVencido concorde, e é assim que a
+//     schedule pede uma visita sem que prazoVencido concorde, e é assim que a
 //     entidade materializada antes de a expiração ser ligada deixa de ficar
 //     imortal por acidente de calendário.
 //   - duração não positiva: rowindex.Never. É a linha que uma regra `never`
 //     declarou imortal, ou o dataset sem duração de fundo.
-func (s *Store) vencimentoDe(rowID types.RowID) uint64 {
-	if s.escritas == nil {
+func (s *Store) vencimentoOf(rowID types.RowID) uint64 {
+	if s.writes == nil {
 		return rowindex.Never
 	}
 	packed, publicada := s.locs.Get(rowID)
@@ -2163,11 +2163,11 @@ func (s *Store) vencimentoDe(rowID types.RowID) uint64 {
 	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 {
 		return rowindex.Never
 	}
-	ms, conhecido := s.escritas.Get(rowID)
+	ms, conhecido := s.writes.Get(rowID)
 	if !conhecido {
 		return rowindex.Grace
 	}
-	d := s.duracaoEfetiva(rowID)
+	d := s.durationEfetiva(rowID)
 	if d <= 0 {
 		return rowindex.Never
 	}
@@ -2188,21 +2188,21 @@ func (s *Store) vencimentoDe(rowID types.RowID) uint64 {
 	return uint64(venc)
 }
 
-// infoDaAgenda descreve, para o manifest, os parâmetros de que a agenda em
+// infoOfAgenda descreve, para o manifest, os parâmetros de que a schedule em
 // disco deriva. Devolve nil no dataset sem expiração — e é isso que mantém o
 // manifest dele na v1.
-func (s *Store) infoDaAgenda() *checkpoint.ScheduleInfo {
-	if s.agenda == nil {
+func (s *Store) infoOfAgenda() *checkpoint.ScheduleInfo {
+	if s.schedule == nil {
 		return nil
 	}
 	return &checkpoint.ScheduleInfo{
-		FallbackDurationMs: uint64(s.duracaoDeFundo.Milliseconds()),
+		FallbackDurationMs: uint64(s.duration.Milliseconds()),
 		BlockShift:         rowindex.ScheduleBlockShift,
 		Levels:             rowindex.ScheduleLevels,
 	}
 }
 
-// duracaoEfetiva devolve por quanto tempo esta linha pode ficar sem escrita.
+// durationEfetiva devolve por quanto tempo esta linha pode ficar sem escrita.
 //
 // Entrada DESCONHECIDA cai na duração de FUNDO, e é isso que faz a adoção das
 // regras num dataset já materializado não mudar comportamento: as entidades
@@ -2212,14 +2212,14 @@ func (s *Store) infoDaAgenda() *checkpoint.ScheduleInfo {
 //
 // Zero devolvido COM conhecido=true é a entidade imortal, e ela NÃO cai no
 // fundo — é para essa distinção que o rowindex.ImmortalTTL existe.
-func (s *Store) duracaoEfetiva(rowID types.RowID) time.Duration {
-	if s.prazos == nil {
+func (s *Store) durationEfetiva(rowID types.RowID) time.Duration {
+	if s.ttlMapping == nil {
 		return 0
 	}
-	if ms, conhecido := s.prazos.Get(rowID); conhecido {
+	if ms, conhecido := s.ttlMapping.Get(rowID); conhecido {
 		return time.Duration(ms) * time.Millisecond
 	}
-	return s.duracaoDeFundo
+	return s.duration
 }
 
 // failWriter registra o primeiro erro pós-Append e o devolve embrulhado em
@@ -2260,15 +2260,15 @@ func (s *Store) validatePayloadAgainstDataset(payload []byte) error {
 		}
 		// A chave canônica do índice é a MESMA em todo caminho — ingestão,
 		// reconstrução e consulta —, então validá-la aqui é o que impede o dano
-		// fatal descrito acima. O conjunto consultado é o camposIndexados, e não
+		// fatal descrito acima. O conjunto consultado é o fieldsIndexados, e não
 		// o mapa de WIPs: durante a janela de rotação em que os WIPs estão
 		// fechados o mapa fica vazio, e validar por ele deixaria passar
 		// justamente o record que a reconstrução seguinte não conseguiria
 		// indexar.
-		if slices.Contains(s.camposIndexados, id) {
+		if slices.Contains(s.fieldsIndexados, id) {
 			if err := valuekey.Validate(v); err != nil {
-				nome, _ := s.dict.Name(id)
-				return fmt.Errorf("%w: campo %d (%q) é indexado: %w", ErrInvalidArgument, id, nome, err)
+				name, _ := s.dict.Name(id)
+				return fmt.Errorf("%w: campo %d (%q) é indexado: %w", ErrInvalidArgument, id, name, err)
 			}
 		}
 	}
@@ -2288,10 +2288,10 @@ func (s *Store) insertValidator(key []byte) primary.ValidateFunc {
 		if !ok {
 			return false, nil
 		}
-		seg, off, _ := rowindex.Unpack(packed)
+		sec, off, _ := rowindex.Unpack(packed)
 		var r types.Record
 		var err error
-		r, s.valBuf, err = s.segR.ReadRecord(seg, off, s.valBuf)
+		r, s.valBuf, err = s.secR.ReadRecord(sec, off, s.valBuf)
 		if err != nil {
 			return false, err
 		}
@@ -2431,7 +2431,7 @@ func (s *Store) ScanLive(snap types.Snapshot) types.RowIDIterator {
 	return &liveIterator{s: s, snap: snap, next: snap.BaseRowID, limit: snap.LimitRowID}
 }
 
-// DiretorioDeSpill é onde o motor de consulta pode transbordar o que não cabe
+// DiretorioOfSpill é onde o motor de consulta pode transbordar o que não cabe
 // na memória.
 //
 // Dentro do dataset, e não em os.TempDir, por três razões: fica sob o mesmo
@@ -2439,7 +2439,7 @@ func (s *Store) ScanLive(snap types.Snapshot) types.RowIDIterator {
 // herda a política de filesystem do dataset (fallocate real, e não tmpfs); e o
 // operador que dimensionou o disco pelo §85 não precisa dimensionar um segundo
 // lugar.
-func (s *Store) DiretorioDeSpill() string {
+func (s *Store) DiretorioOfSpill() string {
 	return filepath.Join(s.opts.Dir, spill.DirName)
 }
 
@@ -2450,7 +2450,7 @@ func (s *Store) DiretorioDeSpill() string {
 // enumera. Valide liveness e predicate via GetByRowID (§44).
 //
 // É UM método, e não mais o par LookupBitmap/LookupHash: os dois já delegavam
-// para o mesmo lookupIndexado desde que passou a existir um motor só (spec D5),
+// para o mesmo lookupIndexed desde que passou a existir um motor só (spec D5),
 // e a §3.1 é o ponto em que as duas assinaturas colapsam. Enquanto o planner
 // ainda distinguia os motores, manter os dois nomes era o que permitia à suíte
 // exercitar o motor novo sem uma linha de teste mudada; unificado o planner, o
@@ -2466,7 +2466,7 @@ func (s *Store) DiretorioDeSpill() string {
 // literal: as fontes seladas e a do locations leem mmap a CADA avanço, então
 // sem a reentrada o Close desmaparia a região sob os pés da varredura.
 func (s *Store) Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	return s.lookupIndexado(field, v)
+	return s.lookupIndexed(field, v)
 }
 
 // Sequence devolve a última sequence aplicada à row (ok=false para row sem
@@ -2488,10 +2488,10 @@ func (s *Store) Sequence(id types.RowID) (int64, types.Presence) {
 	// lastSequence, e é ela que impede um evento antigo de reabrir a
 	// entidade. Quem pergunta a sequence de uma row está decidindo sobre
 	// ordem, e "não sei" é a pior resposta possível.
-	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 || s.prazoVencido(id, s.agora()) {
-		return s.sequenceDe(id), types.PresenceExpired
+	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 || s.prazoVencido(id, s.now()) {
+		return s.sequenceOf(id), types.PresenceExpired
 	}
-	return s.sequenceDe(id), types.PresenceLive
+	return s.sequenceOf(id), types.PresenceLive
 }
 
 // Sync força fdatasync do segmento corrente (loop de durability batch).
@@ -2512,7 +2512,7 @@ func (s *Store) syncLocked() error {
 	if s.stickyErr != nil {
 		return fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
-	if err := s.segW.Sync(); err != nil {
+	if err := s.secW.Sync(); err != nil {
 		return s.failWriter(err)
 	}
 	return nil
@@ -2524,7 +2524,7 @@ func (s *Store) syncLocked() error {
 // tombstone; a contagem de vivas é semântica da S14.
 //
 // Tudo o que sai daqui vem de leitura atômica, inclusive os campos de disco.
-// A alternativa — varrer segTally/segSize sob o wmu, que são writer-only e
+// A alternativa — varrer secTally/secSize sob o wmu, que são writer-only e
 // não se leem sem sincronizar — foi TENTADA e desfeita: o Checkpoint segura
 // o wmu do início ao fim, com histograma que vai até 30s por ser esse o
 // intervalo padrão do §78, e todo scrape de /metrics e toda chamada de
@@ -2541,35 +2541,35 @@ func (s *Store) Stats() Stats {
 		return Stats{}
 	}
 	defer s.sai()
-	segID := s.curSegID.Load()
+	secID := s.curSecID.Load()
 	var lf float64
 	if s.prim != nil {
 		if slots := s.prim.SlotCount(); slots > 0 {
 			lf = float64(s.prim.Used()) / float64(slots)
 		}
 	}
-	// SegmentsTotal vem do espelho do tally, e não do segSize, porque o tally
+	// SegmentsTotal vem do espelho do tally, e não do secSize, porque o tally
 	// é o mapa que anda nos DOIS relógios: ganha entrada no applyRecord, então
 	// uma rotação aparece na contagem no instante em que acontece, e é
 	// reconciliado com o ListSegments a cada checkpoint (semeadura do segmento
 	// que o writer nunca tocou, poda do que o diretório não lista mais).
-	// Espelhar o segSize perderia o primeiro relógio e quebraria o
+	// Espelhar o secSize perderia o primeiro relógio e quebraria o
 	// TestRotacaoDeSegmentoNoPut, que exige a rotação visível sem checkpoint;
 	// espelhar o tally SEM a reconciliação perde o segundo, que é o que faz um
 	// segmento aposentado pela compaction (§53-55) sumir da contagem.
 	return Stats{
 		RowCount:               s.rowCount.Load(),
-		SegmentsTotal:          s.segCount.Load(),
-		CurrentSegmentID:       segID,
+		SegmentsTotal:          s.secCount.Load(),
+		CurrentSegmentID:       secID,
 		PrimaryLoadFactor:      lf,
 		OverlayLen:             s.locs.OverlayLen(),
 		StorageBytes:           s.diskBytesAll.Load(),
 		LiveBytesUpperBound:    s.liveBytesAll.Load(),
-		CompactionRunning:      s.compAtiva.Load(),
-		ExpiryRunning:          s.expAtiva.Load(),
-		Expiradas:              s.expiradas.Load(),
-		Carencias:              s.carencias.Load(),
-		ExpiryExaminadas:       s.examinadas.Load(),
+		CompactionRunning:      s.compActive.Load(),
+		ExpiryRunning:          s.expActive.Load(),
+		ExpiredCount:           s.expiredCount.Load(),
+		PendingCount:           s.lostCount.Load(),
+		ExpiredExamined:        s.examinedCount.Load(),
 		CompactionBytesRead:    s.compBytesLidos.Load(),
 		CompactionBytesWritten: s.compBytesEscritos.Load(),
 	}
@@ -2598,23 +2598,23 @@ func (s *Store) Close() error {
 	// sem o join aqui, ou o Close espera a passada inteira, ou — pior — vence
 	// a corrida e desmapeia o índice sob os pés de quem está no meio de
 	// renomear e apagar arquivo.
-	s.ParaCompaction()
+	s.ForCompaction()
 	// O coletor sai pela MESMA razão da compaction: ele toma o wmu por trecho
 	// e lê o mmap do índice de escritas, então um Close que vencesse a corrida
 	// desmapearia a região sob os pés da passada.
-	s.ParaExpiracao()
+	s.ForExpiration()
 	// E a retenção pela terceira vez a mesma razão: a passada dela renomeia e
-	// apaga arquivo, e lê o segR por pread na busca binária.
-	s.ParaRetencao()
+	// apaga arquivo, e lê o secR por pread na busca binária.
+	s.ForRetention()
 	// A reconstrução é a quarta, e nela a razão é a mais direta das quatro: a
-	// varredura de um segmento inteiro é uma leitura pelo s.segR, que o
-	// fechaIndices/segR.Close logo abaixo fecha inteiro. Sem o join aqui, ela
+	// varredura de um segmento inteiro é uma leitura pelo s.secR, que o
+	// closeIndices/secR.Close logo abaixo fecha inteiro. Sem o join aqui, ela
 	// colheria os.ErrClosed no meio de até 512 MiB de leitura — e o laço
 	// anunciaria como falha o que é o encerramento normal do processo.
-	s.ParaReconstrucao()
+	s.ForRebuild()
 	// E a aposentadoria de grupos, a quinta: a passada toma o wmu e escreve no
 	// dicionário do contador, que o Close fecha logo abaixo.
-	s.ParaAposentadoriaDeGrupos()
+	s.ForRetirementOfGroups()
 
 	s.vida.Lock()
 	defer s.vida.Unlock()
@@ -2627,21 +2627,21 @@ func (s *Store) Close() error {
 	// entra() e está dentro do wmu termina antes daqui, porque o Lock acima só
 	// é concedido quando o RLock dela é liberado.
 	var errs []error
-	errs = append(errs, s.fechaIndices())
-	if s.agenda != nil {
-		errs = append(errs, s.agenda.Close())
+	errs = append(errs, s.closeIndices())
+	if s.schedule != nil {
+		errs = append(errs, s.schedule.Close())
 	}
 	// Sem msync no Close, como nos outros derivados: o que não foi
 	// checkpointado volta pelo replay, e o overlay dos contadores é
 	// exatamente o que a dobra + replay repõem.
-	for _, c := range s.contadores {
+	for _, c := range s.counters {
 		errs = append(errs, c.Close())
 	}
-	if s.prazos != nil {
-		errs = append(errs, s.prazos.Close())
+	if s.ttlMapping != nil {
+		errs = append(errs, s.ttlMapping.Close())
 	}
-	if s.escritas != nil {
-		errs = append(errs, s.escritas.Close())
+	if s.writes != nil {
+		errs = append(errs, s.writes.Close())
 	}
 	if s.seqs != nil {
 		errs = append(errs, s.seqs.Close())
@@ -2652,11 +2652,11 @@ func (s *Store) Close() error {
 	if s.prim != nil {
 		errs = append(errs, s.prim.Close())
 	}
-	if s.segR != nil {
-		errs = append(errs, s.segR.Close())
+	if s.secR != nil {
+		errs = append(errs, s.secR.Close())
 	}
-	if s.segW != nil {
-		errs = append(errs, s.segW.Close())
+	if s.secW != nil {
+		errs = append(errs, s.secW.Close())
 	}
 	// Só fecha o dicionário que ele mesmo abriu: o compartilhado pertence ao
 	// dataset base, que segue ingerindo.
@@ -2677,7 +2677,7 @@ func (s *Store) Close() error {
 // contador.
 func (s *Store) RowCount() uint64 { return s.rowCount.Load() }
 
-// validaDerivadasContraDicionario recusa uma coluna extraída NOVA num dataset
+// validateDerivedAgainstDictionary recusa uma coluna extraída NOVA num dataset
 // que já tem linhas.
 //
 // A extração roda na ingestão: as linhas gravadas antes de a coluna existir
@@ -2692,14 +2692,14 @@ func (s *Store) RowCount() uint64 { return s.rowCount.Load() }
 // dataset criado já com extract tem a coluna registrada desde a primeira
 // subida, e recusá-lo faria a feature ser inutilizável depois do primeiro
 // evento.
-func validaDerivadasContraDicionario(m *checkpoint.Manifest, dict *fielddict.Dict, derivadas []string) error {
-	if len(derivadas) == 0 || m == nil || m.RowCount == 0 {
+func validateDerivedAgainstDictionary(m *checkpoint.Manifest, dict *fielddict.Dict, derived []string) error {
+	if len(derived) == 0 || m == nil || m.RowCount == 0 {
 		return nil
 	}
 	var novas []string
-	for _, nome := range derivadas {
-		if _, existe := dict.Lookup([]byte(nome)); !existe {
-			novas = append(novas, nome)
+	for _, name := range derived {
+		if _, exists := dict.Lookup([]byte(name)); !exists {
+			novas = append(novas, name)
 		}
 	}
 	if len(novas) == 0 {
@@ -2712,21 +2712,21 @@ func validaDerivadasContraDicionario(m *checkpoint.Manifest, dict *fielddict.Dic
 		ErrDatasetCorrupt, novas, m.RowCount)
 }
 
-// validaOpcoesDoModo recusa as combinações que produziriam um dataset
+// validateModeOptions recusa as combinações que produziriam um dataset
 // histórico malformado. As duas recusas são de CONFIGURAÇÃO e saem antes do
 // flock: um Open que vai falhar não pode travar o dataset nem tocar arquivo.
-func validaOpcoesDoModo(opts Options) error {
-	if opts.Modo != ModoHistorico {
+func validateModeOptions(opts Options) error {
+	if opts.Mode != HistoryMode {
 		return nil
 	}
-	if opts.DictCompartilhado == nil {
+	if opts.SharedDictionary == nil {
 		// O histórico não tem dicionário próprio por desenho: o payload que
 		// ele guarda é o que o patch do base montou, endereçado por FieldID.
 		// Sem o dicionário do base, os ids seriam outros e todo record
 		// decodificaria colunas trocadas — sem erro e com o CRC batendo.
 		return fmt.Errorf("%w: ModoHistorico exige DictCompartilhado: a tabela irmã não tem dicionário próprio", ErrInvalidArgument)
 	}
-	if opts.TTLAtivo {
+	if opts.ActiveTTL {
 		// A expiração por inatividade renova o prazo a cada escrita, e no
 		// histórico nenhuma linha é reescrita: a regra nunca teria a segunda
 		// escrita que ela existe para observar. A retenção daqui é outra, e é
@@ -2736,24 +2736,24 @@ func validaOpcoesDoModo(opts Options) error {
 	return nil
 }
 
-// EhHistorico reporta se este Store é a tabela irmã append-only.
-func (s *Store) EhHistorico() bool { return s.opts.Modo == ModoHistorico }
+// EhHistory reporta se este Store é a tabela irmã append-only.
+func (s *Store) EhHistory() bool { return s.opts.Mode == HistoryMode }
 
-// sequenceDe lê o índice de sequences, ou zero quando ele não existe.
+// sequenceOf lê o índice de sequences, ou zero quando ele não existe.
 //
 // Zero é o valor certo e não um placeholder: a tabela histórica não declara
 // sequence, e o stale check do materializer só compara quando o schema tem
 // uma. Quem chama Sequence sobre o histórico está perguntando por algo que a
 // tabela não guarda, e a resposta honesta é o zero que o formato já usa para
 // "sem sequence".
-func (s *Store) sequenceDe(id types.RowID) int64 {
+func (s *Store) sequenceOf(id types.RowID) int64 {
 	if s.seqs == nil {
 		return 0
 	}
 	return s.seqs.Get(id)
 }
 
-// adotaModoDoManifest confere o modo declarado nas Options contra o que está
+// adotaModoOfManifest confere o modo declarado nas Options contra o que está
 // gravado, e semeia a marca-d'água de retenção.
 //
 // A divergência é ErrDatasetCorrupt, e não um aviso, porque as duas direções
@@ -2766,15 +2766,15 @@ func (s *Store) sequenceDe(id types.RowID) int64 {
 //
 // Manifest ausente é dataset NOVO: ele nasce com o modo que as Options pedem,
 // e o primeiro Checkpoint o grava.
-func (s *Store) adotaModoDoManifest(m *checkpoint.Manifest) error {
+func (s *Store) adotaModoOfManifest(m *checkpoint.Manifest) error {
 	if m == nil {
 		return nil
 	}
-	gravado := Modo(m.Mode)
-	if gravado != s.opts.Modo {
+	gravado := StoreMode(m.StoreMode)
+	if gravado != s.opts.Mode {
 		return fmt.Errorf("%w: o dataset %s está gravado como %s e a configuração pede %s; "+
 			"o modo é imutável — recrie o dataset ou corrija o YAML",
-			ErrDatasetCorrupt, s.opts.Dir, gravado, s.opts.Modo)
+			ErrDatasetCorrupt, s.opts.Dir, gravado, s.opts.Mode)
 	}
 	s.rowIDBase.Store(m.RowIDBase)
 	return nil
@@ -2820,7 +2820,7 @@ func (s *Store) Apenda(payload []byte) (types.RowID, error) {
 	defer s.sai()
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	if !s.EhHistorico() {
+	if !s.EhHistory() {
 		return 0, fmt.Errorf("%w: %s é um dataset materializado; use Put", ErrInvalidArgument, s.opts.Dataset)
 	}
 	if s.stickyErr != nil {
@@ -2842,11 +2842,11 @@ func (s *Store) Apenda(payload []byte) (types.RowID, error) {
 	if err != nil {
 		return 0, err
 	}
-	seg, off, err := s.segW.Append(rec)
+	sec, off, err := s.secW.Append(rec)
 	if err != nil {
 		return 0, s.failWriter(err)
 	}
-	if err := s.aposAppend(seg); err != nil {
+	if err := s.aposAppend(sec); err != nil {
 		return 0, s.failWriter(err)
 	}
 	if err := s.applyRecord(recordApply{
@@ -2854,7 +2854,7 @@ func (s *Store) Apenda(payload []byte) (types.RowID, error) {
 		payload:     payload,
 		hadPrevious: false,
 		countsAsNew: true,
-		seg:         seg,
+		sec:         sec,
 		off:         off,
 		recLen:      len(rec),
 	}); err != nil {

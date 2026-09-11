@@ -10,67 +10,67 @@ import "testing"
 // dele: a query executada deixava de ser a query escrita.
 func TestComLimitNaoCortaDentroDeLiteralNemDeIdentificador(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		sql  string
 		n    int
 		want string
 	}{
 		{
-			nome: "sem limit na query",
+			name: "sem limit na query",
 			sql:  "SELECT id FROM t",
 			n:    5,
 			want: "SELECT id FROM t LIMIT 5",
 		},
 		{
-			nome: "limit da query é substituído",
+			name: "limit da query é substituído",
 			sql:  "SELECT id FROM t LIMIT 3",
 			n:    5,
 			want: "SELECT id FROM t LIMIT 5",
 		},
 		{
-			nome: "ponto e vírgula final",
+			name: "ponto e vírgula final",
 			sql:  "SELECT id FROM t;",
 			n:    2,
 			want: "SELECT id FROM t LIMIT 2",
 		},
 		{
-			nome: "limit dentro de literal de string",
+			name: "limit dentro de literal de string",
 			sql:  "SELECT id FROM t WHERE s = 'sem limit aqui'",
 			n:    5,
 			want: "SELECT id FROM t WHERE s = 'sem limit aqui' LIMIT 5",
 		},
 		{
-			nome: "limit dentro de identificador entre aspas duplas",
+			name: "limit dentro de identificador entre aspas duplas",
 			sql:  `SELECT "no limit aqui" FROM t`,
 			n:    5,
 			want: `SELECT "no limit aqui" FROM t LIMIT 5`,
 		},
 		{
-			nome: "identificador citado E cláusula de verdade",
+			name: "identificador citado E cláusula de verdade",
 			sql:  `SELECT "no limit aqui" FROM t LIMIT 9`,
 			n:    5,
 			want: `SELECT "no limit aqui" FROM t LIMIT 5`,
 		},
 		{
-			nome: "aspa dupla escapada dentro do identificador",
+			name: "aspa dupla escapada dentro do identificador",
 			sql:  `SELECT "a"" limit b" FROM t`,
 			n:    5,
 			want: `SELECT "a"" limit b" FROM t LIMIT 5`,
 		},
 		{
-			nome: "aspa simples escapada dentro do literal",
+			name: "aspa simples escapada dentro do literal",
 			sql:  `SELECT id FROM t WHERE s = 'a'' limit b'`,
 			n:    5,
 			want: `SELECT id FROM t WHERE s = 'a'' limit b' LIMIT 5`,
 		},
 		{
-			nome: "limit em minúsculas é cláusula",
+			name: "limit em minúsculas é cláusula",
 			sql:  "SELECT id FROM t limit 3",
 			n:    5,
 			want: "SELECT id FROM t LIMIT 5",
 		},
 		{
-			nome: "limite não é LIMIT",
+			name: "limite não é LIMIT",
 			sql:  `SELECT "limite" FROM t`,
 			n:    5,
 			want: `SELECT "limite" FROM t LIMIT 5`,
@@ -81,7 +81,7 @@ func TestComLimitNaoCortaDentroDeLiteralNemDeIdentificador(t *testing.T) {
 		// N PRIMEIRAS linhas como se fossem a página pedida — sem erro e sem
 		// aviso, que é resultado errado com cara de certo.
 		{
-			nome: "offset é PRESERVADO ao trocar o limit",
+			name: "offset é PRESERVADO ao trocar o limit",
 			sql:  "SELECT id FROM t LIMIT 5 OFFSET 10",
 			n:    3,
 			want: "SELECT id FROM t LIMIT 3 OFFSET 10",
@@ -90,22 +90,22 @@ func TestComLimitNaoCortaDentroDeLiteralNemDeIdentificador(t *testing.T) {
 			// Aqui o corte antigo anexava `LIMIT 3` DEPOIS do OFFSET, gerando
 			// `... OFFSET 10 LIMIT 3` — ordem inválida. O usuário recebia erro
 			// de sintaxe sobre um texto que não escreveu.
-			nome: "offset sem limit ganha o limit ANTES dele",
+			name: "offset sem limit ganha o limit ANTES dele",
 			sql:  "SELECT id FROM t OFFSET 10",
 			n:    3,
 			want: "SELECT id FROM t LIMIT 3 OFFSET 10",
 		},
 		{
-			nome: "offset com where e ponto e vírgula",
+			name: "offset com where e ponto e vírgula",
 			sql:  "SELECT id FROM t WHERE a = 1 LIMIT 5 OFFSET 2;",
 			n:    9,
 			want: "SELECT id FROM t WHERE a = 1 LIMIT 9 OFFSET 2",
 		},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
-			if got := comLimit(c.sql, c.n); got != c.want {
-				t.Errorf("comLimit(%q, %d)\n got %q\nwant %q", c.sql, c.n, got, c.want)
+		t.Run(c.name, func(t *testing.T) {
+			if got := withLimit(c.sql, c.n); got != c.want {
+				t.Errorf("withLimit(%q, %d)\n got %q\nwant %q", c.sql, c.n, got, c.want)
 			}
 		})
 	}
@@ -126,8 +126,8 @@ func TestComLimitNaoCortaQueryQueNaoTokeniza(t *testing.T) {
 		// deixar o erro de sintaxe aparecer.
 		`SELECT a FROM t LIMIT 3 AND s = 'x`,
 	} {
-		if got, want := comLimit(sql, 5), sql+" LIMIT 5"; got != want {
-			t.Errorf("comLimit(%q, 5)\n got %q\nwant %q", sql, got, want)
+		if got, want := withLimit(sql, 5), sql+" LIMIT 5"; got != want {
+			t.Errorf("withLimit(%q, 5)\n got %q\nwant %q", sql, got, want)
 		}
 	}
 }

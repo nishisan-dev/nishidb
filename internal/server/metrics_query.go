@@ -8,17 +8,17 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/budget"
 )
 
-// metricasDeQuery são as séries de consulta do §92.
+// metricsOfQuery são as séries de consulta do §92.
 //
 // Elas nascem AQUI, e não dentro do motor, porque só o protocolo tem o que
 // elas medem: o motor não sabe quantas consultas chegaram, quantas estão em
 // voo nem quanto tempo cada uma levou de ponta a ponta — ele conhece
 // iteradores, não requisições. Enquanto não havia protocolo, as cinco séries
 // existiam só como nome em internal/metrics/names.go, sem alimentador nenhum.
-type metricasDeQuery struct {
+type metricsOfQuery struct {
 	total    *metrics.CounterFamily
 	ativas   *metrics.GaugeFamily
-	erros    *metrics.CounterFamily
+	errors   *metrics.CounterFamily
 	latencia *metrics.HistogramFamily
 	// longasRecusadas é o contador do SUB-POOL de consulta longa. Sai SEM o
 	// label dataset porque o recurso que ele mede é do PROCESSO — o sub-pool é
@@ -26,10 +26,10 @@ type metricasDeQuery struct {
 	// maxConcurrent —, e um label que o dado não sustenta faria quem somasse
 	// por dataset contar a mesma recusa N vezes.
 	longasRecusadas *metrics.CounterFamily
-	// orcamentoRecusado conta as linhas barradas pelo orçamento de buffer
+	// budgetRecusado conta as linhas barradas pelo orçamento de buffer
 	// (ROW_TOO_LARGE). Sem label, e do PROCESSO, pela mesma razão de
 	// longasRecusadas: o orçamento é um só para todos os datasets (§82).
-	orcamentoRecusado *metrics.CounterFamily
+	budgetRecusado *metrics.CounterFamily
 }
 
 // datasetDesconhecido é o valor de label usado quando a requisição falha ANTES
@@ -41,21 +41,21 @@ type metricasDeQuery struct {
 // Com o valor fixo, o custo de um pedido inválido é uma série, uma vez.
 const datasetDesconhecido = "?"
 
-func registraMetricasDeQuery(
-	reg *metrics.Registry, eng *query.Engine, voo *emVoo, orc *budget.Global,
-) *metricasDeQuery {
-	m := &metricasDeQuery{
+func registerMetricsOfQuery(
+	reg *metrics.Registry, eng *query.Engine, voo *inVoo, orc *budget.Global,
+) *metricsOfQuery {
+	m := &metricsOfQuery{
 		total: reg.Counter(metrics.MetQueryTotal,
 			"consultas admitidas pelo protocolo remoto", metrics.LabelDataset),
 		ativas: reg.Gauge(metrics.MetQueryActive,
 			"consultas em execução neste instante", metrics.LabelDataset),
-		erros: reg.Counter(metrics.MetQueryErrors,
+		errors: reg.Counter(metrics.MetQueryErrors,
 			"consultas que terminaram em erro, por categoria", metrics.LabelDataset, metrics.LabelCategory),
 		latencia: reg.Histogram(metrics.MetQueryLatencySeconds,
 			"duração da consulta, do request ao último byte", metrics.DefaultBuckets, metrics.LabelDataset),
 		longasRecusadas: reg.Counter(metrics.MetQueryLongRejectedTotal,
 			"consultas longas recusadas por falta de vaga no sub-pool (runtime.query.maxLongRunning)"),
-		orcamentoRecusado: reg.Counter(metrics.MetQueryBudgetRejectedTotal,
+		budgetRecusado: reg.Counter(metrics.MetQueryBudgetRejectedTotal,
 			"linhas recusadas por não caberem no orçamento de buffer (runtime.query.maxBufferPerQuery)"),
 	}
 
@@ -64,13 +64,13 @@ func registraMetricasDeQuery(
 	//
 	// reg.Counter cria a FAMÍLIA; a série só passa a existir no primeiro
 	// Unlabeled(), e enquanto ele não acontece o /metrics não a publica. Como as
-	// duas só eram tocadas dentro de recusaLonga() e recusaPorOrcamento(), um
+	// duas só eram tocadas dentro de rejectLonga() e rejectByBudget(), um
 	// servidor que nunca recusou nada não as expunha — e aí
 	// `absent(nishidb_query_long_rejected_total)` não distingue "nunca
 	// recusou" de "o alvo caiu". Série que ALARMA não pode nascer no primeiro
 	// alarme; é a mesma regra que o desistiu.Set(0) do watchdog segue.
 	m.longasRecusadas.Unlabeled()
-	m.orcamentoRecusado.Unlabeled()
+	m.budgetRecusado.Unlabeled()
 
 	// A idade da consulta mais antiga entra como coletor PULL, lido na hora do
 	// scrape. É o único jeito de ela estar certa: o valor cresce sozinho com o
@@ -138,33 +138,33 @@ func registraMetricasDeQuery(
 // O par inc/dec do medidor de ativas vive numa closure para que o caminho de
 // erro não possa esquecê-lo: um `defer` no chamador cobre todos os retornos,
 // inclusive os que ainda não existem.
-func (m *metricasDeQuery) admite(dataset string) func() {
+func (m *metricsOfQuery) admite(dataset string) func() {
 	m.total.With(dataset).Inc()
 	m.ativas.With(dataset).Add(1)
 	return func() { m.ativas.With(dataset).Add(-1) }
 }
 
-// erro conta uma falha na categoria dada, que é sempre um código do protocolo
+// err conta uma falha na categoria dada, que é sempre um código do protocolo
 // — conjunto FECHADO, e por isso seguro como label.
-func (m *metricasDeQuery) erro(dataset, categoria string) {
-	m.erros.With(dataset, categoria).Inc()
+func (m *metricsOfQuery) err(dataset, categoria string) {
+	m.errors.With(dataset, categoria).Inc()
 }
 
-// recusaLonga conta uma consulta longa barrada pelo sub-pool.
+// rejectLonga conta uma consulta longa barrada pelo sub-pool.
 //
 // Chamada ALÉM de erro(), não no lugar dela: a série por categoria continua
 // contando a recusa como qualquer outra falha do dataset, e esta responde a
 // outra pergunta — "preciso subir runtime.query.maxLongRunning?" —, que é do
 // processo e não sai de uma soma sobre datasets.
-func (m *metricasDeQuery) recusaLonga() { m.longasRecusadas.Unlabeled().Inc() }
+func (m *metricsOfQuery) rejectLonga() { m.longasRecusadas.Unlabeled().Inc() }
 
-// recusaPorOrcamento conta uma linha barrada pelo teto de buffer da consulta.
-// Chamada ALÉM de erro(), pela mesma razão de recusaLonga.
-func (m *metricasDeQuery) recusaPorOrcamento() { m.orcamentoRecusado.Unlabeled().Inc() }
+// rejectByBudget conta uma linha barrada pelo teto de buffer da consulta.
+// Chamada ALÉM de erro(), pela mesma razão de rejectLonga.
+func (m *metricsOfQuery) rejectByBudget() { m.budgetRecusado.Unlabeled().Inc() }
 
 // observa registra a duração total, do request ao último byte escrito. Inclui o
 // tempo de rede do cliente lento de propósito: é a latência que o usuário sente,
 // e separar as duas exigiria instrumentar o socket.
-func (m *metricasDeQuery) observa(dataset string, segundos float64) {
+func (m *metricsOfQuery) observa(dataset string, segundos float64) {
 	m.latencia.With(dataset).Observe(segundos)
 }

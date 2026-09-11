@@ -32,7 +32,7 @@ type tiposHarness struct {
 	engine *query.Engine
 }
 
-func novoTiposHarness(t *testing.T) *tiposHarness {
+func newTiposHarness(t *testing.T) *tiposHarness {
 	t.Helper()
 	spec, err := schema.Load(tiposYAML, schema.BuiltinDefaults)
 	if err != nil {
@@ -42,10 +42,10 @@ func novoTiposHarness(t *testing.T) *tiposHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	texto, _ := sch.FieldByName([]byte("texto"))
+	text, _ := sch.FieldByName([]byte("texto"))
 	v4, _ := sch.FieldByName([]byte("v4"))
 	st := fakestorage.New(fakestorage.Indexes{
-		Fields: []types.FieldID{texto.ID, v4.ID},
+		Fields: []types.FieldID{text.ID, v4.ID},
 	})
 	eng := query.NewEngine()
 	if err := eng.Register("todos_os_tipos", sch, st); err != nil {
@@ -58,10 +58,10 @@ func novoTiposHarness(t *testing.T) *tiposHarness {
 	return &tiposHarness{t: t, sch: sch, store: st, mat: mat, engine: eng}
 }
 
-func (h *tiposHarness) ingere(evento string) {
+func (h *tiposHarness) ingere(event string) {
 	h.t.Helper()
-	if r := h.mat.Apply([]byte(evento)); r.Err != nil {
-		h.t.Fatalf("ingestão de %s: %v", evento, r.Err)
+	if r := h.mat.Apply([]byte(event)); r.Err != nil {
+		h.t.Fatalf("ingestão de %s: %v", event, r.Err)
 	}
 }
 
@@ -87,10 +87,10 @@ func (h *tiposHarness) achaIDs(sql string) []string {
 // ingerido é encontrado pelo literal equivalente.
 func TestIngestaoEQueryConcordamPorTipo(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		// campo e valor como aparecem no evento JSON.
-		campoJSON string
-		valorJSON string
+		fieldJSON string
+		valueJSON string
 		// predicado SQL que TEM de achar a row.
 		where string
 	}{
@@ -132,14 +132,14 @@ func TestIngestaoEQueryConcordamPorTipo(t *testing.T) {
 	}
 
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
-			h := novoTiposHarness(t)
-			h.ingere(fmt.Sprintf(`{"id":"K1","_SEQ":1,%q:%s}`, tc.campoJSON, tc.valorJSON))
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTiposHarness(t)
+			h.ingere(fmt.Sprintf(`{"id":"K1","_SEQ":1,%q:%s}`, tc.fieldJSON, tc.valueJSON))
 
 			got := h.achaIDs(`SELECT id FROM todos_os_tipos WHERE ` + tc.where)
 			if len(got) != 1 || got[0] != "K1" {
 				t.Errorf("query não achou a row ingerida: %v\n  evento: %s = %s\n  where:  %s",
-					got, tc.campoJSON, tc.valorJSON, tc.where)
+					got, tc.fieldJSON, tc.valueJSON, tc.where)
 			}
 		})
 	}
@@ -151,7 +151,7 @@ func TestIngestaoEQueryConcordamPorTipo(t *testing.T) {
 // inteiro cru e o de double guarda Float64bits — comparar um pelo outro
 // devolve lixo ordenado.
 func TestOperadoresNosTresModosNumericos(t *testing.T) {
-	h := novoTiposHarness(t)
+	h := newTiposHarness(t)
 	h.ingere(`{"id":"K1","_SEQ":1,"inteiro":100,"real":10.5}`)
 
 	casos := []struct {
@@ -189,7 +189,7 @@ func TestOperadoresNosTresModosNumericos(t *testing.T) {
 // Com valores positivos a ordem dos bits COINCIDE com a dos floats — por isso
 // um teste que só use positivos passa com o código errado e não prova nada.
 func TestOrdemDeDoubleNegativoNaoUsaBits(t *testing.T) {
-	h := novoTiposHarness(t)
+	h := newTiposHarness(t)
 	h.ingere(`{"id":"K1","_SEQ":1,"real":-1.0,"inteiro":-1}`)
 
 	casos := []struct {
@@ -222,7 +222,7 @@ func TestOrdemDeDoubleNegativoNaoUsaBits(t *testing.T) {
 // dois casos. Um executor que despachasse por Val.Type varreria o dataset
 // inteiro e devolveria vazio, sem erro nenhum.
 func TestMesmoLiteralEmColunasDeTipoDiferente(t *testing.T) {
-	h := novoTiposHarness(t)
+	h := newTiposHarness(t)
 	h.ingere(`{"id":"K1","_SEQ":1,"inteiro":2,"real":2.0}`)
 
 	// inteiro=2 > 1.5 (CompareIntAsFloat) e real=2.0 > 1.5 (CompareFloatBits).
@@ -244,7 +244,7 @@ func TestMesmoLiteralEmColunasDeTipoDiferente(t *testing.T) {
 // bytes e json não comparam (o binder recusa com E4): a concordância dos dois
 // lados é provada pela PROJEÇÃO — o valor projetado é byte a byte o ingerido.
 func TestIngestaoEQueryConcordamNosTiposOpacos(t *testing.T) {
-	h := novoTiposHarness(t)
+	h := newTiposHarness(t)
 	// "cru" é base64 na ingestão; o valor gravado são os bytes decodificados.
 	h.ingere(`{"id":"K1","_SEQ":1,"cru":"aGVsbG8=","doc":{"a":[1,2],"b":"txt"}}`)
 
@@ -257,12 +257,12 @@ func TestIngestaoEQueryConcordamNosTiposOpacos(t *testing.T) {
 	if !it.Next() {
 		t.Fatalf("row não saiu: %v", it.Err())
 	}
-	cru, doc := it.Row().Col(0), it.Row().Col(1)
-	if string(cru.Val.Bytes) != "hello" {
-		t.Errorf("bytes = %q, want os bytes decodificados do base64", cru.Val.Bytes)
+	raw, doc := it.Row().Col(0), it.Row().Col(1)
+	if string(raw.Val.Bytes) != "hello" {
+		t.Errorf("bytes = %q, want os bytes decodificados do base64", raw.Val.Bytes)
 	}
-	if cru.Val.Type != types.TypeBytes {
-		t.Errorf("tipo físico de bytes = %v", cru.Val.Type)
+	if raw.Val.Type != types.TypeBytes {
+		t.Errorf("tipo físico de bytes = %v", raw.Val.Type)
 	}
 	// O json é gravado VERBATIM (a janela do evento), e é assim que o encoder
 	// o emite.
@@ -282,9 +282,9 @@ func TestIngestaoEQueryConcordamNosTiposOpacos(t *testing.T) {
 // que não existe valor "ingerível mas não consultável" (nem o contrário).
 func TestValorInvalidoEhRecusadoNosDoisLados(t *testing.T) {
 	casos := []struct {
-		nome      string
-		campoJSON string
-		valor     string // literal, sem aspas JSON
+		name      string
+		fieldJSON string
+		value     string // literal, sem aspas JSON
 		where     string
 	}{
 		// Zeros à esquerda em ipv4: ambíguo (octal?), recusado na ingestão e
@@ -295,18 +295,18 @@ func TestValorInvalidoEhRecusadoNosDoisLados(t *testing.T) {
 		{"timestamp sem timezone", "quando", "2026-08-13T12:00:00", `quando = '2026-08-13T12:00:00'`},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
-			h := novoTiposHarness(t)
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTiposHarness(t)
 
-			r := h.mat.Apply([]byte(fmt.Sprintf(`{"id":"K1","_SEQ":1,%q:%q}`, tc.campoJSON, tc.valor)))
+			r := h.mat.Apply([]byte(fmt.Sprintf(`{"id":"K1","_SEQ":1,%q:%q}`, tc.fieldJSON, tc.value)))
 			if r.Err == nil {
-				t.Errorf("a INGESTÃO aceitou %q", tc.valor)
+				t.Errorf("a INGESTÃO aceitou %q", tc.value)
 			}
 
 			_, err := h.engine.Execute(context.Background(), "todos_os_tipos",
 				`SELECT id FROM todos_os_tipos WHERE `+tc.where, nil)
 			if err == nil {
-				t.Errorf("a QUERY aceitou %q", tc.valor)
+				t.Errorf("a QUERY aceitou %q", tc.value)
 			}
 		})
 	}
@@ -316,7 +316,7 @@ func TestValorInvalidoEhRecusadoNosDoisLados(t *testing.T) {
 // coerção, e divergir entre eles faz a mesma query dar resultados diferentes
 // conforme o cliente use `?` ou embuta o valor.
 func TestParametroELiteralConcordam(t *testing.T) {
-	h := novoTiposHarness(t)
+	h := newTiposHarness(t)
 	h.ingere(`{"id":"K1","_SEQ":1,"v4":"10.0.0.1","quando":"2026-08-13T12:00:00Z","real":10.5}`)
 
 	casos := []struct {
@@ -349,7 +349,7 @@ func TestParametroELiteralConcordam(t *testing.T) {
 // adivinha — e este teste existe para que ela seja uma decisão registrada, e
 // não uma descoberta de produção.
 func TestAssimetriaDeliberadaEntreIngestaoEQuery(t *testing.T) {
-	h := novoTiposHarness(t)
+	h := newTiposHarness(t)
 	h.ingere(`{"id":"K1","_SEQ":1,"inteiro":"4096"}`)
 
 	if got := h.achaIDs(`SELECT id FROM todos_os_tipos WHERE inteiro = 4096`); len(got) != 1 {
@@ -370,7 +370,7 @@ func TestAssimetriaDeliberadaEntreIngestaoEQuery(t *testing.T) {
 // runtime é o que torna o teste correto em qualquer fuso de CI — uma
 // constante passaria só na máquina onde foi escrita.
 func TestDatetimePorEpochMillisConcordaComOTextoIngerido(t *testing.T) {
-	h := novoTiposHarness(t)
+	h := newTiposHarness(t)
 	h.ingere(`{"id":"K1","_SEQ":1,"momento":"Aug 22, 2026 08:54:02 PM"}`)
 
 	ms := time.Date(2026, 8, 22, 20, 54, 2, 0, time.Local).UnixMilli()
@@ -385,17 +385,17 @@ func TestDatetimePorEpochMillisConcordaComOTextoIngerido(t *testing.T) {
 // o campo não declara tem de ser ERRO DE BIND, nunca resultado vazio. Vazio
 // parece resposta, e quem escreveu a query concluiria que não há dado.
 func TestLiteralNoFormatoErradoNaoAchaEmSilencio(t *testing.T) {
-	h := novoTiposHarness(t)
+	h := newTiposHarness(t)
 	h.ingere(`{"id":"K1","_SEQ":1,"momento":"Aug 22, 2026 08:54:02 PM","hora":"08:54:02 PM"}`)
 
-	casos := []struct{ nome, where string }{
+	casos := []struct{ name, where string }{
 		{"rfc3339 em campo java medium", `momento = '2026-08-22T20:54:02Z'`},
 		{"iso local em campo java medium", `momento_iso = 'Aug 22, 2026 08:54:02 PM'`},
 		{"texto de hora em campo de data", `momento = '08:54:02 PM'`},
 		{"epoch millis em campo time", `hora = 1786568400000`},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := h.engine.Execute(context.Background(), "todos_os_tipos",
 				`SELECT id FROM todos_os_tipos WHERE `+tc.where, nil)
 			if err == nil {
@@ -408,7 +408,7 @@ func TestLiteralNoFormatoErradoNaoAchaEmSilencio(t *testing.T) {
 // A mensagem precisa dizer em que grafia escrever: "literal inválido para a
 // coluna momento (datetime)" sozinho não é acionável.
 func TestMensagemDeLiteralInvalidoNomeiaOFormatDeclarado(t *testing.T) {
-	h := novoTiposHarness(t)
+	h := newTiposHarness(t)
 	_, err := h.engine.Execute(context.Background(), "todos_os_tipos",
 		`SELECT id FROM todos_os_tipos WHERE momento = '2026-08-22T20:54:02Z'`, nil)
 	if err == nil {
@@ -425,7 +425,7 @@ func TestMensagemDeLiteralInvalidoNomeiaOFormatDeclarado(t *testing.T) {
 // uma operação hostil, e o teste fixa esse comportamento em vez de deixá-lo
 // implícito.
 func TestColunasTemporaisNaoSeConfundemEntreSi(t *testing.T) {
-	h := novoTiposHarness(t)
+	h := newTiposHarness(t)
 	// Mesmo instante de relógio nos três campos.
 	h.ingere(`{"id":"K1","_SEQ":1,"quando":"2026-08-22T20:54:02Z",` +
 		`"momento":"Aug 22, 2026 08:54:02 PM","hora":"08:54:02 PM"}`)

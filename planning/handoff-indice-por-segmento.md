@@ -49,9 +49,9 @@ lembre de tê-los criado. **Leia-o antes de decidir qualquer coisa.**
   Duas formas: **WIP** (mutável, só o segmento corrente) e **selado** (imutável,
   um arquivo por segmento, diretório ordenado + busca binária).
 - `internal/storage/indices*.go` — `aposAppend` (ponto único de rotação sobre
-  **quatro** sítios de `Append`), `aplicaIndiceSets`, `ConstroiIndiceDoSegmento`,
-  `SegmentosPendentesDeReconstrucao`, `AplicaJanela`, `JanelaEfetiva`.
-- `internal/server/history.go` — `ligaRetencao`, `ligaReconstrucao`, métricas.
+  **quatro** sítios de `Append`), `aplicaIndexSets`, `ConstroiIndexOfSegment`,
+  `SegmentosPendentesOfRebuild`, `AplicaWindow`, `WindowEfetiva`.
+- `internal/server/history.go` — `turnonRetention`, `turnonRebuild`, métricas.
 
 ## Tarefas: 16 de 17 feitas
 
@@ -232,13 +232,13 @@ convergência que passa com o defeito presente não prova nada.
 - **Não existe fase `Clear`** (§5.2 da spec): a posting do valor antigo fica no
   índice do segmento ANTIGO, vira falso positivo tolerado, e morre quando o
   segmento se aposenta. Isso removeu o mecanismo de lápide.
-- **Ordem de locks**: `vida → wmu → aposMu`, com `retPassadaMu` **acima** da
+- **Ordem de locks**: `vida → wmu → aposMu`, com `retPassMu` **acima** da
   cadeia. A coleta de métrica **não pede lock nenhum** — quem tem o lock publica
   em atômico.
 - **Planner nunca falha**: toda dúvida degrada para FullScan.
 - Segmento sem índice responde por **enumeração** — correto, só lento.
 - **A decisão de união vem do DADO** (min/maxRowID nos cabeçalhos), nunca de
-  `EhHistorico()`.
+  `IsHistory()`.
 
 ## Débitos abertos por este ciclo
 

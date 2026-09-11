@@ -51,7 +51,7 @@ confundiu.
 
 Doutrina de verificação: para cada invariante, o defeito foi aplicado, a suíte
 ficou vermelha, o defeito foi revertido, a suíte voltou ao verde (inclusive sob
-`-race` nos pacotes `storage` e `contador`). Nenhuma delas ficou no código
+`-race` nos pacotes `storage` e `counter`). Nenhuma delas ficou no código
 (conferido por `git status` antes de cada commit).
 
 | Mutação aplicada | Reprovou em | O que a falha disse |
@@ -135,16 +135,16 @@ counters:
 | `nishidb counters --config` (lista e `--audit`) | 265 grupos, teto 65 536; auditoria 1 010/1 010 e 461/461, **0 divergências**, 2 ms, exit 0 |
 | Servidor com TLS e usuário ADMIN; `query --server` e `counters --server --audit` | mesmos números pela rota; 0 divergências em 3 ms |
 | `/metrics` | as **8 séries × 2 contadores**, `audit_last_success_timestamp` preenchido depois da auditoria |
-| Log da subida | **sem** `contador.construido`: adoção pelo manifest |
+| Log da subida | **sem** `counter.construido`: adoção pelo manifest |
 | SIGTERM | exit 0 |
 | Reinício | adoção de novo, sem construção |
-| `where` mudado para `authenticated = false` e reinício | `contador.construido` com motivo `os parâmetros mudaram (groupBy [4] → [4], where "authenticated = true" → "authenticated = false")`, 1 010 linhas, 265 grupos, 299 ms; auditoria **549/549**, 0 divergências (461 + 549 = 1 010) |
+| `where` mudado para `authenticated = false` e reinício | `counter.construido` com motivo `os parâmetros mudaram (groupBy [4] → [4], where "authenticated = true" → "authenticated = false")`, 1 010 linhas, 265 grupos, 299 ms; auditoria **549/549**, 0 divergências (461 + 549 = 1 010) |
 | `counters --server --rebuild` | 1 010 linhas, 265 grupos, 3 ms; SIGTERM, exit 0 |
 
 O que a rodada **não** exercitou: SIGTERM no meio de uma auditoria — sobre 1 010
 linhas ela termina em 3 ms, e não há janela para o sinal. A prova de que a
 auditoria honra o cancelamento é `TestAuditoriaRespeitaOContexto`, e a rota
-corre sob o mesmo `ctxDeMutacao` de `compact` e `checkpoint`.
+corre sob o mesmo `ctxOfMutacao` de `compact` e `checkpoint`.
 
 ## Veredito
 

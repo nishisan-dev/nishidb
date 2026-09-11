@@ -8,30 +8,30 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// storeComRegras abre um dataset com expiração e duração de fundo dada, com
+// storeWithRegras abre um dataset com expiração e duração de fundo dada, com
 // relógio controlado. Zero em fundo é o dataset que só tem regras
 // condicionais: quem não tiver prazo gravado não expira nunca.
-func storeComRegras(t *testing.T, dir string, fundo time.Duration) (*Store, *relogioDeTeste) {
+func storeWithRegras(t *testing.T, dir string, fundo time.Duration) (*Store, *relogioOfTest) {
 	t.Helper()
 	s := openStore(t, Options{
-		Dir:            dir,
-		TTLAtivo:       true,
-		DuracaoDeFundo: fundo,
-		CampoDeEscrita: "_writtenAt",
-		CampoDePrazo:   "_expiresIn",
+		Dir:                   dir,
+		ActiveTTL:             true,
+		FallbackDuration:      fundo,
+		WriteInstantFieldName: "_writtenAt",
+		TTLFieldName:          "_expiresIn",
 	})
-	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	rel := &relogioOfTest{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 	return s, rel
 }
 
-// payloadComPrazo monta o payload que o materializer produz num dataset com
+// payloadWithPrazo monta o payload que o materializer produz num dataset com
 // regras: o instante da escrita e a duração que a regra escolheu.
-func payloadComPrazo(t *testing.T, s *Store, key string, escrita time.Time, d time.Duration) []byte {
+func payloadWithPrazo(t *testing.T, s *Store, key string, write time.Time, d time.Duration) []byte {
 	t.Helper()
 	return payloadOrdenado(t, s, map[string]types.Value{
 		"id":         {Type: types.TypeString, Bytes: []byte(key)},
-		"_writtenAt": {Type: types.TypeTimestamp, I64: escrita.UnixMilli()},
+		"_writtenAt": {Type: types.TypeTimestamp, I64: write.UnixMilli()},
 		"_expiresIn": {Type: types.TypeInt64, I64: d.Milliseconds()},
 	})
 }
@@ -39,15 +39,15 @@ func payloadComPrazo(t *testing.T, s *Store, key string, escrita time.Time, d ti
 // A duração da LINHA governa, e não uma configuração única do dataset: é o
 // ponto inteiro do TTL condicional.
 func TestPrazoVencidoUsaADuracaoDaLinha(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
-	curto, _ := mustPut(t, s, "curto", 1, payloadComPrazo(t, s, "curto", rel.t, 3*time.Minute), nil)
-	longo, _ := mustPut(t, s, "longo", 1, payloadComPrazo(t, s, "longo", rel.t, 7*24*time.Hour), nil)
+	s, rel := storeWithRegras(t, t.TempDir(), 7*24*time.Hour)
+	curto, _ := mustPut(t, s, "curto", 1, payloadWithPrazo(t, s, "curto", rel.t, 3*time.Minute), nil)
+	longo, _ := mustPut(t, s, "longo", 1, payloadWithPrazo(t, s, "longo", rel.t, 7*24*time.Hour), nil)
 
-	rel.avanca(4 * time.Minute)
-	if !s.prazoVencido(curto, s.agora()) {
+	rel.advance(4 * time.Minute)
+	if !s.prazoVencido(curto, s.now()) {
 		t.Error("a linha de 3m não venceu depois de 4m")
 	}
-	if s.prazoVencido(longo, s.agora()) {
+	if s.prazoVencido(longo, s.now()) {
 		t.Error("a linha de 7d venceu depois de 4m")
 	}
 }
@@ -55,25 +55,25 @@ func TestPrazoVencidoUsaADuracaoDaLinha(t *testing.T) {
 // A prova da MIGRAÇÃO: a entidade materializada antes de as regras existirem
 // não tem o campo no documento, e continua expirando pelo prazo de fundo.
 func TestLinhaSemExpiresInCaiNaDuracaoDeFundo(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	s, rel := storeWithRegras(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 
-	rel.avanca(30 * time.Minute)
-	if s.prazoVencido(id, s.agora()) {
+	rel.advance(30 * time.Minute)
+	if s.prazoVencido(id, s.now()) {
 		t.Error("venceu antes da duração de fundo")
 	}
-	rel.avanca(31 * time.Minute)
-	if !s.prazoVencido(id, s.agora()) {
+	rel.advance(31 * time.Minute)
+	if !s.prazoVencido(id, s.now()) {
 		t.Error("a linha sem prazo gravado não caiu na duração de fundo")
 	}
 }
 
 func TestLinhaSemExpiresInESemFundoEhImortal(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), 0)
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	s, rel := storeWithRegras(t, t.TempDir(), 0)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 
-	rel.avanca(365 * 24 * time.Hour)
-	if s.prazoVencido(id, s.agora()) {
+	rel.advance(365 * 24 * time.Hour)
+	if s.prazoVencido(id, s.now()) {
 		t.Error("sem regra de fundo, a linha sem prazo gravado não pode vencer")
 	}
 }
@@ -82,11 +82,11 @@ func TestLinhaSemExpiresInESemFundoEhImortal(t *testing.T) {
 // colapse imortal com desconhecido passa despercebido — e a entidade que uma
 // regra `never` declarou imortal herdaria o prazo de fundo.
 func TestLinhaImortalNaoHerdaADuracaoDeFundo(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 0), nil)
+	s, rel := storeWithRegras(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithPrazo(t, s, "A", rel.t, 0), nil)
 
-	rel.avanca(48 * time.Hour)
-	if s.prazoVencido(id, s.agora()) {
+	rel.advance(48 * time.Hour)
+	if s.prazoVencido(id, s.now()) {
 		t.Error("a linha imortal caiu na duração de fundo: o sentinela não está sendo distinguido")
 	}
 	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || !ok {
@@ -99,20 +99,20 @@ func TestLinhaImortalNaoHerdaADuracaoDeFundo(t *testing.T) {
 func TestReplayDoTailReconstroiOsPrazos(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
-		Dir:            dir,
-		SegmentSize:    1 << 20,
-		TTLAtivo:       true,
-		DuracaoDeFundo: 7 * 24 * time.Hour,
-		CampoDeEscrita: "_writtenAt",
-		CampoDePrazo:   "_expiresIn",
+		Dir:                   dir,
+		SegmentSize:           1 << 20,
+		ActiveTTL:             true,
+		FallbackDuration:      7 * 24 * time.Hour,
+		WriteInstantFieldName: "_writtenAt",
+		TTLFieldName:          "_expiresIn",
 	}
 	s, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	rel := &relogioOfTest{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
-	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+	id, _ := mustPut(t, s, "A", 1, payloadWithPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 	// Close SEM checkpoint: o índice em heap morre e só os records sobrevivem.
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -123,9 +123,9 @@ func TestReplayDoTailReconstroiOsPrazos(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s2.Close() })
-	rel2 := &relogioDeTeste{t: rel.t.Add(4 * time.Minute)}
+	rel2 := &relogioOfTest{t: rel.t.Add(4 * time.Minute)}
 	s2.UsaRelogio(rel2.agora)
-	if !s2.prazoVencido(id, s2.agora()) {
+	if !s2.prazoVencido(id, s2.now()) {
 		t.Error("o replay não repôs a duração de 3m: a linha ganhou o prazo de fundo")
 	}
 }
@@ -133,13 +133,13 @@ func TestReplayDoTailReconstroiOsPrazos(t *testing.T) {
 // A visibilidade NÃO depende do agendador: uma linha some assim que o prazo
 // DELA passa, mesmo com o coletor parado.
 func TestPrazoVencidoEscondeALinhaComOColetorParado(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+	s, rel := storeWithRegras(t, t.TempDir(), 7*24*time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
 	if _, _, ok, _ := s.GetByRowID(s.presente(), id, nil); !ok {
 		t.Fatal("a linha nem apareceu")
 	}
-	rel.avanca(4 * time.Minute)
+	rel.advance(4 * time.Minute)
 	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || ok {
 		t.Errorf("a linha vencida continua visível: ok=%v err=%v", ok, err)
 	}
@@ -151,32 +151,32 @@ func TestPrazoVencidoEscondeALinhaComOColetorParado(t *testing.T) {
 // A escrita seguinte reescreve o prazo, e é isso que CANCELA a expiração curta
 // quando a condição deixa de valer.
 func TestEscritaComOutroPrazoCancelaAExpiracaoCurta(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+	s, rel := storeWithRegras(t, t.TempDir(), 7*24*time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
-	rel.avanca(90 * time.Second)
+	rel.advance(90 * time.Second)
 	rec, _, pres, err := s.State([]byte("A"), nil)
 	if err != nil || pres != types.PresenceLive {
 		t.Fatalf("pres=%v err=%v", pres, err)
 	}
-	if _, _, err := s.Put([]byte("A"), 2, 0, payloadComPrazo(t, s, "A", rel.t, 7*24*time.Hour), &rec); err != nil {
+	if _, _, err := s.Put([]byte("A"), 2, 0, payloadWithPrazo(t, s, "A", rel.t, 7*24*time.Hour), &rec); err != nil {
 		t.Fatal(err)
 	}
 
-	rel.avanca(4 * time.Minute) // muito além dos 3m originais
-	if s.prazoVencido(id, s.agora()) {
+	rel.advance(4 * time.Minute) // muito além dos 3m originais
+	if s.prazoVencido(id, s.now()) {
 		t.Error("a entidade morreu pelo prazo antigo depois de a condição deixar de valer")
 	}
 }
 
 // A compaction descarta o record vencido pela regra da própria linha.
 func TestCompactionDescartaRecordVencidoPorRegraCondicional(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+	s, rel := storeWithRegras(t, t.TempDir(), 7*24*time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
-	rel.avanca(4 * time.Minute)
-	r, err := s.ExpiraUmaPassada(context.Background(), LimitesDeExpiracao{
-		MaxPorPassada: 10, TempoPorPassada: time.Second,
+	rel.advance(4 * time.Minute)
+	r, err := s.ExpiraOnePass(context.Background(), LimitesOfExpiration{
+		MaxByPassada: 10, TimeByPassada: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -195,12 +195,12 @@ func TestCompactionDescartaRecordVencidoPorRegraCondicional(t *testing.T) {
 // flag e devolver false. Com prazo de MINUTOS isso é disputa contínua pelo
 // lock de escrita com a ingestão.
 func TestColetorNaoTentaExpirarLinhaJaTombstonada(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
-	mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+	s, rel := storeWithRegras(t, t.TempDir(), 7*24*time.Hour)
+	mustPut(t, s, "A", 1, payloadWithPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
-	rel.avanca(4 * time.Minute)
-	lim := LimitesDeExpiracao{MaxPorPassada: 10, TempoPorPassada: time.Second}
-	primeira, err := s.ExpiraUmaPassada(context.Background(), lim)
+	rel.advance(4 * time.Minute)
+	lim := LimitesOfExpiration{MaxByPassada: 10, TimeByPassada: time.Second}
+	primeira, err := s.ExpiraOnePass(context.Background(), lim)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestColetorNaoTentaExpirarLinhaJaTombstonada(t *testing.T) {
 		t.Fatalf("primeira passada: %+v", primeira)
 	}
 
-	segunda, err := s.ExpiraUmaPassada(context.Background(), lim)
+	segunda, err := s.ExpiraOnePass(context.Background(), lim)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,17 +227,17 @@ func TestColetorNaoTentaExpirarLinhaJaTombstonada(t *testing.T) {
 // pré-filtro some: a linha recebe o sentinela "nunca" no mesmo applyRecord que
 // grava a lápide e sai da árvore.
 func TestLinhaTombstonadaNaoEhEntreguePelaAgenda(t *testing.T) {
-	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
+	s, rel := storeWithRegras(t, t.TempDir(), 7*24*time.Hour)
 	for _, k := range []string{"A", "B", "C"} {
-		mustPut(t, s, k, 1, payloadComPrazo(t, s, k, rel.t, 3*time.Minute), nil)
+		mustPut(t, s, k, 1, payloadWithPrazo(t, s, k, rel.t, 3*time.Minute), nil)
 	}
-	rel.avanca(4 * time.Minute)
-	lim := LimitesDeExpiracao{MaxPorPassada: 10, TempoPorPassada: 2 * time.Second}
-	if r, err := s.ExpiraUmaPassada(context.Background(), lim); err != nil || r.Expiradas != 3 {
+	rel.advance(4 * time.Minute)
+	lim := LimitesOfExpiration{MaxByPassada: 10, TimeByPassada: 2 * time.Second}
+	if r, err := s.ExpiraOnePass(context.Background(), lim); err != nil || r.Expiradas != 3 {
 		t.Fatalf("primeira passada: %+v (err=%v)", r, err)
 	}
 	// A passada seguinte não tem o que examinar: as três saíram da agenda.
-	r, err := s.ExpiraUmaPassada(context.Background(), lim)
+	r, err := s.ExpiraOnePass(context.Background(), lim)
 	if err != nil {
 		t.Fatal(err)
 	}

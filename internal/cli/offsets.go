@@ -28,14 +28,14 @@ import (
 //   - Trocar de tópico ou de cluster recusa a subida. A troca LEGÍTIMA
 //     (promoção de teste para produção) precisa de um ato explícito.
 //
-// O reposicionamento é operação de ADMINISTRAÇÃO e não campo de arquivo: o
+// O reposicionamento é operação de ADMINISTRAÇÃO e não field de arquivo: o
 // §49 torna o checkpoint autoritativo, e uma chave de YAML que reposiciona
 // seria aplicada de novo a cada reinício, silenciosamente.
 //
 // Toma o flock do dataset, logo exige o servidor parado. É proposital: mexer
 // na posição com o consumer de pé faria o writer sobrescrever a decisão no
 // checkpoint seguinte.
-func runOffsets(args []string, amb Ambiente) int {
+func runOffsets(args []string, amb Context) int {
 	fs := flag.NewFlagSet("offsets", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
@@ -47,36 +47,36 @@ func runOffsets(args []string, amb Ambiente) int {
 		confirmar = fs.Bool("yes", false, "confirma a escrita (obrigatório com --reset e --set)")
 	)
 	if err := fs.Parse(args); err != nil {
-		return ExitUso
+		return ExitUsageError
 	}
 	if *argConfig == "" || *dataset == "" {
 		fmt.Fprintln(amb.Stderr, "offsets: --config e --dataset são obrigatórios")
-		return ExitUso
+		return ExitUsageError
 	}
 	acoes := 0
-	for _, ligada := range []bool{*mostrar, *reiniciar != "", *definir != ""} {
-		if ligada {
+	for _, on := range []bool{*mostrar, *reiniciar != "", *definir != ""} {
+		if on {
 			acoes++
 		}
 	}
 	if acoes != 1 {
 		fmt.Fprintln(amb.Stderr, "offsets: escolha exatamente uma ação: --show, --reset ou --set")
-		return ExitUso
+		return ExitUsageError
 	}
 
 	cfg, err := nishiconfig.Load(*argConfig)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	spec, err := schema.Load(cfg.DatasetSpecPath(*dataset), cfg.QueryDefaults())
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	if spec.Source.Kafka == nil {
 		fmt.Fprintf(amb.Stderr, "offsets: o dataset %q não declara source.kafka\n", *dataset)
-		return ExitUso
+		return ExitUsageError
 	}
 
 	// Os campos indexados PRECISAM ser declarados: o Store recusa abrir um
@@ -84,55 +84,55 @@ func runOffsets(args []string, amb Ambiente) int {
 	// porque o índice pararia de ser atualizado e reapareceria incompleto.
 	indexados := schema.IndexedFieldNames(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DatasetDir(*dataset),
-		Dataset:                *dataset,
-		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: indexados,
-		ColunasDerivadas:       spec.DerivedColumnNames(),
-		TTLAtivo:               len(spec.Materialization.TTLRules) > 0,
-		DuracaoDeFundo:         spec.Materialization.FallbackDuration,
-		CampoDeEscrita:         schema.WriteInstantFieldName,
-		CampoDePrazo:           schema.TTLFieldName,
+		Dir:                   cfg.DatasetDir(*dataset),
+		Dataset:               *dataset,
+		SegmentSize:           cfg.SegmentSize(),
+		IndexedFieldsByName:   indexados,
+		DerivedColumnNames:    spec.DerivedColumnNames(),
+		ActiveTTL:             len(spec.Materialization.TTLRules) > 0,
+		FallbackDuration:      spec.Materialization.FallbackDuration,
+		WriteInstantFieldName: schema.WriteInstantFieldName,
+		TTLFieldName:          schema.TTLFieldName,
 		// Os contadores também: um dataset que os declara recusa abrir sem
 		// eles, e este comando não escreve linha nenhuma — mas o Open faz
 		// um checkpoint, e o checkpoint grava a seção deles no manifest.
-		CompilaContadores: counters.NovoCompilador(spec).Callback(),
+		CompileCountersCallbackFunction: counters.NewCompiler(spec).Callback(),
 	})
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-		return codigoDoErro(err)
+		return errorCode(err)
 	}
 	defer st.Close()
 
-	atual, existe, errLeitura := st.SourceOffsets()
+	current, exists, errLeitura := st.SourceOffsets()
 
 	switch {
 	case *mostrar:
-		return imprimeOffsets(amb, *dataset, st.RowCount(), atual, existe, errLeitura)
+		return printOffsets(amb, *dataset, st.RowCount(), current, exists, errLeitura)
 
 	case *reiniciar != "":
 		if *reiniciar != schema.AutoOffsetResetEarliest && *reiniciar != schema.AutoOffsetResetLatest {
 			fmt.Fprintf(amb.Stderr, "offsets: --reset %q inválido (%s|%s)\n",
 				*reiniciar, schema.AutoOffsetResetEarliest, schema.AutoOffsetResetLatest)
-			return ExitUso
+			return ExitUsageError
 		}
 		if !*confirmar {
 			fmt.Fprintf(amb.Stderr,
 				"offsets: --reset %s DESCARTA a posição de %q e reprocessa ou pula uma janela do tópico. "+
 					"Confirme com --yes\n", *reiniciar, *dataset)
-			return ExitUso
+			return ExitUsageError
 		}
 		// Reset é a posição VAZIA com a origem do YAML: na próxima subida o
 		// dataset estará "sem posição", e o autoOffsetReset governa. O
 		// RowCount deixa de bloquear porque a decisão foi tomada aqui, de
 		// forma explícita e registrada.
-		nova := checkpoint.SourceOffsets{
-			Source:  origemDaSpec(spec),
+		nw := checkpoint.SourceOffsets{
+			Source:  specOrigin(spec),
 			Offsets: map[int32]int64{},
 		}
-		if err := grava(st, nova); err != nil {
+		if err := grava(st, nw); err != nil {
 			fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-			return codigoDoErro(err)
+			return errorCode(err)
 		}
 		fmt.Fprintf(amb.Stdout, "offsets: posição de %q descartada; a próxima subida usa autoOffsetReset=%s\n",
 			*dataset, *reiniciar)
@@ -142,28 +142,28 @@ func runOffsets(args []string, amb Ambiente) int {
 		offsets, err := parseOffsets(*definir)
 		if err != nil {
 			fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-			return ExitUso
+			return ExitUsageError
 		}
 		if !*confirmar {
 			fmt.Fprintf(amb.Stderr,
 				"offsets: --set sobrescreve a posição de %q por %s. Confirme com --yes\n",
-				*dataset, formataOffsets(offsets))
-			return ExitUso
+				*dataset, formatOffsets(offsets))
+			return ExitUsageError
 		}
-		nova := checkpoint.SourceOffsets{Source: origemDaSpec(spec), Offsets: offsets}
-		if err := grava(st, nova); err != nil {
+		newOffsets := checkpoint.SourceOffsets{Source: specOrigin(spec), Offsets: offsets}
+		if err := grava(st, newOffsets); err != nil {
 			fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-			return codigoDoErro(err)
+			return errorCode(err)
 		}
-		fmt.Fprintf(amb.Stdout, "offsets: posição de %q definida como %s\n", *dataset, formataOffsets(offsets))
+		fmt.Fprintf(amb.Stdout, "offsets: posição de %q definida como %s\n", *dataset, formatOffsets(offsets))
 		return ExitOK
 	}
 }
 
-// origemDaSpec reconstrói a identidade a partir do YAML. O cluster id fica
+// specOrigin reconstrói a identidade a partir do YAML. O cluster id fica
 // vazio: quem o preenche é a primeira subida, que fala com o broker — e a
 // Divergencia trata o vazio como "não confere", não como "divergiu".
-func origemDaSpec(spec *schema.DatasetSpec) checkpoint.Source {
+func specOrigin(spec *schema.DatasetSpec) checkpoint.Source {
 	k := spec.Source.Kafka
 	return checkpoint.Source{
 		Topic:     k.Topic,
@@ -179,8 +179,8 @@ func grava(st *storage.Store, o checkpoint.SourceOffsets) error {
 	return st.Checkpoint()
 }
 
-func imprimeOffsets(amb Ambiente, dataset string, rows uint64,
-	o checkpoint.SourceOffsets, existe bool, errLeitura error,
+func printOffsets(amb Context, dataset string, rows uint64,
+	o checkpoint.SourceOffsets, exists bool, errLeitura error,
 ) int {
 	fmt.Fprintf(amb.Stdout, "dataset: %s\nrows: %d\n", dataset, rows)
 	switch {
@@ -191,7 +191,7 @@ func imprimeOffsets(amb Ambiente, dataset string, rows uint64,
 				"a ingestão NÃO sobe neste estado: use --reset ou --set para decidir explicitamente")
 		}
 		return ExitDataset
-	case !existe:
+	case !exists:
 		fmt.Fprintln(amb.Stdout, "posição: ausente")
 		if rows > 0 {
 			fmt.Fprintln(amb.Stdout,
@@ -217,27 +217,27 @@ func imprimeOffsets(amb Ambiente, dataset string, rows uint64,
 // parseOffsets lê "0:100,1:250".
 func parseOffsets(s string) (map[int32]int64, error) {
 	out := map[int32]int64{}
-	for _, par := range strings.Split(s, ",") {
-		par = strings.TrimSpace(par)
-		if par == "" {
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
 			continue
 		}
-		p, o, ok := strings.Cut(par, ":")
+		p, o, ok := strings.Cut(pair, ":")
 		if !ok {
-			return nil, fmt.Errorf("--set %q inválido (esperado particao:offset)", par)
+			return nil, fmt.Errorf("--set %q inválido (esperado particao:offset)", pair)
 		}
-		particao, err := strconv.ParseInt(strings.TrimSpace(p), 10, 32)
-		if err != nil || particao < 0 {
-			return nil, fmt.Errorf("--set %q: partição inválida", par)
+		partition, err := strconv.ParseInt(strings.TrimSpace(p), 10, 32)
+		if err != nil || partition < 0 {
+			return nil, fmt.Errorf("--set %q: partição inválida", pair)
 		}
 		offset, err := strconv.ParseInt(strings.TrimSpace(o), 10, 64)
 		if err != nil || offset < 0 {
-			return nil, fmt.Errorf("--set %q: offset inválido (>= 0)", par)
+			return nil, fmt.Errorf("--set %q: offset inválido (>= 0)", pair)
 		}
-		if _, dup := out[int32(particao)]; dup {
-			return nil, fmt.Errorf("--set: partição %d repetida", particao)
+		if _, dup := out[int32(partition)]; dup {
+			return nil, fmt.Errorf("--set: partição %d repetida", partition)
 		}
-		out[int32(particao)] = offset
+		out[int32(partition)] = offset
 	}
 	if len(out) == 0 {
 		return nil, errors.New("--set vazio")
@@ -245,7 +245,7 @@ func parseOffsets(s string) (map[int32]int64, error) {
 	return out, nil
 }
 
-func formataOffsets(o map[int32]int64) string {
+func formatOffsets(o map[int32]int64) string {
 	ps := make([]int, 0, len(o))
 	for p := range o {
 		ps = append(ps, int(p))

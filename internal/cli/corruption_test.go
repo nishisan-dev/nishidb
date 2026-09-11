@@ -14,11 +14,11 @@ import (
 // Um byte invertido DENTRO da região durável de um segmento não é detectado no
 // Open (a guarda do §14.20 vê encolhimento, não sobrescrita): ele aparece na
 // leitura, no meio do resultado. O que estava errado era o exit code — o erro
-// real é encoding.ErrCorrupt, que não constava do codigoDoErro e caía no
-// default ExitUso. O operador recebia "erro de uso ou de configuração", que é
+// real é encoding.ErrCorrupt, que não constava do errorCode e caía no
+// default ExitUsageError. O operador recebia "erro de uso ou de configuração", que é
 // justamente o único código que NÃO manda olhar o dataset.
 func TestDatasetCorrompidoSaiComExitDeDataset(t *testing.T) {
-	a := novoAmbiente(t)
+	a := newEnv(t)
 
 	// Uma entidade por evento: todo record fica VIVO, então a varredura
 	// completa lê todos e alcança o byte corrompido onde quer que ele caia.
@@ -26,7 +26,7 @@ func TestDatasetCorrompidoSaiComExitDeDataset(t *testing.T) {
 	for i := range 200 {
 		fmt.Fprintf(&sb, `{"id":"K%04d","_SEQ":1,"Acct-Status-Type":"Stop"}`+"\n", i)
 	}
-	if code := a.rodaComEntrada(sb.String(),
+	if code := a.runWithEntry(sb.String(),
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != cli.ExitOK {
 		t.Fatalf("ingest: code = %d\n%s", code, a.stderr.String())
 	}
@@ -39,17 +39,17 @@ func TestDatasetCorrompidoSaiComExitDeDataset(t *testing.T) {
 	if m.DurableOffset == 0 {
 		t.Fatal("nada durável: o ingest não gravou checkpoint")
 	}
-	seg := filepath.Join(ds, "data", "segment-00000001.dat")
-	raw, err := os.ReadFile(seg)
+	sec := filepath.Join(ds, "data", "segment-00000001.dat")
+	raw, err := os.ReadFile(sec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw[m.DurableOffset/2] ^= 0xFF // no MEIO do que já está selado
-	if err := os.WriteFile(seg, raw, 0o644); err != nil {
+	if err := os.WriteFile(sec, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
+	code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 		"SELECT id FROM radius_sessions")
 
 	if code != cli.ExitDataset {

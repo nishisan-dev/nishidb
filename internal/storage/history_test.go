@@ -9,22 +9,22 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// parHistorico abre o dataset base e a tabela irmã, compartilhando o
+// pairHistory abre o dataset base e a tabela irmã, compartilhando o
 // dicionário — que é como o servidor os abre.
-func parHistorico(t *testing.T) (base, hist *Store) {
+func pairHistory(t *testing.T) (base, hist *Store) {
 	t.Helper()
 	base = openStore(t, Options{})
 	hist = openStore(t, Options{
-		Dir:               t.TempDir(),
-		Dataset:           "events_history",
-		Modo:              ModoHistorico,
-		DictCompartilhado: base.FieldDict(),
+		Dir:              t.TempDir(),
+		Dataset:          "events_history",
+		Mode:             HistoryMode,
+		SharedDictionary: base.FieldDict(),
 	})
 	return base, hist
 }
 
 func TestApendaGravaUmaLinhaVisivel(t *testing.T) {
-	base, hist := parHistorico(t)
+	base, hist := pairHistory(t)
 	p := statusPayload(t, base, "a", "novo", 1)
 	id, err := hist.Apenda(p)
 	if err != nil {
@@ -45,7 +45,7 @@ func TestApendaGravaUmaLinhaVisivel(t *testing.T) {
 // É a propriedade central da tabela: o mesmo identifier duas vezes são DUAS
 // linhas. No dataset base seriam uma, mergeada.
 func TestApendaNaoDeduplica(t *testing.T) {
-	base, hist := parHistorico(t)
+	base, hist := pairHistory(t)
 	p := statusPayload(t, base, "mesmo", "novo", 1)
 	primeiro, err := hist.Apenda(p)
 	if err != nil {
@@ -58,12 +58,12 @@ func TestApendaNaoDeduplica(t *testing.T) {
 	if primeiro == segundo {
 		t.Fatalf("os dois eventos foram para a mesma row %d", primeiro)
 	}
-	if n := contaVivas(t, hist); n != 2 {
+	if n := countVivas(t, hist); n != 2 {
 		t.Fatalf("%d linhas vivas, quer 2", n)
 	}
 }
 
-func contaVivas(t *testing.T, s *Store) int {
+func countVivas(t *testing.T, s *Store) int {
 	t.Helper()
 	it := s.ScanLive(s.presente())
 	defer func() { _ = it.Close() }()
@@ -78,7 +78,7 @@ func contaVivas(t *testing.T, s *Store) int {
 }
 
 func TestPutNoHistoricoEhRecusado(t *testing.T) {
-	base, hist := parHistorico(t)
+	base, hist := pairHistory(t)
 	p := statusPayload(t, base, "a", "novo", 1)
 	if _, _, err := hist.Put([]byte("a"), 0, 0, p, nil); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("Put = %v, quer ErrInvalidArgument", err)
@@ -96,7 +96,7 @@ func TestApendaNoMaterializadoEhRecusado(t *testing.T) {
 // Sem o dicionário do base os FieldIDs seriam outros e todo record
 // decodificaria colunas trocadas, sem erro e com o CRC batendo.
 func TestModoHistoricoSemDicionarioCompartilhadoEhRecusado(t *testing.T) {
-	_, err := Open(Options{Dir: t.TempDir(), SegmentSize: 1 << 20, Modo: ModoHistorico})
+	_, err := Open(Options{Dir: t.TempDir(), SegmentSize: 1 << 20, Mode: HistoryMode})
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("Open = %v, quer ErrInvalidArgument", err)
 	}
@@ -107,9 +107,9 @@ func TestModoHistoricoSemDicionarioCompartilhadoEhRecusado(t *testing.T) {
 func TestModoHistoricoComTTLAtivoEhRecusado(t *testing.T) {
 	base := openStore(t, Options{})
 	_, err := Open(Options{
-		Dir: t.TempDir(), SegmentSize: 1 << 20, Modo: ModoHistorico,
-		DictCompartilhado: base.FieldDict(),
-		TTLAtivo:          true, CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+		Dir: t.TempDir(), SegmentSize: 1 << 20, Mode: HistoryMode,
+		SharedDictionary: base.FieldDict(),
+		ActiveTTL:        true, WriteInstantFieldName: "_writtenAt", TTLFieldName: "_expiresIn",
 	})
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("Open = %v, quer ErrInvalidArgument", err)
@@ -122,7 +122,7 @@ func TestModoHistoricoComTTLAtivoEhRecusado(t *testing.T) {
 func TestModoGravadoEhImutavel(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
+	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
 	if err != nil {
 		t.Fatalf("Open do histórico: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestModoGravadoEhImutavel(t *testing.T) {
 	if err := hist.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	_, err = Open(Options{Dir: dir, SegmentSize: 1 << 20, DictCompartilhado: base.FieldDict()})
+	_, err = Open(Options{Dir: dir, SegmentSize: 1 << 20, SharedDictionary: base.FieldDict()})
 	if !errors.Is(err, ErrDatasetCorrupt) {
 		t.Fatalf("reabrir como materializado = %v, quer ErrDatasetCorrupt", err)
 	}
@@ -144,16 +144,16 @@ func TestModoGravadoEhImutavel(t *testing.T) {
 func TestOHistoricoNaoCriaPrimaryNemSequences(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	hist := openStore(t, Options{Dir: dir, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
+	hist := openStore(t, Options{Dir: dir, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
 	if _, err := hist.Apenda(statusPayload(t, base, "a", "novo", 1)); err != nil {
 		t.Fatalf("Apenda: %v", err)
 	}
 	if err := hist.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	for _, nome := range []string{"primary.idx", "sequences.idx", "expiry.idx", "prazos.idx"} {
-		if _, err := os.Stat(filepath.Join(dir, "indexes", nome)); !os.IsNotExist(err) {
-			t.Errorf("o histórico criou %s (err = %v)", nome, err)
+	for _, name := range []string{"primary.idx", "sequences.idx", "expiry.idx", "prazos.idx"} {
+		if _, err := os.Stat(filepath.Join(dir, "indexes", name)); !os.IsNotExist(err) {
+			t.Errorf("o histórico criou %s (err = %v)", name, err)
 		}
 	}
 	// A location continua, porque é ela que resolve rowId → bytes.
@@ -168,7 +168,7 @@ func TestOHistoricoNaoCriaPrimaryNemSequences(t *testing.T) {
 func TestHistoricoRecuperaOTailSemCheckpoint(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
+	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -181,8 +181,8 @@ func TestHistoricoRecuperaOTailSemCheckpoint(t *testing.T) {
 	if err := hist.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	volta := openStore(t, Options{Dir: dir, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
-	if n := contaVivas(t, volta); n != 5 {
+	back := openStore(t, Options{Dir: dir, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
+	if n := countVivas(t, back); n != 5 {
 		t.Fatalf("%d linhas depois do replay, quer 5", n)
 	}
 }
@@ -192,7 +192,7 @@ func TestHistoricoRecuperaOTailSemCheckpoint(t *testing.T) {
 func TestMarcaDaguaSobreviveAoRestart(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
+	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestMarcaDaguaSobreviveAoRestart(t *testing.T) {
 		}
 	}
 	hist.rowIDBase.Store(2)
-	if n := contaVivas(t, hist); n != 2 {
+	if n := countVivas(t, hist); n != 2 {
 		t.Fatalf("%d linhas visíveis com a marca em 2, quer 2", n)
 	}
 	if err := hist.Checkpoint(); err != nil {
@@ -211,18 +211,18 @@ func TestMarcaDaguaSobreviveAoRestart(t *testing.T) {
 	if err := hist.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	volta := openStore(t, Options{Dir: dir, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
-	if got := volta.RowIDBase(); got != 2 {
+	back := openStore(t, Options{Dir: dir, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
+	if got := back.RowIDBase(); got != 2 {
 		t.Fatalf("RowIDBase = %d depois do restart, quer 2", got)
 	}
-	if n := contaVivas(t, volta); n != 2 {
+	if n := countVivas(t, back); n != 2 {
 		t.Fatalf("%d linhas depois do restart, quer 2", n)
 	}
 }
 
 // A linha purgada some da consulta por rowId também, e não só da varredura.
 func TestLinhaAbaixoDaMarcaSomeDoGetByRowID(t *testing.T) {
-	base, hist := parHistorico(t)
+	base, hist := pairHistory(t)
 	id, err := hist.Apenda(statusPayload(t, base, "a", "novo", 1))
 	if err != nil {
 		t.Fatalf("Apenda: %v", err)
@@ -234,7 +234,7 @@ func TestLinhaAbaixoDaMarcaSomeDoGetByRowID(t *testing.T) {
 }
 
 func TestSequenceDoHistoricoEhZero(t *testing.T) {
-	base, hist := parHistorico(t)
+	base, hist := pairHistory(t)
 	id, err := hist.Apenda(statusPayload(t, base, "a", "novo", 1))
 	if err != nil {
 		t.Fatalf("Apenda: %v", err)

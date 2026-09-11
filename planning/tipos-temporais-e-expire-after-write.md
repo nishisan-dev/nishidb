@@ -146,7 +146,7 @@ func montaInstanteLocal(ano, mes, dia, h, min, seg, millis int, loc *time.Locati
 
 ## 1.5 Saída
 
-**NDJSON** — `datetime` sai byte a byte igual a `timestamp` (reusa `appendTimestamp`, [ndjson.go:307](internal/query/executor/ndjson.go:307)). `time` ganha `appendHoraDoDia` → `"18:54:02.000"`, **sem `Z`**: não há instante e não há fuso a anunciar; reusa `append2`/`append3` ([:351](internal/query/executor/ndjson.go:351)).
+**NDJSON** — `datetime` sai byte a byte igual a `timestamp` (reusa `appendTimestamp`, [ndjson.go:307](internal/query/executor/ndjson.go:307)). `time` ganha `appendHoraOfDia` → `"18:54:02.000"`, **sem `Z`**: não há instante e não há fuso a anunciar; reusa `append2`/`append3` ([:351](internal/query/executor/ndjson.go:351)).
 
 > **Consequência a documentar em letras grandes: `datetime` não faz round-trip textual.** Entra `Aug 22, 2026 08:54:02 PM`, sai `"2026-08-22T23:54:02.000Z"` sob `TZ=America/Sao_Paulo`. É o preço de resolver a ambiguidade na porta. Ecoar o `format:` obrigaria `AppendValue` a receber schema (quebrando a assinatura pura que mantém o arquivo sem `fmt`); renderizar em local faria o mesmo dataset servido de dois hosts produzir bytes diferentes.
 
@@ -164,7 +164,7 @@ func montaInstanteLocal(ano, mes, dia, h, min, seg, millis int, loc *time.Locati
 | T6 | `CompiledField.Format`/`Layout` + resolução no laço + guard de `auto` temporal | [compile.go:89-103](internal/schema/compile.go:89), [:229-280](internal/schema/compile.go:229) |
 | T7 | `Convert` com layouts + call site do `PatchBuffer` | [typeconv.go:39](internal/materializer/typeconv.go:39), [patch.go:117](internal/materializer/patch.go:117) |
 | T8 | `cell` + `coerceLiteral` + mensagem de erro | [coerce.go:122-263](internal/query/binder/coerce.go:122), [binder.go:474](internal/query/binder/binder.go:474) |
-| T9 | `AppendValue` + `appendHoraDoDia`; `formatValue` | [ndjson.go:62-142](internal/query/executor/ndjson.go:62), [plan.go:168](internal/query/planner/plan.go:168) |
+| T9 | `AppendValue` + `appendHoraOfDia`; `formatValue` | [ndjson.go:62-142](internal/query/executor/ndjson.go:62), [plan.go:168](internal/query/planner/plan.go:168) |
 | T10 | `JDBCTime` + `JDBCName` | [jdbc.go:31-53](internal/protocol/jdbc.go:31) |
 | T11 | Suíte de testes (§1.7) | vários |
 | T12 | Docs: `architecture.md:680-700`, spec §17/§18/§73, §3.6 do design | vários |
@@ -214,7 +214,7 @@ O pacote `internal/query` não muda uma linha.
 
 **`_writtenAt` e não `_expiresAt`:** o campo registra um **fato** (quando o writer escreveu), não uma **política**. Mudar `expireAfterWrite: 2h` → `4h` no YAML passa a valer imediatamente para as 17,8M rows existentes; com `_expiresAt` cada row carregaria a política congelada e o operador reescreveria o dataset inteiro por uma mudança de config.
 
-- **`SELECT *`:** não aparece. Filtra-se dentro de `FieldsByID` ([compile.go:360](internal/schema/compile.go:360)), cujos dois únicos consumidores são exatamente os que devem filtrar (`binder.projection()`, `metaDoDataset`), com um `FieldsByIDIncludingSystem()` para quem precisa do conjunto todo. `SELECT _writtenAt` **funciona** — convenção `ROWID`/`xmin`.
+- **`SELECT *`:** não aparece. Filtra-se dentro de `FieldsByID` ([compile.go:360](internal/schema/compile.go:360)), cujos dois únicos consumidores são exatamente os que devem filtrar (`binder.projection()`, `metaOfDataset`), com um `FieldsByIDIncludingSystem()` para quem precisa do conjunto todo. `SELECT _writtenAt` **funciona** — convenção `ROWID`/`xmin`.
 - **Evento que traga `_writtenAt`:** recusa explícita em `PatchBuffer.Parse` ([patch.go:73](internal/materializer/patch.go:73)) — sobrescreveria o relógio do writer. E `schema.fields` com nome iniciado por `_` é recusado no `validate`: prefixo reservado.
 
 **`expiry.idx`**, magic `NDBE`, `int64` de millis por rowId, no molde exato de `Sequences` ([rowindex.go:258-289](internal/storage/rowindex/rowindex.go:258)) — mesmo `openDense` ([:56](internal/storage/rowindex/rowindex.go:56)), mesmo header de 64B.
@@ -249,7 +249,7 @@ Fila = 8 B por entrada, comprimento = escritas na janela: @452 ev/s, 2h → 3,25
 > O teto vira configuração com default, e a escolha vai para log na subida — um agendador que
 > escolhe sozinho e não conta qual escolheu é o que torna um problema de memória indiagnosticável.
 
-Ciclo de vida decalcado de `IniciaCompaction`/`ParaCompaction` ([compaction.go:623](internal/storage/compaction.go:623), [:669](internal/storage/compaction.go:669)), mesmo single-flight. `Close()` chama `ParaExpiracao()` **antes** de `ParaCompaction()` e do `vida.Lock()`. Registro em `ligaExpiracao(ctx)` ao lado de [server.go:461](internal/server/server.go:461), lendo a duração **por dataset**. `nishidb ingest` roda **uma** passada antes do `Checkpoint` final — fecha metade do débito 66 sem tocar no laço de 5s.
+Ciclo de vida decalcado de `StartCompaction`/`ForCompaction` ([compaction.go:623](internal/storage/compaction.go:623), [:669](internal/storage/compaction.go:669)), mesmo single-flight. `Close()` chama `ForExpiration()` **antes** de `ForCompaction()` e do `vida.Lock()`. Registro em `turnonExpiration(ctx)` ao lado de [server.go:461](internal/server/server.go:461), lendo a duração **por dataset**. `nishidb ingest` roda **uma** passada antes do `Checkpoint` final — fecha metade do débito 66 sem tocar no laço de 5s.
 
 ## 2.4 A expiração
 
@@ -267,7 +267,7 @@ Tudo em **uma** seção crítica de `s.wmu`:
    writtenAt + d > agora → return (RENOVADA, aborta sem escrever)
 4. tomb := AppendField(nil, _writtenAt, writtenAt)
    buf := BuildRecord(..., rowID, lastSeq, FlagTombstone, rec.Key, tomb)
-5. segW.Append(buf)                            ← erro é STICKY
+5. secW.Append(buf)                            ← erro é STICKY
 6. applyRecord{flags: FlagTombstone, payload: tomb, prevPayload: rec.Payload,
                hadPrevious: true, countsAsNew: false}
 7. expiry.Set(rowID, 0)

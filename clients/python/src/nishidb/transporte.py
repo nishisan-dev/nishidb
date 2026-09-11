@@ -248,7 +248,7 @@ def _retry_after(resp: http.client.HTTPResponse) -> float | None:
 def _dica(status: int, corpo: bytes) -> str:
     """Troca "400 sem corpo legível" — mensagem sem pista nenhuma — pela causa
     mais provável: a porta fala TLS e faltou `tls=true` na string de conexão.
-    Espelha `dicaDeEsquema` de `internal/cli/query_remote.go:110`."""
+    Espelha `schemaHint` de `internal/cli/query_remote.go:110`."""
     if status == 400 and _HTTP_ONDE_ESPERAVA_HTTPS in corpo:
         return "\n  a porta parece falar TLS: tente nishidb://host:porta/dataset?tls=true"
     return ""

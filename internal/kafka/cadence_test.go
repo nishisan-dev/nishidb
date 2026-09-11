@@ -20,7 +20,7 @@ func TestPrecisaCheckpointDecideOsDoisGatilhos(t *testing.T) {
 	agora := time.Now()
 
 	casos := []struct {
-		nome   string
+		name   string
 		cad    Cadencia
 		desde  int64
 		ultimo time.Time
@@ -29,7 +29,7 @@ func TestPrecisaCheckpointDecideOsDoisGatilhos(t *testing.T) {
 		{
 			// O caso do débito 56: a contagem está longe do limiar e quem
 			// dispara é o relógio.
-			nome:   "tempo vencido com evento decidido dispara",
+			name:   "tempo vencido com evento decidido dispara",
 			cad:    Cadencia{Eventos: 1000, Intervalo: 50 * time.Millisecond},
 			desde:  1,
 			ultimo: agora.Add(-time.Second),
@@ -39,7 +39,7 @@ func TestPrecisaCheckpointDecideOsDoisGatilhos(t *testing.T) {
 			// A guarda que o despertador tornou necessária: o tique acorda o
 			// laço a cada intervalo, e sem evento novo não há posição para
 			// tornar durável nem offset para commitar.
-			nome:   "tempo vencido sem evento decidido não dispara",
+			name:   "tempo vencido sem evento decidido não dispara",
 			cad:    Cadencia{Eventos: 1000, Intervalo: 50 * time.Millisecond},
 			desde:  0,
 			ultimo: agora.Add(-time.Second),
@@ -48,14 +48,14 @@ func TestPrecisaCheckpointDecideOsDoisGatilhos(t *testing.T) {
 		{
 			// Intervalo não configurado DESLIGA o relógio, não adota padrão:
 			// quem não pediu checkpoint por tempo fica só com a contagem.
-			nome:   "intervalo zerado desliga o ramo do tempo",
+			name:   "intervalo zerado desliga o ramo do tempo",
 			cad:    Cadencia{Eventos: 1000},
 			desde:  1,
 			ultimo: agora.Add(-time.Hour),
 			quer:   false,
 		},
 		{
-			nome:   "tempo ainda não vencido não dispara",
+			name:   "tempo ainda não vencido não dispara",
 			cad:    Cadencia{Eventos: 1000, Intervalo: time.Hour},
 			desde:  1,
 			ultimo: agora,
@@ -63,7 +63,7 @@ func TestPrecisaCheckpointDecideOsDoisGatilhos(t *testing.T) {
 		},
 		{
 			// "O que vier primeiro": a contagem não espera o relógio.
-			nome:   "contagem atingida dispara com o relógio novo em folha",
+			name:   "contagem atingida dispara com o relógio novo em folha",
 			cad:    Cadencia{Eventos: 2, Intervalo: time.Hour},
 			desde:  2,
 			ultimo: agora,
@@ -71,7 +71,7 @@ func TestPrecisaCheckpointDecideOsDoisGatilhos(t *testing.T) {
 		},
 		{
 			// Eventos <= 0 desliga os DOIS gatilhos, e não só o da contagem.
-			nome:   "cadência desligada ignora o relógio vencido",
+			name:   "cadência desligada ignora o relógio vencido",
 			cad:    Cadencia{Intervalo: time.Nanosecond},
 			desde:  1000,
 			ultimo: agora.Add(-time.Hour),
@@ -80,9 +80,9 @@ func TestPrecisaCheckpointDecideOsDoisGatilhos(t *testing.T) {
 	}
 
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
-			if got := precisaCheckpoint(c.cad, c.desde, c.ultimo); got != c.quer {
-				t.Errorf("precisaCheckpoint(%+v, desde=%d, ocioso há %s) = %v, quer %v",
+		t.Run(c.name, func(t *testing.T) {
+			if got := needsCheckpoint(c.cad, c.desde, c.ultimo); got != c.quer {
+				t.Errorf("needsCheckpoint(%+v, desde=%d, ocioso há %s) = %v, quer %v",
 					c.cad, c.desde, time.Since(c.ultimo).Round(time.Millisecond), got, c.quer)
 			}
 		})
@@ -99,7 +99,7 @@ func TestPrecisaCheckpointDecideOsDoisGatilhos(t *testing.T) {
 // com intervalo zero, já é construída nesta suíte.
 func TestDespertadorDesligaORelogioSemCadenciaPorTempo(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		cad  Cadencia
 	}{
 		{"intervalo zero", Cadencia{Eventos: 1}},
@@ -107,11 +107,11 @@ func TestDespertadorDesligaORelogioSemCadenciaPorTempo(t *testing.T) {
 		{"cadência por contagem desligada", Cadencia{Intervalo: time.Second}},
 	}
 	for _, caso := range casos {
-		t.Run(caso.nome, func(t *testing.T) {
+		t.Run(caso.name, func(t *testing.T) {
 			w := &Writer{cad: caso.cad}
-			acorda, para := w.despertador()
+			wake, para := w.despertador()
 			defer para()
-			if acorda != nil {
+			if wake != nil {
 				t.Errorf("despertador criou relógio para %+v: sem cadência por tempo o select passa a acordar sozinho, e o NewTicker de intervalo não positivo panica", caso.cad)
 			}
 		})

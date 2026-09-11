@@ -10,7 +10,7 @@ import (
 // tabela irmã é o MESMO que o patch do base montou, endereçado por FieldID.
 func TestDictCompartilhadoDaOsMesmosFieldIDs(t *testing.T) {
 	base := openStore(t, Options{})
-	irma := openStore(t, Options{DictCompartilhado: base.FieldDict()})
+	irma := openStore(t, Options{SharedDictionary: base.FieldDict()})
 
 	id, err := base.FieldDict().LookupOrCreate([]byte("severity"))
 	if err != nil {
@@ -34,7 +34,7 @@ func TestDictCompartilhadoDaOsMesmosFieldIDs(t *testing.T) {
 func TestFecharAIrmaNaoFechaODicionarioDoBase(t *testing.T) {
 	base := openStore(t, Options{})
 	dirIrma := t.TempDir()
-	irma, err := Open(Options{Dir: dirIrma, SegmentSize: 1 << 20, DictCompartilhado: base.FieldDict()})
+	irma, err := Open(Options{Dir: dirIrma, SegmentSize: 1 << 20, SharedDictionary: base.FieldDict()})
 	if err != nil {
 		t.Fatalf("Open da irmã: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestFecharAIrmaNaoFechaODicionarioDoBase(t *testing.T) {
 func TestQuemCompartilhaNaoCriaFieldsDict(t *testing.T) {
 	base := openStore(t, Options{})
 	dirIrma := t.TempDir()
-	irma := openStore(t, Options{Dir: dirIrma, DictCompartilhado: base.FieldDict()})
+	irma := openStore(t, Options{Dir: dirIrma, SharedDictionary: base.FieldDict()})
 	if err := irma.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}

@@ -6,4 +6,4 @@ import "github.com/nishisan-dev/nishidb/internal/predicate"
 // Ver o godoc de collect.go para o motivo da extração.
 type programa = predicate.Programa
 
-var compila = predicate.Compila
+var compile = predicate.Compile

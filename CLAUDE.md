@@ -21,6 +21,19 @@ condição), mensagens de erro e de log, chaves de log, config, wire, métricas.
 O glossário liga o termo PT-BR da prosa ao identificador inglês. Commits na
 voz do time, por bloco lógico.
 
+**A migração é incremental** (ciclo fechado em 11/09/2026, débito 116,
+`docs/aceite-identificadores-em-ingles.md`): a base ainda tem identificadores,
+nomes de teste, mensagens, chaves de log e contratos em PT-BR. Código novo
+nasce em inglês. Identificador PT-BR existente é renomeado **quando a feature
+o toca, no mesmo PR** — e o par velho → novo entra em
+`planning/identificadores-em-ingles/mapeamento-2-manual.tsv` (é o que faz o
+gate `TestRenamedIdentifiersAreNotCitedByTheirOldNames` e o
+`scripts/renamecite` conhecerem o nome novo e cobrarem godoc, doc e diagrama).
+Termo novo entra no glossário. Contratos (chave YAML, campo do wire, nome de
+métrica, nome em disco, chave de log) só mudam com decisão explícita: depois
+da primeira release têm compatibilidade a considerar. Não misturar os dois
+idiomas num arquivo novo.
+
 ## Comandos
 
 ```
@@ -85,7 +98,7 @@ Pacotes que estruturam o todo:
 - `internal/query` — lexer → parser → binder → planner → executor, mais
   `orcamento` (admissão de memória), `spill` (transbordo do ORDER BY) e `meta`
   (namespace `_meta` como Store virtual atrás do mesmo pipeline). Tabelas
-  virtuais registradas por namespace (`Engine.RegistraVirtual`) correm pelo
+  virtuais registradas por namespace (`Engine.RegisterVirtual`) correm pelo
   mesmo pipeline; `internal/counters` compila o bloco `counters:` contra o
   schema e serve `_counters.<nome>` e `_meta.counters` — é a cola entre
   schema/predicado e o storage, e por isso mora fora dos dois (o motor manda
@@ -98,14 +111,14 @@ Pacotes que estruturam o todo:
 - `internal/kafka` — poller → fila limitada (DOIS gates: registros e bytes) →
   writer único; uma goroutine de ponta a ponta preserva ordem por partição.
   Watchdog recria o consumidor só com a conjunção de três fatos (eventos parados
-  + lag no broker + fila vazia), pelo MESMO `kafka.Abre` da subida.
+  + lag no broker + fila vazia), pelo MESMO `kafka.Open` da subida.
 - `internal/metakafka` — a tabela virtual `_meta.kafka`. Mora fora de
   `internal/kafka` e de `internal/query` porque precisa dos dois, e nenhum dos
   dois pode importar o outro (mesmo argumento de `internal/counters`).
 - `internal/server` + `internal/protocol` — protocolo remoto `/v1/*`.
   `protocolo` é pacote próprio porque tem quatro falantes (servidor, CLI remoto,
   JDBC, Python) que não podem redeclarar o formato.
-- `internal/cli` — `cli.Run(args, Ambiente)` devolve exit code sem `os.Exit`.
+- `internal/cli` — `cli.Run(args, Context)` devolve exit code sem `os.Exit`.
 - `internal/gates` — testes que verificam o próprio ferramental (Makefile, CI,
   manifestos dos clients).
 - `clients/jdbc` e `clients/python` — read-only, **zero dependência de runtime**;
@@ -162,7 +175,7 @@ Pacotes que estruturam o todo:
   WARN nomeado; valor fora de faixa é recusado, não arredondado; ponteiros
   (`*bool` etc.) distinguem "ausente" (default) de "explícito".
 - **Exit codes são contrato** (0–8, precedência `4 > 3 > 7 > 6 > 1`; tabela no
-  README). Erro novo precisa de sentinela + `errors.Is` em `codigoDoErro`, senão
+  README). Erro novo precisa de sentinela + `errors.Is` em `errorCode`, senão
   cai no default 1.
 - **Rota HTTP nova entra por `rt.registra(padrao, papel, handler)`**
   (READ/ADMIN, fail-closed). Códigos de erro do wire são estáveis; código novo

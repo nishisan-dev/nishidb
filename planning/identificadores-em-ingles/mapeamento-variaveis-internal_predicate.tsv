@@ -1,0 +1,4 @@
+pacote	especie	endereco	novo	motivo
+internal/predicate	param	payloadDe.campos	fields	tradução via dicionário base
+internal/predicate	local	TestAvaliadorDePayloadAvaliaOEstadoInteiro.semSlot	withoutSlot	tradução via dicionário base
+internal/predicate	local	TestCompilaRegrasRecusaWhenSobreCampoDeSistema.campo	field	tradução via dicionário base

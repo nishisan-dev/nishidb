@@ -8,78 +8,78 @@ import "testing"
 // string" do que não é string).
 func TestExtraiCampo(t *testing.T) {
 	casos := []struct {
-		nome          string
-		payload       string
-		campo         string
-		querValor     string
-		querResultado ResultadoExtracao
+		name       string
+		payload    string
+		field      string
+		querValue  string
+		querResult ResultExtracao
 	}{
 		{
-			nome:          "campo presente e string",
-			payload:       `{"identifier":"abc123","outro":1}`,
-			campo:         "identifier",
-			querValor:     "abc123",
-			querResultado: ExtraidoOK,
+			name:       "campo presente e string",
+			payload:    `{"identifier":"abc123","outro":1}`,
+			field:      "identifier",
+			querValue:  "abc123",
+			querResult: ExtraidoOK,
 		},
 		{
-			nome:          "campo ausente em JSON válido",
-			payload:       `{"outro":1}`,
-			campo:         "identifier",
-			querValor:     "",
-			querResultado: ExtraidoSemCampo,
+			name:       "campo ausente em JSON válido",
+			payload:    `{"outro":1}`,
+			field:      "identifier",
+			querValue:  "",
+			querResult: ExtraidoWithoutField,
 		},
 		{
-			nome:          "payload não é JSON",
-			payload:       `{isso nao e json}`,
-			campo:         "identifier",
-			querValor:     "",
-			querResultado: ExtraidoInvalido,
+			name:       "payload não é JSON",
+			payload:    `{isso nao e json}`,
+			field:      "identifier",
+			querValue:  "",
+			querResult: ExtraidoInvalido,
 		},
 		{
-			nome:          "payload vazio",
-			payload:       ``,
-			campo:         "identifier",
-			querValor:     "",
-			querResultado: ExtraidoInvalido,
+			name:       "payload vazio",
+			payload:    ``,
+			field:      "identifier",
+			querValue:  "",
+			querResult: ExtraidoInvalido,
 		},
 		{
-			nome:          "campo presente mas não é string",
-			payload:       `{"identifier":12345}`,
-			campo:         "identifier",
-			querValor:     "",
-			querResultado: ExtraidoInvalido,
+			name:       "campo presente mas não é string",
+			payload:    `{"identifier":12345}`,
+			field:      "identifier",
+			querValue:  "",
+			querResult: ExtraidoInvalido,
 		},
 		{
-			nome:          "campo presente e string vazia conta como OK com comprimento zero",
-			payload:       `{"identifier":""}`,
-			campo:         "identifier",
-			querValor:     "",
-			querResultado: ExtraidoOK,
+			name:       "campo presente e string vazia conta como OK com comprimento zero",
+			payload:    `{"identifier":""}`,
+			field:      "identifier",
+			querValue:  "",
+			querResult: ExtraidoOK,
 		},
 		{
-			nome:          "string com bytes multibyte mede em BYTES, não em runas",
-			payload:       `{"identifier":"áéí"}`, // 3 runas, 6 bytes em UTF-8
-			campo:         "identifier",
-			querValor:     "áéí",
-			querResultado: ExtraidoOK,
+			name:       "string com bytes multibyte mede em BYTES, não em runas",
+			payload:    `{"identifier":"áéí"}`, // 3 runas, 6 bytes em UTF-8
+			field:      "identifier",
+			querValue:  "áéí",
+			querResult: ExtraidoOK,
 		},
 		{
-			nome:          "campo de nome configurável, não só identifier",
-			payload:       `{"outroCampo":"xyz"}`,
-			campo:         "outroCampo",
-			querValor:     "xyz",
-			querResultado: ExtraidoOK,
+			name:       "campo de nome configurável, não só identifier",
+			payload:    `{"outroCampo":"xyz"}`,
+			field:      "outroCampo",
+			querValue:  "xyz",
+			querResult: ExtraidoOK,
 		},
 	}
 
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
-			valor, resultado := ExtraiCampo([]byte(c.payload), c.campo)
-			if resultado != c.querResultado {
-				t.Errorf("resultado = %v, quer %v", resultado, c.querResultado)
+		t.Run(c.name, func(t *testing.T) {
+			value, result := ExtractField([]byte(c.payload), c.field)
+			if result != c.querResult {
+				t.Errorf("resultado = %v, quer %v", result, c.querResult)
 			}
-			if valor != c.querValor {
-				t.Errorf("valor = %q, quer %q", valor, c.querValor)
+			if value != c.querValue {
+				t.Errorf("valor = %q, quer %q", value, c.querValue)
 			}
 		})
 	}
@@ -89,11 +89,11 @@ func TestExtraiCampo(t *testing.T) {
 // comprimento relevante é EM BYTES, não em runas — um identifier com
 // caracteres multibyte tem de contar mais bytes que runas.
 func TestExtraiCampoMedeBytesNaoRunas(t *testing.T) {
-	valor, resultado := ExtraiCampo([]byte(`{"identifier":"áéí"}`), "identifier")
-	if resultado != ExtraidoOK {
-		t.Fatalf("resultado = %v, quer ExtraidoOK", resultado)
+	value, result := ExtractField([]byte(`{"identifier":"áéí"}`), "identifier")
+	if result != ExtraidoOK {
+		t.Fatalf("resultado = %v, quer ExtraidoOK", result)
 	}
-	if got := len(valor); got != 6 {
+	if got := len(value); got != 6 {
 		t.Errorf("len(valor) = %d bytes, quer 6 (3 runas acentuadas, 2 bytes cada em UTF-8)", got)
 	}
 }

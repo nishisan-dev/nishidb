@@ -1,0 +1,3 @@
+pacote	especie	endereco	novo	motivo
+internal/metrics	const	MetKafkaDecodeIdleSeconds	MetKafkaDecodeIDleSeconds	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/metrics	const	MetKafkaWriterIdleSeconds	MetKafkaWriterIDleSeconds	tradução abrangente de funções/tipos/métodos via script automatizado

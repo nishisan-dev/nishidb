@@ -265,7 +265,7 @@ const (
 	// manual concorrente (storage.ErrCompactionBusy); não é retentável na
 	// hora, mas é retentável em instantes, o que o distingue de um erro de
 	// uso — mesmo assim ele NÃO ganha um exit code próprio (ver o
-	// comentário de codigoDoProtocolo no CLI).
+	// comentário de codigoOfProtocolo no CLI).
 	CodeWriterFailed   = "WRITER_FAILED"
 	CodeCompactionBusy = "COMPACTION_BUSY"
 )

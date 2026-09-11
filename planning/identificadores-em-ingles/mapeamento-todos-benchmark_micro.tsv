@@ -1,0 +1,14 @@
+pacote	especie	endereco	novo	motivo
+benchmark/micro	func	estadoDeReferencia	stateOfReference	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	const	blocoDeContadores	blockOfCounters	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	param	realSetupCom.comContadores	withCounters	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	func	realSetupCom	realSetupWith	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	local	TestGateAllocsPointLookupReal.teto	ceiling	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	func	estadoDeReferenciaT	stateOfReferenceT	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	field#gopls	TestGateAllocsApply.casos.nome	name	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	field#gopls	TestGateAllocsApply.casos.teto	ceiling	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	local	TestGateAllocsIngestFake.teto	ceiling	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	func	contaPostings	countPostings	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	func	datasetDeLeitura	datasetOfLeitura	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	func	keyDoEvento	keyOfEvent	tradução abrangente de funções/tipos/métodos via script automatizado
+benchmark/micro	local	BenchmarkQueryBitmapLimit100.valor	value	tradução abrangente de funções/tipos/métodos via script automatizado

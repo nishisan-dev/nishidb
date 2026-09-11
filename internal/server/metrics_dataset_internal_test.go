@@ -28,19 +28,19 @@ import (
 // uma anomalia rara.
 func TestLixoDeDiscoNuncaPassaPorBaixoDeZero(t *testing.T) {
 	casos := []struct {
-		nome  string
-		disco int64
-		vivo  uint64
-		want  uint64
+		name string
+		disk int64
+		vivo uint64
+		want uint64
 	}{
 		{
 			// O caso comum, e o que o painel lê: o checkpoint mediu o
 			// diretório, o tally reivindica menos que isso, e a diferença é
 			// o que a compaction do §53-55 tem para recuperar.
-			nome:  "disco à frente do vivo: o lixo é a diferença",
-			disco: 8314,
-			vivo:  8250,
-			want:  64,
+			name: "disco à frente do vivo: o lixo é a diferença",
+			disk: 8314,
+			vivo: 8250,
+			want: 64,
 		},
 		{
 			// Seed sem update nenhum: todo record apendado continua vivo e o
@@ -48,19 +48,19 @@ func TestLixoDeDiscoNuncaPassaPorBaixoDeZero(t *testing.T) {
 			// que não é record. O piso da série não é zero — é header por
 			// segmento —, e quem ler a série precisa saber disso antes de
 			// chamar 64 bytes de "lixo detectado".
-			nome:  "só o header sobra quando nada foi sobrescrito",
-			disco: 8314,
-			vivo:  8314 - 64,
-			want:  64,
+			name: "só o header sobra quando nada foi sobrescrito",
+			disk: 8314,
+			vivo: 8314 - 64,
+			want: 64,
 		},
 		{
 			// A igualdade é o limite exato do ramo: um `>=` no lugar do `>`
 			// daria o mesmo zero, mas um `>` trocado por `!=` deixaria a
 			// subtração rodar. Fixar o zero aqui é fixar a fronteira.
-			nome:  "vivo exatamente igual ao disco: zero, não a fronteira",
-			disco: 4096,
-			vivo:  4096,
-			want:  0,
+			name: "vivo exatamente igual ao disco: zero, não a fronteira",
+			disk: 4096,
+			vivo: 4096,
+			want: 0,
 		},
 		{
 			// O cenário que o comentário do piso descreve, com os números
@@ -68,20 +68,20 @@ func TestLixoDeDiscoNuncaPassaPorBaixoDeZero(t *testing.T) {
 			// último ListSegments contra 28.256 bytes já apendados em quatro
 			// arquivos. Sem piso, `64 - 28256` em uint64 é
 			// 18.446.744.073.709.523.424.
-			nome:  "vivo à frente do disco entre dois checkpoints",
-			disco: 64,
-			vivo:  28256,
-			want:  0,
+			name: "vivo à frente do disco entre dois checkpoints",
+			disk: 64,
+			vivo: 28256,
+			want: 0,
 		},
 		{
 			// Dataset recém-aberto cujo ListSegments ainda não mediu nada,
 			// com o tally já andando. É o mesmo desencontro do caso acima
 			// levado ao extremo, e é ele que responde por que o teste do
 			// coletor exige storage_bytes > 0 antes de comparar.
-			nome:  "disco ainda não medido, tally já andando",
-			disco: 0,
-			vivo:  4096,
-			want:  0,
+			name: "disco ainda não medido, tally já andando",
+			disk: 0,
+			vivo: 4096,
+			want: 0,
 		},
 		{
 			// Disco negativo não sai de uma soma de tamanho de arquivo, e é
@@ -91,18 +91,18 @@ func TestLixoDeDiscoNuncaPassaPorBaixoDeZero(t *testing.T) {
 			// cima do vivo e publicaria o disco inteiro do planeta como
 			// lixo. Trocar a guarda por uma comparação em int64 mudaria a
 			// resposta deste caso.
-			nome:  "disco negativo não vira 1,8e19 pela conversão",
-			disco: -1,
-			vivo:  0,
-			want:  0,
+			name: "disco negativo não vira 1,8e19 pela conversão",
+			disk: -1,
+			vivo: 0,
+			want: 0,
 		},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
-			st := storage.Stats{StorageBytes: c.disco, LiveBytesUpperBound: c.vivo}
-			if got := lixoDeDisco(st); got != c.want {
-				t.Errorf("lixoDeDisco(disco=%d, vivo=%d) = %d, queria %d",
-					c.disco, c.vivo, got, c.want)
+		t.Run(c.name, func(t *testing.T) {
+			st := storage.Stats{StorageBytes: c.disk, LiveBytesUpperBound: c.vivo}
+			if got := garbageOfDisk(st); got != c.want {
+				t.Errorf("garbageOfDisk(disco=%d, vivo=%d) = %d, queria %d",
+					c.disk, c.vivo, got, c.want)
 			}
 		})
 	}

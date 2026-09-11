@@ -35,34 +35,34 @@ schema:
       type: int64
 `
 
-// bancadaTTL costura storage real + materializer com o MESMO relógio
+// benchTTL costura storage real + materializer com o MESMO relógio
 // controlado: a expiração é sobre tempo, e um teste que dormisse minutos não
 // caberia na suíte.
-type bancadaTTL struct {
+type benchTTL struct {
 	t     *testing.T
 	st    *storage.Store
 	mat   *materializer.Materializer
 	agora time.Time
 }
 
-func novaBancadaTTL(t *testing.T, yaml string) *bancadaTTL {
+func newBenchTTL(t *testing.T, yaml string) *benchTTL {
 	t.Helper()
 	dir := t.TempDir()
-	caminho := filepath.Join(dir, "alarmes.yaml")
-	if err := os.WriteFile(caminho, []byte(yaml), 0o644); err != nil {
+	path := filepath.Join(dir, "alarmes.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	spec, err := schema.Load(caminho, schema.BuiltinDefaults)
+	spec, err := schema.Load(path, schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:                    filepath.Join(dir, "dados"),
-		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
-		TTLAtivo:               len(spec.Materialization.TTLRules) > 0,
-		DuracaoDeFundo:         spec.Materialization.FallbackDuration,
-		CampoDeEscrita:         schema.WriteInstantFieldName,
-		CampoDePrazo:           schema.TTLFieldName,
+		Dir:                   filepath.Join(dir, "dados"),
+		IndexedFieldsByName:   schema.IndexedFieldNames(spec),
+		ActiveTTL:             len(spec.Materialization.TTLRules) > 0,
+		FallbackDuration:      spec.Materialization.FallbackDuration,
+		WriteInstantFieldName: schema.WriteInstantFieldName,
+		TTLFieldName:          schema.TTLFieldName,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -76,24 +76,24 @@ func novaBancadaTTL(t *testing.T, yaml string) *bancadaTTL {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := &bancadaTTL{t: t, st: st, mat: mat, agora: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)}
+	b := &benchTTL{t: t, st: st, mat: mat, agora: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)}
 	relogio := func() time.Time { return b.agora }
 	mat.UsaRelogio(relogio)
 	st.UsaRelogio(relogio)
 	return b
 }
 
-func (b *bancadaTTL) ingere(evento string) {
+func (b *benchTTL) ingere(event string) {
 	b.t.Helper()
-	if r := b.mat.Apply([]byte(evento)); r.Err != nil {
-		b.t.Fatalf("Apply(%s): %v (%v)", evento, r.Err, r.Category)
+	if r := b.mat.Apply([]byte(event)); r.Err != nil {
+		b.t.Fatalf("Apply(%s): %v (%v)", event, r.Err, r.Category)
 	}
 }
 
-func (b *bancadaTTL) avanca(d time.Duration) { b.agora = b.agora.Add(d) }
+func (b *benchTTL) advance(d time.Duration) { b.agora = b.agora.Add(d) }
 
 // visivel responde a pergunta da CONSULTA: a entidade aparece?
-func (b *bancadaTTL) visivel(key string) bool {
+func (b *benchTTL) visivel(key string) bool {
 	b.t.Helper()
 	_, _, ok, err := b.st.GetByKey(b.st.OpenSnapshot(), []byte(key), nil)
 	if err != nil {
@@ -102,10 +102,10 @@ func (b *bancadaTTL) visivel(key string) bool {
 	return ok
 }
 
-func (b *bancadaTTL) coleta() storage.ResultadoDaExpiracao {
+func (b *benchTTL) coleta() storage.ResultOfExpiration {
 	b.t.Helper()
-	r, err := b.st.ExpiraUmaPassada(context.Background(), storage.LimitesDeExpiracao{
-		MaxPorPassada: 100, TempoPorPassada: time.Second,
+	r, err := b.st.ExpiraOnePass(context.Background(), storage.LimitesOfExpiration{
+		MaxByPassada: 100, TimeByPassada: time.Second,
 	})
 	if err != nil {
 		b.t.Fatal(err)
@@ -117,13 +117,13 @@ func (b *bancadaTTL) coleta() storage.ResultadoDaExpiracao {
 // vencer, e o prazo curto é CANCELADO. Sem a emissão do prazo em toda escrita,
 // a entidade morreria logo depois de reabrir.
 func TestCicloCancelamentoDoTTLCondicional(t *testing.T) {
-	b := novaBancadaTTL(t, ttlCondicionalYAML)
+	b := newBenchTTL(t, ttlCondicionalYAML)
 	b.ingere(`{"id":"a","tipo":2}`) // fechado: 3m
 
-	b.avanca(90 * time.Second)
+	b.advance(90 * time.Second)
 	b.ingere(`{"id":"a","tipo":1}`) // reabriu: 7d
 
-	b.avanca(4 * time.Minute) // muito além dos 3m do primeiro evento
+	b.advance(4 * time.Minute) // muito além dos 3m do primeiro evento
 	if !b.visivel("a") {
 		t.Fatal("a entidade morreu pelo prazo antigo depois de o alarme reabrir")
 	}
@@ -133,10 +133,10 @@ func TestCicloCancelamentoDoTTLCondicional(t *testing.T) {
 }
 
 func TestCicloExpiracaoQuandoACondicaoPersiste(t *testing.T) {
-	b := novaBancadaTTL(t, ttlCondicionalYAML)
+	b := newBenchTTL(t, ttlCondicionalYAML)
 	b.ingere(`{"id":"a","tipo":2}`)
 
-	b.avanca(4 * time.Minute)
+	b.advance(4 * time.Minute)
 	if b.visivel("a") {
 		t.Fatal("a entidade fechada continua visível 4 minutos depois, com prazo de 3m")
 	}
@@ -157,7 +157,7 @@ func TestCicloExpiracaoQuandoACondicaoPersiste(t *testing.T) {
 
 // `never` vence a regra de fundo que vem depois: é o ponto de ela existir.
 func TestCicloNeverNaoExpiraComRegraDeFundoPresente(t *testing.T) {
-	b := novaBancadaTTL(t, `
+	b := newBenchTTL(t, `
 version: 1
 name: alarmes
 materialization:
@@ -177,7 +177,7 @@ schema:
 	b.ingere(`{"id":"imortal","tipo":9}`)
 	b.ingere(`{"id":"comum","tipo":1}`)
 
-	b.avanca(4 * time.Minute)
+	b.advance(4 * time.Minute)
 	if !b.visivel("imortal") {
 		t.Error("a entidade que casou com `never` expirou pelo prazo de fundo")
 	}
@@ -194,17 +194,17 @@ schema:
 // engano. Um teto de idade absoluta por regra é a feature que faltaria, e ela
 // ficou de fora de propósito.
 func TestCicloRenovacaoEmpurraOPrazo(t *testing.T) {
-	b := novaBancadaTTL(t, ttlCondicionalYAML)
+	b := newBenchTTL(t, ttlCondicionalYAML)
 	b.ingere(`{"id":"a","tipo":2}`)
 	for i := 0; i < 5; i++ {
-		b.avanca(60 * time.Second)
+		b.advance(60 * time.Second)
 		b.ingere(`{"id":"a","tipo":2}`)
 		if !b.visivel("a") {
 			t.Fatalf("a entidade expirou na renovação %d, com prazo de 3m e escrita a cada 60s", i)
 		}
 	}
 	// Parou de receber evento: agora expira.
-	b.avanca(4 * time.Minute)
+	b.advance(4 * time.Minute)
 	if b.visivel("a") {
 		t.Error("parou de renovar e continuou visível")
 	}
@@ -213,7 +213,7 @@ func TestCicloRenovacaoEmpurraOPrazo(t *testing.T) {
 // A migração: entidade materializada ANTES de as regras existirem não tem o
 // campo de prazo no documento, e continua expirando pelo prazo de FUNDO.
 func TestCicloEntidadeLegadaUsaAduracaoDeFundo(t *testing.T) {
-	b := novaBancadaTTL(t, ttlCondicionalYAML)
+	b := newBenchTTL(t, ttlCondicionalYAML)
 	// Escreve direto pelo store, sem o campo de prazo — é o que o writer
 	// anterior à feature produzia.
 	payload, err := payloadLegado(b, "legada")
@@ -224,39 +224,39 @@ func TestCicloEntidadeLegadaUsaAduracaoDeFundo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b.avanca(4 * time.Minute) // além do prazo curto, muito aquém do fundo
+	b.advance(4 * time.Minute) // além do prazo curto, muito aquém do fundo
 	if !b.visivel("legada") {
 		t.Error("a entidade legada expirou pelo prazo de uma regra que ela nunca casou")
 	}
-	b.avanca(8 * 24 * time.Hour)
+	b.advance(8 * 24 * time.Hour)
 	if b.visivel("legada") {
 		t.Error("a entidade legada não caiu no prazo de fundo")
 	}
 }
 
 // payloadLegado monta o payload de uma entidade materializada ANTES de as
-// regras existirem: instante de escrita sim, campo de prazo não.
-func payloadLegado(b *bancadaTTL, key string) ([]byte, error) {
+// regras existirem: instante de escrita sim, field de prazo não.
+func payloadLegado(b *benchTTL, key string) ([]byte, error) {
 	b.t.Helper()
 	dict := b.st.FieldDict()
 	idID, err := dict.LookupOrCreate([]byte("id"))
 	if err != nil {
 		return nil, err
 	}
-	escritaID, err := dict.LookupOrCreate([]byte(schema.WriteInstantFieldName))
+	writeID, err := dict.LookupOrCreate([]byte(schema.WriteInstantFieldName))
 	if err != nil {
 		return nil, err
 	}
-	campos := []struct {
+	fields := []struct {
 		id types.FieldID
 		v  types.Value
 	}{
 		{idID, types.Value{Type: types.TypeString, Bytes: []byte(key)}},
-		{escritaID, types.Value{Type: types.TypeTimestamp, I64: b.agora.UnixMilli()}},
+		{writeID, types.Value{Type: types.TypeTimestamp, I64: b.agora.UnixMilli()}},
 	}
-	sort.Slice(campos, func(i, j int) bool { return campos[i].id < campos[j].id })
+	sort.Slice(fields, func(i, j int) bool { return fields[i].id < fields[j].id })
 	var out []byte
-	for _, c := range campos {
+	for _, c := range fields {
 		if out, err = encoding.AppendField(out, c.id, c.v); err != nil {
 			return nil, err
 		}

@@ -77,7 +77,7 @@ schema:
 // três tipos que aparecem lá (texto, inteiro, booleano) e um objeto aninhado —
 // que a descoberta de UM nível transforma em coluna json inteira, e é um custo
 // diferente de copiar um escalar.
-var benchEventoComDocumento = []byte(`{"id":"CMP-V0001PPCLP-013","severity":3,"node":"i-br-sp-cmp-cmp-hl4-01",` +
+var benchEventWithDocumento = []byte(`{"id":"CMP-V0001PPCLP-013","severity":3,"node":"i-br-sp-cmp-cmp-hl4-01",` +
 	`"persistent":{"dataFalha":"2026-08-11 22:28:10","dataClear":"2026-08-11 23:01:44","curtoTally":4,` +
 	`"curtoTTL":300,"longoTally":11,"longoTTL":86400,"medioTally":7,"medioTTL":3600,` +
 	`"slot":"1/1/1","frontPersistence":"on","frontPodName":"pod-alarme-07",` +
@@ -106,13 +106,13 @@ func BenchmarkParseComDescoberta(b *testing.B) {
 	// Warm-up: registra as 11 colunas derivadas e fixa o tipo de cada uma.
 	// Sem ele a bancada mediria a DESCOBERTA (uma vez na vida do dataset) em
 	// vez do regime (todo evento), que é o custo que interessa.
-	if err := pb.Parse(benchEventoComDocumento, c, time.Now()); err != nil {
+	if err := pb.Parse(benchEventWithDocumento, c, time.Now()); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
-	b.SetBytes(int64(len(benchEventoComDocumento)))
+	b.SetBytes(int64(len(benchEventWithDocumento)))
 	for b.Loop() {
-		if err := pb.Parse(benchEventoComDocumento, c, time.Now()); err != nil {
+		if err := pb.Parse(benchEventWithDocumento, c, time.Now()); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -137,13 +137,13 @@ func BenchmarkParseSemDescoberta(b *testing.B) {
 		b.Fatal(err)
 	}
 	var pb PatchBuffer
-	if err := pb.Parse(benchEventoComDocumento, c, time.Now()); err != nil {
+	if err := pb.Parse(benchEventWithDocumento, c, time.Now()); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
-	b.SetBytes(int64(len(benchEventoComDocumento)))
+	b.SetBytes(int64(len(benchEventWithDocumento)))
 	for b.Loop() {
-		if err := pb.Parse(benchEventoComDocumento, c, time.Now()); err != nil {
+		if err := pb.Parse(benchEventWithDocumento, c, time.Now()); err != nil {
 			b.Fatal(err)
 		}
 	}

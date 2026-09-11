@@ -26,36 +26,36 @@ import (
 // próprios, imortalidade e lápides, e exige que concordem linha a linha em
 // vários instantes diferentes.
 func TestAgendaConcordaComPrazoVencidoSobCargaAleatoria(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
+	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
 	r := rand.New(rand.NewPCG(17, 23))
 
-	const linhas = 400
-	ids := make([]types.RowID, 0, linhas)
-	for i := 0; i < linhas; i++ {
+	const rows = 400
+	ids := make([]types.RowID, 0, rows)
+	for i := 0; i < rows; i++ {
 		key := fmt.Sprintf("k-%03d", i)
-		campos := map[string]types.Value{
+		fields := map[string]types.Value{
 			"id":         {Type: types.TypeString, Bytes: []byte(key)},
 			"_writtenAt": {Type: types.TypeTimestamp, I64: rel.t.UnixMilli()},
 		}
 		switch r.UintN(4) {
 		case 0: // prazo próprio curto
-			campos["_expiresIn"] = types.Value{Type: types.TypeInt64, I64: int64(5 * time.Minute / time.Millisecond)}
+			fields["_expiresIn"] = types.Value{Type: types.TypeInt64, I64: int64(5 * time.Minute / time.Millisecond)}
 		case 1: // prazo próprio longo
-			campos["_expiresIn"] = types.Value{Type: types.TypeInt64, I64: int64(10 * time.Hour / time.Millisecond)}
+			fields["_expiresIn"] = types.Value{Type: types.TypeInt64, I64: int64(10 * time.Hour / time.Millisecond)}
 		case 2: // imortal
-			campos["_expiresIn"] = types.Value{Type: types.TypeInt64, I64: 0}
+			fields["_expiresIn"] = types.Value{Type: types.TypeInt64, I64: 0}
 		}
 		// O caso 3 fica sem _expiresIn: cai na duração de fundo.
-		id, _ := mustPut(t, s, key, 1, payloadOrdenado(t, s, campos), nil)
+		id, _ := mustPut(t, s, key, 1, payloadOrdenado(t, s, fields), nil)
 		ids = append(ids, id)
-		rel.avanca(time.Duration(r.UintN(60)) * time.Second)
+		rel.advance(time.Duration(r.UintN(60)) * time.Second)
 	}
 
-	confere := func(momento string) {
+	confere := func(moment string) {
 		t.Helper()
-		agora := uint64(s.agora().UnixMilli())
+		agora := uint64(s.now().UnixMilli())
 		for _, id := range ids {
-			venc := s.agenda.Get(id)
+			venc := s.schedule.Get(id)
 			agendadoVencido := venc != rowindex.Never && venc <= agora
 			// Carencia é a linha sem instante conhecido: ela pede atenção do
 			// coletor sem ter vencido, e prazoVencido diz false para ela com
@@ -63,20 +63,20 @@ func TestAgendaConcordaComPrazoVencidoSobCargaAleatoria(t *testing.T) {
 			if venc == rowindex.Grace {
 				continue
 			}
-			if agendadoVencido != s.prazoVencido(id, s.agora()) {
-				ms, conhecido := s.escritas.Get(id)
+			if agendadoVencido != s.prazoVencido(id, s.now()) {
+				ms, conhecido := s.writes.Get(id)
 				t.Fatalf("%s: row %d diverge — agenda diz vencida=%v (venc=%d, agora=%d), prazoVencido diz %v (escrita=%d conhecido=%v, duração=%v)",
-					momento, id, agendadoVencido, venc, agora, s.prazoVencido(id, s.agora()), ms, conhecido, s.duracaoEfetiva(id))
+					moment, id, agendadoVencido, venc, agora, s.prazoVencido(id, s.now()), ms, conhecido, s.durationEfetiva(id))
 			}
 		}
 	}
 
 	confere("logo após a carga")
 	for i, salto := range []time.Duration{time.Minute, 30 * time.Minute, 2 * time.Hour, 24 * time.Hour} {
-		rel.avanca(salto)
+		rel.advance(salto)
 		confere(fmt.Sprintf("salto %d (+%v)", i, salto))
 	}
-	if err := s.agenda.Check(); err != nil {
+	if err := s.schedule.Check(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -89,22 +89,22 @@ func TestAgendaConcordaComPrazoVencidoSobCargaAleatoria(t *testing.T) {
 // para ver a flag e devolver false. É o mesmo desperdício que o pré-filtro de
 // tombstone da varredura existia para evitar, e aqui ele some por construção.
 func TestLinhaTombstonadaSaiDaAgenda(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
-	if s.agenda.Get(id) == rowindex.Never {
+	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
+	if s.schedule.Get(id) == rowindex.Never {
 		t.Fatal("a linha nasceu fora da agenda")
 	}
-	rel.avanca(2 * time.Hour)
+	rel.advance(2 * time.Hour)
 	expirou, err := s.Expira(id)
 	if err != nil || !expirou {
 		t.Fatalf("Expira devolveu %v, %v", expirou, err)
 	}
-	if v := s.agenda.Get(id); v != rowindex.Never {
+	if v := s.schedule.Get(id); v != rowindex.Never {
 		t.Fatalf("a linha tombstonada continua agendada para %d", v)
 	}
 	// E a descida não a entrega mais, por mais longe que o relógio vá.
-	rel.avanca(1000 * time.Hour)
-	s.agenda.VisitExpired(uint64(s.agora().UnixMilli()), func(row types.RowID) bool {
+	rel.advance(1000 * time.Hour)
+	s.schedule.VisitExpired(uint64(s.now().UnixMilli()), func(row types.RowID) bool {
 		if row == id {
 			t.Fatal("a descida entregou uma linha tombstonada")
 		}
@@ -115,13 +115,13 @@ func TestLinhaTombstonadaSaiDaAgenda(t *testing.T) {
 // A renovação empurra o vencimento agendado junto com o prazo. É o caso de
 // todo evento em regime, e é o que impede a linha renovada de ser reexaminada.
 func TestEscritaNovaEmpurraOVencimentoAgendado(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
-	primeiro := s.agenda.Get(id)
+	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
+	primeiro := s.schedule.Get(id)
 
-	rel.avanca(30 * time.Minute)
-	mustPut(t, s, "A", 2, payloadComEscrita(t, s, "A", "Run", rel.t), nil)
-	segundo := s.agenda.Get(id)
+	rel.advance(30 * time.Minute)
+	mustPut(t, s, "A", 2, payloadWithWrite(t, s, "A", "Run", rel.t), nil)
+	segundo := s.schedule.Get(id)
 
 	if segundo <= primeiro {
 		t.Fatalf("o vencimento não andou: %d → %d", primeiro, segundo)
@@ -140,21 +140,21 @@ func TestEscritaNovaEmpurraOVencimentoAgendado(t *testing.T) {
 // diferentes para o mesmo dataset conforme QUANDO ele foi aberto.
 func TestLinhaSemInstanteEhAgendadaParaACarencia(t *testing.T) {
 	s := openStore(t, Options{
-		Dir: t.TempDir(), TTLAtivo: true, DuracaoDeFundo: time.Hour,
-		CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+		Dir: t.TempDir(), ActiveTTL: true, FallbackDuration: time.Hour,
+		WriteInstantFieldName: "_writtenAt", TTLFieldName: "_expiresIn",
 	})
-	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	rel := &relogioOfTest{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 
-	id, _ := mustPut(t, s, "legada", 1, payloadSemEscrita(t, s, "legada"), nil)
-	if v := s.agenda.Get(id); v != rowindex.Grace {
+	id, _ := mustPut(t, s, "legada", 1, payloadWithoutWrite(t, s, "legada"), nil)
+	if v := s.schedule.Get(id); v != rowindex.Grace {
 		t.Fatalf("a linha sem instante foi agendada para %d, quer %d (carência)", v, rowindex.Grace)
 	}
 	// E depois da carência ela ganha vencimento de verdade.
-	if _, err := s.daCarencia(id); err != nil {
+	if _, err := s.ofCarencia(id); err != nil {
 		t.Fatal(err)
 	}
-	v := s.agenda.Get(id)
+	v := s.schedule.Get(id)
 	if v == rowindex.Grace || v == rowindex.Never {
 		t.Fatalf("depois da carência a linha continua em %d", v)
 	}
@@ -166,9 +166,9 @@ func TestLinhaSemInstanteEhAgendadaParaACarencia(t *testing.T) {
 // A linha imortal fica fora da agenda: ela não tem vencimento, e o coletor
 // não pode ser acordado por ela.
 func TestLinhaImortalNaoEntraNaAgenda(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), 0) // sem duração de fundo
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
-	if v := s.agenda.Get(id); v != rowindex.Never {
+	s, rel := storeWithExpiration(t, t.TempDir(), 0) // sem duração de fundo
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
+	if v := s.schedule.Get(id); v != rowindex.Never {
 		t.Fatalf("linha sem prazo nenhum foi agendada para %d", v)
 	}
 }
@@ -183,10 +183,10 @@ func TestLinhaImortalNaoEntraNaAgenda(t *testing.T) {
 //
 // MUTAÇÃO QUE ESTE TESTE PEGA: remover o msync da agenda do checkpoint.
 func TestCheckpointDurabilizaAAgendaAntesDoManifest(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
+	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
 	var trace []string
 	s.SetCheckpointTraceForTest(func(step string) { trace = append(trace, step) })
-	mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -206,19 +206,19 @@ func TestCheckpointDurabilizaAAgendaAntesDoManifest(t *testing.T) {
 	if manifest < 0 || agenda > manifest {
 		t.Fatalf("a agenda foi durabilizada depois do manifest: %v", trace)
 	}
-	for _, antes := range []string{"msyncPrazos", "msyncEscritas"} {
-		if p := pos(antes); p < 0 || p > agenda {
-			t.Fatalf("%s não veio antes da agenda que deriva dele: %v", antes, trace)
+	for _, before := range []string{"msyncPrazos", "msyncEscritas"} {
+		if p := pos(before); p < 0 || p > agenda {
+			t.Fatalf("%s não veio antes da agenda que deriva dele: %v", before, trace)
 		}
 	}
 }
 
-// opcoesComExpiracao repete a configuração de storeComExpiracao para os testes
+// optionsWithExpiration repete a configuração de storeWithExpiration para os testes
 // que precisam reabrir o MESMO diretório com parâmetros variados.
-func opcoesComExpiracao(dir string, d time.Duration) Options {
+func optionsWithExpiration(dir string, d time.Duration) Options {
 	return Options{
-		Dir: dir, SegmentSize: 1 << 20, TTLAtivo: true, DuracaoDeFundo: d,
-		CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+		Dir: dir, SegmentSize: 1 << 20, ActiveTTL: true, FallbackDuration: d,
+		WriteInstantFieldName: "_writtenAt", TTLFieldName: "_expiresIn",
 	}
 }
 
@@ -231,11 +231,11 @@ func opcoesComExpiracao(dir string, d time.Duration) Options {
 // exercitar um estado impossível em vez da migração real.
 func simulaDatasetAnteriorAAgenda(t *testing.T, dir string) {
 	t.Helper()
-	arquivos, err := filepath.Glob(filepath.Join(dir, "indexes", "vencimentos*.idx"))
-	if err != nil || len(arquivos) == 0 {
+	files, err := filepath.Glob(filepath.Join(dir, "indexes", "vencimentos*.idx"))
+	if err != nil || len(files) == 0 {
 		t.Fatalf("nenhum arquivo de agenda encontrado em %s (glob: %v)", dir, err)
 	}
-	for _, p := range arquivos {
+	for _, p := range files {
 		if err := os.Remove(p); err != nil {
 			t.Fatal(err)
 		}
@@ -266,13 +266,13 @@ func simulaDatasetAnteriorAAgenda(t *testing.T, dir string) {
 // não há record nenhum a ler.
 func TestAgendaAusenteEhConstruidaNaAberturaSemLerRecord(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, opcoesComExpiracao(dir, time.Hour))
-	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	s := openStore(t, optionsWithExpiration(dir, time.Hour))
+	rel := &relogioOfTest{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 	var ids []types.RowID
 	for i := 0; i < 50; i++ {
 		key := fmt.Sprintf("k-%02d", i)
-		id, _ := mustPut(t, s, key, 1, payloadComEscrita(t, s, key, "Start", rel.t), nil)
+		id, _ := mustPut(t, s, key, 1, payloadWithWrite(t, s, key, "Start", rel.t), nil)
 		ids = append(ids, id)
 	}
 	if err := s.Checkpoint(); err != nil {
@@ -285,11 +285,11 @@ func TestAgendaAusenteEhConstruidaNaAberturaSemLerRecord(t *testing.T) {
 	// Apaga os arquivos da agenda: é o estado de um dataset anterior a ela.
 	simulaDatasetAnteriorAAgenda(t, dir)
 
-	s2 := openStore(t, opcoesComExpiracao(dir, time.Hour))
+	s2 := openStore(t, optionsWithExpiration(dir, time.Hour))
 	s2.UsaRelogio(rel.agora)
 	for _, id := range ids {
-		if v := s2.agenda.Get(id); v != s2.vencimentoDe(id) {
-			t.Fatalf("row %d ficou em %d depois da construção, quer %d", id, v, s2.vencimentoDe(id))
+		if v := s2.schedule.Get(id); v != s2.vencimentoOf(id) {
+			t.Fatalf("row %d ficou em %d depois da construção, quer %d", id, v, s2.vencimentoOf(id))
 		}
 	}
 	if err := s2.AuditaAgenda(); err != nil {
@@ -306,14 +306,14 @@ func TestAgendaAusenteEhConstruidaNaAberturaSemLerRecord(t *testing.T) {
 func TestAgendaEhReconstruidaQuandoADuracaoDeFundoMuda(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)
-	s := openStore(t, opcoesComExpiracao(dir, time.Hour))
-	rel := &relogioDeTeste{t: base}
+	s := openStore(t, optionsWithExpiration(dir, time.Hour))
+	rel := &relogioOfTest{t: base}
 	s.UsaRelogio(rel.agora)
 	// Sem _expiresIn: a linha herda a duração de FUNDO, que é o que muda.
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
-	antes := s.agenda.Get(id)
-	if querido := uint64(base.Add(time.Hour).UnixMilli()); antes != querido {
-		t.Fatalf("vencimento inicial %d, quer %d", antes, querido)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
+	before := s.schedule.Get(id)
+	if querido := uint64(base.Add(time.Hour).UnixMilli()); before != querido {
+		t.Fatalf("vencimento inicial %d, quer %d", before, querido)
 	}
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
@@ -323,9 +323,9 @@ func TestAgendaEhReconstruidaQuandoADuracaoDeFundoMuda(t *testing.T) {
 	}
 
 	// Reabre com OUTRA duração de fundo.
-	s2 := openStore(t, opcoesComExpiracao(dir, 10*time.Hour))
+	s2 := openStore(t, optionsWithExpiration(dir, 10*time.Hour))
 	s2.UsaRelogio(rel.agora)
-	depois := s2.agenda.Get(id)
+	depois := s2.schedule.Get(id)
 	if querido := uint64(base.Add(10 * time.Hour).UnixMilli()); depois != querido {
 		t.Fatalf("depois de mudar a duração de fundo o vencimento é %d, quer %d (a agenda não foi reconstruída)",
 			depois, querido)
@@ -340,10 +340,10 @@ func TestAgendaEhReconstruidaQuandoADuracaoDeFundoMuda(t *testing.T) {
 // operação que a agenda existe para tornar desnecessária.
 func TestAgendaCoerenteEhAdotadaSemReconstrucao(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, opcoesComExpiracao(dir, time.Hour))
-	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	s := openStore(t, optionsWithExpiration(dir, time.Hour))
+	rel := &relogioOfTest{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -351,27 +351,27 @@ func TestAgendaCoerenteEhAdotadaSemReconstrucao(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2 := openStore(t, opcoesComExpiracao(dir, time.Hour))
+	s2 := openStore(t, optionsWithExpiration(dir, time.Hour))
 	s2.UsaRelogio(rel.agora)
-	if s2.agendaReconstruida {
+	if s2.scheduleBuilt {
 		t.Fatal("a agenda foi reconstruída sem nenhum parâmetro ter mudado")
 	}
-	if v := s2.agenda.Get(id); v != s2.vencimentoDe(id) {
-		t.Fatalf("a agenda adotada diverge: %d != %d", v, s2.vencimentoDe(id))
+	if v := s2.schedule.Get(id); v != s2.vencimentoOf(id) {
+		t.Fatalf("a agenda adotada diverge: %d != %d", v, s2.vencimentoOf(id))
 	}
 }
 
 // A auditoria reprova a agenda que diverge do que os índices dizem — é ela
 // que dá aos testes de crash uma afirmação a fazer sobre o dataset inteiro.
 func TestAuditoriaReprovaAAgendaDivergente(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 	if err := s.AuditaAgenda(); err != nil {
 		t.Fatalf("agenda íntegra reprovada: %v", err)
 	}
 	// Empurra a folha para o infinito: a linha continua vencendo pelos
 	// índices, mas o coletor nunca mais a alcança.
-	if err := s.agenda.Update(id, 0); err != nil {
+	if err := s.schedule.Update(id, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AuditaAgenda(); err == nil {
@@ -392,10 +392,10 @@ func TestAuditoriaReprovaAAgendaDivergente(t *testing.T) {
 // manifest, sem conferir se os arquivos alcançam as linhas.
 func TestAgendaQueNaoCobreODatasetEhReconstruida(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, opcoesComExpiracao(dir, time.Hour))
-	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	s := openStore(t, optionsWithExpiration(dir, time.Hour))
+	rel := &relogioOfTest{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -403,25 +403,25 @@ func TestAgendaQueNaoCobreODatasetEhReconstruida(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Só os arquivos: o manifest continua declarando a agenda, com os mesmos
+	// Só os files: o manifest continua declarando a agenda, com os mesmos
 	// parâmetros desta abertura.
-	arquivos, err := filepath.Glob(filepath.Join(dir, "indexes", "vencimentos*.idx"))
-	if err != nil || len(arquivos) == 0 {
+	files, err := filepath.Glob(filepath.Join(dir, "indexes", "vencimentos*.idx"))
+	if err != nil || len(files) == 0 {
 		t.Fatalf("nenhum arquivo de agenda encontrado (glob: %v)", err)
 	}
-	for _, p := range arquivos {
+	for _, p := range files {
 		if err := os.Remove(p); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	s2 := openStore(t, opcoesComExpiracao(dir, time.Hour))
+	s2 := openStore(t, optionsWithExpiration(dir, time.Hour))
 	s2.UsaRelogio(rel.agora)
-	if !s2.agendaReconstruida {
+	if !s2.scheduleBuilt {
 		t.Fatal("a agenda vazia foi adotada: nenhuma linha voltaria a vencer")
 	}
-	if v := s2.agenda.Get(id); v != s2.vencimentoDe(id) {
-		t.Fatalf("row %d ficou em %d, quer %d", id, v, s2.vencimentoDe(id))
+	if v := s2.schedule.Get(id); v != s2.vencimentoOf(id) {
+		t.Fatalf("row %d ficou em %d, quer %d", id, v, s2.vencimentoOf(id))
 	}
 	if err := s2.AuditaAgenda(); err != nil {
 		t.Fatal(err)
@@ -446,45 +446,45 @@ func TestAgendaQueNaoCobreODatasetEhReconstruida(t *testing.T) {
 // MUTAÇÃO QUE ESTE TESTE PEGA: voltar a percorrer as linhas em vez de descer a
 // agenda, com ou sem pré-filtro.
 func TestOEsforcoDaPassadaNaoAcompanhaOTamanhoDoDataset(t *testing.T) {
-	esforco := func(linhas int) int {
+	esforco := func(rows int) int {
 		t.Helper()
-		s, rel := storeComExpiracao(t, t.TempDir(), 100*time.Hour)
+		s, rel := storeWithExpiration(t, t.TempDir(), 100*time.Hour)
 		// Todas com prazo longo; as três primeiras com prazo curto, para que
 		// o TRABALHO seja idêntico nos dois datasets e só o tamanho mude.
-		for i := 0; i < linhas; i++ {
+		for i := 0; i < rows; i++ {
 			key := fmt.Sprintf("k-%05d", i)
-			campos := map[string]types.Value{
+			fields := map[string]types.Value{
 				"id":         {Type: types.TypeString, Bytes: []byte(key)},
 				"_writtenAt": {Type: types.TypeTimestamp, I64: rel.t.UnixMilli()},
 			}
 			if i < 3 {
-				campos["_expiresIn"] = types.Value{Type: types.TypeInt64, I64: int64(time.Minute / time.Millisecond)}
+				fields["_expiresIn"] = types.Value{Type: types.TypeInt64, I64: int64(time.Minute / time.Millisecond)}
 			}
-			mustPut(t, s, key, 1, payloadOrdenado(t, s, campos), nil)
+			mustPut(t, s, key, 1, payloadOrdenado(t, s, fields), nil)
 		}
-		rel.avanca(5 * time.Minute) // vence as três curtas, nenhuma das longas
+		rel.advance(5 * time.Minute) // vence as três curtas, nenhuma das longas
 
-		r, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+		r, err := s.ExpiraOnePass(context.Background(), limitesOfTest())
 		if err != nil {
 			t.Fatal(err)
 		}
 		if r.Expiradas != 3 {
-			t.Fatalf("dataset de %d linhas: expiradas=%d, quer 3 (%+v)", linhas, r.Expiradas, r)
+			t.Fatalf("dataset de %d linhas: expiradas=%d, quer 3 (%+v)", rows, r.Expiradas, r)
 		}
 		if r.Examinadas == 0 {
-			t.Fatalf("dataset de %d linhas: a passada expirou 3 linhas sem tocar a agenda — não está descendo a árvore", linhas)
+			t.Fatalf("dataset de %d linhas: a passada expirou 3 linhas sem tocar a agenda — não está descendo a árvore", rows)
 		}
 		return r.Examinadas
 	}
 
-	pequeno, grande := esforco(200), esforco(20_000)
+	small, grande := esforco(200), esforco(20_000)
 	// Cem vezes mais linhas, o mesmo trabalho. A descida toca alguns nós a
 	// mais porque a árvore fica mais funda, mas o esforço não pode ACOMPANHAR
 	// o tamanho: o dobro é folga larga para a profundidade, e uma varredura
 	// mediria cem vezes.
-	if grande > 2*pequeno {
+	if grande > 2*small {
 		t.Fatalf("esforço saltou de %d para %d ao multiplicar o dataset por 100: a passada está varrendo",
-			pequeno, grande)
+			small, grande)
 	}
 }
 
@@ -495,28 +495,28 @@ func TestOEsforcoDaPassadaNaoAcompanhaOTamanhoDoDataset(t *testing.T) {
 // continua valendo por cima, porque uma linha pode entrar na agenda com
 // vencimento anterior àquele em que o coletor foi dormir.
 func TestOColetorDormeAteOProximoVencimento(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
-	mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
+	mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 
-	// Falta muito mais que o teto: a espera é limitada por ele.
-	if espera := s.esperaAteOProximoVencimento(ResultadoDaExpiracao{}); espera != tetoDeEspera {
-		t.Fatalf("com o vencimento a uma hora, a espera é %v; quer o teto de %v", espera, tetoDeEspera)
+	// Falta muito mais que o teto: a wait é limitada por ele.
+	if wait := s.waitUntilOProximoVencimento(ResultOfExpiration{}); wait != ceilingOfWait {
+		t.Fatalf("com o vencimento a uma hora, a espera é %v; quer o teto de %v", wait, ceilingOfWait)
 	}
 	// Agora falta menos que o teto: a espera encolhe para o vencimento.
-	rel.avanca(time.Hour - 10*time.Second)
-	espera := s.esperaAteOProximoVencimento(ResultadoDaExpiracao{})
-	if espera != 10*time.Second {
-		t.Fatalf("faltando 10s para o vencimento, a espera é %v", espera)
+	rel.advance(time.Hour - 10*time.Second)
+	wait := s.waitUntilOProximoVencimento(ResultOfExpiration{})
+	if wait != 10*time.Second {
+		t.Fatalf("faltando 10s para o vencimento, a espera é %v", wait)
 	}
 	// Passada que bateu o teto volta já: há trabalho represado.
-	if espera := s.esperaAteOProximoVencimento(ResultadoDaExpiracao{BateuTeto: true}); espera != 0 {
-		t.Fatalf("passada represada esperou %v", espera)
+	if wait := s.waitUntilOProximoVencimento(ResultOfExpiration{BateuCeiling: true}); wait != 0 {
+		t.Fatalf("passada represada esperou %v", wait)
 	}
 	// Sem nada agendado, o teto: dormir para sempre deixaria a primeira linha
 	// escrita depois disso sem coletor nenhum.
-	s2, _ := storeComExpiracao(t, t.TempDir(), time.Hour)
-	if espera := s2.esperaAteOProximoVencimento(ResultadoDaExpiracao{}); espera != tetoDeEspera {
-		t.Fatalf("agenda vazia esperou %v; quer o teto de %v", espera, tetoDeEspera)
+	s2, _ := storeWithExpiration(t, t.TempDir(), time.Hour)
+	if wait := s2.waitUntilOProximoVencimento(ResultOfExpiration{}); wait != ceilingOfWait {
+		t.Fatalf("agenda vazia esperou %v; quer o teto de %v", wait, ceilingOfWait)
 	}
 }
 
@@ -527,22 +527,22 @@ func TestOColetorDormeAteOProximoVencimento(t *testing.T) {
 // inteiro tomando o lock do writer para descobrir que não há nada a fazer. É a
 // diferença entre uma estrutura auto-corretiva e um laço.
 func TestEntradaFrouxaEhCorrigidaNaPrimeiraVisita(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 
 	// Simula o que uma interrupção deixa: a folha promete um vencimento muito
 	// anterior ao real. A linha NÃO venceu — prazoVencido diz que não.
-	if err := s.agenda.Update(id, rowindex.FirstRealExpiry); err != nil {
+	if err := s.schedule.Update(id, rowindex.FirstRealExpiry); err != nil {
 		t.Fatal(err)
 	}
-	primeira, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	primeira, err := s.ExpiraOnePass(context.Background(), limitesOfTest())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if primeira.Renovadas != 1 || primeira.Expiradas != 0 || primeira.Examinadas == 0 {
 		t.Fatalf("a primeira passada devia descer até a entrada frouxa e não marcar nada: %+v", primeira)
 	}
-	segunda, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	segunda, err := s.ExpiraOnePass(context.Background(), limitesOfTest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,26 +562,26 @@ func TestEntradaFrouxaEhCorrigidaNaPrimeiraVisita(t *testing.T) {
 // e sem teste ela seria só uma expectativa.
 func TestAgendaEhReconstruidaPeloReplayDoTail(t *testing.T) {
 	dir := t.TempDir()
-	s, rel := storeComExpiracao(t, dir, time.Hour)
-	escrita := rel.t
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", escrita), nil)
+	s, rel := storeWithExpiration(t, dir, time.Hour)
+	write := rel.t
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", write), nil)
 	// SEM checkpoint: nem o record nem a agenda estão duráveis.
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	s2, rel2 := storeComExpiracao(t, dir, time.Hour)
-	rel2.t = escrita
-	if v := s2.agenda.Get(id); v != uint64(escrita.Add(time.Hour).UnixMilli()) {
-		t.Fatalf("depois do replay a agenda diz %d, quer %d", v, escrita.Add(time.Hour).UnixMilli())
+	s2, rel2 := storeWithExpiration(t, dir, time.Hour)
+	rel2.t = write
+	if v := s2.schedule.Get(id); v != uint64(write.Add(time.Hour).UnixMilli()) {
+		t.Fatalf("depois do replay a agenda diz %d, quer %d", v, write.Add(time.Hour).UnixMilli())
 	}
 	if err := s2.AuditaAgenda(); err != nil {
 		t.Fatal(err)
 	}
 	// E o vencimento veio do PAYLOAD, não do relógio do replay: o coletor
 	// entrega a linha no prazo original.
-	rel2.t = escrita.Add(2 * time.Hour)
-	r, err := s2.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	rel2.t = write.Add(2 * time.Hour)
+	r, err := s2.ExpiraOnePass(context.Background(), limitesOfTest())
 	if err != nil || r.Expiradas != 1 {
 		t.Fatalf("a linha replayada não venceu no prazo do payload: %+v (err=%v)", r, err)
 	}
@@ -597,33 +597,33 @@ func TestAgendaEhReconstruidaPeloReplayDoTail(t *testing.T) {
 // deixar a linha imortal.
 func TestCarenciaInterrompidaSeResolveNaVisitaSeguinte(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, opcoesComExpiracao(dir, time.Hour))
-	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	s := openStore(t, optionsWithExpiration(dir, time.Hour))
+	rel := &relogioOfTest{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
-	id, _ := mustPut(t, s, "legada", 1, payloadSemEscrita(t, s, "legada"), nil)
+	id, _ := mustPut(t, s, "legada", 1, payloadWithoutWrite(t, s, "legada"), nil)
 
 	// O desencontro: o instante de escrita foi gravado e a agenda ficou no
 	// sentinela de carência, como se a queda tivesse acontecido entre os dois.
-	if err := s.escritas.Set(id, rel.t.UnixMilli()); err != nil {
+	if err := s.writes.Set(id, rel.t.UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	if s.agenda.Get(id) != rowindex.Grace {
+	if s.schedule.Get(id) != rowindex.Grace {
 		t.Fatal("o cenário não montou: a agenda não está na carência")
 	}
 
-	r, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	r, err := s.ExpiraOnePass(context.Background(), limitesOfTest())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Carencias != 0 || r.Expiradas != 0 {
 		t.Fatalf("a passada agiu sobre uma linha que já tinha instante: %+v", r)
 	}
-	if v := s.agenda.Get(id); v != uint64(rel.t.Add(time.Hour).UnixMilli()) {
+	if v := s.schedule.Get(id); v != uint64(rel.t.Add(time.Hour).UnixMilli()) {
 		t.Fatalf("a agenda ficou em %d; a carência pendente não foi resolvida", v)
 	}
 	// E a linha vence no prazo, em vez de ficar presa no sentinela.
-	rel.avanca(2 * time.Hour)
-	r2, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	rel.advance(2 * time.Hour)
+	r2, err := s.ExpiraOnePass(context.Background(), limitesOfTest())
 	if err != nil || r2.Expiradas != 1 {
 		t.Fatalf("a linha não venceu depois da carência resolvida: %+v (err=%v)", r2, err)
 	}

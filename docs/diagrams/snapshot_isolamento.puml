@@ -24,7 +24,7 @@ st -> reg : há leitor vivo?
 alt sem leitor
   st -> w : publica e segue\n(journal não recebe NADA)
 else com leitor
-  st -> jr : Registra(rowId, location ANTERIOR, época+1)
+  st -> jr : Retain(rowId, location ANTERIOR, época+1)
   note right of jr
     24 bytes. Não copia o record:
     ele continua no segmento

@@ -148,7 +148,7 @@ Três restrições estruturais encontradas na varredura governam o desenho:
    `openNew` usa `O_EXCL`.
 2. **Reescrita in-place é fatal:** segmento menor que o registrado no manifest é erro de
    recovery ([store_recovery.go:67](internal/storage/store_recovery.go:67)).
-3. **`Publish`, `ApplyOverlay` e `segTally` são writer-only por contrato explícito**
+3. **`Publish`, `ApplyOverlay` e `secTally` são writer-only por contrato explícito**
    ([rowindex.go:170](internal/storage/rowindex/rowindex.go:170)) — uma goroutine
    própria republicando locations viola a invariante.
 
@@ -233,7 +233,7 @@ auth entra envolvendo o mux num ponto só. O listener também é criado num pont
 - **Papéis:** READ nas rotas de leitura; ADMIN nas mutantes. É aqui que entram
   `POST /v1/compact` e `POST /v1/checkpoint`, fechando o resto do §96 (D3).
 - **CLI:** `nishidb query --server` ganha credencial — por **variável de ambiente ou
-  arquivo**, nunca flag de senha, que apareceria em `ps`. `normalizaEndereco` já aceita
+  arquivo**, nunca flag de senha, que apareceria em `ps`. `normalizeAddress` já aceita
   `https://` ([query_remote.go:64](internal/cli/query_remote.go:64)).
 
 Fecha os débitos **57** e **14**.

@@ -30,10 +30,10 @@ func read(t *testing.T, p string) string {
 	return string(b)
 }
 
-// deParaTabela é o conteúdo que a primeira redação destruía: uma tabela
+// ofForTable é o conteúdo que a primeira redação destruía: uma tabela
 // De → Para, cuja coluna da esquerda é, por construção, o nome VELHO — que é
 // exatamente o que a ferramenta procura.
-const deParaTabela = "# De → Para\n" +
+const ofForTable = "# De → Para\n" +
 	"\n" +
 	"| velho | novo |\n" +
 	"|---|---|\n" +
@@ -50,16 +50,16 @@ const deParaTabela = "# De → Para\n" +
 // relatório de tudo que foi aplicado são conferidos na mesma rodada.
 func TestExcludedFilesAreUntouchedAndAppliedSubstitutionsAreReported(t *testing.T) {
 	dir := t.TempDir()
-	glossario := write(t, dir, "docs/glossario.md", deParaTabela)
-	planoDoc := write(t, dir, "planning/identificadores-em-ingles.md", deParaTabela)
-	planoDir := write(t, dir, "planning/identificadores-em-ingles/mapeamento-1.md", deParaTabela)
-	porFlag := write(t, dir, "notas/rascunho.md", deParaTabela)
+	glossario := write(t, dir, "docs/glossario.md", ofForTable)
+	planoDoc := write(t, dir, "planning/identificadores-em-ingles.md", ofForTable)
+	planoDir := write(t, dir, "planning/identificadores-em-ingles/mapeamento-1.md", ofForTable)
+	byFlag := write(t, dir, "notas/rascunho.md", ofForTable)
 	// ferramentaFixture reproduz o achado da Tarefa 1.1: os testes do próprio
 	// renamecite usam nomes reais de pacote como fixture de tabela De → Para
 	// (ver godoc de defaultExcludes), e uma rodada real contra esses mesmos
 	// nomes não pode colapsar o fixture em `X → X` como fez antes deste caso.
-	ferramentaFixture := write(t, dir, "scripts/renamecite/rules_test.go", deParaTabela)
-	alvo := write(t, dir, "docs/outro.md", deParaTabela)
+	ferramentaFixture := write(t, dir, "scripts/renamecite/rules_test.go", ofForTable)
+	target := write(t, dir, "docs/outro.md", ofForTable)
 
 	logkeys := write(t, dir, "mapa/logkeys.tsv", "velho\tnovo\nconsumer.subiu\tconsumer.up\n")
 	tests := write(t, dir, "mapa/tests.tsv", "pacote\tvelho\tnovo\ninternal/kafka\tTestFilaRecusaCheia\tTestQueueRefusesWhenFull\n")
@@ -78,31 +78,31 @@ func TestExcludedFilesAreUntouchedAndAppliedSubstitutionsAreReported(t *testing.
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
 
-	for nome, p := range map[string]string{
+	for name, p := range map[string]string{
 		"docs/glossario.md":                                                glossario,
 		"planning/identificadores-em-ingles.md":                            planoDoc,
 		"planning/identificadores-em-ingles/…":                             planoDir,
-		"notas/rascunho.md (excluído pela -exclude)":                       porFlag,
+		"notas/rascunho.md (excluído pela -exclude)":                       byFlag,
 		"scripts/renamecite/rules_test.go (fixture da própria ferramenta)": ferramentaFixture,
 	} {
-		if got := read(t, p); got != deParaTabela {
-			t.Errorf("%s foi reescrito:\n%s", nome, got)
+		if got := read(t, p); got != ofForTable {
+			t.Errorf("%s foi reescrito:\n%s", name, got)
 		}
 	}
 
-	want := strings.Replace(deParaTabela, "`consumer.subiu`", "`consumer.up`", 1)
+	want := strings.Replace(ofForTable, "`consumer.subiu`", "`consumer.up`", 1)
 	want = strings.Replace(want, "TestFilaRecusaCheia", "TestQueueRefusesWhenFull", 1)
-	if got := read(t, alvo); got != want {
+	if got := read(t, target); got != want {
 		t.Errorf("docs/outro.md:\n%s\nquer:\n%s", got, want)
 	}
 
 	rel := read(t, report)
-	for _, linha := range []string{
+	for _, row := range []string{
 		"aplicado\tdocs/outro.md:5\tconsumer.subiu\tconsumer.up\tcrase\n",
 		"aplicado\tdocs/outro.md:7\tTestFilaRecusaCheia\tTestQueueRefusesWhenFull\tteste\n",
 	} {
-		if !strings.Contains(rel, linha) {
-			t.Errorf("relatório sem %q:\n%s", linha, rel)
+		if !strings.Contains(rel, row) {
+			t.Errorf("relatório sem %q:\n%s", row, rel)
 		}
 	}
 	for _, excluido := range []string{"glossario", "identificadores-em-ingles", "rascunho", "renamecite"} {
@@ -122,7 +122,7 @@ func TestExcludedFilesAreUntouchedAndAppliedSubstitutionsAreReported(t *testing.
 // relatório — silêncio aqui é o que criou o achado.
 func TestProtectedTokenIsKeptAndReported(t *testing.T) {
 	dir := t.TempDir()
-	alvo := write(t, dir, "doc.md", "a coluna `linhas` e a função `Compila`\n")
+	target := write(t, dir, "doc.md", "a coluna `linhas` e a função `Compila`\n")
 	idents := write(t, dir, "mapa/idents.tsv",
 		"pacote\tespecie\tendereco\tnovo\tmotivo\n"+
 			"internal/storage\tfunc\tlinhas\trows\t\n"+
@@ -134,7 +134,7 @@ func TestProtectedTokenIsKeptAndReported(t *testing.T) {
 	if code := run([]string{"-dir", dir, "-idents", idents, "-protect", protect, "-exclude", "mapa", "-report", report}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
-	if got, want := read(t, alvo), "a coluna `linhas` e a função `Compile`\n"; got != want {
+	if got, want := read(t, target), "a coluna `linhas` e a função `Compile`\n"; got != want {
 		t.Fatalf("saída: %q, quer %q", got, want)
 	}
 	rel := read(t, report)
@@ -151,7 +151,7 @@ func TestProtectedTokenIsKeptAndReported(t *testing.T) {
 // e quem guarda é o relatório, não uma exceção embutida.
 func TestBareUnexportedTokenIsStillReplaced(t *testing.T) {
 	dir := t.TempDir()
-	alvo := write(t, dir, "doc.md", "a coluna `linhas`\n")
+	target := write(t, dir, "doc.md", "a coluna `linhas`\n")
 	idents := write(t, dir, "mapa/idents.tsv",
 		"pacote\tespecie\tendereco\tnovo\tmotivo\ninternal/storage\tfunc\tlinhas\trows\t\n")
 	report := filepath.Join(dir, "relatorio.txt")
@@ -160,7 +160,7 @@ func TestBareUnexportedTokenIsStillReplaced(t *testing.T) {
 	if code := run([]string{"-dir", dir, "-idents", idents, "-exclude", "mapa", "-report", report}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
-	if got, want := read(t, alvo), "a coluna `rows`\n"; got != want {
+	if got, want := read(t, target), "a coluna `rows`\n"; got != want {
 		t.Fatalf("saída: %q, quer %q", got, want)
 	}
 	if rel := read(t, report); !strings.Contains(rel, "aplicado\tdoc.md:1\tlinhas\trows\tcrase\n") {
@@ -199,16 +199,16 @@ func TestLoadMappingSynthesizesTheFullNewAddressForMethodsAndFields(t *testing.T
 // espécie, e por isso `grupos.dict` — nome de arquivo em disco — virava
 // `groups.dict` só porque existe uma variável chamada `grupos`.
 func TestDottedTokenOnlyFallsBackWhenTheFirstSegmentIsAType(t *testing.T) {
-	comVar := NewMapping()
-	comVar.addIdentRow("internal/storage", "var", "grupos", "groups")
-	out, _ := RewriteText([]byte("o arquivo `grupos.dict`"), ".md", comVar)
+	withVar := NewMapping()
+	withVar.addIdentRow("internal/storage", "var", "grupos", "groups")
+	out, _ := RewriteText([]byte("o arquivo `grupos.dict`"), ".md", withVar)
 	if got, want := string(out), "o arquivo `grupos.dict`"; got != want {
 		t.Errorf("com `grupos` como var: %q, quer %q", got, want)
 	}
 
-	comTipo := NewMapping()
-	comTipo.addIdentRow("internal/storage", "type", "grupos", "groups")
-	out, _ = RewriteText([]byte("o campo `grupos.dict`"), ".md", comTipo)
+	withTipo := NewMapping()
+	withTipo.addIdentRow("internal/storage", "type", "grupos", "groups")
+	out, _ = RewriteText([]byte("o campo `grupos.dict`"), ".md", withTipo)
 	if got, want := string(out), "o campo `groups.dict`"; got != want {
 		t.Errorf("com `grupos` como type: %q, quer %q", got, want)
 	}
@@ -231,37 +231,37 @@ func TestPackageMapCompletesTheQualifiedCitation(t *testing.T) {
 		"internal/query/budget\tfunc\tNovoGlobal\tNewGlobal\t\n"
 	const paths = "velho\tnovo\ninternal/query/orcamento\tinternal/query/budget\n"
 
-	comMapa := t.TempDir()
-	alvo := write(t, comMapa, "doc.go", doc)
+	withMapa := t.TempDir()
+	target := write(t, withMapa, "doc.go", doc)
 	var out, errb bytes.Buffer
 	code := run([]string{
-		"-dir", comMapa,
-		"-idents", write(t, comMapa, "mapa/idents.tsv", idents),
-		"-paths", write(t, comMapa, "mapa/pacotes.tsv", paths),
+		"-dir", withMapa,
+		"-idents", write(t, withMapa, "mapa/idents.tsv", idents),
+		"-paths", write(t, withMapa, "mapa/pacotes.tsv", paths),
 		"-exclude", "mapa",
-		"-report", filepath.Join(comMapa, "relatorio.txt"),
+		"-report", filepath.Join(withMapa, "relatorio.txt"),
 	}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
-	if got, want := read(t, alvo), "package x\n\n// Ver budget.NewGlobal(0).\nfunc F() {}\n"; got != want {
+	if got, want := read(t, target), "package x\n\n// Ver budget.NewGlobal(0).\nfunc F() {}\n"; got != want {
 		t.Errorf("com -paths: %q\nquer:       %q", got, want)
 	}
 
-	semMapa := t.TempDir()
-	alvo = write(t, semMapa, "doc.go", doc)
+	withoutMapa := t.TempDir()
+	target = write(t, withoutMapa, "doc.go", doc)
 	out.Reset()
 	errb.Reset()
 	code = run([]string{
-		"-dir", semMapa,
-		"-idents", write(t, semMapa, "mapa/idents.tsv", idents),
+		"-dir", withoutMapa,
+		"-idents", write(t, withoutMapa, "mapa/idents.tsv", idents),
 		"-exclude", "mapa",
-		"-report", filepath.Join(semMapa, "relatorio.txt"),
+		"-report", filepath.Join(withoutMapa, "relatorio.txt"),
 	}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
-	if got := read(t, alvo); got != doc {
+	if got := read(t, target); got != doc {
 		t.Errorf("sem -paths a citação foi tocada pela metade: %q", got)
 	}
 }
@@ -316,21 +316,21 @@ func TestLiveDeclarationBlocksTheLeafRewriteAndIsReported(t *testing.T) {
 	const idents = "pacote\tespecie\tendereco\tnovo\tmotivo\n" +
 		"internal/storage/checkpoint\tfield\tContadorInfo.Nome\tName\t\n"
 
-	comDeclaracao := t.TempDir()
-	write(t, comDeclaracao, "internal/metrics/metrics.go", "package metrics\n\ntype Amostra struct {\n\tNome string\n}\n")
-	alvo := write(t, comDeclaracao, "docs/doc.md", doc)
-	relatorio := filepath.Join(comDeclaracao, "relatorio.txt")
+	withDeclaracao := t.TempDir()
+	write(t, withDeclaracao, "internal/metrics/metrics.go", "package metrics\n\ntype Amostra struct {\n\tNome string\n}\n")
+	target := write(t, withDeclaracao, "docs/doc.md", doc)
+	relatorio := filepath.Join(withDeclaracao, "relatorio.txt")
 	var out, errb bytes.Buffer
 	code := run([]string{
-		"-dir", comDeclaracao,
-		"-idents", write(t, comDeclaracao, "mapa/idents.tsv", idents),
+		"-dir", withDeclaracao,
+		"-idents", write(t, withDeclaracao, "mapa/idents.tsv", idents),
 		"-exclude", "mapa",
 		"-report", relatorio,
 	}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
-	if got := read(t, alvo); got != doc {
+	if got := read(t, target); got != doc {
 		t.Errorf("com a declaração viva: %q, quer %q", got, doc)
 	}
 	if rel := read(t, relatorio); !strings.Contains(rel, "pulado\tdocs/doc.md:1\tNome\tainda declarado internal/metrics.Nome\n") {
@@ -340,21 +340,21 @@ func TestLiveDeclarationBlocksTheLeafRewriteAndIsReported(t *testing.T) {
 	// A árvore sem a declaração tem um fixture de testdata que declara o MESMO
 	// nome: o go tool ignora essas árvores, então o que está lá não é
 	// declaração do módulo e não pode bloquear o rename.
-	semDeclaracao := t.TempDir()
-	write(t, semDeclaracao, "scripts/ferramenta/testdata/modulo/a.go", "package a\n\ntype Amostra struct {\n\tNome string\n}\n")
-	alvo = write(t, semDeclaracao, "docs/doc.md", doc)
+	withoutDeclaracao := t.TempDir()
+	write(t, withoutDeclaracao, "scripts/ferramenta/testdata/modulo/a.go", "package a\n\ntype Amostra struct {\n\tNome string\n}\n")
+	target = write(t, withoutDeclaracao, "docs/doc.md", doc)
 	out.Reset()
 	errb.Reset()
 	code = run([]string{
-		"-dir", semDeclaracao,
-		"-idents", write(t, semDeclaracao, "mapa/idents.tsv", idents),
+		"-dir", withoutDeclaracao,
+		"-idents", write(t, withoutDeclaracao, "mapa/idents.tsv", idents),
 		"-exclude", "mapa",
-		"-report", filepath.Join(semDeclaracao, "relatorio.txt"),
+		"-report", filepath.Join(withoutDeclaracao, "relatorio.txt"),
 	}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
-	if got, want := read(t, alvo), "o campo `Name` do coletor\n"; got != want {
+	if got, want := read(t, target), "o campo `Name` do coletor\n"; got != want {
 		t.Errorf("sem a declaração: %q, quer %q", got, want)
 	}
 }
@@ -366,7 +366,7 @@ func TestLiveDeclarationBlocksTheLeafRewriteAndIsReported(t *testing.T) {
 func TestQualifiedAddressRewritesDespiteALiveHomonym(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "internal/storage/store.go", "package storage\n\ntype Store struct{}\n\nfunc (s *Store) Contadores() int { return 0 }\n")
-	alvo := write(t, dir, "docs/doc.md", "o `Manifest.Contadores` e o `Contadores` solto\n")
+	target := write(t, dir, "docs/doc.md", "o `Manifest.Contadores` e o `Contadores` solto\n")
 	var out, errb bytes.Buffer
 	code := run([]string{
 		"-dir", dir,
@@ -379,7 +379,7 @@ func TestQualifiedAddressRewritesDespiteALiveHomonym(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
-	if got, want := read(t, alvo), "o `Manifest.Counters` e o `Contadores` solto\n"; got != want {
+	if got, want := read(t, target), "o `Manifest.Counters` e o `Contadores` solto\n"; got != want {
 		t.Fatalf("saída: %q\nquer:  %q", got, want)
 	}
 }
@@ -404,13 +404,13 @@ func TestInterfaceGroupsTSVReachesTheCitations(t *testing.T) {
 		"internal/query/executor\tStore\tAbreSnapshot\tOpenSnapshot\n" +
 		"internal/query/executor\tStore\tFechaSnapshot\tCloseSnapshot\n"
 
-	com := t.TempDir()
-	alvo := write(t, com, "doc.go", doc)
-	report := filepath.Join(com, "relatorio.txt")
+	with := t.TempDir()
+	target := write(t, with, "doc.go", doc)
+	report := filepath.Join(with, "relatorio.txt")
 	var out, errb bytes.Buffer
 	code := run([]string{
-		"-dir", com,
-		"-ifaces", write(t, com, "mapa/ifaces.tsv", ifaces),
+		"-dir", with,
+		"-ifaces", write(t, with, "mapa/ifaces.tsv", ifaces),
 		"-exclude", "mapa",
 		"-report", report,
 	}, &out, &errb)
@@ -418,28 +418,28 @@ func TestInterfaceGroupsTSVReachesTheCitations(t *testing.T) {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
 	want := "package x\n\n// A leitura chama OpenSnapshot e devolve por Store.CloseSnapshot.\nfunc F() {}\n"
-	if got := read(t, alvo); got != want {
+	if got := read(t, target); got != want {
 		t.Fatalf("com -ifaces: %q\nquer:       %q", got, want)
 	}
 	rel := read(t, report)
-	for _, linha := range []string{
+	for _, row := range []string{
 		"aplicado\tdoc.go:3\tAbreSnapshot\tOpenSnapshot\tnu\n",
 		"aplicado\tdoc.go:3\tStore.FechaSnapshot\tStore.CloseSnapshot\tqualificado\n",
 	} {
-		if !strings.Contains(rel, linha) {
-			t.Errorf("relatório sem %q:\n%s", linha, rel)
+		if !strings.Contains(rel, row) {
+			t.Errorf("relatório sem %q:\n%s", row, rel)
 		}
 	}
 
-	sem := t.TempDir()
-	alvo = write(t, sem, "doc.go", doc)
+	without := t.TempDir()
+	target = write(t, without, "doc.go", doc)
 	out.Reset()
 	errb.Reset()
-	code = run([]string{"-dir", sem, "-report", filepath.Join(sem, "relatorio.txt")}, &out, &errb)
+	code = run([]string{"-dir", without, "-report", filepath.Join(without, "relatorio.txt")}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
-	if got := read(t, alvo); got != doc {
+	if got := read(t, target); got != doc {
 		t.Errorf("sem -ifaces o documento mudou, e a regra alcançada não seria a do flag: %q", got)
 	}
 }

@@ -14,15 +14,15 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// maxColunasDeAgrupamento é o teto de colunas do groupBy que a tabela virtual
+// maxColumnsOfAgrupamento é o teto de colunas do groupBy que a tabela virtual
 // monta sem alocar: a linha é composta num array de pilha desse tamanho mais
 // as duas colunas fixas.
-const maxColunasDeAgrupamento = 16
+const maxColumnsOfAgrupamento = 16
 
-// Leitor é o que a tabela virtual precisa do contador. Interface, e não o
+// Reader é o que a tabela virtual precisa do contador. Interface, e não o
 // *counter.Counter, para que o teste da tabela e o do contador não se
 // conheçam além do contrato — *counter.Counter a satisfaz.
-type Leitor interface {
+type Reader interface {
 	// Limit é o maior id de grupo emitido mais um.
 	Limit() uint32
 	// Group devolve a chave composta, o texto (groupKey), o total e os refs do
@@ -32,7 +32,7 @@ type Leitor interface {
 	ByText(texto []byte) (uint32, bool)
 }
 
-// Tabela monta o schema sintético e o Store virtual de `_counters.<nome>`.
+// Table monta o schema sintético e o Store virtual de `_counters.<nome>`.
 //
 // O schema é compilado do MESMO YAML de um dataset de verdade, como o `_meta`
 // faz: reusar o compilador é o que garante que a tabela obedeça às mesmas
@@ -49,9 +49,9 @@ type Leitor interface {
 // A tabela lê o PRESENTE: os totais não são versionados pelo journal do
 // snapshot. O que o snapshot congela é o CONJUNTO de grupos — um grupo que
 // nasce no meio da varredura não entra no universo dela.
-func Tabela(def counter.Definition, l Leitor) (*schema.Compiled, query.Store, error) {
-	if len(def.Columns) == 0 || len(def.Columns) > maxColunasDeAgrupamento {
-		return nil, nil, fmt.Errorf("contadores: %q tem %d colunas de agrupamento; a tabela aceita de 1 a %d", def.Name, len(def.Columns), maxColunasDeAgrupamento)
+func Table(def counter.Definition, l Reader) (*schema.Compiled, query.Store, error) {
+	if len(def.Columns) == 0 || len(def.Columns) > maxColumnsOfAgrupamento {
+		return nil, nil, fmt.Errorf("contadores: %q tem %d colunas de agrupamento; a tabela aceita de 1 a %d", def.Name, len(def.Columns), maxColumnsOfAgrupamento)
 	}
 	if len(def.Names) != len(def.Columns) || len(def.Types) != len(def.Columns) {
 		return nil, nil, fmt.Errorf("contadores: %q com Names, Types e Columns de tamanhos diferentes", def.Name)
@@ -67,7 +67,7 @@ func Tabela(def counter.Definition, l Leitor) (*schema.Compiled, query.Store, er
 	}
 	fmt.Fprintf(&sb, ", %s]\n  fields:\n    %s:\n      type: string\n", schema.CounterTotalColumn, schema.CounterKeyColumn)
 	for i, n := range def.Names {
-		tipo, err := nomeDoTipo(def.Types[i])
+		tipo, err := nameOfTipo(def.Types[i])
 		if err != nil {
 			return nil, nil, fmt.Errorf("contadores: %q, coluna %q: %w", def.Name, n, err)
 		}
@@ -83,22 +83,22 @@ func Tabela(def counter.Definition, l Leitor) (*schema.Compiled, query.Store, er
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", schema.CountersNamespace, def.Name, err)
 	}
-	f := &fonte{l: l, colunas: make([]types.FieldID, len(def.Names))}
-	if f.idChave, err = idDaColuna(sc, schema.CounterKeyColumn); err != nil {
+	f := &source{l: l, columns: make([]types.FieldID, len(def.Names))}
+	if f.idKey, err = idOfColumn(sc, schema.CounterKeyColumn); err != nil {
 		return nil, nil, err
 	}
-	if f.idTotal, err = idDaColuna(sc, schema.CounterTotalColumn); err != nil {
+	if f.idTotal, err = idOfColumn(sc, schema.CounterTotalColumn); err != nil {
 		return nil, nil, err
 	}
 	for i, n := range def.Names {
-		if f.colunas[i], err = idDaColuna(sc, n); err != nil {
+		if f.columns[i], err = idOfColumn(sc, n); err != nil {
 			return nil, nil, err
 		}
 	}
 	return sc, f, nil
 }
 
-func nomeDoTipo(t types.FieldType) (string, error) {
+func nameOfTipo(t types.FieldType) (string, error) {
 	switch t {
 	case types.TypeString:
 		return "string", nil
@@ -111,78 +111,78 @@ func nomeDoTipo(t types.FieldType) (string, error) {
 	}
 }
 
-func idDaColuna(sc *schema.Compiled, nome string) (types.FieldID, error) {
-	f, ok := sc.FieldByName([]byte(nome))
+func idOfColumn(sc *schema.Compiled, name string) (types.FieldID, error) {
+	f, ok := sc.FieldByName([]byte(name))
 	if !ok {
-		return 0, fmt.Errorf("contadores: coluna %q sem FieldID no schema sintético", nome)
+		return 0, fmt.Errorf("contadores: coluna %q sem FieldID no schema sintético", name)
 	}
 	return f.ID, nil
 }
 
-// Registra declara o namespace `_counters` sob o dataset, registra a tabela
+// Register declara o namespace `_counters` sob o dataset, registra a tabela
 // de cada contador aberto no Store e a `_meta.counters` que os lista — esta
 // SEMPRE, mesmo sem contador nenhum: "quais existem" tem resposta quando é
 // nenhum. Chamado por todo caminho que registra um dataset no motor —
 // servidor e CLI — para que `FROM _counters.<nome>` e `FROM _meta.counters`
 // funcionem da mesma forma nos dois.
-func Registra(eng *query.Engine, dataset string, st *storage.Store) error {
+func Register(eng *query.Engine, dataset string, st *storage.Store) error {
 	if err := eng.DeclaraNamespace(dataset, schema.CountersNamespace); err != nil {
 		return err
 	}
-	cs := st.Contadores()
+	cs := st.Counters()
 	contados := make([]Contado, 0, len(cs))
 	for _, c := range cs {
-		sc, fonte, err := Tabela(c.Def(), c)
+		sc, source, err := Table(c.Def(), c)
 		if err != nil {
 			return err
 		}
-		if err := eng.RegistraVirtual(dataset, schema.CountersNamespace, c.Def().Name, sc, fonte); err != nil {
+		if err := eng.RegisterVirtual(dataset, schema.CountersNamespace, c.Def().Name, sc, source); err != nil {
 			return err
 		}
 		contados = append(contados, c)
 	}
-	msc, mfonte, err := TabelaMeta(contados)
+	msc, mfonte, err := TableMeta(contados)
 	if err != nil {
 		return err
 	}
-	return eng.RegistraVirtual(dataset, meta.Namespace, TabelaMetaCounters, msc, mfonte)
+	return eng.RegisterVirtual(dataset, meta.Namespace, TableMetaCounters, msc, mfonte)
 }
 
-// fonte é o Store virtual: cada rowID é um id de grupo, e o record é
+// source é o Store virtual: cada rowID é um id de grupo, e o record é
 // codificado sob demanda a partir do que o contador tem em memória.
-type fonte struct {
-	l       Leitor
-	idChave types.FieldID
+type source struct {
+	l       Reader
+	idKey   types.FieldID
 	idTotal types.FieldID
-	colunas []types.FieldID // FieldID de cada coluna do groupBy, na ordem declarada
+	columns []types.FieldID // FieldID de cada coluna do groupBy, na ordem declarada
 }
 
 // OpenSnapshot congela o conjunto de grupos: ids a partir do limite nasceram
 // depois da consulta. Época e instante ficam zerados e são ignorados — os
 // totais são lidos no presente.
-func (f *fonte) OpenSnapshot() types.Snapshot {
+func (f *source) OpenSnapshot() types.Snapshot {
 	return types.Snapshot{LimitRowID: types.RowID(f.l.Limit())}
 }
 
 // CloseSnapshot é no-op: a fonte não retém nada.
-func (f *fonte) CloseSnapshot(types.Snapshot) {}
+func (f *source) CloseSnapshot(types.Snapshot) {}
 
-func (f *fonte) ScanLive(snap types.Snapshot) types.RowIDIterator {
-	return &iterador{l: f.l, limite: uint32(snap.LimitRowID)}
+func (f *source) ScanLive(snap types.Snapshot) types.RowIDIterator {
+	return &iterador{l: f.l, limit: uint32(snap.LimitRowID)}
 }
 
-func (f *fonte) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+func (f *source) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	if id == 0 || id >= snap.LimitRowID {
 		return types.Record{}, buf, false, nil
 	}
-	chave, texto, total, _, vivo := f.l.Group(uint32(id))
+	key, text, total, _, vivo := f.l.Group(uint32(id))
 	if !vivo {
 		return types.Record{}, buf, false, nil
 	}
-	return f.record(id, chave, texto, total, buf)
+	return f.record(id, key, text, total, buf)
 }
 
-func (f *fonte) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
+func (f *source) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
 	id, ok := f.l.ByText(key)
 	if !ok {
 		return types.Record{}, buf, false, nil
@@ -193,15 +193,15 @@ func (f *fonte) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []
 // Indexed responde SEMPRE false: a tabela não declara índice, e o planner
 // degrada para a varredura dos grupos — que sobre milhares de linhas é o
 // plano certo. A key (groupKey) dá o point lookup por conta própria.
-func (f *fonte) Indexed(types.FieldID) bool { return false }
+func (f *source) Indexed(types.FieldID) bool { return false }
 
 // Lookup nunca é chamado: sem índice declarado o planner não escolhe plano
 // indexado. Rede de segurança, como no _meta.
-func (f *fonte) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
+func (f *source) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
 	return nil, fmt.Errorf("contadores: a tabela virtual não tem índice (campo %d)", field)
 }
 
-type par struct {
+type pair struct {
 	id types.FieldID
 	v  types.Value
 }
@@ -209,26 +209,26 @@ type par struct {
 // record codifica UM grupo como uma linha. O payload exige FieldID crescente;
 // os pares são ordenados num array de pilha, sem alocar — a linha é montada
 // por grupo a cada consulta do alarme.
-func (f *fonte) record(row types.RowID, chave, texto []byte, total int64, buf []byte) (types.Record, []byte, bool, error) {
-	var pares [maxColunasDeAgrupamento + 2]par
+func (f *source) record(row types.RowID, key, text []byte, total int64, buf []byte) (types.Record, []byte, bool, error) {
+	var pares [maxColumnsOfAgrupamento + 2]pair
 	n := 0
-	pares[n] = par{f.idChave, types.Value{Type: types.TypeString, Bytes: texto}}
+	pares[n] = pair{f.idKey, types.Value{Type: types.TypeString, Bytes: text}}
 	n++
-	pares[n] = par{f.idTotal, types.Value{Type: types.TypeInt64, I64: total}}
+	pares[n] = pair{f.idTotal, types.Value{Type: types.TypeInt64, I64: total}}
 	n++
-	err := valuekey.WalkComposite(chave, func(i int, v types.Value) error {
-		if i >= len(f.colunas) {
+	err := valuekey.WalkComposite(key, func(i int, v types.Value) error {
+		if i >= len(f.columns) {
 			return fmt.Errorf("contadores: a chave do grupo %d tem mais componentes que o groupBy", row)
 		}
-		pares[n] = par{f.colunas[i], v}
+		pares[n] = pair{f.columns[i], v}
 		n++
 		return nil
 	})
 	if err != nil {
 		return types.Record{}, buf, false, err
 	}
-	if n != len(f.colunas)+2 {
-		return types.Record{}, buf, false, fmt.Errorf("contadores: a chave do grupo %d tem %d componentes, o groupBy tem %d", row, n-2, len(f.colunas))
+	if n != len(f.columns)+2 {
+		return types.Record{}, buf, false, fmt.Errorf("contadores: a chave do grupo %d tem %d componentes, o groupBy tem %d", row, n-2, len(f.columns))
 	}
 	for i := 1; i < n; i++ {
 		for j := i; j > 0 && pares[j-1].id > pares[j].id; j-- {
@@ -241,24 +241,24 @@ func (f *fonte) record(row types.RowID, chave, texto []byte, total int64, buf []
 			return types.Record{}, buf, false, fmt.Errorf("contadores: codificando a coluna %d do grupo %d: %w", pares[i].id, row, err)
 		}
 	}
-	return types.Record{RowID: row, Sequence: int64(row), Key: texto, Payload: buf}, buf, true, nil
+	return types.Record{RowID: row, Sequence: int64(row), Key: text, Payload: buf}, buf, true, nil
 }
 
 // iterador percorre os ids de grupo vivos abaixo do limite congelado.
 type iterador struct {
-	l      Leitor
-	limite uint32
-	id     uint32
+	l     Reader
+	limit uint32
+	id    uint32
 }
 
 func (it *iterador) Next() bool {
-	for it.id+1 < it.limite {
+	for it.id+1 < it.limit {
 		it.id++
 		if _, _, _, _, vivo := it.l.Group(it.id); vivo {
 			return true
 		}
 	}
-	it.id = it.limite
+	it.id = it.limit
 	return false
 }
 

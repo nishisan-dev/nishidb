@@ -16,9 +16,9 @@ import (
 const OffsetsFileName = "kafka.offsets"
 
 var (
-	// ErrNoOffsets indica ausência do arquivo — dataset que nunca consumiu
+	// ErrInOffsets indica ausência do arquivo — dataset que nunca consumiu
 	// de Kafka, ou dataset alimentado só por `nishidb ingest`.
-	ErrNoOffsets = errors.New("checkpoint: offsets ausentes")
+	ErrInOffsets = errors.New("checkpoint: offsets ausentes")
 
 	// ErrCorruptOffsets indica magic, version, CRC ou tamanho inconsistente.
 	//
@@ -205,11 +205,11 @@ func WriteOffsets(path string, s SourceOffsets) error {
 	return writeAtomic(path, s.encode())
 }
 
-// LoadOffsets lê o kafka.offsets. Ausência devolve ErrNoOffsets.
+// LoadOffsets lê o kafka.offsets. Ausência devolve ErrInOffsets.
 func LoadOffsets(path string) (SourceOffsets, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return SourceOffsets{}, fmt.Errorf("%w: %s", ErrNoOffsets, path)
+		return SourceOffsets{}, fmt.Errorf("%w: %s", ErrInOffsets, path)
 	}
 	if err != nil {
 		return SourceOffsets{}, err

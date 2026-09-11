@@ -15,19 +15,19 @@ import (
 // pelo operador que só tem o binário do CLI.
 //
 // TODO comando remoto (`query --server`, `status`, `datasets`, `inspect`,
-// `compact`, `checkpoint`) chama registraFlagsRemotas no seu FlagSet e, logo
-// após o Parse, flagsRemotas.resolve() — o ÚNICO lugar em que as fontes de
+// `compact`, `checkpoint`) chama setupRemoteFlags no seu FlagSet e, logo
+// após o Parse, remoteFlags.resolve() — o ÚNICO lugar em que as fontes de
 // senha são lidas e validadas. Dali em diante o comando carrega só um
-// credencialRemota, que os TRÊS pontos de costura do protocolo remoto
-// (consultaRemota em query_remote.go, buscaDocumento em operation.go,
-// postaMutacao em mutation.go — a B5 já apontava o último deles) consomem via
-// clienteRemoto (monta o *http.Client, com Proxy: nil e o CertPool de
+// remoteCredential, que os TRÊS pontos de costura do protocolo remoto
+// (remoteQuery em query_remote.go, searchDocument em operation.go,
+// postMutation em mutation.go — a B5 já apontava o último deles) consomem via
+// remoteClient (monta o *http.Client, com Proxy: nil e o CertPool de
 // --tls-ca) e aplicaCredencial (o req.SetBasicAuth, quando --user foi dado).
 //
 // NUNCA existe uma flag de senha: apareceria em `ps aux` para qualquer
 // usuário da máquina (§95). A senha entra SOMENTE por NISHIDB_PASSWORD (env,
 // que não sobrevive a um `ps`) ou --password-file — o mesmo desenho do
-// servidor (internal/server/security.go:resolveSenha — trailing newline
+// servidor (internal/server/security.go:resolvePassword — trailing newline
 // aparado), mas SEM a checagem de modo 0600 de lá: aquele arquivo é lido por
 // um PROCESSO SERVIDOR que pode compartilhar host com outros usuários e
 // datasets sensíveis; este é lido pelo comando do PRÓPRIO operador, na
@@ -35,38 +35,38 @@ import (
 // falhar) sem reduzir exposição real nenhuma, e por isso a doutrina diverge
 // aqui, deliberadamente.
 
-// envSenha é o ÚNICO nome de variável de ambiente aceito para a senha do
+// envPass é o ÚNICO nome de variável de ambiente aceito para a senha do
 // cliente — diferente de server.authentication.users.passwordEnv (que
 // NOMEIA uma variável arbitrária por usuário), aqui o cliente escolhe um
 // nome fixo, o que permite documentar "NISHIDB_PASSWORD" sem indireção
 // nenhuma.
-const envSenha = "NISHIDB_PASSWORD"
+const envPass = "NISHIDB_PASSWORD"
 
-// credencialRemota é o que os três pontos de costura recebem depois que
-// flagsRemotas.resolve() validou as fontes. usuario/senha vazios (o caso de
+// remoteCredential é o que os três pontos de costura recebem depois que
+// remoteFlags.resolve() validou as fontes. user/senha vazios (o caso de
 // hoje, sem --user) significam "sem Authorization" — a paridade byte a byte
 // com o comportamento anterior a esta task.
-type credencialRemota struct {
-	usuario string
-	senha   string
-	tlsCA   string
+type remoteCredential struct {
+	user  string
+	pass  string
+	tlsCA string
 }
 
-// flagsRemotas são as três flags que TODO comando remoto aceita.
-// registraFlagsRemotas as acrescenta ao FlagSet do comando, ANTES do Parse —
+// remoteFlags são as três flags que TODO comando remoto aceita.
+// setupRemoteFlags as acrescenta ao FlagSet do comando, ANTES do Parse —
 // o mesmo padrão de --server em cada um deles.
-type flagsRemotas struct {
-	usuario      *string
+type remoteFlags struct {
+	user         *string
 	passwordFile *string
 	tlsCA        *string
 }
 
-func registraFlagsRemotas(fs *flag.FlagSet) *flagsRemotas {
-	return &flagsRemotas{
-		usuario: fs.String("user", "",
-			"usuário HTTP Basic (a senha NUNCA é uma flag: use "+envSenha+" ou --password-file)"),
+func setupRemoteFlags(fs *flag.FlagSet) *remoteFlags {
+	return &remoteFlags{
+		user: fs.String("user", "",
+			"usuário HTTP Basic (a senha NUNCA é uma flag: use "+envPass+" ou --password-file)"),
 		passwordFile: fs.String("password-file", "",
-			"arquivo com a senha (quebra de linha final aparada); exclusivo com "+envSenha),
+			"arquivo com a senha (quebra de linha final aparada); exclusivo com "+envPass),
 		tlsCA: fs.String("tls-ca", "",
 			"CA (PEM) para validar o certificado do servidor — liga TLS neste cliente"),
 	}
@@ -78,57 +78,57 @@ func registraFlagsRemotas(fs *flag.FlagSet) *flagsRemotas {
 // --user (as duas leituras, env e arquivo, contam como "uma fonte"), e as
 // duas fontes ao mesmo tempo. Nenhuma mensagem ecoa o VALOR de nada — só
 // nomeia a flag/variável.
-func (f *flagsRemotas) resolve() (credencialRemota, error) {
-	senhaEnv, temEnv := os.LookupEnv(envSenha)
-	temArquivo := *f.passwordFile != ""
-	temUsuario := *f.usuario != ""
+func (f *remoteFlags) resolve() (remoteCredential, error) {
+	passwordFromEnv, hasEnv := os.LookupEnv(envPass)
+	hasFile := *f.passwordFile != ""
+	hasUser := *f.user != ""
 
 	switch {
-	case !temUsuario && (temEnv || temArquivo):
-		return credencialRemota{}, fmt.Errorf(
-			"%s/--password-file exige --user (a senha sozinha não identifica ninguém)", envSenha)
-	case temUsuario && temEnv && temArquivo:
-		return credencialRemota{}, fmt.Errorf(
-			"%s e --password-file são exclusivos: escolha UMA fonte de senha", envSenha)
-	case temUsuario && !temEnv && !temArquivo:
-		return credencialRemota{}, fmt.Errorf(
-			"--user exige uma senha por %s ou --password-file", envSenha)
-	case temUsuario && temEnv && !temArquivo && senhaEnv == "":
-		// Mesma distinção do servidor (security.go:resolveSenha): "ausente"
+	case !hasUser && (hasEnv || hasFile):
+		return remoteCredential{}, fmt.Errorf(
+			"%s/--password-file exige --user (a senha sozinha não identifica ninguém)", envPass)
+	case hasUser && hasEnv && hasFile:
+		return remoteCredential{}, fmt.Errorf(
+			"%s e --password-file são exclusivos: escolha UMA fonte de senha", envPass)
+	case hasUser && !hasEnv && !hasFile:
+		return remoteCredential{}, fmt.Errorf(
+			"--user exige uma senha por %s ou --password-file", envPass)
+	case hasUser && hasEnv && !hasFile && passwordFromEnv == "":
+		// Mesma distinção do servidor (security.go:resolvePassword): "ausente"
 		// e "definida e vazia" NÃO são a mesma coisa — o caso do container
 		// cujo orquestrador injeta a chave sem valor, e sem esta recusa o
 		// Basic sairia com senha vazia e o 401 do servidor não daria pista
 		// nenhuma de qual das duas aconteceu.
-		return credencialRemota{}, fmt.Errorf(
+		return remoteCredential{}, fmt.Errorf(
 			"%s está definida e VAZIA — não é a mesma coisa que ausente; preencha a variável ou use "+
-				"--password-file", envSenha)
-	case !temUsuario:
+				"--password-file", envPass)
+	case !hasUser:
 		// Nem --user, nem fonte de senha: caminho anônimo, byte a byte igual
 		// ao comportamento anterior a esta task. --tls-ca continua valendo —
 		// TLS e autenticação são decisões independentes do servidor (§77).
-		return credencialRemota{tlsCA: *f.tlsCA}, nil
+		return remoteCredential{tlsCA: *f.tlsCA}, nil
 	}
 
-	senha := senhaEnv
-	if temArquivo {
+	password := passwordFromEnv
+	if hasFile {
 		b, err := os.ReadFile(*f.passwordFile)
 		if err != nil {
-			return credencialRemota{}, fmt.Errorf("--password-file: %w", err)
+			return remoteCredential{}, fmt.Errorf("--password-file: %w", err)
 		}
-		// Mesma aparagem do servidor (security.go:resolveSenha): todo
+		// Mesma aparagem do servidor (security.go:resolvePassword): todo
 		// `echo senha > arquivo` termina em LF ou CRLF.
-		senha = strings.TrimRight(string(b), "\r\n")
-		if senha == "" {
-			return credencialRemota{}, fmt.Errorf(
+		password = strings.TrimRight(string(b), "\r\n")
+		if password == "" {
+			return remoteCredential{}, fmt.Errorf(
 				"--password-file %s está vazio (ou só contém quebra de linha) após aparar o \\n/\\r\\n final",
 				*f.passwordFile)
 		}
 	}
-	return credencialRemota{usuario: *f.usuario, senha: senha, tlsCA: *f.tlsCA}, nil
+	return remoteCredential{user: *f.user, pass: password, tlsCA: *f.tlsCA}, nil
 }
 
-// clienteRemoto monta o *http.Client COMPARTILHADO pelos três pontos de
-// costura do protocolo remoto (consultaRemota, buscaDocumento, postaMutacao)
+// remoteClient monta o *http.Client COMPARTILHADO pelos três pontos de
+// costura do protocolo remoto (remoteQuery, searchDocument, postMutation)
 // — um cliente novo por invocação do comando, nunca um estado global.
 //
 // Transport próprio com Proxy: nil — nunca http.DefaultClient, que honra
@@ -137,7 +137,7 @@ func (f *flagsRemotas) resolve() (credencialRemota, error) {
 // corporativo, que responde 403 e faz o operador culpar o servidor errado
 // (docs/piloto-events.md:142) — a mesma armadilha que o painel
 // (nishidb-stats.py:39-47) já fechou para si. O CLI fala com um servidor que
-// o operador NOMEOU na linha de comando, nunca com a internet: não há
+// o operador NOMEOU na line de comando, nunca com a internet: não há
 // cenário em que consultar o proxy é o certo.
 //
 // Clone() de http.DefaultTransport, não um &http.Transport{} vazio: preserva
@@ -151,7 +151,7 @@ func (f *flagsRemotas) resolve() (credencialRemota, error) {
 // neste binário, por decisão do plano (viraria o modo permanente de operação
 // em três semanas, doutrina citada no brief da task); quem precisa depurar
 // um handshake usa openssl s_client.
-func clienteRemoto(cred credencialRemota) (*http.Client, error) {
+func remoteClient(cred remoteCredential) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 
@@ -166,13 +166,13 @@ func clienteRemoto(cred credencialRemota) (*http.Client, error) {
 		}
 		transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	}
-	return &http.Client{Transport: transport, CheckRedirect: recusaRedirect}, nil
+	return &http.Client{Transport: transport, CheckRedirect: refuseRedirect}, nil
 }
 
-// recusaRedirect recusa QUALQUER redirect — 3xx same-host incluído — em vez
+// refuseRedirect recusa QUALQUER redirect — 3xx same-host incluído — em vez
 // de confiar na política default do stdlib (que remove o Authorization em
 // redirect CROSS-host mas o PRESERVA em SAME-host, ver net/http.Client.Do).
-// O CLI do NishiDB fala com UM servidor que o operador nomeou na linha de
+// O CLI do NishiDB fala com UM servidor que o operador nomeou na line de
 // comando; esse servidor não redireciona, e um 3xx só pode significar
 // configuração errada no meio do caminho (proxy reverso, endereço trocado) —
 // nunca algo a seguir silenciosamente com a credencial embarcada. Recusar a
@@ -187,7 +187,7 @@ func clienteRemoto(cred credencialRemota) (*http.Client, error) {
 // Retornar erro aqui faz http.Client.Do devolver esse erro (embrulhado num
 // *url.Error) SEM jamais montar ou enviar a requisição seguinte — nenhum
 // header, credencial incluída, é reenviado a lugar nenhum.
-func recusaRedirect(req *http.Request, _ []*http.Request) error {
+func refuseRedirect(req *http.Request, _ []*http.Request) error {
 	status := 0
 	if req.Response != nil {
 		status = req.Response.StatusCode
@@ -197,12 +197,12 @@ func recusaRedirect(req *http.Request, _ []*http.Request) error {
 		status, req.URL)
 }
 
-// aplicaCredencial injeta o HTTP Basic quando --user foi dado. É o ÚNICO
+// applyCredential injeta o HTTP Basic quando --user foi dado. É o ÚNICO
 // lugar em que Authorization entra num *http.Request do protocolo remoto —
-// o ponto de costura que a B5 já apontava em postaMutacao, agora estendido a
-// consultaRemota e buscaDocumento.
-func aplicaCredencial(req *http.Request, cred credencialRemota) {
-	if cred.usuario != "" {
-		req.SetBasicAuth(cred.usuario, cred.senha)
+// o ponto de costura que a B5 já apontava em postMutation, agora estendido a
+// remoteQuery e searchDocument.
+func applyCredential(req *http.Request, cred remoteCredential) {
+	if cred.user != "" {
+		req.SetBasicAuth(cred.user, cred.pass)
 	}
 }

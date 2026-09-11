@@ -32,7 +32,7 @@ var (
 	_ executor.Store = (*fakestorage.Store)(nil)
 )
 
-const yamlTeste = `
+const yamlTest = `
 version: 1
 name: t
 materialization:
@@ -51,9 +51,9 @@ schema:
       type: json
 `
 
-func compilaSchema(t *testing.T) *schema.Compiled {
+func compileSchema(t *testing.T) *schema.Compiled {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yamlTeste), schema.BuiltinDefaults)
+	spec, err := schema.Parse([]byte(yamlTest), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,15 +64,15 @@ func compilaSchema(t *testing.T) *schema.Compiled {
 	return c
 }
 
-// campo aceita testing.TB, e não *testing.T, porque as bancadas do top-N
+// field aceita testing.TB, e não *testing.T, porque as bancadas do top-N
 // montam o mesmo schema que os testes: um helper por sabor de T duplicaria a
-// resolução de campo, que é justamente onde uma divergência entre teste e
+// resolução de field, que é justamente onde uma divergência entre teste e
 // benchmark passaria despercebida.
-func campo(tb testing.TB, c *schema.Compiled, nome string) *schema.CompiledField {
+func field(tb testing.TB, c *schema.Compiled, name string) *schema.CompiledField {
 	tb.Helper()
-	f, ok := c.FieldByName([]byte(nome))
+	f, ok := c.FieldByName([]byte(name))
 	if !ok {
-		tb.Fatalf("campo %q", nome)
+		tb.Fatalf("campo %q", name)
 	}
 	return f
 }
@@ -81,7 +81,7 @@ func campo(tb testing.TB, c *schema.Compiled, nome string) *schema.CompiledField
 // ponto de cada vez.
 func bqBase(t *testing.T, c *schema.Compiled) *binder.BoundQuery {
 	t.Helper()
-	id := campo(t, c, "id")
+	id := field(t, c, "id")
 	return &binder.BoundQuery{
 		Dataset:        "t",
 		Schema:         c,
@@ -101,12 +101,12 @@ func bqBase(t *testing.T, c *schema.Compiled) *binder.BoundQuery {
 // usuário — por isso saem em Open, antes de qualquer leitura, e com o
 // sentinela que o cliente distingue de erro de dados.
 func TestPlanoInvalido(t *testing.T) {
-	c := compilaSchema(t)
+	c := compileSchema(t)
 	st := fakestorage.New(fakestorage.Indexes{})
-	id, doc := campo(t, c, "id"), campo(t, c, "doc")
+	id, doc := field(t, c, "id"), field(t, c, "doc")
 
 	casos := []struct {
-		nome  string
+		name  string
 		bq    func() *binder.BoundQuery
 		plan  planner.Plan
 		store executor.Store
@@ -171,7 +171,7 @@ func TestPlanoInvalido(t *testing.T) {
 	}
 
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			it, err := executor.Open(context.Background(), tc.bq(), tc.plan,
 				executor.Options{Store: tc.store})
 			if err == nil {
@@ -191,7 +191,7 @@ func TestPlanoInvalido(t *testing.T) {
 // Open não lê NADA: a primeira row só é buscada no primeiro Next. É o que
 // torna o LIMIT 0 gratuito e o streaming honesto.
 func TestOpenNaoLeDados(t *testing.T) {
-	c := compilaSchema(t)
+	c := compileSchema(t)
 	st := &storeQueExplode{t: t}
 
 	it, err := executor.Open(context.Background(), bqBase(t, c), planner.FullScan(),

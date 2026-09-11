@@ -17,29 +17,29 @@ import (
 // sorteado para sempre, e o contrato do driver JDBC do M3 mapeia POSIÇÃO para
 // valor.
 func TestDatasetsDoMesmoYAMLTemAMesmaOrdemDeColunas(t *testing.T) {
-	const evento = `{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop","Filter-Id":"f","Framed-Protocol":"PPP"}`
+	const event = `{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop","Filter-Id":"f","Framed-Protocol":"PPP"}`
 
 	var primeira string
 	for i := range 8 {
-		a := novoAmbiente(t) // raiz nova: dataset virgem, dicionário vazio
-		if code := a.rodaComEntrada(evento+"\n",
+		a := newEnv(t) // raiz nova: dataset virgem, dicionário vazio
+		if code := a.runWithEntry(event+"\n",
 			"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != cli.ExitOK {
 			t.Fatalf("ingest: code = %d\n%s", code, a.stderr.String())
 		}
-		if code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
+		if code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 			"SELECT * FROM radius_sessions"); code != cli.ExitOK {
 			t.Fatalf("query: code = %d\n%s", code, a.stderr.String())
 		}
-		linha := strings.TrimSpace(a.stdout.String())
-		if linha == "" {
+		row := strings.TrimSpace(a.stdout.String())
+		if row == "" {
 			t.Fatal("SELECT * não devolveu linha")
 		}
 		if i == 0 {
-			primeira = linha
+			primeira = row
 			continue
 		}
-		if linha != primeira {
-			t.Fatalf("dataset %d devolveu as colunas em outra ordem:\n  %s\n  %s", i, primeira, linha)
+		if row != primeira {
+			t.Fatalf("dataset %d devolveu as colunas em outra ordem:\n  %s\n  %s", i, primeira, row)
 		}
 	}
 }

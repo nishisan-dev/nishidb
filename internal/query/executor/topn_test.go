@@ -40,7 +40,7 @@ schema:
       type: int64
 `
 
-func compilaSchemaTopN(tb testing.TB) *schema.Compiled {
+func compileSchemaTopN(tb testing.TB) *schema.Compiled {
 	tb.Helper()
 	spec, err := schema.Parse([]byte(yamlTopN), schema.BuiltinDefaults)
 	if err != nil {
@@ -53,13 +53,13 @@ func compilaSchemaTopN(tb testing.TB) *schema.Compiled {
 	return c
 }
 
-// linhaTopN descreve uma linha do corpus. `temNome` false é AUSÊNCIA de verdade
+// rowTopN descreve uma linha do corpus. `hasName` false é AUSÊNCIA de verdade
 // (o campo não é gravado), e não string vazia: o modo precisa ver o mesmo que o
 // caminho completo vê.
-type linhaTopN struct {
+type rowTopN struct {
 	id      string
-	nome    string
-	temNome bool
+	name    string
+	hasName bool
 	n       int64
 }
 
@@ -73,13 +73,13 @@ type linhaTopN struct {
 //
 // Uma linha em treze vem SEM `nome`, para que o grupo dos ausentes exista no
 // mesmo corpus.
-func corpusTopN(n int) []linhaTopN {
-	out := make([]linhaTopN, 0, n)
+func corpusTopN(n int) []rowTopN {
+	out := make([]rowTopN, 0, n)
 	for i := 0; i < n; i++ {
-		l := linhaTopN{
+		l := rowTopN{
 			id:      fmt.Sprintf("k%04d", i),
-			nome:    fmt.Sprintf("g%02d", (i*5)%7),
-			temNome: i%13 != 0,
+			name:    fmt.Sprintf("g%02d", (i*5)%7),
+			hasName: i%13 != 0,
 			n:       int64((i * 37) % 11),
 		}
 		out = append(out, l)
@@ -87,28 +87,28 @@ func corpusTopN(n int) []linhaTopN {
 	return out
 }
 
-func semeiaTopN(tb testing.TB, c *schema.Compiled, linhas []linhaTopN) *fakestorage.Store {
+func seedTopN(tb testing.TB, c *schema.Compiled, rows []rowTopN) *fakestorage.Store {
 	tb.Helper()
 	st := fakestorage.New(fakestorage.Indexes{})
-	id, nome, num := campo(tb, c, "id"), campo(tb, c, "nome"), campo(tb, c, "n")
-	type campoDaLinha struct {
+	id, name, num := field(tb, c, "id"), field(tb, c, "nome"), field(tb, c, "n")
+	type fieldDaRow struct {
 		id  types.FieldID
 		val types.Value
 	}
-	for _, l := range linhas {
-		campos := []campoDaLinha{
+	for _, l := range rows {
+		fields := []fieldDaRow{
 			{id.ID, types.Value{Type: types.TypeString, Bytes: []byte(l.id)}},
 			{num.ID, types.Value{Type: types.TypeInt64, I64: l.n}},
 		}
-		if l.temNome {
-			campos = append(campos, campoDaLinha{nome.ID, types.Value{Type: types.TypeString, Bytes: []byte(l.nome)}})
+		if l.hasName {
+			fields = append(fields, fieldDaRow{name.ID, types.Value{Type: types.TypeString, Bytes: []byte(l.name)}})
 		}
 		// AppendField exige FieldID crescente: é a mesma invariante que o
 		// payload real honra, e sem ela o encoding recusa.
-		slices.SortFunc(campos, func(a, b campoDaLinha) int { return int(a.id) - int(b.id) })
+		slices.SortFunc(fields, func(a, b fieldDaRow) int { return int(a.id) - int(b.id) })
 		var p []byte
 		var err error
-		for _, cp := range campos {
+		for _, cp := range fields {
 			if p, err = encoding.AppendField(p, cp.id, cp.val); err != nil {
 				tb.Fatal(err)
 			}
@@ -120,41 +120,41 @@ func semeiaTopN(tb testing.TB, c *schema.Compiled, linhas []linhaTopN) *fakestor
 	return st
 }
 
-// idsDosSlots é a lista de campos que a query coleta, em FieldID CRESCENTE.
+// idsOfSlots é a lista de campos que a query coleta, em FieldID CRESCENTE.
 //
 // A ordem não é estética: o `coleta` casa slots e payload por merge linear e só
 // funciona com os dois lados ordenados por FieldID. Fixar os índices na mão foi
 // como este arquivo quebrou na primeira escrita — o dicionário numera na ordem
 // em que compila, e `n` saiu com ID menor que `nome`, então o slot de `nome`
 // passou a receber o inteiro.
-func idsDosSlots(tb testing.TB, c *schema.Compiled) []types.FieldID {
+func idsOfSlots(tb testing.TB, c *schema.Compiled) []types.FieldID {
 	tb.Helper()
-	ids := []types.FieldID{campo(tb, c, "id").ID, campo(tb, c, "nome").ID, campo(tb, c, "n").ID}
+	ids := []types.FieldID{field(tb, c, "id").ID, field(tb, c, "nome").ID, field(tb, c, "n").ID}
 	slices.Sort(ids)
 	return ids
 }
 
-// slotDe resolve o índice de slot de uma coluna, sempre a partir da lista
+// slotOf resolve o índice de slot de uma coluna, sempre a partir da lista
 // ordenada.
-func slotDe(tb testing.TB, c *schema.Compiled, nome string) int {
+func slotOf(tb testing.TB, c *schema.Compiled, name string) int {
 	tb.Helper()
-	id := campo(tb, c, nome).ID
-	for i, x := range idsDosSlots(tb, c) {
+	id := field(tb, c, name).ID
+	for i, x := range idsOfSlots(tb, c) {
 		if x == id {
 			return i
 		}
 	}
-	tb.Fatalf("campo %q fora da lista de slots", nome)
+	tb.Fatalf("campo %q fora da lista de slots", name)
 	return -1
 }
 
 // bqTopN monta a query ligada: projeta `id`, ordena pelas chaves dadas, e
 // carrega LIMIT explícito e OFFSET — que juntos são o que faz o Open escolher o
 // caminho rápido.
-func bqTopN(tb testing.TB, c *schema.Compiled, chaves []binder.BoundOrderKey, limite, offset int64) *binder.BoundQuery {
+func bqTopN(tb testing.TB, c *schema.Compiled, keys []binder.BoundOrderKey, limit, offset int64) *binder.BoundQuery {
 	tb.Helper()
 	const maxRows = 10_000
-	efetivo := limite
+	efetivo := limit
 	if efetivo > maxRows {
 		efetivo = maxRows
 	}
@@ -164,11 +164,11 @@ func bqTopN(tb testing.TB, c *schema.Compiled, chaves []binder.BoundOrderKey, li
 		// A projeção é `id` só, mas os slots trazem as três colunas: ordenar
 		// por coluna FORA da projeção é caso suportado, e o top-N não pode
 		// tratá-lo diferente do caminho completo.
-		Columns:        []binder.BoundColumn{{Field: campo(tb, c, "id"), Name: "id", Slot: slotDe(tb, c, "id")}},
-		Slots:          binder.Slots{IDs: idsDosSlots(tb, c)},
-		OrderBy:        chaves,
+		Columns:        []binder.BoundColumn{{Field: field(tb, c, "id"), Name: "id", Slot: slotOf(tb, c, "id")}},
+		Slots:          binder.Slots{IDs: idsOfSlots(tb, c)},
+		OrderBy:        keys,
 		HasLimit:       true,
-		Limit:          limite,
+		Limit:          limit,
 		MaxRows:        maxRows,
 		EffectiveLimit: efetivo,
 		Offset:         offset,
@@ -176,31 +176,31 @@ func bqTopN(tb testing.TB, c *schema.Compiled, chaves []binder.BoundOrderKey, li
 	}
 }
 
-// chaveNome e chaveN resolvem o slot pelo mesmo caminho que o bqTopN.
-func chaveNome(tb testing.TB, c *schema.Compiled, desc, nullsFirst bool) binder.BoundOrderKey {
+// keyName e keyN resolvem o slot pelo mesmo caminho que o bqTopN.
+func keyName(tb testing.TB, c *schema.Compiled, desc, nullsFirst bool) binder.BoundOrderKey {
 	tb.Helper()
 	return binder.BoundOrderKey{
-		Field: campo(tb, c, "nome"), Slot: slotDe(tb, c, "nome"), Desc: desc, NullsFirst: nullsFirst,
+		Field: field(tb, c, "nome"), Slot: slotOf(tb, c, "nome"), Desc: desc, NullsFirst: nullsFirst,
 		Kind: binder.CompareBytes, Want: types.TypeString}
 }
 
-func chaveN(tb testing.TB, c *schema.Compiled, desc bool) binder.BoundOrderKey {
+func keyN(tb testing.TB, c *schema.Compiled, desc bool) binder.BoundOrderKey {
 	tb.Helper()
 	return binder.BoundOrderKey{
-		Field: campo(tb, c, "n"), Slot: slotDe(tb, c, "n"), Desc: desc,
+		Field: field(tb, c, "n"), Slot: slotOf(tb, c, "n"), Desc: desc,
 		Kind: binder.CompareInt, Want: types.TypeInt64}
 }
 
-// resultadoTopN é o que uma execução devolveu: os ids na ordem de saída, mais o
+// resultTopN é o que uma execução devolveu: os ids na ordem de saída, mais o
 // que as métricas disseram sobre o modo escolhido.
-type resultadoTopN struct {
+type resultTopN struct {
 	ids        []string
 	usouTopN   int64
 	degradouTo int64
 }
 
 // executa roda a query com as Options dadas e colhe a saída.
-func executa(t *testing.T, st executor.Store, bq *binder.BoundQuery, opts executor.Options) resultadoTopN {
+func executa(t *testing.T, st executor.Store, bq *binder.BoundQuery, opts executor.Options) resultTopN {
 	t.Helper()
 	var m executor.Metrics
 	opts.Store, opts.Metrics = st, &m
@@ -220,11 +220,11 @@ func executa(t *testing.T, st executor.Store, bq *binder.BoundQuery, opts execut
 	if err := it.Err(); err != nil {
 		t.Fatalf("Err: %v", err)
 	}
-	return resultadoTopN{ids: ids, usouTopN: m.TopN.Load(), degradouTo: m.TopNDegradado.Load()}
+	return resultTopN{ids: ids, usouTopN: m.TopN.Load(), degradouTo: m.TopNDegradado.Load()}
 }
 
-// desligaTopN é o Options que força o ORDER BY COMPLETO.
-var desligaTopN = executor.Options{TopNMax: -1}
+// turnoffTopN é o Options que força o ORDER BY COMPLETO.
+var turnoffTopN = executor.Options{TopNMax: -1}
 
 // TestTopNDaOMesmoResultadoQueOSortCompleto é o teste que decide se o caminho
 // rápido está certo.
@@ -242,28 +242,28 @@ var desligaTopN = executor.Options{TopNMax: -1}
 // TestSortExternoDaOMesmoResultadoQueOSortEmMemoria faz ao provar que o teto de
 // 512 realmente transborda.
 func TestTopNDaOMesmoResultadoQueOSortCompleto(t *testing.T) {
-	c := compilaSchemaTopN(t)
-	linhas := corpusTopN(300)
-	st := semeiaTopN(t, c, linhas)
+	c := compileSchemaTopN(t)
+	rows := corpusTopN(300)
+	st := seedTopN(t, c, rows)
 
 	casos := []struct {
-		nome            string
-		chaves          []binder.BoundOrderKey
-		limite, offset  int64
-		linhasEsperadas int
+		name          string
+		keys          []binder.BoundOrderKey
+		limit, offset int64
+		rowsEsperadas int
 	}{
-		{"uma chave asc", []binder.BoundOrderKey{chaveNome(t, c, false, false)}, 25, 0, 25},
-		{"uma chave desc", []binder.BoundOrderKey{chaveNome(t, c, true, false)}, 25, 0, 25},
-		{"com offset", []binder.BoundOrderKey{chaveNome(t, c, false, false)}, 25, 40, 25},
-		{"duas chaves", []binder.BoundOrderKey{chaveN(t, c, true), chaveNome(t, c, false, false)}, 30, 11, 30},
-		{"nulls first", []binder.BoundOrderKey{chaveNome(t, c, false, true)}, 20, 3, 20},
-		{"limite maior que o corpus", []binder.BoundOrderKey{chaveNome(t, c, false, false)}, 500, 0, 300},
+		{"uma chave asc", []binder.BoundOrderKey{keyName(t, c, false, false)}, 25, 0, 25},
+		{"uma chave desc", []binder.BoundOrderKey{keyName(t, c, true, false)}, 25, 0, 25},
+		{"com offset", []binder.BoundOrderKey{keyName(t, c, false, false)}, 25, 40, 25},
+		{"duas chaves", []binder.BoundOrderKey{keyN(t, c, true), keyName(t, c, false, false)}, 30, 11, 30},
+		{"nulls first", []binder.BoundOrderKey{keyName(t, c, false, true)}, 20, 3, 20},
+		{"limite maior que o corpus", []binder.BoundOrderKey{keyName(t, c, false, false)}, 500, 0, 300},
 	}
 
 	for _, cs := range casos {
-		t.Run(cs.nome, func(t *testing.T) {
-			rapido := executa(t, st, bqTopN(t, c, cs.chaves, cs.limite, cs.offset), executor.Options{})
-			completo := executa(t, st, bqTopN(t, c, cs.chaves, cs.limite, cs.offset), desligaTopN)
+		t.Run(cs.name, func(t *testing.T) {
+			rapido := executa(t, st, bqTopN(t, c, cs.keys, cs.limit, cs.offset), executor.Options{})
+			completo := executa(t, st, bqTopN(t, c, cs.keys, cs.limit, cs.offset), turnoffTopN)
 
 			if rapido.usouTopN != 1 {
 				t.Fatalf("o lado rápido NÃO escolheu o top-N (TopN=%d): os dois lados são o mesmo "+
@@ -278,9 +278,9 @@ func TestTopNDaOMesmoResultadoQueOSortCompleto(t *testing.T) {
 					"completo e o diferencial voltou a comparar um caminho consigo mesmo",
 					rapido.degradouTo)
 			}
-			if len(completo.ids) != cs.linhasEsperadas {
+			if len(completo.ids) != cs.rowsEsperadas {
 				t.Fatalf("%d linhas, quer %d: a montagem não produziu o corpus",
-					len(completo.ids), cs.linhasEsperadas)
+					len(completo.ids), cs.rowsEsperadas)
 			}
 			if len(rapido.ids) != len(completo.ids) {
 				t.Fatalf("top-N devolveu %d linhas, completo devolveu %d", len(rapido.ids), len(completo.ids))
@@ -304,12 +304,12 @@ func TestTopNDaOMesmoResultadoQueOSortCompleto(t *testing.T) {
 // pularia 20, devolvendo VAZIO; um OFFSET aplicado antes de ordenar pularia
 // linhas escolhidas por rowId e a página sairia com outras linhas dentro.
 func TestTopNComOffsetPulaDepoisDeOrdenar(t *testing.T) {
-	c := compilaSchemaTopN(t)
-	st := semeiaTopN(t, c, corpusTopN(300))
-	chaves := []binder.BoundOrderKey{chaveNome(t, c, false, false)}
+	c := compileSchemaTopN(t)
+	st := seedTopN(t, c, corpusTopN(300))
+	keys := []binder.BoundOrderKey{keyName(t, c, false, false)}
 
-	inteira := executa(t, st, bqTopN(t, c, chaves, 40, 0), executor.Options{})
-	segunda := executa(t, st, bqTopN(t, c, chaves, 20, 20), executor.Options{})
+	inteira := executa(t, st, bqTopN(t, c, keys, 40, 0), executor.Options{})
+	segunda := executa(t, st, bqTopN(t, c, keys, 20, 20), executor.Options{})
 
 	if inteira.usouTopN != 1 || segunda.usouTopN != 1 {
 		t.Fatalf("um dos lados não usou o top-N (%d, %d)", inteira.usouTopN, segunda.usouTopN)
@@ -333,16 +333,16 @@ func TestTopNComOffsetPulaDepoisDeOrdenar(t *testing.T) {
 // tem de subir. Um heap que usasse só a primeira chave passaria num teste de
 // contagem e falharia aqui na primeira transição interna.
 func TestTopNOrdenaPorVariasChaves(t *testing.T) {
-	c := compilaSchemaTopN(t)
-	linhas := corpusTopN(300)
-	st := semeiaTopN(t, c, linhas)
-	porID := map[string]linhaTopN{}
-	for _, l := range linhas {
-		porID[l.id] = l
+	c := compileSchemaTopN(t)
+	rows := corpusTopN(300)
+	st := seedTopN(t, c, rows)
+	byID := map[string]rowTopN{}
+	for _, l := range rows {
+		byID[l.id] = l
 	}
 
-	chaves := []binder.BoundOrderKey{chaveN(t, c, true), chaveNome(t, c, false, false)}
-	r := executa(t, st, bqTopN(t, c, chaves, 60, 0), executor.Options{})
+	keys := []binder.BoundOrderKey{keyN(t, c, true), keyName(t, c, false, false)}
+	r := executa(t, st, bqTopN(t, c, keys, 60, 0), executor.Options{})
 	if r.usouTopN != 1 {
 		t.Fatalf("não usou o top-N (TopN=%d)", r.usouTopN)
 	}
@@ -352,7 +352,7 @@ func TestTopNOrdenaPorVariasChaves(t *testing.T) {
 
 	transicoes := 0
 	for i := 1; i < len(r.ids); i++ {
-		a, b := porID[r.ids[i-1]], porID[r.ids[i]]
+		a, b := byID[r.ids[i-1]], byID[r.ids[i]]
 		if b.n > a.n {
 			t.Fatalf("linha %d: n subiu de %d para %d num ORDER BY n DESC", i, a.n, b.n)
 		}
@@ -362,11 +362,11 @@ func TestTopNOrdenaPorVariasChaves(t *testing.T) {
 		}
 		// Mesmo n: o nome tem de subir, e o ausente vai por último.
 		switch {
-		case a.temNome && !b.temNome:
-		case !a.temNome && b.temNome:
+		case a.hasName && !b.hasName:
+		case !a.hasName && b.hasName:
 			t.Fatalf("linha %d: ausente antes de presente com o mesmo n=%d", i, a.n)
-		case a.temNome && b.temNome && b.nome < a.nome:
-			t.Fatalf("linha %d: nome caiu de %q para %q com o mesmo n=%d", i, a.nome, b.nome, a.n)
+		case a.hasName && b.hasName && b.name < a.name:
+			t.Fatalf("linha %d: nome caiu de %q para %q com o mesmo n=%d", i, a.name, b.name, a.n)
 		}
 	}
 	if transicoes == 0 {
@@ -384,17 +384,17 @@ func TestTopNOrdenaPorVariasChaves(t *testing.T) {
 //     que faz `ORDER BY x DESC LIMIT 10` significar "os 10 maiores".
 //   - Com NULLS FIRST, as primeiras linhas são TODAS ausentes.
 //   - E, em cada variante, o resultado bate com o do caminho completo linha a
-//     linha. É essa terceira que prova o REUSO: uma comparaChave copiada e
+//     linha. É essa terceira que prova o REUSO: uma comparaKey copiada e
 //     alterada passaria nas duas primeiras e divergiria aqui.
 func TestTopNPoeAusentePorUltimoNasDuasDirecoes(t *testing.T) {
-	c := compilaSchemaTopN(t)
-	linhas := corpusTopN(300)
-	st := semeiaTopN(t, c, linhas)
-	porID := map[string]linhaTopN{}
+	c := compileSchemaTopN(t)
+	rows := corpusTopN(300)
+	st := seedTopN(t, c, rows)
+	byID := map[string]rowTopN{}
 	ausentes := 0
-	for _, l := range linhas {
-		porID[l.id] = l
-		if !l.temNome {
+	for _, l := range rows {
+		byID[l.id] = l
+		if !l.hasName {
 			ausentes++
 		}
 	}
@@ -403,7 +403,7 @@ func TestTopNPoeAusentePorUltimoNasDuasDirecoes(t *testing.T) {
 	}
 
 	for _, cs := range []struct {
-		nome              string
+		name              string
 		desc, nullsFirst  bool
 		primeirosAusentes bool
 	}{
@@ -412,16 +412,16 @@ func TestTopNPoeAusentePorUltimoNasDuasDirecoes(t *testing.T) {
 		{"asc nulls first", false, true, true},
 		{"desc nulls first", true, true, true},
 	} {
-		t.Run(cs.nome, func(t *testing.T) {
-			chaves := []binder.BoundOrderKey{chaveNome(t, c, cs.desc, cs.nullsFirst)}
-			rapido := executa(t, st, bqTopN(t, c, chaves, 10, 0), executor.Options{})
-			completo := executa(t, st, bqTopN(t, c, chaves, 10, 0), desligaTopN)
+		t.Run(cs.name, func(t *testing.T) {
+			keys := []binder.BoundOrderKey{keyName(t, c, cs.desc, cs.nullsFirst)}
+			rapido := executa(t, st, bqTopN(t, c, keys, 10, 0), executor.Options{})
+			completo := executa(t, st, bqTopN(t, c, keys, 10, 0), turnoffTopN)
 			if rapido.usouTopN != 1 || completo.usouTopN != 0 {
 				t.Fatalf("modos iguais nos dois lados (%d, %d)", rapido.usouTopN, completo.usouTopN)
 			}
 			for i, id := range rapido.ids {
-				if temNome := porID[id].temNome; temNome == cs.primeirosAusentes {
-					t.Fatalf("linha %d (%s): temNome=%v, quer %v", i, id, temNome, !cs.primeirosAusentes)
+				if hasName := byID[id].hasName; hasName == cs.primeirosAusentes {
+					t.Fatalf("linha %d (%s): hasName=%v, quer %v", i, id, hasName, !cs.primeirosAusentes)
 				}
 			}
 			for i := range completo.ids {
@@ -447,15 +447,15 @@ func TestTopNPoeAusentePorUltimoNasDuasDirecoes(t *testing.T) {
 // rejeitado não muda a resposta — elas não estavam entre as N melhores de um
 // prefixo, então não podiam estar entre as N melhores do total.
 func TestTopNDegradaEmVezDeRecusarQuandoOOrcamentoEstoura(t *testing.T) {
-	c := compilaSchemaTopN(t)
-	st := semeiaTopN(t, c, corpusTopN(300))
-	chaves := []binder.BoundOrderKey{chaveNome(t, c, false, false), chaveN(t, c, true)}
-	comSpill := storeComSpill{Store: st, dir: t.TempDir()}
+	c := compileSchemaTopN(t)
+	st := seedTopN(t, c, corpusTopN(300))
+	keys := []binder.BoundOrderKey{keyName(t, c, false, false), keyN(t, c, true)}
+	withSpill := storeWithSpill{Store: st, dir: t.TempDir()}
 
 	// Teto de 256 bytes: não cabem nem as 30 entradas do heap, então a
 	// degradação acontece cedo, com a maior parte do corpus ainda por varrer.
-	degradado := executa(t, comSpill, bqTopN(t, c, chaves, 30, 5), executor.Options{SortMemory: 256})
-	completo := executa(t, comSpill, bqTopN(t, c, chaves, 30, 5), desligaTopN)
+	degradado := executa(t, withSpill, bqTopN(t, c, keys, 30, 5), executor.Options{SortMemory: 256})
+	completo := executa(t, withSpill, bqTopN(t, c, keys, 30, 5), turnoffTopN)
 
 	if degradado.usouTopN != 1 {
 		t.Fatalf("a query não começou no top-N (TopN=%d)", degradado.usouTopN)
@@ -481,20 +481,20 @@ func TestTopNDegradaEmVezDeRecusarQuandoOOrcamentoEstoura(t *testing.T) {
 // E, sem lugar para transbordar, a degradação termina onde o caminho completo
 // termina: RECUSANDO. O modo rápido não inventa uma resposta parcial.
 func TestTopNDegradadoRecusaQuandoNaoHaOndeTransbordar(t *testing.T) {
-	c := compilaSchemaTopN(t)
-	st := semeiaTopN(t, c, corpusTopN(300))
-	chaves := []binder.BoundOrderKey{chaveNome(t, c, false, false)}
+	c := compileSchemaTopN(t)
+	st := seedTopN(t, c, corpusTopN(300))
+	keys := []binder.BoundOrderKey{keyName(t, c, false, false)}
 
 	var m executor.Metrics
-	it, err := executor.Open(context.Background(), bqTopN(t, c, chaves, 30, 0), planner.FullScan(),
+	it, err := executor.Open(context.Background(), bqTopN(t, c, keys, 30, 0), planner.FullScan(),
 		executor.Options{Store: st, Metrics: &m, SortMemory: 256})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	for it.Next() {
 	}
-	if !errors.Is(it.Err(), executor.ErrOrcamentoDeOrdenacao) {
-		t.Fatalf("erro = %v, quer ErrOrcamentoDeOrdenacao", it.Err())
+	if !errors.Is(it.Err(), executor.ErrBudgetOfOrdenacao) {
+		t.Fatalf("erro = %v, quer ErrBudgetOfOrdenacao", it.Err())
 	}
 	if err := it.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -513,24 +513,24 @@ func TestTopNDegradadoRecusaQuandoNaoHaOndeTransbordar(t *testing.T) {
 // de linhas num heap não é caminho rápido — é o sort completo com um sift a
 // mais por linha e sem saber transbordar.
 func TestTopNSoValeDentroDoTetoDeLinhas(t *testing.T) {
-	c := compilaSchemaTopN(t)
-	st := semeiaTopN(t, c, corpusTopN(60))
-	chaves := []binder.BoundOrderKey{chaveNome(t, c, false, false)}
+	c := compileSchemaTopN(t)
+	st := seedTopN(t, c, corpusTopN(60))
+	keys := []binder.BoundOrderKey{keyName(t, c, false, false)}
 
-	semLimite := bqTopN(t, c, chaves, 10, 0)
-	semLimite.HasLimit = false
-	semLimite.EffectiveLimit = semLimite.MaxRows // 10.000, acima do teto padrão
-	if r := executa(t, st, semLimite, executor.Options{}); r.usouTopN != 0 {
+	withoutLimit := bqTopN(t, c, keys, 10, 0)
+	withoutLimit.HasLimit = false
+	withoutLimit.EffectiveLimit = withoutLimit.MaxRows // 10.000, acima do teto padrão
+	if r := executa(t, st, withoutLimit, executor.Options{}); r.usouTopN != 0 {
 		t.Errorf("com limite efetivo de %d o top-N foi escolhido (TopN=%d): o teto de linhas "+
-			"não está sendo respeitado", semLimite.EffectiveLimit, r.usouTopN)
+			"não está sendo respeitado", withoutLimit.EffectiveLimit, r.usouTopN)
 	}
 
 	// O teto conta OFFSET + limite, e não só o limite: as linhas puladas também
 	// precisam ser as certas, então elas ocupam lugar no heap.
-	if r := executa(t, st, bqTopN(t, c, chaves, 10, 0), executor.Options{TopNMax: 10}); r.usouTopN != 1 {
+	if r := executa(t, st, bqTopN(t, c, keys, 10, 0), executor.Options{TopNMax: 10}); r.usouTopN != 1 {
 		t.Errorf("com teto 10 e LIMIT 10 o top-N não foi escolhido")
 	}
-	if r := executa(t, st, bqTopN(t, c, chaves, 10, 1), executor.Options{TopNMax: 10}); r.usouTopN != 0 {
+	if r := executa(t, st, bqTopN(t, c, keys, 10, 1), executor.Options{TopNMax: 10}); r.usouTopN != 0 {
 		t.Errorf("com teto 10, LIMIT 10 e OFFSET 1 o top-N foi escolhido: o OFFSET não entrou " +
 			"na conta do tamanho do heap")
 	}
@@ -547,12 +547,12 @@ func TestTopNSoValeDentroDoTetoDeLinhas(t *testing.T) {
 // idêntico ao do caminho completo, inclusive saindo truncado pelo teto
 // implícito do dataset.
 func TestTopNValeSemLimiteEscritoQuandoOMaxRowsCabe(t *testing.T) {
-	c := compilaSchemaTopN(t)
-	st := semeiaTopN(t, c, corpusTopN(300))
-	chaves := []binder.BoundOrderKey{chaveNome(t, c, false, false), chaveN(t, c, true)}
+	c := compileSchemaTopN(t)
+	st := seedTopN(t, c, corpusTopN(300))
+	keys := []binder.BoundOrderKey{keyName(t, c, false, false), keyN(t, c, true)}
 
-	semLimite := func() *binder.BoundQuery {
-		bq := bqTopN(t, c, chaves, 40, 0)
+	withoutLimit := func() *binder.BoundQuery {
+		bq := bqTopN(t, c, keys, 40, 0)
 		bq.HasLimit, bq.Limit = false, 0
 		bq.MaxRows, bq.EffectiveLimit = 40, 40
 		return bq
@@ -565,7 +565,7 @@ func TestTopNValeSemLimiteEscritoQuandoOMaxRowsCabe(t *testing.T) {
 		t.Helper()
 		var m executor.Metrics
 		opts.Store, opts.Metrics = st, &m
-		it, err := executor.Open(context.Background(), semLimite(), planner.FullScan(), opts)
+		it, err := executor.Open(context.Background(), withoutLimit(), planner.FullScan(), opts)
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
@@ -582,17 +582,17 @@ func TestTopNValeSemLimiteEscritoQuandoOMaxRowsCabe(t *testing.T) {
 			t.Fatalf("Err = %v, quer ErrMaxRowsExceeded: o corpus não estourou o teto implícito "+
 				"e o teste não exercita a truncagem", it.Err())
 		}
-		esperado := int64(1)
+		expected := int64(1)
 		if opts.TopNMax < 0 {
-			esperado = 0
+			expected = 0
 		}
-		if got := m.TopN.Load(); got != esperado {
-			t.Fatalf("TopN = %d, quer %d (TopNMax=%d)", got, esperado, opts.TopNMax)
+		if got := m.TopN.Load(); got != expected {
+			t.Fatalf("TopN = %d, quer %d (TopNMax=%d)", got, expected, opts.TopNMax)
 		}
 		return ids
 	}
 
-	rapido, completo := colhe(executor.Options{}), colhe(desligaTopN)
+	rapido, completo := colhe(executor.Options{}), colhe(turnoffTopN)
 	if len(rapido) != 40 {
 		t.Fatalf("%d linhas, quer 40 (o teto implícito do dataset)", len(rapido))
 	}

@@ -23,7 +23,7 @@ const DefaultHistorySuffix = "_history"
 //
 // Tem sentinela PRÓPRIA pela mesma razão de ErrObsoleteIndexSpelling: a subida
 // precisa sair com ExitDataset (3), e quem decide isso é o errors.Is do
-// codigoDoErro do cli. Sem ela, uma janela recusada cairia no default (ExitUso,
+// errorCode do cli. Sem ela, uma janela recusada cairia no default (ExitUso,
 // 1) — o único código que manda o operador olhar a linha de comando em vez do
 // YAML do dataset.
 var ErrInvalidIndexWindow = errors.New("history.index inválido")
@@ -279,7 +279,7 @@ func validateHistory(n *yaml.Node, baseName string, fields map[string]FieldSpec)
 // As recusas aqui saem com ErrInvalidIndexWindow, e não com o specErrf do
 // resto do arquivo, por uma razão de CONTRATO e não de estilo: recusa de
 // configuração de dataset tem de sair com ExitDataset (3), e é o errors.Is do
-// codigoDoErro que decide isso. Sem sentinela própria elas cairiam no default
+// errorCode que decide isso. Sem sentinela própria elas cairiam no default
 // (ExitUso, 1) e mandariam o operador conferir a linha de comando quando o
 // problema está no YAML.
 func validateWindow(n *yaml.Node) (*IndexWindowSpec, error) {

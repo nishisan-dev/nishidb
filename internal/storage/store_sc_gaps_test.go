@@ -20,7 +20,7 @@ func TestValorIndexavelGiganteEhBarradoAntesDoAppend(t *testing.T) {
 	// abertura e falhava sempre — um único evento externo, com configuração
 	// default, deixava o dataset INABRÍVEL para sempre.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := audOpen(t, opts)
 	mustPut(t, s, "ok", 1, statusPayload(t, s, "ok", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
@@ -63,14 +63,14 @@ func TestValorIndexavelGiganteEhBarradoAntesDoAppend(t *testing.T) {
 func TestTetoDoValorIndexavelNaFronteira(t *testing.T) {
 	// R2: o teto é do u16 do values.dict — 65535 cabe, 65536 não. Um teste
 	// só com "70000 falha" ficaria verde com o limite em qualquer lugar.
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 
-	noLimite := strings.Repeat("v", types.MaxIndexedValueBytes)
-	if _, _, err := s.Put([]byte("limite"), 1, 0, statusPayload(t, s, "limite", noLimite, 1), nil); err != nil {
+	noLimit := strings.Repeat("v", types.MaxIndexedValueBytes)
+	if _, _, err := s.Put([]byte("limite"), 1, 0, statusPayload(t, s, "limite", noLimit, 1), nil); err != nil {
 		t.Fatalf("valor de exatamente %d bytes deveria ser aceito: %v", types.MaxIndexedValueBytes, err)
 	}
 	// E fica de fato indexado: aceitar sem indexar seria falso negativo.
-	it, err := s.Lookup(fldStatus, strVal(noLimite))
+	it, err := s.Lookup(fldStatus, strVal(noLimit))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestFailWriterEmbrulhaSentinelaNaChamadaQueMata(t *testing.T) {
 	// F-4: é a chamada que mata o writer que deixa o phantom commit. Se ela
 	// devolvesse o erro cru, o consumidor sob log-and-skip concluiria que o
 	// writer está vivo e que nada foi gravado — as duas coisas falsas.
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	s.SetSetErrHookForTest(func(types.FieldID) error { return errors.New("set falho simulado") })
 
 	_, _, err := s.Put([]byte("mata"), 1, 0, statusPayload(t, s, "mata", "Start", 1), nil)
@@ -117,8 +117,8 @@ func TestEncolhimentoDeUmByteJaEhFatal(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	tamanho := fileSizeAud(t, audSegPath(dir, 1))
-	if err := os.Truncate(audSegPath(dir, 1), tamanho-1); err != nil {
+	size := fileSizeAud(t, audSecPath(dir, 1))
+	if err := os.Truncate(audSecPath(dir, 1), size-1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -150,8 +150,8 @@ func TestEncolhimentoDeSegmentoSeladoEhFatal(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	tamanho := fileSizeAud(t, audSegPath(dir, 1))
-	if err := os.Truncate(audSegPath(dir, 1), tamanho-64); err != nil {
+	size := fileSizeAud(t, audSecPath(dir, 1))
+	if err := os.Truncate(audSecPath(dir, 1), size-64); err != nil {
 		t.Fatal(err)
 	}
 
@@ -184,10 +184,10 @@ func TestCamposIndexadosRejeitaFieldIDZeroENomeVazio(t *testing.T) {
 	// W6/X6: um índice no campo 0 ENTRA no manifest, e a direção 1 passa a
 	// exigi-lo em toda abertura — dataset refém de um índice que nunca
 	// indexaria nada (o fieldID 0 é reservado).
-	if _, err := Open(Options{Dir: t.TempDir(), CamposIndexados: []types.FieldID{0}}); !errors.Is(err, ErrInvalidArgument) {
+	if _, err := Open(Options{Dir: t.TempDir(), IndexedFields: []types.FieldID{0}}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("fieldID 0 deveria ser rejeitado, obtido %v", err)
 	}
-	if _, err := Open(Options{Dir: t.TempDir(), CamposIndexadosPorNome: []string{""}}); !errors.Is(err, ErrInvalidArgument) {
+	if _, err := Open(Options{Dir: t.TempDir(), IndexedFieldsByName: []string{""}}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("nome vazio deveria ser rejeitado, obtido %v", err)
 	}
 }
@@ -195,14 +195,14 @@ func TestCamposIndexadosRejeitaFieldIDZeroENomeVazio(t *testing.T) {
 func TestCamposIndexadosDevolveEmOrdemCrescente(t *testing.T) {
 	// X1: o doc promete ordem crescente e a fonte é um map, cuja iteração é
 	// aleatória por construção.
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldCounter, fldStatus, fldID}})
-	got := s.CamposIndexados()
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldCounter, fldStatus, fldID}})
+	got := s.FieldsIndexados()
 	if len(got) != 3 {
 		t.Fatalf("esperado 3 campos, obtido %v", got)
 	}
 	for i := 1; i < len(got); i++ {
 		if got[i-1] >= got[i] {
-			t.Fatalf("CamposIndexados deveria vir em ordem crescente: %v", got)
+			t.Fatalf("FieldsIndexados deveria vir em ordem crescente: %v", got)
 		}
 	}
 }

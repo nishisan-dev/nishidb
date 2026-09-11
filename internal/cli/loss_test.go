@@ -13,36 +13,36 @@ import (
 // colapsava os dois num único mapa de "descartados" e terminava com exit 0: a
 // row sumia e `$?` dizia sucesso, que é a definição de perda silenciosa.
 //
-// eventoGigante tem um VALOR acima de types.MaxIndexedValueBytes num campo
+// eventGigante tem um VALOR acima de types.MaxIndexedValueBytes num field
 // com índice bitmap. Até o M1 essa era a rota de FALHA (balde 2), porque o
 // erro caía em STORAGE_ERROR por falta de categoria melhor. No M2 ele é a
 // rota de DESCARTE: um atributo RADIUS de 70 KiB é culpa do evento, e o §101
 // governa (categoria EVENT_TOO_LARGE).
-func eventoGigante() string {
+func eventGigante() string {
 	return `{"id":"B","_SEQ":1,"Filter-Id":"` + strings.Repeat("x", types.MaxIndexedValueBytes+1) + `"}`
 }
 
-// eventoComNomeDeCampoGigante é a rota de FALHA que sobrou, e é
+// eventWithNameOfFieldGigante é a rota de FALHA que sobrou, e é
 // qualitativamente diferente: o teto violado não é de um VALOR, é do NOME do
-// campo no dicionário. Um valor grande é dado legítimo mal dimensionado; um
-// nome de campo de 64 KiB é produtor emitindo lixo estrutural, e cada um
+// field no dicionário. Um valor grande é dado legítimo mal dimensionado; um
+// nome de field de 64 KiB é produtor emitindo lixo estrutural, e cada um
 // desses consumiria permanentemente um slot do dicionário do dataset. Pedir
 // atenção humana em vez de descartar e seguir é conservador na direção certa.
-func eventoComNomeDeCampoGigante() string {
+func eventWithNameOfFieldGigante() string {
 	return `{"id":"B","_SEQ":1,"` + strings.Repeat("n", 1<<16) + `":"x"}`
 }
 
 // A rota de descarte: o evento não entra, mas isso NÃO é perda de dado — a
 // política do §101 decidiu descartá-lo, e o exit code diz sucesso.
 func TestEventoAcimaDoTetoDeFormatoEDescarteENaoPerda(t *testing.T) {
-	a := novoAmbiente(t)
-	entrada := strings.Join([]string{
+	a := newEnv(t)
+	entry := strings.Join([]string{
 		`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`,
-		eventoGigante(),
+		eventGigante(),
 		`{"id":"C","_SEQ":1,"Acct-Status-Type":"Start"}`,
 	}, "\n") + "\n"
 
-	code := a.rodaComEntrada(entrada,
+	code := a.runWithEntry(entry,
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-")
 
 	if code != cli.ExitOK {
@@ -62,19 +62,19 @@ func TestEventoAcimaDoTetoDeFormatoEDescarteENaoPerda(t *testing.T) {
 }
 
 func TestEventoNaoAplicadoPorFalhaTemExitCodeProprio(t *testing.T) {
-	a := novoAmbiente(t)
-	entrada := strings.Join([]string{
+	a := newEnv(t)
+	entry := strings.Join([]string{
 		`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`,
-		eventoComNomeDeCampoGigante(),
+		eventWithNameOfFieldGigante(),
 		`{"id":"C","_SEQ":1,"Acct-Status-Type":"Start"}`,
 	}, "\n") + "\n"
 
-	code := a.rodaComEntrada(entrada,
+	code := a.runWithEntry(entry,
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-")
 
-	if code != cli.ExitPerdaDeDados {
+	if code != cli.ExitDataLoss {
 		t.Errorf("code = %d, want %d (perda de dado): a ingestão perdeu uma row e reportou sucesso\n%s",
-			code, cli.ExitPerdaDeDados, a.stderr.String())
+			code, cli.ExitDataLoss, a.stderr.String())
 	}
 	msg := a.stderr.String()
 	if !strings.Contains(msg, "3 lidos, 2 aplicados") {
@@ -90,12 +90,12 @@ func TestEventoNaoAplicadoPorFalhaTemExitCodeProprio(t *testing.T) {
 	}
 
 	// A prova de que houve perda: a row do meio não existe.
-	if code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
+	if code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 		"SELECT id FROM radius_sessions"); code != cli.ExitOK {
 		t.Fatalf("query: code = %d\n%s", code, a.stderr.String())
 	}
-	if linhas := strings.Count(strings.TrimSpace(a.stdout.String()), "\n") + 1; linhas != 2 {
-		t.Errorf("%d rows no dataset, want 2\n%s", linhas, a.stdout.String())
+	if rows := strings.Count(strings.TrimSpace(a.stdout.String()), "\n") + 1; rows != 2 {
+		t.Errorf("%d rows no dataset, want 2\n%s", rows, a.stdout.String())
 	}
 }
 
@@ -103,14 +103,14 @@ func TestEventoNaoAplicadoPorFalhaTemExitCodeProprio(t *testing.T) {
 // ruidosa não pode fazer o pipeline inteiro falhar. O exit novo é só para o
 // balde que representa perda.
 func TestEventoRuimContinuaSaindoComSucesso(t *testing.T) {
-	a := novoAmbiente(t)
-	entrada := strings.Join([]string{
+	a := newEnv(t)
+	entry := strings.Join([]string{
 		`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`,
 		`{isso nao e json}`,
 		`{"id":"C","_SEQ":1,"Acct-Status-Type":"Start"}`,
 	}, "\n") + "\n"
 
-	code := a.rodaComEntrada(entrada,
+	code := a.runWithEntry(entry,
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-")
 	if code != cli.ExitOK {
 		t.Errorf("code = %d, want 0 (evento ruim é descarte, não falha)\n%s", code, a.stderr.String())
@@ -123,16 +123,16 @@ func TestEventoRuimContinuaSaindoComSucesso(t *testing.T) {
 // As duas categorias na mesma rodada: cada uma na sua linha, e o exit é o da
 // falha — o balde mais grave manda.
 func TestDescarteEFalhaSaoReportadosSeparadamente(t *testing.T) {
-	a := novoAmbiente(t)
-	entrada := strings.Join([]string{
+	a := newEnv(t)
+	entry := strings.Join([]string{
 		`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`,
 		`{isso nao e json}`,
-		eventoComNomeDeCampoGigante(),
+		eventWithNameOfFieldGigante(),
 	}, "\n") + "\n"
 
-	if code := a.rodaComEntrada(entrada,
-		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != cli.ExitPerdaDeDados {
-		t.Errorf("code = %d, want %d\n%s", code, cli.ExitPerdaDeDados, a.stderr.String())
+	if code := a.runWithEntry(entry,
+		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != cli.ExitDataLoss {
+		t.Errorf("code = %d, want %d\n%s", code, cli.ExitDataLoss, a.stderr.String())
 	}
 	msg := a.stderr.String()
 	if !strings.Contains(msg, "1 descartados por categoria: INVALID_JSON=1") {

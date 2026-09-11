@@ -13,7 +13,7 @@ import (
 // lookup), e por isso ele não é usado aqui.
 
 func benchVarre(b *testing.B, sql string, rows int) {
-	h := novoStubHarnessB(b, rows)
+	h := newStubHarnessB(b, rows)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

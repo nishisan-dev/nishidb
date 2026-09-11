@@ -13,13 +13,13 @@ import (
 // "_writtenAt IS NULL" continua devolvendo a entidade depois da carência, e
 // isso NÃO significa que o coletor não rodou.
 func TestCarenciaGravaNoIndiceENaoNoPayload(t *testing.T) {
-	s, _ := storeComExpiracao(t, t.TempDir(), 90*24*time.Hour)
-	id, _ := mustPut(t, s, "legada", 1, payloadSemEscrita(t, s, "legada"), nil)
+	s, _ := storeWithExpiration(t, t.TempDir(), 90*24*time.Hour)
+	id, _ := mustPut(t, s, "legada", 1, payloadWithoutWrite(t, s, "legada"), nil)
 
-	if _, conhecido := s.escritas.Get(id); conhecido {
+	if _, conhecido := s.writes.Get(id); conhecido {
 		t.Fatal("nasceu com prazo")
 	}
-	r, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	r, err := s.ExpiraOnePass(context.Background(), limitesOfTest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestCarenciaGravaNoIndiceENaoNoPayload(t *testing.T) {
 		t.Fatalf("carencias=%d: %+v", r.Carencias, r)
 	}
 	// O ÍNDICE agora conhece o prazo...
-	if _, conhecido := s.escritas.Get(id); !conhecido {
+	if _, conhecido := s.writes.Get(id); !conhecido {
 		t.Fatal("a carência não chegou ao índice")
 	}
 	// ...e o PAYLOAD continua sem o campo.
@@ -35,7 +35,7 @@ func TestCarenciaGravaNoIndiceENaoNoPayload(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
-	if _, tem := instanteDeEscrita(rec.Payload, s.campoDeEscrita); tem {
+	if _, has := writeInstant(rec.Payload, s.writeFieldID); has {
 		t.Fatal("a carência escreveu no payload; ela deve escrever só no índice")
 	}
 	_ = types.RowID(0)

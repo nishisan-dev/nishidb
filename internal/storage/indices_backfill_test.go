@@ -12,22 +12,22 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// abreStoreIndexadoEm abre — ou REABRE — o dataset materializado em dir com o
+// openStoreIndexedIn abre — ou REABRE — o dataset materializado em dir com o
 // conjunto indexado declarado.
 //
 // Receber o diretório é o que permite fechar e reabrir o MESMO dataset dentro de
 // um teste com OUTRO conjunto de campos, que é o ato inteiro do débito 22:
 // acrescentar `index: true` a um campo de um dataset povoado, ou tirá-lo.
-func abreStoreIndexadoEm(t *testing.T, dir string, campos []string, segSize int64) *Store {
+func openStoreIndexedIn(t *testing.T, dir string, fields []string, secSize int64) *Store {
 	t.Helper()
 	return openStore(t, Options{
-		Dir:                    dir,
-		SegmentSize:            segSize,
-		CamposIndexadosPorNome: campos,
+		Dir:                 dir,
+		SegmentSize:         secSize,
+		IndexedFieldsByName: fields,
 	})
 }
 
-// rodaReconstrucaoAteEsvaziar drena a fila NA MÃO, e é assim de propósito: o
+// runRebuildUntilEsvaziar drena a fila NA MÃO, e é assim de propósito: o
 // laço de fundo (§2.4) existe e é testado em indices_rebuild_test.go, mas os
 // testes deste arquivo afirmam sobre a FILA e a RECONSTRUÇÃO — quem agenda o quê,
 // e o que o arquivo publicado cobre. Acoplá-los à goroutine trocaria um oráculo
@@ -42,34 +42,34 @@ func abreStoreIndexadoEm(t *testing.T, dir string, campos []string, segSize int6
 // depois de reconstruído, porque a seção que provaria o contrário não existe —,
 // então um laço sem teto num caso desses roda para sempre. Aqui ele vira falha
 // nomeada, que é o que separa "não esvaziou" de "o teste travou".
-func rodaReconstrucaoAteEsvaziar(t *testing.T, s *Store) {
+func runRebuildUntilEsvaziar(t *testing.T, s *Store) {
 	t.Helper()
 	for range 10 {
-		pendentes, err := s.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
+		pendentes, err := s.SegmentosPendentesOfRebuild(WindowOfIndex{})
 		if err != nil {
-			t.Fatalf("SegmentosPendentesDeReconstrucao: %v", err)
+			t.Fatalf("SegmentosPendentesOfRebuild: %v", err)
 		}
 		if len(pendentes) == 0 {
 			return
 		}
-		for _, seg := range pendentes {
-			if err := s.ConstroiIndiceDoSegmento(t.Context(), seg, s.CamposIndexados()); err != nil {
-				t.Fatalf("ConstroiIndiceDoSegmento(%d): %v", seg, err)
+		for _, sec := range pendentes {
+			if err := s.ConstroiIndexOfSegment(t.Context(), sec, s.FieldsIndexados()); err != nil {
+				t.Fatalf("ConstroiIndexOfSegment(%d): %v", sec, err)
 			}
 		}
 	}
 	t.Fatal("a fila de reconstrução não esvaziou em 10 passadas")
 }
 
-// camposDoSelado lê os campos com seção no .sidx do segmento. É o oráculo por
+// fieldsOfSealed lê os campos com seção no .sidx do segmento. É o oráculo por
 // (segmento, campo): "tem arquivo?" deixou de ser a pergunta.
-func camposDoSelado(t *testing.T, dir string, seg uint32) []types.FieldID {
+func fieldsOfSealed(t *testing.T, dir string, sec uint32) []types.FieldID {
 	t.Helper()
-	campos, err := segindex.SealedFields(segindex.SealedPath(filepath.Join(dir, "data"), seg))
+	fields, err := segindex.SealedFields(segindex.SealedPath(filepath.Join(dir, "data"), sec))
 	if err != nil {
-		t.Fatalf("SealedFields(%d): %v", seg, err)
+		t.Fatalf("SealedFields(%d): %v", sec, err)
 	}
-	return campos
+	return fields
 }
 
 // TestAcrescentarIndiceEmDatasetPovoadoAgendaReconstrucao é a metade do débito 22
@@ -77,7 +77,7 @@ func camposDoSelado(t *testing.T, dir string, seg uint32) []types.FieldID {
 // backfill, e a reconstrução da §2.4 É o backfill — mesmo código, gatilho
 // diferente. Manter a recusa seria ter a capacidade e negar o uso dela.
 //
-// Quem drena a fila aqui é o TESTE (rodaReconstrucaoAteEsvaziar), e não o laço de
+// Quem drena a fila aqui é o TESTE (runRebuildUntilEsvaziar), e não o laço de
 // fundo — que existe desde a Tarefa 14 e fechou o débito 22. A separação é de
 // oráculo: o que este teste prova é que a fila agenda o segmento certo e que a
 // reconstrução dela serve a CONSULTA; que alguém a drene sozinho é assunto do
@@ -89,35 +89,35 @@ func camposDoSelado(t *testing.T, dir string, seg uint32) []types.FieldID {
 // varrendo o dataset inteiro", que é a diferença que este débito era.
 func TestAcrescentarIndiceEmDatasetPovoadoAgendaReconstrucao(t *testing.T) {
 	dir := t.TempDir()
-	s := abreStoreIndexadoEm(t, dir, nil, 64<<10) // sem campo indexado nenhum
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
+	s := openStoreIndexedIn(t, dir, nil, 64<<10) // sem campo indexado nenhum
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	s2 := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10) // acrescenta agora
-	campo := campoDoDicionario(t, s2, "node")
-	pendentes, err := s2.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
+	s2 := openStoreIndexedIn(t, dir, []string{"node"}, 64<<10) // acrescenta agora
+	field := fieldOfDicionario(t, s2, "node")
+	pendentes, err := s2.SegmentosPendentesOfRebuild(WindowOfIndex{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(pendentes, alvo) {
-		t.Fatalf("SegmentosPendentesDeReconstrucao = %v, quero o segmento %d: acrescentar índice num dataset povoado não agendou a reconstrução",
-			pendentes, alvo)
+	if !slices.Contains(pendentes, target) {
+		t.Fatalf("SegmentosPendentesOfRebuild = %v, quero o segmento %d: acrescentar índice num dataset povoado não agendou a reconstrução",
+			pendentes, target)
 	}
-	if antes := candidatosCrus(t, s2, campo, strVal("valor-que-nunca-existiu")); len(antes) == 0 {
+	if before := candidatosCrus(t, s2, field, strVal("valor-que-nunca-existiu")); len(before) == 0 {
 		t.Fatal("pré-condição: o segmento povoado já respondia por índice, e o teste não mede o backfill")
 	}
 
-	rodaReconstrucaoAteEsvaziar(t, s2)
+	runRebuildUntilEsvaziar(t, s2)
 
-	if depois := candidatosCrus(t, s2, campo, strVal("valor-que-nunca-existiu")); len(depois) != 0 {
+	if depois := candidatosCrus(t, s2, field, strVal("valor-que-nunca-existiu")); len(depois) != 0 {
 		t.Errorf("depois do backfill o Lookup ainda enumerou %d candidatos: a reconstrução não passou a servir a consulta", len(depois))
 	}
 	// E o índice reconstruído tem de ACHAR o que está lá, não só parar de
 	// enumerar: um .sidx vazio faria o teste acima passar pelo motivo errado.
-	if got := lookupRevalidado(t, s2, campo, strVal("n1")); len(got) == 0 {
+	if got := lookupRevalidado(t, s2, field, strVal("n1")); len(got) == 0 {
 		t.Error("o backfill não populou o índice: o Lookup de um valor existente devolveu vazio")
 	}
 }
@@ -131,46 +131,46 @@ func TestAcrescentarIndiceEmDatasetPovoadoAgendaReconstrucao(t *testing.T) {
 // A CONSULTA DE PRÉ-CONDIÇÃO NÃO É DECORAÇÃO, e é ela que faz este teste guardar
 // duas coisas: ela aquece o cache de selados com o mapeamento do arquivo ANTIGO,
 // e o mmap sobrevive ao rename da reescrita. Sem a evição que
-// ConstroiIndiceDoSegmento faz, a asserção final falha com o segmento ainda
+// ConstroiIndexOfSegment faz, a asserção final falha com o segmento ainda
 // enumerando — a reconstrução teria acontecido em disco e não na resposta. Um
 // teste que consultasse só DEPOIS passaria sem exercer isso.
 func TestSegmentoSeladoSemASecaoDoCampoNovoEntraNaFila(t *testing.T) {
 	dir := t.TempDir()
-	s := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
+	s := openStoreIndexedIn(t, dir, []string{"node"}, 64<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	// A pré-condição é justamente o estado que o teste antigo declarava PRONTO:
 	// o segmento TEM .sidx, e ele cobre só o campo que era indexado quando o
 	// segmento foi selado.
-	if campos := camposDoSelado(t, dir, alvo); len(campos) != 1 {
-		t.Fatalf("o .sidx do segmento %d tem %v; a pré-condição é uma seção só", alvo, campos)
+	if fields := fieldsOfSealed(t, dir, target); len(fields) != 1 {
+		t.Fatalf("o .sidx do segmento %d tem %v; a pré-condição é uma seção só", target, fields)
 	}
 
-	s2 := abreStoreIndexadoEm(t, dir, []string{"node", "type"}, 64<<10)
-	campoType := campoDoDicionario(t, s2, "type")
+	s2 := openStoreIndexedIn(t, dir, []string{"node", "type"}, 64<<10)
+	fieldType := fieldOfDicionario(t, s2, "type")
 	inexistente := types.Value{Type: types.TypeInt64, I64: 99}
 
-	pendentes, err := s2.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
+	pendentes, err := s2.SegmentosPendentesOfRebuild(WindowOfIndex{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(pendentes, alvo) {
-		t.Fatalf("SegmentosPendentesDeReconstrucao = %v, quero o segmento %d: um .sidx sem a seção do campo declarado não entrou na fila",
-			pendentes, alvo)
+	if !slices.Contains(pendentes, target) {
+		t.Fatalf("SegmentosPendentesOfRebuild = %v, quero o segmento %d: um .sidx sem a seção do campo declarado não entrou na fila",
+			pendentes, target)
 	}
-	if antes := candidatosCrus(t, s2, campoType, inexistente); len(antes) == 0 {
+	if before := candidatosCrus(t, s2, fieldType, inexistente); len(before) == 0 {
 		t.Fatal("pré-condição: o campo novo já era respondido por índice, e o teste não mede a reconstrução")
 	}
 
-	rodaReconstrucaoAteEsvaziar(t, s2)
+	runRebuildUntilEsvaziar(t, s2)
 
-	if campos := camposDoSelado(t, dir, alvo); len(campos) != 2 {
-		t.Errorf("o .sidx do segmento %d ficou com %v; quero as duas seções", alvo, campos)
+	if fields := fieldsOfSealed(t, dir, target); len(fields) != 2 {
+		t.Errorf("o .sidx do segmento %d ficou com %v; quero as duas seções", target, fields)
 	}
-	if depois := candidatosCrus(t, s2, campoType, inexistente); len(depois) != 0 {
+	if depois := candidatosCrus(t, s2, fieldType, inexistente); len(depois) != 0 {
 		t.Errorf("depois da reconstrução o campo novo ainda enumerou %d candidatos", len(depois))
 	}
 }
@@ -187,44 +187,44 @@ func TestSegmentoSeladoSemASecaoDoCampoNovoEntraNaFila(t *testing.T) {
 // reconstruído" (§6.3) deixaria de valer para o caminho novo.
 func TestReconstruirSoOsCamposQueFaltamPreservaOsQueJaEstavam(t *testing.T) {
 	dir := t.TempDir()
-	s := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
+	s := openStoreIndexedIn(t, dir, []string{"node"}, 64<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	s2 := abreStoreIndexadoEm(t, dir, []string{"node", "type"}, 64<<10)
-	campoNode := campoDoDicionario(t, s2, "node")
-	campoType := campoDoDicionario(t, s2, "type")
+	s2 := openStoreIndexedIn(t, dir, []string{"node", "type"}, 64<<10)
+	fieldNode := fieldOfDicionario(t, s2, "node")
+	fieldType := fieldOfDicionario(t, s2, "type")
 
-	if err := s2.ConstroiIndiceDoSegmento(t.Context(), alvo, []types.FieldID{campoType}); err != nil {
-		t.Fatalf("ConstroiIndiceDoSegmento(%d, só o campo que falta): %v", alvo, err)
+	if err := s2.ConstroiIndexOfSegment(t.Context(), target, []types.FieldID{fieldType}); err != nil {
+		t.Fatalf("ConstroiIndexOfSegment(%d, só o campo que falta): %v", target, err)
 	}
-	esperado := []types.FieldID{campoNode, campoType}
-	slices.Sort(esperado)
-	if campos := camposDoSelado(t, dir, alvo); !slices.Equal(campos, esperado) {
-		t.Fatalf("o .sidx ficou com %v, quero %v: reconstruir um campo apagou o outro", campos, esperado)
+	expected := []types.FieldID{fieldNode, fieldType}
+	slices.Sort(expected)
+	if fields := fieldsOfSealed(t, dir, target); !slices.Equal(fields, expected) {
+		t.Fatalf("o .sidx ficou com %v, quero %v: reconstruir um campo apagou o outro", fields, expected)
 	}
 
-	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
-	porFaltante, err := os.ReadFile(caminho)
+	path := segindex.SealedPath(filepath.Join(dir, "data"), target)
+	byFaltante, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(caminho); err != nil {
+	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := s2.ConstroiIndiceDoSegmento(t.Context(), alvo, s2.CamposIndexados()); err != nil {
-		t.Fatalf("ConstroiIndiceDoSegmento(%d, tudo): %v", alvo, err)
+	if err := s2.ConstroiIndexOfSegment(t.Context(), target, s2.FieldsIndexados()); err != nil {
+		t.Fatalf("ConstroiIndexOfSegment(%d, tudo): %v", target, err)
 	}
-	porInteiro, err := os.ReadFile(caminho)
+	byInteiro, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(porFaltante, porInteiro) {
+	if !bytes.Equal(byFaltante, byInteiro) {
 		t.Errorf("reconstruir só o campo que falta deu %d bytes e reconstruir tudo deu %d: os dois caminhos têm de publicar o mesmo arquivo",
-			len(porFaltante), len(porInteiro))
+			len(byFaltante), len(byInteiro))
 	}
 }
 
@@ -238,37 +238,37 @@ func TestReconstruirSoOsCamposQueFaltamPreservaOsQueJaEstavam(t *testing.T) {
 // no produto explica — o mesmo modo de falha que o .widx órfão obrigou a fechar.
 func TestRemoverIndiceApagaAsSecoes(t *testing.T) {
 	dir := t.TempDir()
-	s := abreStoreIndexadoEm(t, dir, []string{"node", "type"}, 64<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
+	s := openStoreIndexedIn(t, dir, []string{"node", "type"}, 64<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if campos := camposDoSelado(t, dir, alvo); len(campos) != 2 {
-		t.Fatalf("o .sidx do segmento %d tem %v; a pré-condição é as duas seções", alvo, campos)
+	if fields := fieldsOfSealed(t, dir, target); len(fields) != 2 {
+		t.Fatalf("o .sidx do segmento %d tem %v; a pré-condição é as duas seções", target, fields)
 	}
 
-	s2 := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10)
-	campoNode := campoDoDicionario(t, s2, "node")
+	s2 := openStoreIndexedIn(t, dir, []string{"node"}, 64<<10)
+	fieldNode := fieldOfDicionario(t, s2, "node")
 
-	pendentes, err := s2.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
+	pendentes, err := s2.SegmentosPendentesOfRebuild(WindowOfIndex{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(pendentes, alvo) {
-		t.Fatalf("SegmentosPendentesDeReconstrucao = %v, quero o segmento %d: a seção do campo que deixou de ser indexado não agendou nada",
-			pendentes, alvo)
+	if !slices.Contains(pendentes, target) {
+		t.Fatalf("SegmentosPendentesOfRebuild = %v, quero o segmento %d: a seção do campo que deixou de ser indexado não agendou nada",
+			pendentes, target)
 	}
 
-	rodaReconstrucaoAteEsvaziar(t, s2)
+	runRebuildUntilEsvaziar(t, s2)
 
-	if campos := camposDoSelado(t, dir, alvo); !slices.Equal(campos, []types.FieldID{campoNode}) {
+	if fields := fieldsOfSealed(t, dir, target); !slices.Equal(fields, []types.FieldID{fieldNode}) {
 		t.Errorf("o .sidx do segmento %d ficou com %v, quero só [%d]: a seção do campo removido não saiu",
-			alvo, campos, campoNode)
+			target, fields, fieldNode)
 	}
 	// O campo que continua indexado tem de continuar respondendo: a remoção não
 	// pode levar junto o índice de quem ficou.
-	if got := lookupRevalidado(t, s2, campoNode, strVal("n1")); len(got) == 0 {
+	if got := lookupRevalidado(t, s2, fieldNode, strVal("n1")); len(got) == 0 {
 		t.Error("a reescrita sem a seção removida também perdeu o índice do campo que ficou")
 	}
 }
@@ -280,27 +280,27 @@ func TestRemoverIndiceApagaAsSecoes(t *testing.T) {
 // arquivo passaria a afirmar mais do que sabe. Pedir MENOS que o conjunto
 // declarado é legítimo (o restante é preservado); pedir FORA dele, não.
 func TestConstruirComCampoNaoIndexadoEhRecusado(t *testing.T) {
-	campos := []string{"node"}
-	s, dir := abreStoreIndexadoComSegmentoPequeno(t, campos, 64<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
-	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
-	antes, err := os.ReadFile(caminho)
+	fields := []string{"node"}
+	s, dir := openStoreIndexedWithSegmentSmall(t, fields, 64<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
+	path := segindex.SealedPath(filepath.Join(dir, "data"), target)
+	before, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
+		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", target, err)
 	}
 
-	naoIndexado := campoDoDicionario(t, s, "type")
-	err = s.ConstroiIndiceDoSegmento(t.Context(), alvo, []types.FieldID{naoIndexado})
+	naoIndexed := fieldOfDicionario(t, s, "type")
+	err = s.ConstroiIndexOfSegment(t.Context(), target, []types.FieldID{naoIndexed})
 	if !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("ConstroiIndiceDoSegmento(campo não indexado) = %v, quero ErrInvalidArgument", err)
+		t.Fatalf("ConstroiIndexOfSegment(campo não indexado) = %v, quero ErrInvalidArgument", err)
 	}
-	depois, err := os.ReadFile(caminho)
+	depois, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(antes, depois) {
-		t.Errorf("a recusa reescreveu o .sidx: %d bytes viraram %d", len(antes), len(depois))
+	if !bytes.Equal(before, depois) {
+		t.Errorf("a recusa reescreveu o .sidx: %d bytes viraram %d", len(before), len(depois))
 	}
 }
 
@@ -318,46 +318,46 @@ func TestConstruirComCampoNaoIndexadoEhRecusado(t *testing.T) {
 // anterior deixou em disco continua lá, e uma fila que morre em vez de refazer o
 // arquivo é o modo de falha errado para qualquer origem que ele venha a ter.
 //
-// A doutrina é a do godoc logo acima do segmentoPendente, e vale aqui sem
+// A doutrina é a do godoc logo acima do segmentPendente, e vale aqui sem
 // emenda: dado derivado que não serve, derive de novo.
 func TestSidxDeZeroBytesEhPendenteEmVezDeDerrubarAFila(t *testing.T) {
 	dir := t.TempDir()
-	s := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
+	s := openStoreIndexedIn(t, dir, []string{"node"}, 64<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
-	if _, err := os.Stat(caminho); err != nil {
-		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
+	path := segindex.SealedPath(filepath.Join(dir, "data"), target)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", target, err)
 	}
 	// Zero bytes, que é o que a corrida do temporário publica.
-	if err := os.WriteFile(caminho, nil, 0o644); err != nil {
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	s2 := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10)
-	campo := campoDoDicionario(t, s2, "node")
-	pendentes, err := s2.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
+	s2 := openStoreIndexedIn(t, dir, []string{"node"}, 64<<10)
+	field := fieldOfDicionario(t, s2, "node")
+	pendentes, err := s2.SegmentosPendentesOfRebuild(WindowOfIndex{})
 	if err != nil {
-		t.Fatalf("SegmentosPendentesDeReconstrucao = %v: um .sidx vazio derrubou a fila inteira", err)
+		t.Fatalf("SegmentosPendentesOfRebuild = %v: um .sidx vazio derrubou a fila inteira", err)
 	}
-	if !slices.Contains(pendentes, alvo) {
-		t.Fatalf("SegmentosPendentesDeReconstrucao = %v, quero o segmento %d: um .sidx vazio não entrou na fila",
-			pendentes, alvo)
+	if !slices.Contains(pendentes, target) {
+		t.Fatalf("SegmentosPendentesOfRebuild = %v, quero o segmento %d: um .sidx vazio não entrou na fila",
+			pendentes, target)
 	}
 
 	// E a reconstrução tem de atravessar o arquivo vazio, não tropeçar nele: a
 	// cobertura pergunta ao .sidx atual quais campos preservar, e é a MESMA
 	// classificação que responde ali.
-	rodaReconstrucaoAteEsvaziar(t, s2)
+	runRebuildUntilEsvaziar(t, s2)
 
-	if campos := camposDoSelado(t, dir, alvo); !slices.Equal(campos, []types.FieldID{campo}) {
+	if fields := fieldsOfSealed(t, dir, target); !slices.Equal(fields, []types.FieldID{field}) {
 		t.Errorf("o .sidx do segmento %d ficou com %v, quero [%d]: o arquivo vazio não foi refeito",
-			alvo, campos, campo)
+			target, fields, field)
 	}
-	if got := lookupRevalidado(t, s2, campo, strVal("n1")); len(got) == 0 {
+	if got := lookupRevalidado(t, s2, field, strVal("n1")); len(got) == 0 {
 		t.Error("o índice refeito sobre o arquivo vazio não responde")
 	}
 }

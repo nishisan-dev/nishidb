@@ -47,7 +47,7 @@ func TestAutoFixaTipoNaPrimeiraObservacao(t *testing.T) {
 // A regra na prática, e o que ela custa: depois de fixado, o tipo manda.
 func TestAutoSegundaObservacaoDivergenteCoerceOuFalha(t *testing.T) {
 	casos := []struct {
-		nome     string
+		name     string
 		primeiro string
 		segundo  string
 		// querSkip: o segundo evento é descartado como TYPE_CONVERSION.
@@ -56,7 +56,7 @@ func TestAutoSegundaObservacaoDivergenteCoerceOuFalha(t *testing.T) {
 		verifica func(t *testing.T, h *harness)
 	}{
 		{
-			nome:     "string numérica coerida para o int64 fixado",
+			name:     "string numérica coerida para o int64 fixado",
 			primeiro: `{"id":"A","X":5}`,
 			// Mesma regra da coluna declarada int64, que já aceita string
 			// numérica por causa do Connect-Info da amostra real.
@@ -66,7 +66,7 @@ func TestAutoSegundaObservacaoDivergenteCoerceOuFalha(t *testing.T) {
 			},
 		},
 		{
-			nome:     "double num campo fixado como int64",
+			name:     "double num campo fixado como int64",
 			primeiro: `{"id":"A","X":5}`,
 			segundo:  `{"id":"A","X":5.5}`,
 			querSkip: true,
@@ -80,7 +80,7 @@ func TestAutoSegundaObservacaoDivergenteCoerceOuFalha(t *testing.T) {
 			// Raw do parser é o texto-fonte, então gravar `7` como "7" não
 			// altera um byte do que a origem escreveu — e antes disto o evento
 			// inteiro era DESCARTADO por causa de uma grafia.
-			nome:     "número num campo fixado como string é coergido para o texto-fonte",
+			name:     "número num campo fixado como string é coergido para o texto-fonte",
 			primeiro: `{"id":"A","X":"texto"}`,
 			segundo:  `{"id":"A","X":7}`,
 			verifica: func(t *testing.T, h *harness) {
@@ -105,7 +105,7 @@ func TestAutoSegundaObservacaoDivergenteCoerceOuFalha(t *testing.T) {
 			// O que a coerção NÃO alcança, e é o que mantém o "ou falha" do
 			// nome deste teste vivo para o alvo `string`: um documento inteiro
 			// não vira texto. A coluna existe para ser comparável.
-			nome:     "objeto num campo fixado como string",
+			name:     "objeto num campo fixado como string",
 			primeiro: `{"id":"A","X":"texto"}`,
 			segundo:  `{"id":"A","X":{"a":1}}`,
 			querSkip: true,
@@ -114,7 +114,7 @@ func TestAutoSegundaObservacaoDivergenteCoerceOuFalha(t *testing.T) {
 			},
 		},
 		{
-			nome:     "null não conflita e não desfixa",
+			name:     "null não conflita e não desfixa",
 			primeiro: `{"id":"A","X":5}`,
 			segundo:  `{"id":"A","X":null}`,
 			verifica: func(t *testing.T, h *harness) {
@@ -130,7 +130,7 @@ func TestAutoSegundaObservacaoDivergenteCoerceOuFalha(t *testing.T) {
 	}
 
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, autoFixYAML)
 			h.apply(tc.primeiro)
 
@@ -274,27 +274,27 @@ func TestConversaoDeValorNaoAcusaConflitoDeDicionario(t *testing.T) {
 	}
 }
 
-// dictFalhaAoFixar persiste nomes normalmente, mas falha ao gravar o TIPO — o
+// dictFailAoFixar persiste nomes normalmente, mas falha ao gravar o TIPO — o
 // que o fielddict real faz quando o WriteAt/fsync do registro de hint falha
 // (disco cheio, EIO, EFBIG).
-type dictFalhaAoFixar struct {
+type dictFailAoFixar struct {
 	inner *fakestorage.Dict
 	err   error
 }
 
-func (d dictFalhaAoFixar) LookupOrCreate(name []byte) (types.FieldID, error) {
+func (d dictFailAoFixar) LookupOrCreate(name []byte) (types.FieldID, error) {
 	return d.inner.LookupOrCreate(name)
 }
 
-func (d dictFalhaAoFixar) TypeHint(id types.FieldID) (types.FieldType, bool) {
+func (d dictFailAoFixar) TypeHint(id types.FieldID) (types.FieldType, bool) {
 	return d.inner.TypeHint(id)
 }
 
-func (d dictFalhaAoFixar) SetTypeHint(types.FieldID, types.FieldType) error { return d.err }
+func (d dictFailAoFixar) SetTypeHint(types.FieldID, types.FieldType) error { return d.err }
 
-func (d dictFalhaAoFixar) Len() int { return d.inner.Len() }
+func (d dictFailAoFixar) Len() int { return d.inner.Len() }
 
-func (d dictFalhaAoFixar) Name(id types.FieldID) (string, bool) { return d.inner.Name(id) }
+func (d dictFailAoFixar) Name(id types.FieldID) (string, bool) { return d.inner.Name(id) }
 
 // Falha de I/O ao PERSISTIR o tipo fixado vem do dataset, não do evento.
 // Contabilizá-la como TYPE_CONVERSION faria o pipeline pular, em silêncio e
@@ -307,7 +307,7 @@ func TestFalhaDeIODoDicionarioAoFixarTipoEhFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	eio := errors.New(`fielddict: fsync do tipo de "X": input/output error`)
-	c, err := s.Compile(dictFalhaAoFixar{inner: fakestorage.NewDict(), err: eio})
+	c, err := s.Compile(dictFailAoFixar{inner: fakestorage.NewDict(), err: eio})
 	if err != nil {
 		t.Fatal(err)
 	}

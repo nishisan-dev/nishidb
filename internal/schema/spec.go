@@ -41,6 +41,7 @@ type DatasetSpec struct {
 	Counters []CounterSpec
 }
 
+// MaterializationSpec ...
 type MaterializationSpec struct {
 	Key      KeySpec
 	Mode     string // merge | replace
@@ -65,10 +66,13 @@ type MaterializationSpec struct {
 	TombstoneRetention time.Duration
 }
 
+// KeySpec ...
+
 type KeySpec struct {
 	Source string // payload (único no v1)
 	Field  string
 	Type   string // string (único no v1)
+	// SequenceSpec ...
 }
 
 type SequenceSpec struct {
@@ -79,6 +83,7 @@ type SequenceSpec struct {
 
 // ExpiryResolution é o passo do agendador (§57). Duração menor que isto é
 // recusada em vez de arredondada: o operador leria "30s" e teria até 90s, e
+// SchemaSpec ...
 // uma chave que mente é pior que uma chave recusada.
 const ExpiryResolution = time.Minute
 
@@ -123,7 +128,7 @@ const (
 	MaxColsPhysicalCeiling = 65535
 )
 
-// As tags de YAML são EXPLÍCITAS mesmo quando redundantes. O default do
+// FieldSpec tags de YAML são EXPLÍCITAS mesmo quando redundantes. O default do
 // yaml.v3 é minúsculo o nome inteiro do campo Go, então um nome de duas
 // palavras vira "unknownfields" e a chave camelCase do arquivo não casa com
 // nada — em silêncio, porque este struct é decodificado sem KnownFields. É a
@@ -177,8 +182,9 @@ type ExtractSpec struct {
 	// As é o nome da coluna resultante. Omitido, vale o próprio Path — o que
 	// só é possível quando ele não tem ponto, porque nome de coluna com ponto
 	// colidiria com a sintaxe de caminho da projeção.
-	As     string `yaml:"as"`
-	Type   string `yaml:"type"`
+	As   string `yaml:"as"`
+	Type string `yaml:"type"`
+	// QuerySpec ...
 	Index  string `yaml:"index"`
 	Format string `yaml:"format"`
 }

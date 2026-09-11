@@ -19,14 +19,14 @@ import (
 // evento daquela categoria — mudança observável na superfície /metrics que o
 // piloto em produção já expõe. Como o enum §101 de evento ruim é fechado
 // (ErrorCategory.BadEvent()), pré-registrar as seis categorias em
-// registraMetricas restaura a presença-em-zero, que é a prática canônica do
+// registerMetrics restaura a presença-em-zero, que é a prática canônica do
 // Prometheus para séries cuja cardinalidade é conhecida de antemão.
 func TestRegistraMetricasPreRegistraAsSeisCategoriasDeEventoRuimEmZero(t *testing.T) {
-	m := registraMetricas(nil, "events")
+	m := registerMetrics(nil, "events")
 
-	amostras := m.famInvalidos.Collect()
-	vistas := make(map[string]float64, len(amostras))
-	for _, a := range amostras {
+	samples := m.famInvalidos.Collect()
+	vistas := make(map[string]float64, len(samples))
+	for _, a := range samples {
 		var motivo string
 		for _, l := range a.Labels {
 			if l.Name == metrics.LabelInvalidReason {
@@ -52,13 +52,13 @@ func TestRegistraMetricasPreRegistraAsSeisCategoriasDeEventoRuimEmZero(t *testin
 	}
 
 	for _, motivo := range esperadas {
-		valor, ok := vistas[motivo]
+		value, ok := vistas[motivo]
 		if !ok {
 			t.Errorf("motivo=%q não aparece em %s logo após a subida — a presença-em-zero foi perdida", motivo, metrics.MetIngestInvalidTotal)
 			continue
 		}
-		if valor != 0 {
-			t.Errorf("motivo=%q = %v, queria 0 (nenhum evento descartado ainda)", motivo, valor)
+		if value != 0 {
+			t.Errorf("motivo=%q = %v, queria 0 (nenhum evento descartado ainda)", motivo, value)
 		}
 	}
 	if len(vistas) != len(esperadas) {
@@ -79,34 +79,34 @@ func TestRegistraMetricasPreRegistraAsSeisCategoriasDeEventoRuimEmZero(t *testin
 // as duas fontes com o mesmo número passaria com elas trocadas.
 func TestCadaEsperaSaiDaSuaFonteEUmaVezSo(t *testing.T) {
 	const (
-		esperaDosDecodificadores = 11 * time.Second
-		esperaDoWriter           = 23 * time.Second
+		waitOfDecodificadores = 11 * time.Second
+		waitOfWriter          = 23 * time.Second
 	)
-	m := registraMetricas(nil, "events")
+	m := registerMetrics(nil, "events")
 	m.OlhaAFila(func() (int, int64) { return 0, 0 })
-	m.OlhaOsTempos(func() (time.Duration, time.Duration) { return 0, esperaDosDecodificadores })
-	m.OlhaAEsteira(func() int64 { return 0 }, func() time.Duration { return esperaDoWriter })
+	m.OlhaOsTempos(func() (time.Duration, time.Duration) { return 0, waitOfDecodificadores })
+	m.OlhaAEsteira(func() int64 { return 0 }, func() time.Duration { return waitOfWriter })
 
-	valores := map[string][]float64{}
-	for _, a := range append(m.amostrasDaFila(), m.amostrasDaEsteira()...) {
-		valores[a.Name] = append(valores[a.Name], a.Value)
+	values := map[string][]float64{}
+	for _, a := range append(m.samplesOfFila(), m.samplesOfEsteira()...) {
+		values[a.Name] = append(values[a.Name], a.Value)
 	}
 
-	for nome, quero := range map[string]float64{
-		metrics.MetKafkaWriterIdleSeconds: esperaDoWriter.Seconds(),
-		metrics.MetKafkaDecodeIdleSeconds: esperaDosDecodificadores.Seconds(),
+	for name, quero := range map[string]float64{
+		metrics.MetKafkaWriterIDleSeconds: waitOfWriter.Seconds(),
+		metrics.MetKafkaDecodeIDleSeconds: waitOfDecodificadores.Seconds(),
 	} {
-		got, ok := valores[nome]
+		got, ok := values[name]
 		if !ok {
-			t.Errorf("%s não foi emitida", nome)
+			t.Errorf("%s não foi emitida", name)
 			continue
 		}
 		if len(got) != 1 {
-			t.Errorf("%s foi emitida %d vezes; nome repetido é exposição malformada", nome, len(got))
+			t.Errorf("%s foi emitida %d vezes; nome repetido é exposição malformada", name, len(got))
 			continue
 		}
 		if got[0] != quero {
-			t.Errorf("%s = %v, quero %v — as duas fontes estão trocadas", nome, got[0], quero)
+			t.Errorf("%s = %v, quero %v — as duas fontes estão trocadas", name, got[0], quero)
 		}
 	}
 }
@@ -131,10 +131,10 @@ func TestOGaugeDeDecodificadoresNuncaSaiEmZero(t *testing.T) {
 		DecodeWorkers: 3,
 	}
 	reg := metrics.NewRegistry()
-	ctx, cancela := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancela()
-	if c, err := Abre(ctx, cfg, Opcoes{Store: storeGolden{}, Metrics: reg}); err == nil {
-		c.Fecha()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if c, err := Abre(ctx, cfg, Options{Store: storeGolden{}, Metrics: reg}); err == nil {
+		c.Close()
 		t.Skip("o Abre subiu: este teste precisa do caminho de falha para valer")
 	}
 
@@ -143,18 +143,18 @@ func TestOGaugeDeDecodificadoresNuncaSaiEmZero(t *testing.T) {
 	if _, err := reg.WriteTo(&buf); err != nil {
 		t.Fatal(err)
 	}
-	var linha string
+	var row string
 	for _, l := range strings.Split(buf.String(), "\n") {
 		if strings.HasPrefix(l, metrics.MetIngestDecodeWorkers+"{") {
-			linha = l
+			row = l
 		}
 	}
-	if linha == "" {
+	if row == "" {
 		t.Fatalf("%s não foi publicada", metrics.MetIngestDecodeWorkers)
 	}
-	if !strings.HasSuffix(linha, " 3") {
+	if !strings.HasSuffix(row, " 3") {
 		t.Errorf("%s depois de um Abre que falhou: %q. Quero 3 — zero é impossível, "+
 			"o parse do YAML recusa 0, e só significaria que o Set ficou atrás de um "+
-			"caminho de erro", metrics.MetIngestDecodeWorkers, linha)
+			"caminho de erro", metrics.MetIngestDecodeWorkers, row)
 	}
 }

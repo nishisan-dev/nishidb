@@ -24,20 +24,20 @@ import (
 // corresponde a uma decisão diferente do operador: reprocessar, corrigir a
 // query, investigar o dataset, reabrir, ou paginar.
 const (
-	ExitOK        = 0
-	ExitUso       = 1 // erro de uso ou de configuração
-	ExitQuery     = 2 // sintaxe ou bind da query
-	ExitDataset   = 3 // dataset corrompido, travado ou inacessível
-	ExitWriter    = 4 // writer em modo falho: reprocessar é inútil até reabrir
-	ExitTruncado  = 5 // resultado truncado pelo teto de maxRows
-	ExitInterromp = 6 // interrompido por sinal
-	// ExitPerdaDeDados: a ingestão terminou e o dataset está íntegro, mas
+	ExitOK              = 0
+	ExitUsageError      = 1 // erro de uso ou de configuração
+	ExitQuery           = 2 // sintaxe ou bind da query
+	ExitDataset         = 3 // dataset corrompido, travado ou inacessível
+	ExitWriter          = 4 // writer em modo falho: reprocessar é inútil até reabrir
+	ExitResultTruncated = 5 // resultado truncado pelo teto de maxRows
+	ExitInterrupted     = 6 // interrompido por sinal
+	// ExitDataLoss: a ingestão terminou e o dataset está íntegro, mas
 	// eventos NÃO entraram por falha que não é do evento (§101, balde 2).
 	// Distinto do 4: aqui não há modo falho, reprocessar depois de investigar
 	// é útil. Distinto do 0: houve perda, e um pipeline que testa $? precisa
 	// saber disso.
-	ExitPerdaDeDados = 7
-	// ExitParadoPorPolitica: a ingestão PAROU porque a política do dataset
+	ExitDataLoss = 7
+	// ExitPolicyStopped: a ingestão PAROU porque a política do dataset
 	// mandou (`errors.invalidEvent: stop`, §101).
 	//
 	// É código próprio, e não uma reciclagem do 7, porque a causa é outra e a
@@ -45,12 +45,12 @@ const (
 	// investigar o motor; aqui a parada foi PEDIDA pela configuração diante de
 	// um evento ruim, e a resposta é olhar o evento e decidir — possivelmente
 	// pulando-o com `nishidb offsets`. Reusar o 7 mentiria sobre a causa.
-	ExitParadoPorPolitica = 8
+	ExitPolicyStopped = 8
 )
 
-// Ambiente são as dependências de processo, injetadas para o teste rodar o
+// Context são as dependências de processo, injetadas para o teste rodar o
 // CLI como função em vez de precisar de um binário compilado.
-type Ambiente struct {
+type Context struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
@@ -58,7 +58,7 @@ type Ambiente struct {
 	Ctx context.Context
 }
 
-const uso = `nishidb — engine de materialização e consulta
+const usage = `nishidb — engine de materialização e consulta
 
 USO
   nishidb ingest  --config <nishidb.yaml> --dataset <nome> --input <arquivo|-> [--checkpoint-every N]
@@ -171,10 +171,10 @@ EXIT CODES
 
 // Run executa o CLI e devolve o exit code. Não chama os.Exit: quem decide
 // terminar o processo é o main, e o teste precisa poder chamar isto direto.
-func Run(args []string, amb Ambiente) int {
+func Run(args []string, amb Context) int {
 	if len(args) < 1 {
-		fmt.Fprint(amb.Stderr, uso)
-		return ExitUso
+		fmt.Fprint(amb.Stderr, usage)
+		return ExitUsageError
 	}
 	switch args[0] {
 	case "ingest":
@@ -201,27 +201,27 @@ func Run(args []string, amb Ambiente) int {
 		_, _ = fmt.Fprintln(amb.Stdout, buildinfo.String())
 		return ExitOK
 	case "-h", "--help", "help":
-		fmt.Fprint(amb.Stdout, uso)
+		fmt.Fprint(amb.Stdout, usage)
 		return ExitOK
 	default:
-		fmt.Fprintf(amb.Stderr, "comando desconhecido: %q\n\n%s", args[0], uso)
-		return ExitUso
+		fmt.Fprintf(amb.Stderr, "comando desconhecido: %q\n\n%s", args[0], usage)
+		return ExitUsageError
 	}
 }
 
-// codigoDoErro traduz o erro na decisão que o operador precisa tomar. A
+// errorCode traduz o erro na decisão que o operador precisa tomar. A
 // ordem importa: um erro pode casar mais de um sentinela, e o mais específico
 // tem de vencer.
-func codigoDoErro(err error) int {
+func errorCode(err error) int {
 	switch {
 	case err == nil:
 		return ExitOK
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return ExitInterromp
+		return ExitInterrupted
 	case errors.Is(err, parser.ErrSyntax), errors.Is(err, binder.ErrBind),
 		errors.Is(err, executor.ErrInvalidPlan):
 		return ExitQuery
-	case errors.Is(err, executor.ErrMaxRowsExceeded), errors.Is(err, storage.ErrSnapshotExpirado):
+	case errors.Is(err, executor.ErrMaxRowsExceeded), errors.Is(err, storage.ErrExpiredSnapshot):
 		// ErrSnapshotExpirado divide o 5 com o teto de linhas, e não ganha
 		// código próprio, porque a DECISÃO do operador é a mesma: o resultado
 		// que saiu está incompleto e não deve ser tratado como completo. O que
@@ -230,7 +230,7 @@ func codigoDoErro(err error) int {
 		// nada) ou subir runtime.query.snapshotMaxBytes. Um código novo mudaria
 		// a tabela de exit codes, que é contrato, para separar dois casos que
 		// pedem o mesmo do script que os lê.
-		return ExitTruncado
+		return ExitResultTruncated
 	case errors.Is(err, types.ErrWriterFailed):
 		return ExitWriter
 	case errors.Is(err, storage.ErrDatasetLocked), errors.Is(err, storage.ErrDatasetCorrupt),
@@ -255,56 +255,56 @@ func codigoDoErro(err error) int {
 		// porta e pelo mesmo motivo.
 		return ExitDataset
 	default:
-		return ExitUso
+		return ExitUsageError
 	}
 }
 
-// abreDataset resolve a configuração, carrega o schema do dataset e abre o
+// openDataset resolve a configuração, carrega o schema do dataset e abre o
 // Store com os índices que o YAML declara.
 //
 // Os campos indexados saem do PRÓPRIO YAML, e são passados por NOME: os
 // FieldIDs nascem do dicionário, que vive dentro do Store — exigir IDs aqui
 // obrigaria a abrir sem índice, compilar, fechar e reabrir.
-func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.Compiled, *schema.DatasetSpec, error) {
-	spec, err := schema.Load(cfg.DatasetSpecPath(nome), cfg.QueryDefaults())
+func openDataset(cfg *nishiconfig.Config, name string) (*storage.Store, *schema.Compiled, *schema.DatasetSpec, error) {
+	spec, err := schema.Load(cfg.DatasetSpecPath(name), cfg.QueryDefaults())
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("dataset %q: %w", nome, err)
+		return nil, nil, nil, fmt.Errorf("dataset %q: %w", name, err)
 	}
-	if spec.Name != nome {
-		return nil, nil, nil, fmt.Errorf("dataset %q: o arquivo declara name: %q", nome, spec.Name)
+	if spec.Name != name {
+		return nil, nil, nil, fmt.Errorf("dataset %q: o arquivo declara name: %q", name, spec.Name)
 	}
 
-	indexados := schema.IndexedFieldNames(spec)
+	indexedFieldNames := schema.IndexedFieldNames(spec)
 
 	// O schema compila DENTRO do Open, pelo callback dos contadores — o mesmo
 	// caminho do servidor: um dataset com `counters:` aberto pelo CLI tem de
 	// manter os contadores igual ao servidor, senão o `nishidb ingest` deixaria
 	// o vetor parado enquanto o Put anda.
-	comp := counters.NovoCompilador(spec)
+	comp := counters.NewCompiler(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DatasetDir(nome),
-		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: indexados,
-		ColunasDerivadas:       spec.DerivedColumnNames(),
-		TTLAtivo:               len(spec.Materialization.TTLRules) > 0,
-		DuracaoDeFundo:         spec.Materialization.FallbackDuration,
-		CampoDeEscrita:         schema.WriteInstantFieldName,
-		CampoDePrazo:           schema.TTLFieldName,
-		SnapshotMaxBytes:       cfg.SnapshotMaxBytes(),
-		CompilaContadores:      comp.Callback(),
+		Dir:                             cfg.DatasetDir(name),
+		SegmentSize:                     cfg.SegmentSize(),
+		IndexedFieldsByName:             indexedFieldNames,
+		DerivedColumnNames:              spec.DerivedColumnNames(),
+		ActiveTTL:                       len(spec.Materialization.TTLRules) > 0,
+		FallbackDuration:                spec.Materialization.FallbackDuration,
+		WriteInstantFieldName:           schema.WriteInstantFieldName,
+		TTLFieldName:                    schema.TTLFieldName,
+		SnapshotMaxBytes:                cfg.SnapshotMaxBytes(),
+		CompileCountersCallbackFunction: comp.Callback(),
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("abrindo o dataset %q: %w", nome, err)
+		return nil, nil, nil, fmt.Errorf("abrindo o dataset %q: %w", name, err)
 	}
-	compilado := comp.Compilado()
-	if compilado == nil {
+	compiled := comp.Compiled()
+	if compiled == nil {
 		st.Close()
-		return nil, nil, nil, fmt.Errorf("dataset %q: o Open não compilou o schema", nome)
+		return nil, nil, nil, fmt.Errorf("dataset %q: o Open não compilou o schema", name)
 	}
-	return st, compilado, spec, nil
+	return st, compiled, spec, nil
 }
 
-// abreHistorico abre a tabela irmã do dataset, ou devolve (nil, nil) quando
+// openHistory abre a tabela irmã do dataset, ou devolve (nil, nil) quando
 // não há bloco `history`.
 //
 // A ordem é a mesma do servidor, e pela mesma razão: o Store da irmã recebe o
@@ -312,43 +312,43 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 // base passa a espelhar o dela. Sem esta função, `nishidb ingest` gravaria só
 // o dataset base e a tabela declarada no YAML ficaria vazia — a configuração
 // aceita e sem efeito que o débito 37 nomeia.
-func abreHistorico(cfg *nishiconfig.Config, spec *schema.DatasetSpec, base *schema.Compiled, dict *fielddict.Dict) (*storage.Store, *schema.CompiledField, error) {
+func openHistory(cfg *nishiconfig.Config, spec *schema.DatasetSpec, base *schema.Compiled, dict *fielddict.Dict) (*storage.Store, *schema.CompiledField, error) {
 	h := spec.History
 	if h == nil {
 		return nil, nil, nil
 	}
-	irma := spec.DeriveHistory()
-	segmento := cfg.SegmentSize()
+	derivedHistory := spec.DeriveHistory()
+	segmentSize := cfg.SegmentSize()
 	if h.SegmentSize > 0 {
-		segmento = h.SegmentSize
+		segmentSize = h.SegmentSize
 	}
-	if err := h.ValidateAgainstSegment(segmento); err != nil {
+	if err := h.ValidateAgainstSegment(segmentSize); err != nil {
 		return nil, nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DatasetDir(irma.Name),
-		Dataset:                irma.Name,
-		SegmentSize:            segmento,
-		Modo:                   storage.ModoHistorico,
-		DictCompartilhado:      dict,
-		CamposIndexadosPorNome: schema.IndexedFieldNames(irma),
-		ColunasDerivadas:       irma.DerivedColumnNames(),
-		CampoDeEscrita:         schema.WriteInstantFieldName,
+		Dir:                   cfg.DatasetDir(derivedHistory.Name),
+		Dataset:               derivedHistory.Name,
+		SegmentSize:           segmentSize,
+		Mode:                  storage.HistoryMode,
+		SharedDictionary:      dict,
+		IndexedFieldsByName:   schema.IndexedFieldNames(derivedHistory),
+		DerivedColumnNames:    derivedHistory.DerivedColumnNames(),
+		WriteInstantFieldName: schema.WriteInstantFieldName,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("tabela histórica de %q: %w", spec.Name, err)
 	}
-	compilado, err := irma.Compile(dict)
+	compiled, err := derivedHistory.Compile(dict)
 	if err != nil {
-		return nil, nil, fechandoStore(st, fmt.Errorf("tabela histórica de %q: %w", spec.Name, err))
+		return nil, nil, closingStorage(st, fmt.Errorf("tabela histórica de %q: %w", spec.Name, err))
 	}
-	base.AddMirror(compilado)
+	base.AddMirror(compiled)
 
 	var raw *schema.CompiledField
 	if h.RawPayload {
-		f, ok := compilado.FieldByName([]byte(schema.RawFieldName))
+		f, ok := compiled.FieldByName([]byte(schema.RawFieldName))
 		if !ok {
-			return nil, nil, fechandoStore(st,
+			return nil, nil, closingStorage(st,
 				fmt.Errorf("tabela histórica de %q: a coluna %q não compilou", spec.Name, schema.RawFieldName))
 		}
 		raw = f
@@ -356,21 +356,21 @@ func abreHistorico(cfg *nishiconfig.Config, spec *schema.DatasetSpec, base *sche
 	return st, raw, nil
 }
 
-// fechandoStore devolve o erro original, fechando o Store antes. O erro do
+// closingStorage devolve o erro original, fechando o Store antes. O erro do
 // Close é agregado e nunca substitui a causa: quem lê precisa do motivo de a
 // abertura ter falhado, não do que aconteceu na limpeza.
 //
 // É o gêmeo do helper de mesmo nome do servidor. Ele mora nos dois lugares
 // porque os dois abrem dataset por caminhos próprios, e extrair um terceiro
 // pacote para seis linhas custaria mais do que a duplicação.
-func fechandoStore(st *storage.Store, causa error) error {
+func closingStorage(st *storage.Store, cause error) error {
 	if err := st.Close(); err != nil {
-		return errors.Join(causa, err)
+		return errors.Join(cause, err)
 	}
-	return causa
+	return cause
 }
 
-// abreParaConsulta resolve o nome pedido contra os YAMLs de
+// openForQuery resolve o nome pedido contra os YAMLs de
 // `datasets.directory` e devolve o Store da tabela — que pode ser a IRMÃ de um
 // dataset, e não um dataset declarado.
 //
@@ -384,62 +384,62 @@ func fechandoStore(st *storage.Store, causa error) error {
 // A spec devolvida é a do dataset DECLARADO, e é nil quando o que se abriu é a
 // tabela IRMÃ: ela não tem YAML próprio nem fonte própria, e é isso que faz o
 // `_meta.kafka` não ser registrado sobre ela — a ingestão dela é a do base.
-func abreParaConsulta(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.Compiled, *schema.DatasetSpec, func(), error) {
-	if arquivoExiste(cfg.DatasetSpecPath(nome)) {
-		st, compilado, spec, err := abreDataset(cfg, nome)
+func openForQuery(cfg *nishiconfig.Config, name string) (*storage.Store, *schema.Compiled, *schema.DatasetSpec, func(), error) {
+	if fileExists(cfg.DatasetSpecPath(name)) {
+		st, compiled, spec, err := openDataset(cfg, name)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
-		return st, compilado, spec, func() { _ = st.Close() }, nil
+		return st, compiled, spec, func() { _ = st.Close() }, nil
 	}
-	base, err := datasetQueDerivaAIrma(cfg, nome)
+	base, err := datasetDerivedFromSibling(cfg, name)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	stBase, compiladoBase, spec, err := abreDataset(cfg, base)
+	stBase, basedCompiled, spec, err := openDataset(cfg, base)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	stIrma, _, err := abreHistorico(cfg, spec, compiladoBase, stBase.FieldDict())
+	stIrma, _, err := openHistory(cfg, spec, basedCompiled, stBase.FieldDict())
 	if err != nil {
-		return nil, nil, nil, nil, fechandoStore(stBase, err)
+		return nil, nil, nil, nil, closingStorage(stBase, err)
 	}
-	compiladoIrma, err := spec.DeriveHistory().Compile(stBase.FieldDict())
+	derivedCompiled, err := spec.DeriveHistory().Compile(stBase.FieldDict())
 	if err != nil {
-		return nil, nil, nil, nil, errors.Join(fechandoStore(stIrma, err), stBase.Close())
+		return nil, nil, nil, nil, errors.Join(closingStorage(stIrma, err), stBase.Close())
 	}
-	return stIrma, compiladoIrma, nil, func() {
+	return stIrma, derivedCompiled, nil, func() {
 		_ = stIrma.Close()
 		_ = stBase.Close()
 	}, nil
 }
 
-// datasetQueDerivaAIrma acha o dataset cujo bloco `history` produz este nome.
+// datasetDerivedFromSibling acha o dataset cujo bloco `history` produz este nome.
 //
 // A varredura é sobre o diretório inteiro porque o sufixo é declarável: não dá
 // para inverter o nome sem saber qual sufixo cada dataset escolheu. São alguns
 // arquivos YAML lidos uma vez, no caminho de um comando interativo.
-func datasetQueDerivaAIrma(cfg *nishiconfig.Config, nome string) (string, error) {
-	nomes, err := cfg.ListDatasets()
+func datasetDerivedFromSibling(cfg *nishiconfig.Config, name string) (string, error) {
+	names, err := cfg.ListDatasets()
 	if err != nil {
 		return "", err
 	}
-	for _, candidato := range nomes {
-		spec, err := schema.Load(cfg.DatasetSpecPath(candidato), cfg.QueryDefaults())
+	for _, nameCandidate := range names {
+		spec, err := schema.Load(cfg.DatasetSpecPath(nameCandidate), cfg.QueryDefaults())
 		if err != nil {
 			// Um YAML quebrado no diretório não pode impedir a consulta a
 			// OUTRO dataset: ele já será recusado quando alguém o pedir.
 			continue
 		}
-		if spec.History != nil && spec.History.TableName(candidato) == nome {
-			return candidato, nil
+		if spec.History != nil && spec.History.TableName(nameCandidate) == name {
+			return nameCandidate, nil
 		}
 	}
 	return "", fmt.Errorf("dataset %q: não há %s nem nenhum dataset cujo bloco `history` derive esse nome",
-		nome, cfg.DatasetSpecPath(nome))
+		name, cfg.DatasetSpecPath(name))
 }
 
-func arquivoExiste(caminho string) bool {
-	_, err := os.Stat(caminho)
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
 	return err == nil
 }

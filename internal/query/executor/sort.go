@@ -10,12 +10,12 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// ErrOrcamentoDeOrdenacao é o teto de memória do ORDER BY estourado.
+// ErrBudgetOfOrdenacao é o teto de memória do ORDER BY estourado.
 //
 // A query é RECUSADA, nunca truncada. Truncar a ENTRADA do sort daria "as N
 // primeiras por rowId, depois ordenadas", que não é prefixo de resposta
 // nenhuma — é resultado errado com cara de certo, e este motor não tolera isso.
-var ErrOrcamentoDeOrdenacao = fmt.Errorf("orçamento de ordenação excedido")
+var ErrBudgetOfOrdenacao = fmt.Errorf("orçamento de ordenação excedido")
 
 // ordenador acumula as linhas que passaram no predicado e as devolve na ordem
 // pedida.
@@ -44,19 +44,19 @@ var ErrOrcamentoDeOrdenacao = fmt.Errorf("orçamento de ordenação excedido")
 //   - TOP-N, escolhido no Open quando `OFFSET + limite` cabe num teto de
 //     linhas: um heap limitado que retém só as N melhores. Ver topn.go.
 //
-// Os três compartilham comparaChave, e isso é requisito e não economia: duas
+// Os três compartilham comparaKey, e isso é requisito e não economia: duas
 // regras de ordenação divergiriam no primeiro empate, e o resultado passaria a
 // depender de qual modo o Open escolheu.
 type ordenador struct {
-	chaves []binder.BoundOrderKey
+	keys   []binder.BoundOrderKey
 	arena  []byte
 	tuplas []tupla
 	// vals é achatado: nKeys entradas por tupla, contíguas. Um slice por tupla
 	// alocaria uma vez por LINHA, que é exatamente o que não pode acontecer.
-	vals  []chaveVal
+	vals  []keyVal
 	nKeys int
 
-	orcamento   int64
+	budget      int64
 	slotsModelo []types.FieldID
 	fr          encoding.FieldReader
 	pos         int // próxima tupla a emitir
@@ -75,11 +75,11 @@ type ordenador struct {
 	// ZERO quando o operador usa o caminho completo — inclusive depois de uma
 	// degradação. É o único discriminador do modo; ver topn.go.
 	topN int
-	heap []entradaTopN
+	heap []entryTopN
 	// valsTN é achatado como o vals do caminho completo: nKeys entradas por
-	// entrada do heap, contíguas, endereçadas pelo chaveIdx que viaja na
+	// entrada do heap, contíguas, endereçadas pelo keyIDx que viaja na
 	// entrada.
-	valsTN []chaveVal
+	valsTN []keyVal
 	// bytesTN é a soma das capacidades dos buffers do heap, mantida por
 	// aritmética para que o orçamento não precise varrer N entradas por linha.
 	bytesTN int64
@@ -87,10 +87,10 @@ type ordenador struct {
 	// diagnóstico: sem ele, a degradação é invisível de fora e nenhum teste
 	// consegue provar que ela aconteceu.
 	degradou bool
-	// slotsDaDegradacao só existe durante a degradação, para reler as entradas
+	// slotsOfDegradacao só existe durante a degradação, para reler as entradas
 	// retidas sem tocar nos slots do iterador — que naquele instante ainda
 	// carregam a linha que acabou de chegar.
-	slotsDaDegradacao []slot
+	slotsOfDegradacao []slot
 }
 
 // cabeca é a posição corrente de UM run durante o merge.
@@ -99,48 +99,48 @@ type ordenador struct {
 // comparar k runs ao mesmo tempo: os payloads de todas as cabeças estão vivos
 // simultaneamente, cada um no buffer do seu leitor.
 type cabeca struct {
-	leitor *spill.Reader
-	slots  []slot
-	fr     encoding.FieldReader
-	rowID  types.RowID
-	valida bool
+	reader   *spill.Reader
+	slots    []slot
+	fr       encoding.FieldReader
+	rowID    types.RowID
+	validate bool
 }
 
 type tupla struct {
 	rowID  types.RowID
 	payIni int32
-	payFim int32
-	// chaveIdx é o índice do bloco desta tupla dentro de `vals`, e viaja DENTRO
+	payEnd int32
+	// keyIDx é o índice do bloco desta tupla dentro de `vals`, e viaja DENTRO
 	// da tupla porque o sort as REORDENA: derivar o bloco da posição no slice
 	// funcionaria só antes de ordenar, e depois passaria a ler as chaves de
 	// outra linha — resultado errado, em silêncio.
-	chaveIdx int32
+	keyIDx int32
 }
 
-// chaveVal é um valor de chave já copiado. `presente` significa "a coluna está
+// keyVal é um valor de chave já copiado. `presente` significa "a coluna está
 // na row E no tipo esperado" — as duas condições colapsam de propósito, porque
 // valor de tipo divergente não é ordenável no domínio declarado e vai para o
 // mesmo grupo dos ausentes, como já acontece no predicado.
-type chaveVal struct {
+type keyVal struct {
 	presente bool
 	i64      int64
 	ini      int32
-	fim      int32
-	// direto é o valor já resolvido, e vale nos dois modos em que os bytes NÃO
+	end      int32
+	// direct é o valor já resolvido, e vale nos dois modos em que os bytes NÃO
 	// vivem no arena: o merge de runs, onde eles estão no buffer do leitor da
 	// cabeça, e o top-N, onde estão no buffer da própria entrada. No caminho
 	// completo em memória ele é nil e a janela (ini, fim) manda — ver o godoc
 	// do ordenador sobre por que o arena não admite ponteiros.
 	//
-	// No top-N o `direto` é RE-RESOLVIDO a cada substituição da entrada, porque
+	// No top-N o `direct` é RE-RESOLVIDO a cada substituição da entrada, porque
 	// a reescrita pode realocar o buffer; (ini, fim) continuam sendo a forma
 	// durável, e o ponteiro a forma derivada.
-	direto []byte
+	direct []byte
 }
 
-func novoOrdenador(chaves []binder.BoundOrderKey, orcamento int64, area *spill.Area, ids []types.FieldID) *ordenador {
+func newOrdenador(keys []binder.BoundOrderKey, budget int64, area *spill.Area, ids []types.FieldID) *ordenador {
 	return &ordenador{
-		chaves: chaves, nKeys: len(chaves), orcamento: orcamento,
+		keys: keys, nKeys: len(keys), budget: budget,
 		area: area, slotsModelo: ids, pendente: -1}
 }
 
@@ -164,17 +164,17 @@ func (o *ordenador) acrescenta(slots []slot, rowID types.RowID) error {
 		}
 	}
 	o.tuplas = append(o.tuplas, tupla{
-		rowID: rowID, payIni: ini, payFim: int32(len(o.arena)),
-		chaveIdx: int32(len(o.vals))})
+		rowID: rowID, payIni: ini, payEnd: int32(len(o.arena)),
+		keyIDx: int32(len(o.vals))})
 
-	for _, k := range o.chaves {
+	for _, k := range o.keys {
 		s := &slots[k.Slot]
-		cv := chaveVal{presente: s.Present && s.Val.Type == k.Want}
+		cv := keyVal{presente: s.Present && s.Val.Type == k.Want}
 		if cv.presente {
 			if k.Kind == binder.CompareBytes {
 				cv.ini = int32(len(o.arena))
 				o.arena = append(o.arena, s.Val.Bytes...)
-				cv.fim = int32(len(o.arena))
+				cv.end = int32(len(o.arena))
 			} else {
 				cv.i64 = s.Val.I64
 			}
@@ -182,14 +182,14 @@ func (o *ordenador) acrescenta(slots []slot, rowID types.RowID) error {
 		o.vals = append(o.vals, cv)
 	}
 
-	if o.usado() > o.orcamento {
+	if o.usado() > o.budget {
 		if o.area == nil {
 			// Sem lugar em disco: RECUSA. Truncar a entrada do sort daria "as
 			// N primeiras por rowId, depois ordenadas", que não é prefixo de
 			// resposta nenhuma.
 			return fmt.Errorf("%w: %d bytes acima do teto de %d; "+
 				"reduza o resultado com WHERE, ou peça menos colunas",
-				ErrOrcamentoDeOrdenacao, o.usado(), o.orcamento)
+				ErrBudgetOfOrdenacao, o.usado(), o.budget)
 		}
 		return o.transborda()
 	}
@@ -203,7 +203,7 @@ func (o *ordenador) acrescenta(slots []slot, rowID types.RowID) error {
 // O(k): um run desordenado obrigaria a reler o arquivo inteiro para achar o
 // mínimo, a cada linha emitida.
 func (o *ordenador) transborda() error {
-	o.ordenaEmMemoria()
+	o.ordenaInMemoria()
 	arq, err := o.area.NewRun()
 	if err != nil {
 		return err
@@ -211,7 +211,7 @@ func (o *ordenador) transborda() error {
 	o.runs = append(o.runs, arq)
 	for i := range o.tuplas {
 		t := &o.tuplas[i]
-		if err := arq.Write(t.rowID, o.arena[t.payIni:t.payFim]); err != nil {
+		if err := arq.Write(t.rowID, o.arena[t.payIni:t.payEnd]); err != nil {
 			return err
 		}
 	}
@@ -235,15 +235,15 @@ func (o *ordenador) transborda() error {
 // teto de bytes valer só para o caminho completo, e a linha de 4 MiB de JSON
 // passaria a derrubar o processo exatamente pela porta que o modo novo abriu.
 func (o *ordenador) usado() int64 {
-	const bytesPorTupla = 24 // rowID(8) + três int32 + padding
-	const bytesPorChave = 24 // bool+pad(8) + i64(8) + dois int32
+	const bytesByTupla = 24 // rowID(8) + três int32 + padding
+	const bytesByKey = 24   // bool+pad(8) + i64(8) + dois int32
 	u := int64(len(o.arena)) +
-		int64(len(o.tuplas))*bytesPorTupla +
-		int64(len(o.vals))*bytesPorChave
+		int64(len(o.tuplas))*bytesByTupla +
+		int64(len(o.vals))*bytesByKey
 	if o.topN > 0 {
 		u += o.bytesTN +
-			int64(len(o.heap))*bytesPorEntradaTopN +
-			int64(len(o.valsTN))*bytesPorChave
+			int64(len(o.heap))*bytesByEntryTopN +
+			int64(len(o.valsTN))*bytesByKey
 	}
 	return u
 }
@@ -259,7 +259,7 @@ func (o *ordenador) ordena() error {
 		return nil
 	}
 	if len(o.runs) == 0 {
-		o.ordenaEmMemoria()
+		o.ordenaInMemoria()
 		return nil
 	}
 	if len(o.tuplas) > 0 {
@@ -267,26 +267,26 @@ func (o *ordenador) ordena() error {
 			return err
 		}
 	}
-	return o.montaMerge()
+	return o.buildMerge()
 }
 
-func (o *ordenador) ordenaEmMemoria() {
+func (o *ordenador) ordenaInMemoria() {
 	slices.SortFunc(o.tuplas, func(a, b tupla) int {
 		return o.compara(&a, &b)
 	})
 }
 
-// montaMerge abre um leitor por run e posiciona cada cabeça no primeiro
+// buildMerge abre um leitor por run e posiciona cada cabeça no primeiro
 // registro.
-func (o *ordenador) montaMerge() error {
+func (o *ordenador) buildMerge() error {
 	o.cabecas = make([]*cabeca, 0, len(o.runs))
 	for _, r := range o.runs {
 		l, err := r.NewReader()
 		if err != nil {
 			return err
 		}
-		c := &cabeca{leitor: l, slots: novosSlots(o.slotsModelo)}
-		if err := c.avanca(); err != nil {
+		c := &cabeca{reader: l, slots: novosSlots(o.slotsModelo)}
+		if err := c.advance(); err != nil {
 			return err
 		}
 		o.cabecas = append(o.cabecas, c)
@@ -294,24 +294,24 @@ func (o *ordenador) montaMerge() error {
 	return nil
 }
 
-// avanca lê o registro seguinte do run e decodifica os slots.
-func (c *cabeca) avanca() error {
-	id, payload, ok, err := c.leitor.Next()
+// advance lê o registro seguinte do run e decodifica os slots.
+func (c *cabeca) advance() error {
+	id, payload, ok, err := c.reader.Next()
 	if err != nil {
 		return err
 	}
 	if !ok {
-		c.valida = false
+		c.validate = false
 		return nil
 	}
 	if err := coleta(c.slots, &c.fr, payload); err != nil {
 		return fmt.Errorf("executor: relendo a row %d do spill: %w", id, err)
 	}
-	c.rowID, c.valida = id, true
+	c.rowID, c.validate = id, true
 	return nil
 }
 
-// proximaDoMerge escolhe a menor cabeça e a copia para os slots do chamador.
+// proximaOfMerge escolhe a menor cabeça e a copia para os slots do chamador.
 //
 // A varredura é LINEAR sobre as k cabeças, sem heap, pelo mesmo argumento que o
 // unionIter do candidate.go já registra: com k pequeno — e k aqui é o número de
@@ -322,16 +322,16 @@ func (c *cabeca) avanca() error {
 // buffer do leitor daquela cabeça, e avançá-la aqui invalidaria os bytes ANTES
 // de o consumidor os ler. Adiando, o payload vale até o próximo Next — que é
 // exatamente o contrato que o executor já publica.
-func (o *ordenador) proximaDoMerge(slots []slot) (types.RowID, bool, error) {
+func (o *ordenador) proximaOfMerge(slots []slot) (types.RowID, bool, error) {
 	if o.pendente >= 0 {
-		if err := o.cabecas[o.pendente].avanca(); err != nil {
+		if err := o.cabecas[o.pendente].advance(); err != nil {
 			return 0, false, err
 		}
 		o.pendente = -1
 	}
 	vencedora := -1
 	for i, c := range o.cabecas {
-		if !c.valida {
+		if !c.validate {
 			continue
 		}
 		if vencedora < 0 || o.comparaCabecas(c, o.cabecas[vencedora]) < 0 {
@@ -352,25 +352,25 @@ func (o *ordenador) proximaDoMerge(slots []slot) (types.RowID, bool, error) {
 // operador divergiriam no primeiro empate, e o resultado dependeria de ter
 // transbordado ou não.
 func (o *ordenador) comparaCabecas(a, b *cabeca) int {
-	for i := range o.chaves {
-		k := &o.chaves[i]
-		va := doSlot(&a.slots[k.Slot], k)
-		vb := doSlot(&b.slots[k.Slot], k)
-		if c := o.comparaChave(k, &va, &vb); c != 0 {
+	for i := range o.keys {
+		k := &o.keys[i]
+		va := ofSlot(&a.slots[k.Slot], k)
+		vb := ofSlot(&b.slots[k.Slot], k)
+		if c := o.comparaKey(k, &va, &vb); c != 0 {
 			return c
 		}
 	}
 	return int(a.rowID) - int(b.rowID)
 }
 
-// doSlot converte um slot lido para a forma que o comparador entende. As
+// ofSlot converte um slot lido para a forma que o comparador entende. As
 // janelas de bytes apontam para o buffer do leitor da cabeça, que está vivo —
 // por isso ini/fim não servem aqui, e o valor viaja direto.
-func doSlot(s *slot, k *binder.BoundOrderKey) chaveVal {
-	cv := chaveVal{presente: s.Present && s.Val.Type == k.Want}
+func ofSlot(s *slot, k *binder.BoundOrderKey) keyVal {
+	cv := keyVal{presente: s.Present && s.Val.Type == k.Want}
 	if cv.presente {
 		cv.i64 = s.Val.I64
-		cv.direto = s.Val.Bytes
+		cv.direct = s.Val.Bytes
 	}
 	return cv
 }
@@ -382,18 +382,18 @@ func doSlot(s *slot, k *binder.BoundOrderKey) chaveVal {
 // segunda execução do sort pode arrumar os empatados de outro jeito. Com o
 // rowID como última chave, a ordem é determinística e a paginação fecha.
 func (o *ordenador) compara(a, b *tupla) int {
-	ia, ib := int(a.chaveIdx), int(b.chaveIdx)
-	for i := range o.chaves {
-		k := &o.chaves[i]
+	ia, ib := int(a.keyIDx), int(b.keyIDx)
+	for i := range o.keys {
+		k := &o.keys[i]
 		va, vb := &o.vals[ia+i], &o.vals[ib+i]
-		if c := o.comparaChave(k, va, vb); c != 0 {
+		if c := o.comparaKey(k, va, vb); c != 0 {
 			return c
 		}
 	}
 	return int(a.rowID) - int(b.rowID)
 }
 
-func (o *ordenador) comparaChave(k *binder.BoundOrderKey, a, b *chaveVal) int {
+func (o *ordenador) comparaKey(k *binder.BoundOrderKey, a, b *keyVal) int {
 	// AUSENTE VAI POR ÚLTIMO NAS DUAS DIREÇÕES, e é o único default em que
 	// `ORDER BY x DESC LIMIT 10` significa "os 10 maiores" e não "10 linhas sem
 	// valor". Diverge de Postgres e Oracle (que invertem no DESC) e de MySQL e
@@ -415,21 +415,21 @@ func (o *ordenador) comparaChave(k *binder.BoundOrderKey, a, b *chaveVal) int {
 			return -1
 		}
 	}
-	c := compara(k.Kind, o.valor(k, a), o.valor(k, b))
+	c := compara(k.Kind, o.value(k, a), o.value(k, b))
 	if k.Desc {
 		return -c
 	}
 	return c
 }
 
-// valor materializa o types.Value para a comparação. Não aloca: para bytes é
+// value materializa o types.Value para a comparação. Não aloca: para bytes é
 // uma janela no arena, e para os demais tipos é um campo escalar.
-func (o *ordenador) valor(k *binder.BoundOrderKey, c *chaveVal) types.Value {
+func (o *ordenador) value(k *binder.BoundOrderKey, c *keyVal) types.Value {
 	if k.Kind == binder.CompareBytes {
-		if c.direto != nil {
-			return types.Value{Bytes: c.direto}
+		if c.direct != nil {
+			return types.Value{Bytes: c.direct}
 		}
-		return types.Value{Bytes: o.arena[c.ini:c.fim]}
+		return types.Value{Bytes: o.arena[c.ini:c.end]}
 	}
 	return types.Value{I64: c.i64}
 }
@@ -442,17 +442,17 @@ func (o *ordenador) valor(k *binder.BoundOrderKey, c *chaveVal) types.Value {
 // produzam exatamente os mesmos valores.
 func (o *ordenador) proxima(slots []slot) (types.RowID, bool, error) {
 	if o.topN > 0 {
-		return o.proximaDoTopN(slots)
+		return o.proximaOfTopN(slots)
 	}
 	if o.cabecas != nil {
-		return o.proximaDoMerge(slots)
+		return o.proximaOfMerge(slots)
 	}
 	if o.pos >= len(o.tuplas) {
 		return 0, false, nil
 	}
 	t := o.tuplas[o.pos]
 	o.pos++
-	if err := coleta(slots, &o.fr, o.arena[t.payIni:t.payFim]); err != nil {
+	if err := coleta(slots, &o.fr, o.arena[t.payIni:t.payEnd]); err != nil {
 		return 0, false, fmt.Errorf("executor: relendo a row %d ordenada: %w", t.rowID, err)
 	}
 	return t.rowID, true, nil

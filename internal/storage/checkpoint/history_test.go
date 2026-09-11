@@ -27,13 +27,13 @@ func TestManifestSemHistoricoNaoEmiteASecao(t *testing.T) {
 }
 
 func TestModoHistoricoSobreviveAoIdaEVolta(t *testing.T) {
-	m := &Manifest{Epoch: 1, NextRowID: 900, Mode: 1, RowIDBase: 128}
+	m := &Manifest{Epoch: 1, NextRowID: 900, StoreMode: 1, RowIDBase: 128}
 	decoded, err := decode(m.encode())
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if decoded.Mode != 1 {
-		t.Errorf("Mode = %d, quer 1", decoded.Mode)
+	if decoded.StoreMode != 1 {
+		t.Errorf("Mode = %d, quer 1", decoded.StoreMode)
 	}
 	if decoded.RowIDBase != 128 {
 		t.Errorf("RowIDBase = %d, quer 128", decoded.RowIDBase)
@@ -62,14 +62,14 @@ func TestRowIDBaseSozinhaEmiteASecao(t *testing.T) {
 // mudasse. A do índice por segmento é a última porque a tag dela é a maior, e
 // não porque foi a última a existir.
 func TestHistoricoEIndiceConvivemEmOrdemDeTag(t *testing.T) {
-	m := &Manifest{Mode: 1, RowIDBase: 64}
+	m := &Manifest{StoreMode: 1, RowIDBase: 64}
 	b := m.encode()
 	decoded, err := decode(b)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if decoded.Mode != 1 || decoded.RowIDBase != 64 {
-		t.Errorf("Mode = %d, RowIDBase = %d", decoded.Mode, decoded.RowIDBase)
+	if decoded.StoreMode != 1 || decoded.RowIDBase != 64 {
+		t.Errorf("Mode = %d, RowIDBase = %d", decoded.StoreMode, decoded.RowIDBase)
 	}
 	hist := binary.LittleEndian.AppendUint16(nil, tagHistory)
 	indexMarker := binary.LittleEndian.AppendUint16(nil, tagPerSegmentIndex)
@@ -107,8 +107,8 @@ func TestSecaoDeHistoricoEscritaAMaoEhLida(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if m.Mode != 1 || m.RowIDBase != 4096 {
-		t.Fatalf("Mode = %d, RowIDBase = %d", m.Mode, m.RowIDBase)
+	if m.StoreMode != 1 || m.RowIDBase != 4096 {
+		t.Fatalf("Mode = %d, RowIDBase = %d", m.StoreMode, m.RowIDBase)
 	}
 	if m.Epoch != 7 {
 		t.Fatalf("o corpo não sobreviveu à cauda: %+v", *m)

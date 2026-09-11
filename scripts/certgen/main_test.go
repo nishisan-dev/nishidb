@@ -21,9 +21,9 @@ import (
 func TestOCertificadoServeParaLocalhostEParaOIP(t *testing.T) {
 	dir := t.TempDir()
 	cert := filepath.Join(dir, "cert.pem")
-	chave := filepath.Join(dir, "key.pem")
+	key := filepath.Join(dir, "key.pem")
 
-	if err := gera(cert, chave, 2*time.Hour); err != nil {
+	if err := generate(cert, key, 2*time.Hour); err != nil {
 		t.Fatalf("gera: %v", err)
 	}
 
@@ -31,31 +31,31 @@ func TestOCertificadoServeParaLocalhostEParaOIP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bloco, _ := pem.Decode(bruto)
-	if bloco == nil || bloco.Type != "CERTIFICATE" {
+	block, _ := pem.Decode(bruto)
+	if block == nil || block.Type != "CERTIFICATE" {
 		t.Fatal("o arquivo de certificado não é um PEM de CERTIFICATE")
 	}
-	c, err := x509.ParseCertificate(bloco.Bytes)
+	c, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		t.Fatalf("parseando o certificado: %v", err)
 	}
 
-	temLocalhost := false
+	hasLocalhost := false
 	for _, n := range c.DNSNames {
 		if n == "localhost" {
-			temLocalhost = true
+			hasLocalhost = true
 		}
 	}
-	if !temLocalhost {
+	if !hasLocalhost {
 		t.Errorf("DNSNames = %v, falta localhost", c.DNSNames)
 	}
-	temIP := false
+	hasIP := false
 	for _, ip := range c.IPAddresses {
 		if ip.Equal(net.ParseIP("127.0.0.1")) {
-			temIP = true
+			hasIP = true
 		}
 	}
-	if !temIP {
+	if !hasIP {
 		t.Errorf("IPAddresses = %v, falta 127.0.0.1", c.IPAddresses)
 	}
 }
@@ -65,11 +65,11 @@ func TestOCertificadoServeParaLocalhostEParaOIP(t *testing.T) {
 func TestOParDeCertificadoEChaveCasa(t *testing.T) {
 	dir := t.TempDir()
 	cert := filepath.Join(dir, "cert.pem")
-	chave := filepath.Join(dir, "key.pem")
-	if err := gera(cert, chave, time.Hour); err != nil {
+	key := filepath.Join(dir, "key.pem")
+	if err := generate(cert, key, time.Hour); err != nil {
 		t.Fatalf("gera: %v", err)
 	}
-	if _, err := tls.LoadX509KeyPair(cert, chave); err != nil {
+	if _, err := tls.LoadX509KeyPair(cert, key); err != nil {
 		t.Fatalf("o par não carrega: %v", err)
 	}
 }
@@ -82,11 +82,11 @@ func TestOParDeCertificadoEChaveCasa(t *testing.T) {
 func TestAChavePrivadaNaoEhLegivelPorOutros(t *testing.T) {
 	dir := t.TempDir()
 	cert := filepath.Join(dir, "cert.pem")
-	chave := filepath.Join(dir, "key.pem")
-	if err := gera(cert, chave, time.Hour); err != nil {
+	key := filepath.Join(dir, "key.pem")
+	if err := generate(cert, key, time.Hour); err != nil {
 		t.Fatalf("gera: %v", err)
 	}
-	info, err := os.Stat(chave)
+	info, err := os.Stat(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,15 +101,15 @@ func TestAChavePrivadaNaoEhLegivelPorOutros(t *testing.T) {
 func TestAValidadeEhCurtaEComeçaNoPassado(t *testing.T) {
 	dir := t.TempDir()
 	cert := filepath.Join(dir, "cert.pem")
-	if err := gera(cert, filepath.Join(dir, "key.pem"), time.Hour); err != nil {
+	if err := generate(cert, filepath.Join(dir, "key.pem"), time.Hour); err != nil {
 		t.Fatalf("gera: %v", err)
 	}
 	bruto, err := os.ReadFile(cert)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bloco, _ := pem.Decode(bruto)
-	c, err := x509.ParseCertificate(bloco.Bytes)
+	block, _ := pem.Decode(bruto)
+	c, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		t.Fatal(err)
 	}

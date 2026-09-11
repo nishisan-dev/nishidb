@@ -32,7 +32,7 @@ const (
 // que o resultado dele deveria ser comparado.
 func TestRowNascidaDepoisDoOpenNaoApareceEmPlanoNenhum(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		sql  string
 	}{
 		// Acct-Status-Type é indexado no fixture: fonte por índice.
@@ -41,10 +41,10 @@ func TestRowNascidaDepoisDoOpenNaoApareceEmPlanoNenhum(t *testing.T) {
 		{"varredura completa", `SELECT id FROM radius_sessions WHERE "User-Name" LIKE '%a%'`},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			ig := &integracao{t: t, dir: filepath.Join(t.TempDir(), "radius"), oracle: oraculo{}}
-			ig.abre()
-			defer ig.fecha()
+			ig.open()
+			defer ig.close()
 
 			mat, err := materializer.New(ig.sch, ig.store)
 			if err != nil {
@@ -104,8 +104,8 @@ func TestRowNascidaDepoisDoOpenNaoApareceEmPlanoNenhum(t *testing.T) {
 // coisas presas pela vida do processo, e nada no resultado dela denuncia isso.
 func TestConsultaFechadaDevolveAsVersoesQueSegurava(t *testing.T) {
 	ig := &integracao{t: t, dir: filepath.Join(t.TempDir(), "radius"), oracle: oraculo{}}
-	ig.abre()
-	defer ig.fecha()
+	ig.open()
+	defer ig.close()
 
 	mat, err := materializer.New(ig.sch, ig.store)
 	if err != nil {

@@ -21,10 +21,10 @@ func TestAJanelaVemDoLoteDePollNaoDaFila(t *testing.T) {
 		QueueSize:      4096, // muito maior, de propósito
 		QueueBytes:     64 << 20,
 	}
-	w := NovoWriter(cfg, nil, storeGolden{}, NovaFila(cfg.QueueSize, cfg.QueueBytes),
-		nil, registraMetricas(nil, "eventos"), nil, Cadencia{}, nil)
+	w := NewWriter(cfg, nil, storeGolden{}, NewQueue(cfg.QueueSize, cfg.QueueBytes),
+		nil, registerMetrics(nil, "eventos"), nil, Cadencia{}, nil)
 
-	if got := w.est.tamanho(); got != 64 {
+	if got := w.est.size(); got != 64 {
 		t.Errorf("janela da esteira = %d com maxPollRecords=64 e ingestionQueueSize=4096; "+
 			"quero 64 — a janela é o trabalho em voo, não a rajada de entrada", got)
 	}
@@ -38,8 +38,8 @@ func TestAJanelaVemDoLoteDePollNaoDaFila(t *testing.T) {
 func TestAJanelaArredondaParaCima(t *testing.T) {
 	casos := map[int]int{1: 1, 2: 2, 3: 4, 1000: 1024, 1024: 1024, 1025: 2048}
 	for pedido, quero := range casos {
-		if got := novaEsteira(pedido).tamanho(); got != quero {
-			t.Errorf("novaEsteira(%d).tamanho() = %d, quero %d", pedido, got, quero)
+		if got := newPipeline(pedido).size(); got != quero {
+			t.Errorf("newPipeline(%d).tamanho() = %d, quero %d", pedido, got, quero)
 		}
 	}
 }
@@ -52,14 +52,14 @@ func TestAJanelaArredondaParaCima(t *testing.T) {
 // na subida — sem log, sem erro, sem diagnóstico —, que é o pior desfecho
 // possível para um valor de configuração absurdo.
 func TestAJanelaTemTetoENaoTravaComValorAbsurdo(t *testing.T) {
-	for _, pedido := range []int{janelaMaxima, janelaMaxima + 1, 1 << 40, int(^uint(0) >> 1)} {
-		got := potenciaDeDois(pedido)
-		if got != janelaMaxima {
-			t.Errorf("potenciaDeDois(%d) = %d, quero o teto de %d", pedido, got, janelaMaxima)
+	for _, pedido := range []int{windowMaxima, windowMaxima + 1, 1 << 40, int(^uint(0) >> 1)} {
+		got := powerOfTwo(pedido)
+		if got != windowMaxima {
+			t.Errorf("powerOfTwo(%d) = %d, quero o teto de %d", pedido, got, windowMaxima)
 		}
 	}
 	// E o teto não pode ter engolido a faixa útil.
-	if got := potenciaDeDois(1000); got != 1024 {
-		t.Errorf("potenciaDeDois(1000) = %d, quero 1024", got)
+	if got := powerOfTwo(1000); got != 1024 {
+		t.Errorf("powerOfTwo(1000) = %d, quero 1024", got)
 	}
 }

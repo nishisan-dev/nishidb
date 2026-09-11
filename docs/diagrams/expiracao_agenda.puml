@@ -40,7 +40,7 @@ partition "Abertura" {
 
 partition "Escrita (applyRecord, sob o wmu)" {
   :publica a location — commit de visibilidade;
-  :vencimentoDe(rowId) = escrita + duração efetiva;
+  :vencimentoOf(rowId) = escrita + duração efetiva;
   note right
     DEPOIS do commit da location, porque o vencimento é
     função dela: linha sem location e linha tombstonada
@@ -104,7 +104,7 @@ partition "Coletor" {
 
   repeat
     if (instante de escrita conhecido?) then (não)
-      :daCarencia: grava agora e reagenda;
+      :ofCarencia: grava agora e reagenda;
     else (sim)
       :Expira: revalida sob o wmu e publica a lápide;
       note right

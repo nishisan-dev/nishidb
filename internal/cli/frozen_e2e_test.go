@@ -37,12 +37,12 @@ schema:
       frozenFrom: "@writeTime"
 `
 
-// ambienteAlarmes acrescenta o dataset das congeladas ao ambiente padrão.
-func ambienteAlarmes(t *testing.T) *ambiente {
+// envAlarmes acrescenta o dataset das congeladas ao ambiente padrão.
+func envAlarmes(t *testing.T) *env {
 	t.Helper()
-	a := novoAmbiente(t)
-	caminho := filepath.Join(a.dir, "datasets", "alarmes.yaml")
-	if err := os.WriteFile(caminho, []byte(alarmesYAML), 0o644); err != nil {
+	a := newEnv(t)
+	path := filepath.Join(a.dir, "datasets", "alarmes.yaml")
+	if err := os.WriteFile(path, []byte(alarmesYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return a
@@ -50,13 +50,13 @@ func ambienteAlarmes(t *testing.T) *ambiente {
 
 // consultaAlarmes ingere os eventos e devolve as linhas da consulta já
 // decodificadas, pelo caminho REAL do binário.
-func consultaAlarmes(t *testing.T, a *ambiente, eventos []string, sql string) []map[string]any {
+func consultaAlarmes(t *testing.T, a *env, eventos []string, sql string) []map[string]any {
 	t.Helper()
-	if code := a.rodaComEntrada(strings.Join(eventos, "\n")+"\n",
+	if code := a.runWithEntry(strings.Join(eventos, "\n")+"\n",
 		"ingest", "--config", a.config, "--dataset", "alarmes", "--input", "-"); code != cli.ExitOK {
 		t.Fatalf("ingest = %d\n%s", code, a.stderr.String())
 	}
-	if code := a.roda("query", "--config", a.config, "--dataset", "alarmes", sql); code != cli.ExitOK {
+	if code := a.run("query", "--config", a.config, "--dataset", "alarmes", sql); code != cli.ExitOK {
 		t.Fatalf("query = %d\n%s", code, a.stderr.String())
 	}
 	saida := strings.TrimSuffix(a.stdout.String(), "\n")
@@ -75,20 +75,20 @@ func consultaAlarmes(t *testing.T, a *ambiente, eventos []string, sql string) []
 }
 
 func TestCongeladaSobreviveATresUpdatesDaOrigem(t *testing.T) {
-	a := ambienteAlarmes(t)
-	linhas := consultaAlarmes(t, a, []string{
+	a := envAlarmes(t)
+	rows := consultaAlarmes(t, a, []string{
 		`{"id":"a","sev":5}`,
 		`{"id":"a","sev":3}`,
 		`{"id":"a","sev":1}`,
 		`{"id":"a","sev":7}`,
 	}, `SELECT id, sev, origSev FROM alarmes`)
-	if len(linhas) != 1 {
-		t.Fatalf("%d linhas, quero 1: %v", len(linhas), linhas)
+	if len(rows) != 1 {
+		t.Fatalf("%d linhas, quero 1: %v", len(rows), rows)
 	}
-	if got := linhas[0]["sev"]; got != float64(7) {
+	if got := rows[0]["sev"]; got != float64(7) {
 		t.Errorf("sev = %v, quero 7 (o corrente)", got)
 	}
-	if got := linhas[0]["origSev"]; got != float64(5) {
+	if got := rows[0]["origSev"]; got != float64(5) {
 		t.Errorf("origSev = %v, quero 5 (o de nascimento)", got)
 	}
 }
@@ -96,16 +96,16 @@ func TestCongeladaSobreviveATresUpdatesDaOrigem(t *testing.T) {
 // A captura é do PRIMEIRO valor visto, não do primeiro evento: fonte que manda
 // evento parcial não perde a coluna, ela só é preenchida mais tarde.
 func TestCongeladaCapturaNoSegundoEventoQuandoOPrimeiroNaoTrouxeAOrigem(t *testing.T) {
-	a := ambienteAlarmes(t)
-	linhas := consultaAlarmes(t, a, []string{
+	a := envAlarmes(t)
+	rows := consultaAlarmes(t, a, []string{
 		`{"id":"a"}`,
 		`{"id":"a","sev":3}`,
 		`{"id":"a","sev":9}`,
 	}, `SELECT id, sev, origSev FROM alarmes`)
-	if len(linhas) != 1 {
-		t.Fatalf("%d linhas, quero 1: %v", len(linhas), linhas)
+	if len(rows) != 1 {
+		t.Fatalf("%d linhas, quero 1: %v", len(rows), rows)
 	}
-	if got := linhas[0]["origSev"]; got != float64(3) {
+	if got := rows[0]["origSev"]; got != float64(3) {
 		t.Errorf("origSev = %v, quero 3 — o primeiro valor VISTO, não o do primeiro evento", got)
 	}
 }
@@ -113,17 +113,17 @@ func TestCongeladaCapturaNoSegundoEventoQuandoOPrimeiroNaoTrouxeAOrigem(t *testi
 // A congelada é uma coluna normal para o planner: com bitmap declarado, o
 // WHERE sobre ela devolve a entidade mesmo depois de a origem ter mudado.
 func TestCongeladaComIndiceBitmapEhFiltravel(t *testing.T) {
-	a := ambienteAlarmes(t)
-	linhas := consultaAlarmes(t, a, []string{
+	a := envAlarmes(t)
+	rows := consultaAlarmes(t, a, []string{
 		`{"id":"a","sev":5}`,
 		`{"id":"b","sev":8}`,
 		`{"id":"a","sev":1}`,
 		`{"id":"b","sev":2}`,
 	}, `SELECT id, origSev FROM alarmes WHERE origSev = 5`)
-	if len(linhas) != 1 {
-		t.Fatalf("%d linhas, quero 1: %v", len(linhas), linhas)
+	if len(rows) != 1 {
+		t.Fatalf("%d linhas, quero 1: %v", len(rows), rows)
 	}
-	if got := linhas[0]["id"]; got != "a" {
+	if got := rows[0]["id"]; got != "a" {
 		t.Errorf("id = %v, quero a", got)
 	}
 }
@@ -133,14 +133,14 @@ func TestCongeladaComIndiceBitmapEhFiltravel(t *testing.T) {
 // alternativa — um valor que só vive num índice derivado — voltaria como o
 // valor CORRENTE depois de um crash, e ninguém veria.
 func TestCongeladaSobreviveAoReplayDoTail(t *testing.T) {
-	a := ambienteAlarmes(t)
+	a := envAlarmes(t)
 	spec, err := schema.Load(filepath.Join(a.dir, "datasets", "alarmes.yaml"), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
 	opts := storage.Options{
-		Dir:                    filepath.Join(a.dir, "dados", "alarmes"),
-		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
+		Dir:                 filepath.Join(a.dir, "dados", "alarmes"),
+		IndexedFieldsByName: schema.IndexedFieldNames(spec),
 	}
 	st, err := storage.Open(opts)
 	if err != nil {
@@ -178,19 +178,19 @@ func TestCongeladaSobreviveAoReplayDoTail(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("entidade perdida no replay (ok=%v err=%v)", ok, err)
 	}
-	campos := decodeCampos(t, c2, rec.Payload)
-	if campos["origSev"] != int64(5) {
-		t.Errorf("origSev depois do replay = %v, quero 5 (o de nascimento, não o corrente)", campos["origSev"])
+	fields := decodeFields(t, c2, rec.Payload)
+	if fields["origSev"] != int64(5) {
+		t.Errorf("origSev depois do replay = %v, quero 5 (o de nascimento, não o corrente)", fields["origSev"])
 	}
-	if campos["sev"] != int64(9) {
-		t.Errorf("sev depois do replay = %v, quero 9", campos["sev"])
+	if fields["sev"] != int64(9) {
+		t.Errorf("sev depois do replay = %v, quero 9", fields["sev"])
 	}
 }
 
-// decodeCampos lê o payload materializado e devolve nome→valor dos campos
+// decodeFields lê o payload materializado e devolve nome→valor dos campos
 // int64, que é o que estes testes conferem. Decodifica pelo FieldReader do
 // storage — o mesmo caminho da query, e não uma releitura paralela.
-func decodeCampos(t *testing.T, c *schema.Compiled, payload []byte) map[string]int64 {
+func decodeFields(t *testing.T, c *schema.Compiled, payload []byte) map[string]int64 {
 	t.Helper()
 	out := map[string]int64{}
 	var r encoding.FieldReader
@@ -203,8 +203,8 @@ func decodeCampos(t *testing.T, c *schema.Compiled, payload []byte) map[string]i
 			}
 			return out
 		}
-		f, existe := c.FieldByID(id)
-		if !existe || v.Type != types.TypeInt64 {
+		f, exists := c.FieldByID(id)
+		if !exists || v.Type != types.TypeInt64 {
 			continue
 		}
 		out[f.Name] = v.I64

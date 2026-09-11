@@ -38,7 +38,7 @@ fora --> [*] : aposentadoria\n(não há índice a remover)
 
 note bottom of corrente
   **Fonte do Lookup:** caminhada da cadeia
-  do valor, materializada em `contagem`
+  do valor, materializada em `count`
   elementos — UMA alocação, de tamanho exato.
 end note
 

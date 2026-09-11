@@ -8,9 +8,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// põeUmaLinha grava um record e faz checkpoint, para que o manifest passe a
+// põeOneRow grava um record e faz checkpoint, para que o manifest passe a
 // declarar RowCount > 0 — que é a condição sob a qual a recusa vale.
-func põeUmaLinha(t *testing.T, s *Store) {
+func põeOneRow(t *testing.T, s *Store) {
 	t.Helper()
 	// O Put recusa fieldID fora do dicionário: registrar "id" aqui é o que lhe
 	// dá o ID 1 que fldID nomeia.
@@ -35,12 +35,12 @@ func põeUmaLinha(t *testing.T, s *Store) {
 func TestColunaDerivadaNovaEmDatasetComLinhasERecusada(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{Dir: dir})
-	põeUmaLinha(t, s)
+	põeOneRow(t, s)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, ColunasDerivadas: []string{"probe_ip"}})
+	_, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, DerivedColumnNames: []string{"probe_ip"}})
 	if !errors.Is(err, ErrDatasetCorrupt) {
 		t.Fatalf("Open = %v, quer ErrDatasetCorrupt", err)
 	}
@@ -59,10 +59,10 @@ func TestColunaDerivadaNovaEmDatasetComLinhasERecusada(t *testing.T) {
 // desta guarda saiu, e foi a verificação com o binário que a pegou.
 func TestDatasetCriadoComDerivadaReabreDepoisDeTerLinhas(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, SegmentSize: 1 << 20, ColunasDerivadas: []string{"probe_ip"}}
+	opts := Options{Dir: dir, SegmentSize: 1 << 20, DerivedColumnNames: []string{"probe_ip"}}
 
 	s := openStore(t, opts)
-	põeUmaLinha(t, s)
+	põeOneRow(t, s)
 	// Registra a derivada como o Compile faria num dataset criado com extract.
 	if _, err := s.FieldDict().LookupOrCreate([]byte("probe_ip")); err != nil {
 		t.Fatal(err)
@@ -83,5 +83,5 @@ func TestDatasetCriadoComDerivadaReabreDepoisDeTerLinhas(t *testing.T) {
 // Dataset VAZIO aceita a declaração: é exatamente o momento em que ela deve
 // ser feita.
 func TestColunaDerivadaEmDatasetVazioEAceita(t *testing.T) {
-	openStore(t, Options{ColunasDerivadas: []string{"probe_ip"}})
+	openStore(t, Options{DerivedColumnNames: []string{"probe_ip"}})
 }

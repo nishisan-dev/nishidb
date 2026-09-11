@@ -20,7 +20,7 @@ import (
 // CLI, e o defeito está no limite do laço — que é exatamente o que ele fixa.
 func TestResumoNomeiaTodasAsCategorias(t *testing.T) {
 	for c := materializer.CategoryInvalidJSON; c < materializer.NumCategories; c++ {
-		r := resumoIngest{lidos: 1}
+		r := summaryIngest{lidos: 1}
 		if c.BadEvent() {
 			r.descartados[c], r.descartadosTotal = 1, 1
 		} else {
@@ -28,7 +28,7 @@ func TestResumoNomeiaTodasAsCategorias(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		imprimeResumo(&buf, r, time.Second)
+		printSummary(&buf, r, time.Second)
 
 		if !strings.Contains(buf.String(), c.String()+"=1") {
 			t.Errorf("categoria %v (=%d) não aparece no resumo:\n%s", c, c, buf.String())
@@ -39,13 +39,13 @@ func TestResumoNomeiaTodasAsCategorias(t *testing.T) {
 // A ordem é fixa porque a saída é lida por script: mapa iterado daria ordem
 // diferente a cada execução.
 func TestResumoMantemAOrdemDasCategorias(t *testing.T) {
-	r := resumoIngest{lidos: 3, descartadosTotal: 3}
+	r := summaryIngest{lidos: 3, descartadosTotal: 3}
 	r.descartados[materializer.CategoryTypeConversion] = 1
 	r.descartados[materializer.CategoryInvalidJSON] = 1
 	r.descartados[materializer.CategoryInvalidKey] = 1
 
 	var buf bytes.Buffer
-	imprimeResumo(&buf, r, time.Second)
+	printSummary(&buf, r, time.Second)
 
 	saida := buf.String()
 	pos := func(s string) int { return strings.Index(saida, s) }

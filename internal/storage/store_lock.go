@@ -42,7 +42,7 @@ func acquireDatasetLock(dir string) (*datasetLock, error) {
 		return nil, fmt.Errorf("storage: abrir o lock %s: %w", path, err)
 	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		dono := donoDoLock(path)
+		dono := donoOfLock(path)
 		f.Close()
 		return nil, fmt.Errorf("%w: %s%s", ErrDatasetLocked, dir, dono)
 	}
@@ -55,8 +55,8 @@ func acquireDatasetLock(dir string) (*datasetLock, error) {
 	return &datasetLock{f: f}, nil
 }
 
-// donoDoLock lê o pid registrado, para a mensagem de erro apontar o culpado.
-func donoDoLock(path string) string {
+// donoOfLock lê o pid registrado, para a mensagem de erro apontar o culpado.
+func donoOfLock(path string) string {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return ""

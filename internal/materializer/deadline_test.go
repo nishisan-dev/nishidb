@@ -28,30 +28,30 @@ schema:
       type: int64
 `
 
-// duracaoDoEvento roda o caminho REAL — Parse e depois a avaliação — sobre um
+// durationOfEvent roda o caminho REAL — Parse e depois a avaliação — sobre um
 // estado anterior dado, e devolve a duração escolhida.
-func duracaoDoEvento(t *testing.T, h *harness, prevPayload []byte, evento string) time.Duration {
+func durationOfEvent(t *testing.T, h *harness, prevPayload []byte, event string) time.Duration {
 	t.Helper()
-	if err := h.m.patch.Parse([]byte(evento), h.c, time.Now()); err != nil {
-		t.Fatalf("Parse(%s): %v", evento, err)
+	if err := h.m.patch.Parse([]byte(event), h.c, time.Now()); err != nil {
+		t.Fatalf("Parse(%s): %v", event, err)
 	}
-	d, err := h.m.duracaoDe(prevPayload, h.m.patch.entries)
+	d, err := h.m.durationOf(prevPayload, h.m.patch.entries)
 	if err != nil {
-		t.Fatalf("duracaoDe: %v", err)
+		t.Fatalf("durationOf: %v", err)
 	}
 	return d
 }
 
 func TestPrazoUsaAPrimeiraRegraQueCasa(t *testing.T) {
 	h := newHarness(t, prazoYAML)
-	if d := duracaoDoEvento(t, h, nil, `{"id":"a","tipo":2}`); d != 3*time.Minute {
+	if d := durationOfEvent(t, h, nil, `{"id":"a","tipo":2}`); d != 3*time.Minute {
 		t.Errorf("duração = %v, quero 3m", d)
 	}
 }
 
 func TestPrazoCaiNaRegraDeFundoQuandoNenhumaCasa(t *testing.T) {
 	h := newHarness(t, prazoYAML)
-	if d := duracaoDoEvento(t, h, nil, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
+	if d := durationOfEvent(t, h, nil, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
 		t.Errorf("duração = %v, quero 7d", d)
 	}
 }
@@ -74,7 +74,7 @@ schema:
       type: int64
 `
 	h := newHarness(t, yaml)
-	if d := duracaoDoEvento(t, h, nil, `{"id":"a","tipo":1}`); d != 0 {
+	if d := durationOfEvent(t, h, nil, `{"id":"a","tipo":1}`); d != 0 {
 		t.Errorf("duração = %v: sem regra de fundo, quem não casa não tem prazo", d)
 	}
 }
@@ -100,10 +100,10 @@ schema:
       type: int64
 `
 	h := newHarness(t, yaml)
-	if d := duracaoDoEvento(t, h, nil, `{"id":"a","tipo":9}`); d != 0 {
+	if d := durationOfEvent(t, h, nil, `{"id":"a","tipo":9}`); d != 0 {
 		t.Errorf("duração = %v, quero 0 (imortal)", d)
 	}
-	if d := duracaoDoEvento(t, h, nil, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
+	if d := durationOfEvent(t, h, nil, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
 		t.Errorf("duração = %v, quero o fundo", d)
 	}
 }
@@ -113,7 +113,7 @@ schema:
 func TestPrazoVeOValorDoEstadoQuandoOEventoNaoTrazOCampo(t *testing.T) {
 	h := newHarness(t, prazoYAML)
 	prev := encodeFields(t, fieldKV{h.fieldID("tipo"), vi64(2)})
-	if d := duracaoDoEvento(t, h, prev, `{"id":"a","sev":5}`); d != 3*time.Minute {
+	if d := durationOfEvent(t, h, prev, `{"id":"a","sev":5}`); d != 3*time.Minute {
 		t.Errorf("duração = %v, quero 3m: o tipo=2 do estado continua valendo", d)
 	}
 }
@@ -121,7 +121,7 @@ func TestPrazoVeOValorDoEstadoQuandoOEventoNaoTrazOCampo(t *testing.T) {
 func TestPrazoVeOValorDoEventoQuandoEleSobrescreveOEstado(t *testing.T) {
 	h := newHarness(t, prazoYAML)
 	prev := encodeFields(t, fieldKV{h.fieldID("tipo"), vi64(2)})
-	if d := duracaoDoEvento(t, h, prev, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
+	if d := durationOfEvent(t, h, prev, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
 		t.Errorf("duração = %v, quero 7d: o evento tirou a condição de valer", d)
 	}
 }
@@ -130,7 +130,7 @@ func TestPrazoVeOValorDoEventoQuandoEleSobrescreveOEstado(t *testing.T) {
 func TestPrazoTrataNullExplicitoComoAusente(t *testing.T) {
 	h := newHarness(t, prazoYAML)
 	prev := encodeFields(t, fieldKV{h.fieldID("tipo"), vi64(2)})
-	if d := duracaoDoEvento(t, h, prev, `{"id":"a","tipo":null}`); d != 7*24*time.Hour {
+	if d := durationOfEvent(t, h, prev, `{"id":"a","tipo":null}`); d != 7*24*time.Hour {
 		t.Errorf("duração = %v, quero 7d: o campo foi removido", d)
 	}
 }
@@ -190,8 +190,8 @@ func TestContadoresDeRegraContamPorRegra(t *testing.T) {
 	if m.RegrasCasadas[1] != 1 {
 		t.Errorf("regra de fundo casou %d vezes, quero 1", m.RegrasCasadas[1])
 	}
-	if m.SemRegra != 0 {
-		t.Errorf("semRegra = %d: com regra de fundo, ninguém fica sem", m.SemRegra)
+	if m.WithoutRegra != 0 {
+		t.Errorf("withoutRegra = %d: com regra de fundo, ninguém fica sem", m.WithoutRegra)
 	}
 }
 
@@ -213,8 +213,8 @@ schema:
       type: int64
 `)
 	h.apply(`{"id":"a","tipo":1}`)
-	if m := h.m.Metrics(); m.SemRegra != 1 || m.RegrasCasadas[0] != 0 {
-		t.Errorf("semRegra=%d regra[0]=%d, quero 1 e 0", m.SemRegra, m.RegrasCasadas[0])
+	if m := h.m.Metrics(); m.WithoutRegra != 1 || m.RegrasCasadas[0] != 0 {
+		t.Errorf("withoutRegra=%d regra[0]=%d, quero 1 e 0", m.WithoutRegra, m.RegrasCasadas[0])
 	}
 }
 

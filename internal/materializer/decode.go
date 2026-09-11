@@ -10,7 +10,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// instanteDoAplica é o placeholder que o decode entrega ao Parse no lugar do
+// instantOfAplica é o placeholder que o decode entrega ao Parse no lugar do
 // relógio: o instante de verdade só é conhecido — e só pode ser lido — na
 // aplicação, por carimbaRelogio.
 //
@@ -19,7 +19,7 @@ import (
 // expiração de forma imediata e nomeável; o instante do decode passaria por
 // correto em toda asserção e só apareceria em produção, como entidade que
 // morre cedo.
-var instanteDoAplica = time.Time{}
+var instantOfAplica = time.Time{}
 
 // Decodificado é um evento já tokenizado, resolvido contra o schema e
 // convertido — tudo o que o Apply fazia ANTES de tocar o storage, junto dos
@@ -40,32 +40,32 @@ var instanteDoAplica = time.Time{}
 type Decodificado struct {
 	PatchBuffer
 
-	// evento é uma JANELA sobre os bytes recebidos, não uma cópia. Ele
+	// event é uma JANELA sobre os bytes recebidos, não uma cópia. Ele
 	// precisa sobreviver até a aplicação por duas razões: a tabela histórica
-	// grava o evento cru na coluna `_raw`, e o evento que não parseia só é
+	// grava o event cru na coluna `_raw`, e o event que não parseia só é
 	// gravado como ruim lá, não aqui.
 	//
-	// Quem entrega o evento é dono de mantê-lo vivo até o Aplica retornar. No
+	// Quem entrega o event é dono de mantê-lo vivo até o Aplica retornar. No
 	// caminho Kafka isso é o `kgo.Record`, que o franz-go não reutiliza.
-	evento []byte
+	event []byte
 
-	// erro é o desfecho do decode, CRU: sem classificação e sem contagem.
+	// err é o desfecho do decode, CRU: sem classificação e sem contagem.
 	//
 	// Classificar aqui seria barato e errado. `failure` incrementa
 	// `byCat`/`invalid`/`failed`, e contador é efeito: um evento decodificado
 	// duas vezes — que é exatamente o que o reprocesso por descoberta faz —
 	// contaria dois. O balde do §101 é decidido por quem aplica, uma vez.
-	erro error
+	err error
 
-	// precisaDoWriter marca o evento que o decode não pôde terminar porque
+	// precisaOfWriter marca o evento que o decode não pôde terminar porque
 	// teria de CRIAR metadado — coluna nova ou tipo fixado. O conteúdo do
 	// Decodificado é lixo parcial neste caso, e o único uso legítimo dele é o
-	// `evento`: quem aplica refaz o parse do zero, pelo caminho completo, na
+	// `event`: quem aplica refaz o parse do zero, pelo caminho completo, na
 	// goroutine que pode escrever.
-	precisaDoWriter bool
+	precisaOfWriter bool
 }
 
-// Decodifica converte o evento em entries tipadas e ordenadas, sem tocar no
+// Decode converte o evento em entries tipadas e ordenadas, sem tocar no
 // storage e SEM LER O RELÓGIO.
 //
 // A ausência do relógio aqui é desenho, não economia. O carimbo de
@@ -80,7 +80,7 @@ type Decodificado struct {
 //
 // O decode é SOMENTE LEITURA sobre o schema: ele resolve contra as colunas que
 // já existem e para no primeiro metadado que teria de criar, marcando
-// precisaDoWriter. Isso não é precaução — é o que mantém o FieldID
+// precisaOfWriter. Isso não é precaução — é o que mantém o FieldID
 // determinístico. LookupOrCreate atribui o id na ordem de chamada, o id é
 // formato de disco e a posição da coluna no `SELECT *` é contrato do driver
 // JDBC; com N decodificadores, essa ordem viraria a de quem ganha o mutex.
@@ -92,13 +92,13 @@ type Decodificado struct {
 //
 // Não devolve erro: o desfecho fica em d.erro, porque quem transforma erro em
 // categoria, contador e política é o Aplica.
-func (m *Materializer) Decodifica(d *Decodificado, event []byte) {
-	d.evento = event
-	d.soLeitura = true
-	d.precisaDoWriter = false
-	d.erro = d.Parse(event, m.schema, instanteDoAplica)
-	if errors.Is(d.erro, errPrecisaDoWriter) {
-		d.precisaDoWriter, d.erro = true, nil
+func (m *Materializer) Decode(d *Decodificado, event []byte) {
+	d.event = event
+	d.onlyLeitura = true
+	d.precisaOfWriter = false
+	d.err = d.Parse(event, m.schema, instantOfAplica)
+	if errors.Is(d.err, errPrecisaOfWriter) {
+		d.precisaOfWriter, d.err = true, nil
 	}
 }
 
@@ -120,21 +120,21 @@ func (m *Materializer) Decodifica(d *Decodificado, event []byte) {
 // nenhuma. O caso ruim — origem que emite chave nova a cada evento — degrada
 // para a vazão de antes da Fase 4, nunca para menos, e aparece em
 // nishidb_ingest_decode_serial_total.
-func (m *Materializer) reprocessa(evento []byte) *Decodificado {
+func (m *Materializer) reprocessa(event []byte) *Decodificado {
 	m.metrics.decodeSerial.Add(1)
-	antes := m.schema.KnownFieldCount()
+	before := m.schema.KnownFieldCount()
 
 	d := &m.patch
-	d.evento = evento
-	d.soLeitura = false
-	d.precisaDoWriter = false
-	d.erro = d.Parse(evento, m.schema, instanteDoAplica)
+	d.event = event
+	d.onlyLeitura = false
+	d.precisaOfWriter = false
+	d.err = d.Parse(event, m.schema, instantOfAplica)
 
-	m.avaliaReprocessoInutil(m.schema.KnownFieldCount() > antes)
+	m.evaluateReprocessoInutil(m.schema.KnownFieldCount() > before)
 	return d
 }
 
-// avaliaReprocessoInutil dispara, uma vez, o aviso de que o reprocesso deixou
+// evaluateReprocessoInutil dispara, uma vez, o aviso de que o reprocesso deixou
 // de ser transitório.
 //
 // O QUE ELE DETECTA. O reprocesso tem três causas, e duas delas são limitadas
@@ -160,15 +160,15 @@ func (m *Materializer) reprocessa(evento []byte) *Decodificado {
 // grande o bastante para que uma rajada de descoberta com N workers — em que
 // vários decodificadores pedem a MESMA coluna e só o primeiro reprocesso a cria
 // — não o alcance, e pequeno o bastante para caber em minutos de ingestão real.
-const reprocessosInuteisParaAvisar = 1000
+const reprocessosInuteisForAvisar = 1000
 
-func (m *Materializer) avaliaReprocessoInutil(criouColuna bool) {
-	if criouColuna {
+func (m *Materializer) evaluateReprocessoInutil(criouColumn bool) {
+	if criouColumn {
 		m.reprocessosInuteis = 0
 		return
 	}
 	m.reprocessosInuteis++
-	if m.reprocessosInuteis < reprocessosInuteisParaAvisar {
+	if m.reprocessosInuteis < reprocessosInuteisForAvisar {
 		return
 	}
 	if m.aoReprocessar == nil || !m.avisouReprocesso.CompareAndSwap(false, true) {
@@ -179,7 +179,7 @@ func (m *Materializer) avaliaReprocessoInutil(criouColuna bool) {
 
 // AoReprocessar registra o aviso de reprocesso improdutivo. Chamado na fiação
 // do dataset, antes de a ingestão começar — como os avisos irmãos do schema.
-func (m *Materializer) AoReprocessar(fn func(seguidos int64, colunas int)) { m.aoReprocessar = fn }
+func (m *Materializer) AoReprocessar(fn func(seguidos int64, columns int)) { m.aoReprocessar = fn }
 
 // carimbaRelogio grava o instante da ESCRITA nas entries que o representam.
 //
@@ -192,7 +192,7 @@ func (m *Materializer) AoReprocessar(fn func(seguidos int64, colunas int)) { m.a
 // já estão ordenadas por FieldID e sem duplicatas, e um documento do piloto
 // traz ~1.650 delas: varrer todas para achar uma ou duas seria pagar uma
 // passada inteira por evento no caminho quente. É a mesma escolha que o
-// `slotDe` do prazo já faz, e pela mesma razão.
+// `slotOf` do prazo já faz, e pela mesma razão.
 func (d *Decodificado) carimbaRelogio(c *schema.Compiled, agoraMs int64) {
 	if c.WriteInstantField != nil {
 		d.carimba(c.WriteInstantField.ID, agoraMs)
@@ -223,11 +223,11 @@ func (d *Decodificado) carimba(id types.FieldID, agoraMs int64) {
 // para um uso benigno — a exceção é que corrói a regra. São `var` de pacote,
 // resolvidas uma vez na subida, então o custo não toca o caminho quente.
 var (
-	bytesPorEntry    = int(reflect.TypeOf(patchEntry{}).Size())
-	bytesPorContagem = int(reflect.TypeOf(contagem{}).Size())
-	bytesPorPai      = int(reflect.TypeOf(paiVisto{}).Size())
-	bytesPorFieldID  = int(reflect.TypeOf(types.FieldID(0)).Size())
-	bytesPorPonteiro = int(reflect.TypeOf((*schema.CompiledField)(nil)).Size())
+	bytesByEntry    = int(reflect.TypeOf(patchEntry{}).Size())
+	bytesByCount    = int(reflect.TypeOf(count{}).Size())
+	bytesByPai      = int(reflect.TypeOf(paiVisto{}).Size())
+	bytesByFieldID  = int(reflect.TypeOf(types.FieldID(0)).Size())
+	bytesByPonteiro = int(reflect.TypeOf((*schema.CompiledField)(nil)).Size())
 )
 
 // BytesRetidos é a memória que este Decodificado SEGURA entre eventos.
@@ -251,11 +251,11 @@ func (d *Decodificado) BytesRetidos() int {
 	// cap(d.evento) entra porque o slot PRENDE aquele buffer enquanto o
 	// segura, e a fila já devolveu o orçamento de bytes dele no Recebe: sem
 	// esta parcela, a memória do evento em voo não é contada em lugar nenhum.
-	// Depois do Libera ela é zero, que é o estado de regime.
-	n := cap(d.arena) + cap(d.folha) + cap(d.nomeBuf) + cap(d.evento)
-	n += cap(d.entries)*bytesPorEntry + cap(d.contagens)*bytesPorContagem
-	n += cap(d.pais)*bytesPorPai + cap(d.paisFeitos)*bytesPorFieldID
-	n += cap(d.filhosBuf) * bytesPorPonteiro
+	// Depois do Release ela é zero, que é o estado de regime.
+	n := cap(d.arena) + cap(d.folha) + cap(d.nameBuf) + cap(d.event)
+	n += cap(d.entries)*bytesByEntry + cap(d.contagens)*bytesByCount
+	n += cap(d.pais)*bytesByPai + cap(d.paisFeitos)*bytesByFieldID
+	n += cap(d.filhosBuf) * bytesByPonteiro
 	n += d.parser.RetainedBytes()
 	for _, p := range d.aninhados {
 		n += p.RetainedBytes()
@@ -266,7 +266,7 @@ func (d *Decodificado) BytesRetidos() int {
 	return n
 }
 
-// Encolhe solta os buffers deste Decodificado quando ele passou do limiar.
+// Shrink solta os buffers deste Decodificado quando ele passou do limiar.
 //
 // Devolve true quando encolheu. O próximo evento realoca — que é o ponto: o
 // custo de uma realocação ocasional é preferível a K slots segurando, para
@@ -279,15 +279,15 @@ func (d *Decodificado) BytesRetidos() int {
 //
 // Atribui nil, e não `[:0]`: o comprimento não é o que ocupa memória. É a mesma
 // correção do débito 28.
-func (d *Decodificado) Encolhe(limiar int) bool {
+func (d *Decodificado) Shrink(limiar int) bool {
 	if limiar <= 0 || d.BytesRetidos() <= limiar {
 		return false
 	}
-	d.arena, d.folha, d.nomeBuf = nil, nil, nil
+	d.arena, d.folha, d.nameBuf = nil, nil, nil
 	d.entries, d.contagens = nil, nil
-	// pais entra aqui e TAMBÉM no Libera, e as duas coisas são diferentes: o
-	// Libera zera os elementos e trunca, porque quer soltar as janelas sobre o
-	// evento mantendo o array para reuso; o Encolhe solta o array.
+	// pais entra aqui e TAMBÉM no Release, e as duas coisas são diferentes: o
+	// Release zera os elementos e trunca, porque quer soltar as janelas sobre o
+	// evento mantendo o array para reuso; o Shrink solta o array.
 	d.pais, d.paisFeitos, d.filhosBuf = nil, nil, nil
 	// key é JANELA SOBRE O ARENA (patch.go a aponta para o Bytes convertido), e
 	// esquecer isto é soltar o arena sem soltar coisa nenhuma: o array continua
@@ -305,9 +305,9 @@ func (d *Decodificado) Encolhe(limiar int) bool {
 	return true
 }
 
-// Libera solta as referências ao EVENTO deste slot. Sempre, não só ao encolher.
+// Release solta as referências ao EVENTO deste slot. Sempre, não só ao encolher.
 //
-// É outra coisa que o Encolhe, e confundir as duas foi o defeito: o Encolhe
+// É outra coisa que o Shrink, e confundir as duas foi o defeito: o Shrink
 // devolve o buffer que é NOSSO e que o próximo evento realoca; este solta
 // memória de OUTRO DONO — o buffer de fetch do franz-go, do qual o evento é uma
 // janela. Segurá-la num slot ocioso mantém vivo o lote inteiro que a trouxe:
@@ -322,8 +322,8 @@ func (d *Decodificado) Encolhe(limiar int) bool {
 //
 // O `clear` antes do truncamento não é zelo: `pais[:0]` preserva o array, e o
 // coletor enxerga os ponteiros que ficaram além do comprimento.
-func (d *Decodificado) Libera() {
-	d.evento = nil
+func (d *Decodificado) Release() {
+	d.event = nil
 	clear(d.pais)
 	d.pais = d.pais[:0]
 	d.parser.ReleaseInput()

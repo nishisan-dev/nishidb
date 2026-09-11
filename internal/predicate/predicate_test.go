@@ -26,15 +26,15 @@ import (
 // mutações do OR morriam e as do AND não. A assimetria era estrutural, não
 // descuido.
 
-// avalia é o avaliador de REFERÊNCIA: recursivo, óbvio, escrito para ser
+// evaluate é o avaliador de REFERÊNCIA: recursivo, óbvio, escrito para ser
 // obviamente correto e não para ser rápido. É o oráculo.
-func avalia(e binder.BoundExpr, slots []Slot) bool {
+func evaluate(e binder.BoundExpr, slots []Slot) bool {
 	switch n := e.(type) {
 	case *binder.BoundLogical:
 		if n.Op == parser.LogicalAnd {
-			return avalia(n.Left, slots) && avalia(n.Right, slots)
+			return evaluate(n.Left, slots) && evaluate(n.Right, slots)
 		}
-		return avalia(n.Left, slots) || avalia(n.Right, slots)
+		return evaluate(n.Left, slots) || evaluate(n.Right, slots)
 	case *binder.BoundComparison:
 		s := slots[n.Slot]
 		if !s.Present {
@@ -51,20 +51,20 @@ func avalia(e binder.BoundExpr, slots []Slot) bool {
 	}
 }
 
-func campoInt(id types.FieldID) *schema.CompiledField {
+func fieldInt(id types.FieldID) *schema.CompiledField {
 	return &schema.CompiledField{ID: id, Name: fmt.Sprintf("c%d", id), Type: types.TypeInt64}
 }
 
 func cmpInt(sl int, op parser.CmpOp, v int64) *binder.BoundComparison {
 	return &binder.BoundComparison{
-		Field: campoInt(types.FieldID(sl + 1)), Slot: sl, Op: op,
+		Field: fieldInt(types.FieldID(sl + 1)), Slot: sl, Op: op,
 		Kind: binder.CompareInt, Val: types.Value{Type: types.TypeInt64, I64: v},
 	}
 }
 
-// estados enumera TODAS as combinações de (ausente, valor 0, valor 1) para k
+// states enumera TODAS as combinações de (ausente, valor 0, valor 1) para k
 // slots: 3^k. É a varredura exaustiva do espaço que o predicado observa.
-func estados(k int) [][]Slot {
+func states(k int) [][]Slot {
 	total := 1
 	for i := 0; i < k; i++ {
 		total *= 3
@@ -90,22 +90,22 @@ func estados(k int) [][]Slot {
 	return out
 }
 
-func confere(t *testing.T, nome string, e binder.BoundExpr, k int) {
+func confere(t *testing.T, name string, e binder.BoundExpr, k int) {
 	t.Helper()
-	p, err := Compila(e, k)
+	p, err := Compile(e, k)
 	if err != nil {
-		t.Fatalf("%s: Compila: %v", nome, err)
+		t.Fatalf("%s: Compile: %v", name, err)
 	}
 	var mismatches int64
-	for _, s := range estados(k) {
-		want := avalia(e, s)
-		if got := p.Avalia(s, &mismatches); got != want {
-			t.Fatalf("%s com slots %v: programa = %v, árvore = %v", nome, resumo(s), got, want)
+	for _, s := range states(k) {
+		want := evaluate(e, s)
+		if got := p.Evaluate(s, &mismatches); got != want {
+			t.Fatalf("%s com slots %v: programa = %v, árvore = %v", name, summary(s), got, want)
 		}
 	}
 }
 
-func resumo(s []Slot) string {
+func summary(s []Slot) string {
 	out := ""
 	for _, sl := range s {
 		if !sl.Present {
@@ -140,10 +140,10 @@ func TestProvaPrecedenciaEAgrupamento(t *testing.T) {
 		"(a AND b) OR c":         or(and(a, b), c),
 		"a AND (b OR c)":         and(a, or(b, c)),
 		"(a AND b) OR (a AND c)": or(and(a, b), and(a, c)),
-		"a IS NULL AND b":        and(&binder.BoundNullCheck{Field: campoInt(1), Slot: 0}, b),
+		"a IS NULL AND b":        and(&binder.BoundNullCheck{Field: fieldInt(1), Slot: 0}, b),
 	}
-	for nome, expr := range casos {
-		t.Run(nome, func(t *testing.T) { confere(t, nome, expr, 3) })
+	for name, expr := range casos {
+		t.Run(name, func(t *testing.T) { confere(t, name, expr, 3) })
 	}
 }
 
@@ -156,12 +156,12 @@ func TestProvaProgramaIgualArvoreEmArvoresGeradas(t *testing.T) {
 	)
 	r := rand.New(rand.NewPCG(42, 1))
 
-	var monta func(prof int) binder.BoundExpr
-	monta = func(prof int) binder.BoundExpr {
+	var build func(prof int) binder.BoundExpr
+	build = func(prof int) binder.BoundExpr {
 		if prof == 0 || r.IntN(3) == 0 {
 			sl := r.IntN(slots)
 			if r.IntN(4) == 0 {
-				return &binder.BoundNullCheck{Field: campoInt(types.FieldID(sl + 1)), Slot: sl, Not: r.IntN(2) == 0}
+				return &binder.BoundNullCheck{Field: fieldInt(types.FieldID(sl + 1)), Slot: sl, Not: r.IntN(2) == 0}
 			}
 			ops := []parser.CmpOp{parser.CmpEq, parser.CmpNe, parser.CmpGt, parser.CmpGte, parser.CmpLt, parser.CmpLte}
 			return cmpInt(sl, ops[r.IntN(len(ops))], int64(r.IntN(2)))
@@ -170,11 +170,11 @@ func TestProvaProgramaIgualArvoreEmArvoresGeradas(t *testing.T) {
 		if r.IntN(2) == 0 {
 			op = parser.LogicalOr
 		}
-		return &binder.BoundLogical{Op: op, Left: monta(prof - 1), Right: monta(prof - 1)}
+		return &binder.BoundLogical{Op: op, Left: build(prof - 1), Right: build(prof - 1)}
 	}
 
 	for i := 0; i < arvores; i++ {
-		expr := monta(4)
+		expr := build(4)
 		confere(t, fmt.Sprintf("árvore %d", i), expr, slots)
 	}
 }

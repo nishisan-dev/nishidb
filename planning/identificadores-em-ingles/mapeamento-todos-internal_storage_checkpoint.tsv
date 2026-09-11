@@ -1,0 +1,4 @@
+pacote	especie	endereco	novo	motivo
+internal/storage/checkpoint	var	ErrNoManifest	ErrInManifest	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/checkpoint	local	decode.segCount	secCount	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/checkpoint	var	ErrNoOffsets	ErrInOffsets	tradução abrangente de funções/tipos/métodos via script automatizado

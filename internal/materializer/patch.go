@@ -52,7 +52,7 @@ type PatchBuffer struct {
 	aninhados   []*jsonp.Parser
 	folha       []byte
 	descobridor *jsonp.Parser
-	nomeBuf     []byte
+	nameBuf     []byte
 	// filhosBuf serve ao caminho do pai com forma divergente (array, null,
 	// escalar), que precisa enumerar TODAS as colunas daquele documento para
 	// removê-las. É buffer e não slice novo pela mesma razão dos vizinhos,
@@ -68,10 +68,10 @@ type PatchBuffer struct {
 	// godoc do tipo contagem para o porquê — em uma linha: o evento que o
 	// writer reprocessa passa pelo Parse duas vezes, e contar dentro dele
 	// dobraria os números que o `_meta.fields` publica.
-	contagens []contagem
+	contagens []count
 
-	// soLeitura proíbe este Parse de CRIAR metadado: coluna nova e tipo fixado
-	// ficam de fora, e o Parse para com errPrecisaDoWriter no ponto exato em
+	// onlyLeitura proíbe este Parse de CRIAR metadado: coluna nova e tipo fixado
+	// ficam de fora, e o Parse para com errPrecisaOfWriter no ponto exato em
 	// que precisaria de um dos dois.
 	//
 	// É o que permite decodificar fora da goroutine do writer. Deixar N
@@ -82,42 +82,42 @@ type PatchBuffer struct {
 	// é fixado na primeira observação" viraria "na primeira a chegar no lock",
 	// não "no menor offset". A violação já foi vista em produção; ver
 	// internal/cli/determinism_test.go.
-	soLeitura bool
+	onlyLeitura bool
 }
 
-// errPrecisaDoWriter interrompe um Parse somente-leitura que alcançou um
+// errPrecisaOfWriter interrompe um Parse somente-leitura que alcançou um
 // metadado a criar.
 //
 // É sentinela INTERNA: nunca chega ao classify e nunca vira categoria do §101.
-// Quem a recebe é o Decodifica, que a traduz em `precisaDoWriter` e devolve o
+// Quem a recebe é o Decode, que a traduz em `precisaOfWriter` e devolve o
 // evento intacto para o writer refazer pelo caminho completo.
-var errPrecisaDoWriter = errors.New("materializer: decode somente-leitura alcançou metadado a criar")
+var errPrecisaOfWriter = errors.New("materializer: decode somente-leitura alcançou metadado a criar")
 
 // resolveDesconhecido resolve o campo de topo que o FieldByName não conhece,
 // honrando o modo somente-leitura.
-func (b *PatchBuffer) resolveDesconhecido(c *schema.Compiled, nome []byte) (*schema.CompiledField, error) {
-	if !b.soLeitura {
-		return c.ResolveUnknown(nome)
+func (b *PatchBuffer) resolveDesconhecido(c *schema.Compiled, name []byte) (*schema.CompiledField, error) {
+	if !b.onlyLeitura {
+		return c.ResolveUnknown(name)
 	}
-	cf, precisa, err := c.ResolveUnknownReadOnly(nome)
+	cf, precisa, err := c.ResolveUnknownReadOnly(name)
 	if err != nil {
 		return nil, err
 	}
 	if precisa {
-		return nil, errPrecisaDoWriter
+		return nil, errPrecisaOfWriter
 	}
 	return cf, nil
 }
 
 // resolveAninhado resolve a coluna de uma chave descoberta dentro de um
 // documento, honrando o modo somente-leitura.
-func (b *PatchBuffer) resolveAninhado(pai *schema.CompiledField, nomeQualificado, caminho []byte) (*schema.CompiledField, error) {
-	if !b.soLeitura {
-		return b.compilado.ResolveNested(pai, nomeQualificado, caminho)
+func (b *PatchBuffer) resolveAninhado(pai *schema.CompiledField, nameQualificado, path []byte) (*schema.CompiledField, error) {
+	if !b.onlyLeitura {
+		return b.compilado.ResolveNested(pai, nameQualificado, path)
 	}
-	cf, precisa := b.compilado.ResolveNestedReadOnly(pai, nomeQualificado)
+	cf, precisa := b.compilado.ResolveNestedReadOnly(pai, nameQualificado)
 	if precisa {
-		return nil, errPrecisaDoWriter
+		return nil, errPrecisaOfWriter
 	}
 	return cf, nil
 }
@@ -130,8 +130,8 @@ func (b *PatchBuffer) resolveAninhado(pai *schema.CompiledField, nomeQualificado
 // writer, e é por isso que o modo somente-leitura devolve a pendência em vez de
 // tentar.
 func (b *PatchBuffer) fixaTipo(c *schema.Compiled, cf *schema.CompiledField, t types.FieldType) error {
-	if b.soLeitura {
-		return errPrecisaDoWriter
+	if b.onlyLeitura {
+		return errPrecisaOfWriter
 	}
 	return c.FixAutoType(cf, t)
 }
@@ -205,8 +205,8 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 			if err != nil {
 				// A pendência do decode somente-leitura sobe CRUA: ela não é
 				// erro do evento, e embrulhá-la aqui a faria chegar ao
-				// Decodifica vestida de SCHEMA_VALIDATION.
-				if errors.Is(err, errPrecisaDoWriter) {
+				// Decode vestida de SCHEMA_VALIDATION.
+				if errors.Is(err, errPrecisaOfWriter) {
 					return err
 				}
 				return fmt.Errorf("campo %q: %w", f.Key, err) // SCHEMA_VALIDATION
@@ -226,7 +226,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 			// null JSON não fixa tipo: gravaria "sem tipo" e travaria o campo.
 			if t := InferType(f); t != types.TypeNull {
 				if err := b.fixaTipo(c, cf, t); err != nil {
-					if errors.Is(err, errPrecisaDoWriter) {
+					if errors.Is(err, errPrecisaOfWriter) {
 						return err
 					}
 					// Só o CONFLITO é evento ruim: o campo mudou de formato na
@@ -283,9 +283,9 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 			// que é estável durante todo o Parse — ao contrário do arena, que
 			// é reapontado a cada conversão. Os outros Kinds nem são
 			// percorridos, então o valor deles não é guardado.
-			pv := paiVisto{campo: cf, kind: f.Kind}
+			pv := paiVisto{field: cf, kind: f.Kind}
 			if f.Kind == jsonp.KindObject {
-				pv.valor = f.Raw
+				pv.value = f.Raw
 			}
 			b.pais = append(b.pais, pv)
 		}
@@ -297,7 +297,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 	// A extração roda DEPOIS do laço, porque precisa da última ocorrência de
 	// cada pai, e ANTES da ordenação, para que as derivadas participem do
 	// sort e do dedup como qualquer outra entry.
-	if err := b.extraiDerivadas(); err != nil {
+	if err := b.extractDerived(); err != nil {
 		return err
 	}
 

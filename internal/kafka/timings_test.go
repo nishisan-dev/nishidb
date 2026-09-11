@@ -22,7 +22,7 @@ import (
 // espera não terminasse. Foi assim no incidente de 27/08/2026, em que o poller
 // ficou preso uma hora.
 func TestFilaCheiaContaEsperaDoPollerENaoDoWriter(t *testing.T) {
-	f := NovaFila(1, 1<<20)
+	f := NewQueue(1, 1<<20)
 	ctx := context.Background()
 	if err := f.Envia(ctx, &kgo.Record{Value: []byte("a")}); err != nil {
 		t.Fatal(err)
@@ -51,12 +51,12 @@ func TestFilaCheiaContaEsperaDoPollerENaoDoWriter(t *testing.T) {
 		t.Fatalf("Envia: %v", err)
 	}
 
-	bloqueado, ocioso := f.Tempos()
+	bloqueado, idle := f.Tempos()
 	if bloqueado <= 0 {
 		t.Fatal("espera do poller não foi contada")
 	}
-	if ocioso != 0 {
-		t.Fatalf("writer contou %v de ociosidade sem nunca ter esperado", ocioso)
+	if idle != 0 {
+		t.Fatalf("writer contou %v de ociosidade sem nunca ter esperado", idle)
 	}
 }
 
@@ -67,16 +67,16 @@ func TestFilaCheiaContaEsperaDoPollerENaoDoWriter(t *testing.T) {
 // Este acumulador virou o `decode_idle`, que é a espera SOMADA de K
 // decodificadores — daí o nome do teste ter deixado de dizer "writer".
 func TestFilaVaziaContaOciosidadeDeQuemConsomeENaoDoPoller(t *testing.T) {
-	f := NovaFila(4, 1<<20)
-	ctx, cancela := context.WithTimeout(context.Background(), 40*time.Millisecond)
-	defer cancela()
+	f := NewQueue(4, 1<<20)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
 
 	// Nada na fila: quem consome bloqueia até o contexto acabar.
 	if _, ok, _ := f.recebeOuAcorda(ctx, nil); ok {
 		t.Fatal("recebeu item de uma fila vazia")
 	}
-	bloqueado, ocioso := f.Tempos()
-	if ocioso <= 0 {
+	bloqueado, idle := f.Tempos()
+	if idle <= 0 {
 		t.Fatal("ociosidade de quem consome não foi contada")
 	}
 	if bloqueado != 0 {
@@ -87,7 +87,7 @@ func TestFilaVaziaContaOciosidadeDeQuemConsomeENaoDoPoller(t *testing.T) {
 // O caminho rápido não conta nada, e é o que mantém a instrumentação honesta:
 // um contador que sobe em regime não distingue mais nada.
 func TestSemEsperaNadaEContado(t *testing.T) {
-	f := NovaFila(8, 1<<20)
+	f := NewQueue(8, 1<<20)
 	ctx := context.Background()
 	for i := 0; i < 4; i++ {
 		if err := f.Envia(ctx, &kgo.Record{Value: []byte("x")}); err != nil {
@@ -121,7 +121,7 @@ func TestDespertadorNaoEEngolidoPelaFilaCheia(t *testing.T) {
 	var viuTique int
 	const rodadas = 400
 	for i := 0; i < rodadas; i++ {
-		f := NovaFila(4, 1<<20)
+		f := NewQueue(4, 1<<20)
 		if err := f.Envia(ctx, &kgo.Record{Value: []byte("x")}); err != nil {
 			t.Fatal(err)
 		}
@@ -140,7 +140,7 @@ func TestDespertadorNaoEEngolidoPelaFilaCheia(t *testing.T) {
 // Enfileirar numa fila JÁ FECHADA é erro, não panic.
 //
 // A barreira de quiesce é enfileirada por uma goroutine que não é o poller:
-// aoRevogar roda na do group do franz-go e pode chegar depois de Roda ter
+// aoRevogar roda na do group do franz-go e pode chegar depois de Run ter
 // fechado a fila — o encerramento é justamente a janela em que uma revogação é
 // mais provável, porque sair do group a provoca.
 //
@@ -148,15 +148,15 @@ func TestDespertadorNaoEEngolidoPelaFilaCheia(t *testing.T) {
 // derruba o processo. Foi encontrado assim, pela suíte, ao mover a barreira de
 // fim de lote para a revogação.
 func TestEnfileirarEmFilaFechadaEErroENaoPanico(t *testing.T) {
-	f := NovaFila(4, 1<<20)
-	f.Fecha()
+	f := NewQueue(4, 1<<20)
+	f.Close()
 
 	defer func() {
 		if v := recover(); v != nil {
 			t.Fatalf("enfileirar em fila fechada paniquei: %v", v)
 		}
 	}()
-	err := f.EnviaBarreira(context.Background(), novaBarreira())
+	err := f.EnviaBarreira(context.Background(), newBarrier())
 	if !errors.Is(err, ErrFilaFechada) {
 		t.Fatalf("EnviaBarreira devolveu %v, quer ErrFilaFechada", err)
 	}
@@ -168,11 +168,11 @@ func TestEnfileirarEmFilaFechadaEErroENaoPanico(t *testing.T) {
 func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
 	st := &storeLento{demora: time.Millisecond}
 	cfg := &Config{Dataset: "eventos", Topic: "eventos", GroupID: "g", Brokers: []string{"127.0.0.1:9092"}}
-	fila := NovaFila(64, 1<<20)
-	w := NovoWriter(cfg, nil, st, fila, nil, registraMetricas(nil, "eventos"),
+	fila := NewQueue(64, 1<<20)
+	w := NewWriter(cfg, nil, st, fila, nil, registerMetrics(nil, "eventos"),
 		map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
 
-	// O writer é marcado como INICIADO sem que Roda rode: é a precondição que
+	// O writer é marcado como INICIADO sem que Run rode: é a precondição que
 	// torna a afirmação deste teste possível de fazer. O Quiesce ganhou um
 	// quarto caso — writer que nunca subiu devolve nil na hora, porque nada foi
 	// aplicado e não há quem drene —, e sem esta marca o teste passaria por
@@ -181,8 +181,8 @@ func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
 
 	// Enfileira barreira numa fila que já tem itens à frente dela. Sem ninguém
 	// drenando, o Quiesce tem de ficar esperando.
-	ctx, cancela := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancela()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	for i := 0; i < 8; i++ {
 		if err := fila.Envia(ctx, &kgo.Record{Partition: 0, Offset: int64(i), Value: []byte("x")}); err != nil {
 			t.Fatal(err)
@@ -222,9 +222,9 @@ func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
 //
 // É o quarto caso, e o que faltava. O plano nomeou três — barreira pronta,
 // writer que já saiu, contexto —, e o group do franz-go pode revogar partições
-// durante o próprio Abre, antes de o Consumidor.Roda ter lançado goroutine
+// durante o próprio Abre, antes de o Consumidor.Run ter lançado goroutine
 // nenhuma. Nesse instante a fila aceita a barreira, ninguém a consome, `parado`
-// não está fechado porque Roda não retornou, e o contexto do callback não está
+// não está fechado porque Run não retornou, e o contexto do callback não está
 // cancelado: o Quiesce espera para sempre DENTRO de um callback do franz-go, o
 // group cai atrás dele e o Close do cliente trava.
 //
@@ -236,8 +236,8 @@ func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
 func TestQuiesceVoltaNaHoraSeOWriterNuncaSubiu(t *testing.T) {
 	cfg := &Config{Dataset: "eventos", Topic: "eventos", GroupID: "g",
 		Brokers: []string{"127.0.0.1:9092"}, MaxPollRecords: 8, QueueSize: 8, QueueBytes: 1 << 20}
-	fila := NovaFila(cfg.QueueSize, cfg.QueueBytes)
-	w := NovoWriter(cfg, nil, &storeLento{}, fila, nil, registraMetricas(nil, "eventos"),
+	fila := NewQueue(cfg.QueueSize, cfg.QueueBytes)
+	w := NewWriter(cfg, nil, &storeLento{}, fila, nil, registerMetrics(nil, "eventos"),
 		map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
 
 	pronto := make(chan error, 1)

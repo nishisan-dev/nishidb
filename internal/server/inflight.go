@@ -10,7 +10,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
-// emVoo é o registro das consultas que estão correndo NESTE instante.
+// inVoo é o registro das consultas que estão correndo NESTE instante.
 //
 // Existe porque o medidor nishidb_query_active responde "quantas", e com o
 // prazo longo virando cidadão de primeira classe a pergunta do operador passou
@@ -22,36 +22,36 @@ import (
 // execuções da MESMA consulta são duas ocupações de vaga, e chaveá-las pelo
 // texto faria a segunda apagar a primeira do painel — justamente no cenário em
 // que o operador está tentando entender por que o pool encheu.
-type emVoo struct {
+type inVoo struct {
 	mu       sync.Mutex
 	proximo  uint64
-	consulta map[uint64]consultaEmVoo
+	consulta map[uint64]consultaInVoo
 }
 
-type consultaEmVoo struct {
+type consultaInVoo struct {
 	dataset string
 	hash    string
 	longa   bool
-	inicio  time.Time
+	start   time.Time
 }
 
-func novoEmVoo() *emVoo {
-	return &emVoo{consulta: make(map[uint64]consultaEmVoo)}
+func newInVoo() *inVoo {
+	return &inVoo{consulta: make(map[uint64]consultaInVoo)}
 }
 
-// registraEmVoo anota a consulta e devolve a função que a retira.
+// registerInVoo anota a consulta e devolve a função que a retira.
 //
-// A forma é a mesma de metricasDeQuery.admite, e pelo mesmo motivo: com o par
+// A forma é a mesma de metricsOfQuery.admite, e pelo mesmo motivo: com o par
 // registra/retira numa closure, um `defer` no chamador cobre TODOS os retornos
 // — inclusive os que ainda não existem. Uma entrada que sobrevive à consulta
 // vaza memória e, pior, mente no painel: o operador veria uma consulta de
 // horas que terminou há muito tempo.
-func (s *Servidor) registraEmVoo(dataset, sql string, longa bool, inicio time.Time) func() {
-	return s.emVoo.registra(dataset, sql, longa, inicio)
+func (s *Server) registerInVoo(dataset, sql string, longa bool, start time.Time) func() {
+	return s.inVoo.register(dataset, sql, longa, start)
 }
 
-func (e *emVoo) registra(dataset, sql string, longa bool, inicio time.Time) func() {
-	c := consultaEmVoo{dataset: dataset, hash: hashDoSQL(sql), longa: longa, inicio: inicio}
+func (e *inVoo) register(dataset, sql string, longa bool, start time.Time) func() {
+	c := consultaInVoo{dataset: dataset, hash: hashOfSQL(sql), longa: longa, start: start}
 	e.mu.Lock()
 	id := e.proximo
 	e.proximo++
@@ -72,7 +72,7 @@ func (e *emVoo) registra(dataset, sql string, longa bool, inicio time.Time) func
 // A cópia é feita sob lock e a formatação fora dele — segurar o mutex do
 // registro enquanto se serializa JSON faria o /v1/stats atrasar a admissão de
 // TODA consulta nova.
-func (e *emVoo) instantaneo(agora time.Time) []protocol.InFlightQuery {
+func (e *inVoo) instantaneo(agora time.Time) []protocol.InFlightQuery {
 	e.mu.Lock()
 	out := make([]protocol.InFlightQuery, 0, len(e.consulta))
 	for _, c := range e.consulta {
@@ -80,7 +80,7 @@ func (e *emVoo) instantaneo(agora time.Time) []protocol.InFlightQuery {
 			Dataset:   c.dataset,
 			SQLHash:   c.hash,
 			Long:      c.longa,
-			RunningMs: agora.Sub(c.inicio).Milliseconds(),
+			RunningMs: agora.Sub(c.start).Milliseconds(),
 		})
 	}
 	e.mu.Unlock()
@@ -104,19 +104,19 @@ func (e *emVoo) instantaneo(agora time.Time) []protocol.InFlightQuery {
 // quando alguma consulta começasse ou terminasse, e o número que interessa
 // cresce SOZINHO enquanto nada acontece — que é exatamente o estado de um
 // servidor travado numa consulta longa.
-func (e *emVoo) maisAntiga(agora time.Time) float64 {
+func (e *inVoo) maisAntiga(agora time.Time) float64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var pior time.Duration
 	for _, c := range e.consulta {
-		if d := agora.Sub(c.inicio); d > pior {
+		if d := agora.Sub(c.start); d > pior {
 			pior = d
 		}
 	}
 	return pior.Seconds()
 }
 
-// hashDoSQL identifica a consulta sem publicar o texto dela.
+// hashOfSQL identifica a consulta sem publicar o texto dela.
 //
 // O texto NÃO vai para o registro porque ele pode carregar literais com dado do
 // cliente, e o §95 proíbe registrar payload por default — é a mesma razão de o
@@ -126,7 +126,7 @@ func (e *emVoo) maisAntiga(agora time.Time) float64 {
 //
 // Doze caracteres hexadecimais (48 bits) são folga de sobra para o punhado de
 // consultas que cabe no pool, e cabem numa coluna de terminal.
-func hashDoSQL(sql string) string {
+func hashOfSQL(sql string) string {
 	soma := sha256.Sum256([]byte(sql))
 	return hex.EncodeToString(soma[:6])
 }

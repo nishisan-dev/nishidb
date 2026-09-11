@@ -101,7 +101,7 @@ melhorias — não sobreviveram à leitura:
 - **`CountIncompatibleValue` já recebe o `*CompiledField`**
   ([compile.go:270-280](internal/schema/compile.go:270)), então o segundo contador
   da Melhoria B entra sem mudança de assinatura, como o documento previu.
-- **`_meta.fields` absorve colunas novas sem lista paralela**: `colunasIDs` sai de
+- **`_meta.fields` absorve colunas novas sem lista paralela**: `columnsIDs` sai de
   `FieldsByID()` ([meta.go:160](internal/query/meta/meta.go:160)) e a ordenação por
   FieldID já está resolvida no `sort.Slice` de
   [source.go:158](internal/query/meta/source.go:158).
@@ -119,7 +119,7 @@ melhorias — não sobreviveram à leitura:
    recusado em [spec.go:492](internal/schema/spec.go:492).
 
 2. **Há seis rotas de perda NÃO contadas, e uma delas é a errata pela porta que
-   ficou aberta.** A auditoria de `extraiDerivadas`/`descobreAninhados`
+   ficou aberta.** A auditoria de `extractDerived`/`descobreAninhados`
    ([extract.go](internal/materializer/extract.go)) respondeu a Pergunta 1 do
    documento com um "sim, e pior":
 
@@ -174,19 +174,19 @@ melhorias — não sobreviveram à leitura:
 
 8. **🔴 A compaction não devolve disco ao filesystem enquanto o processo vive.**
    Achado fora do pedido, confirmado no código, e determinístico — não é corrida.
-   `compactaSegmento` lê o segmento que vai aposentar por
-   `s.segR.ScanFrom` ([compaction.go:287](internal/storage/compaction.go:287));
+   `compactaSegment` lê o segmento que vai aposentar por
+   `s.secR.ScanFrom` ([compaction.go:287](internal/storage/compaction.go:287));
    `ScanFrom` chama `r.file(seg)`, que **cacheia** o fd
    ([segment.go:307](internal/storage/segment/segment.go:307)); o cache **não tem
    despejo** — o único `delete(r.fds, id)` vive dentro de `Reader.Close()`
    ([segment.go:444](internal/storage/segment/segment.go:444)), que só roda no
    `Close` do Store ([store.go:1823](internal/storage/store.go:1823)); e
-   `aposentaSegmento` faz `os.Remove`
+   `aposentaSegment` faz `os.Remove`
    ([compaction.go:490](internal/storage/compaction.go:490)), cujo unlink tira o
    **nome** e não o **inode**.
 
    **Nenhum instrumento do projeto enxerga isso**: `dirBytes` do harness,
-   `discoDosSegmentos` do e2e e o `Stats.StorageBytes` medem o *listing* do
+   `diskOfSegmentos` do e2e e o `Stats.StorageBytes` medem o *listing* do
    diretório, e para os três o arquivo sumiu. Os "3,68 GB em 104 aposentadorias"
    do aceite do M4 são medida de listing, não de filesystem. Isso muda a leitura
    do débito 65 e atinge o piloto, que existe para provar o plateau de disco.
@@ -205,14 +205,14 @@ melhorias — não sobreviveram à leitura:
 
    **E a correção ingênua quebra query.** Hoje o fd aberto é o que salva a janela
    entre `locs.Get` ([store.go:1016](internal/storage/store.go:1016)) e
-   `segR.ReadRecord` ([store.go:1024](internal/storage/store.go:1024)): com o
+   `secR.ReadRecord` ([store.go:1024](internal/storage/store.go:1024)): com o
    nome já removido, o `pread` sobre o inode ainda devolve bytes válidos com CRC
    correto. Fechar o fd sem barreira faz a leitura seguinte cair em `os.ErrClosed`
    ou ENOENT e abortar a query. **A ordem é obrigatória: barreira primeiro,
    fechamento depois.**
 
 9. **O `OFFSET` quebra o `--limit` do CLI — o débito 46 vira pré-requisito, não
-   dívida.** `comLimit` ([query.go:156](internal/cli/query.go:156)) reescreve o
+   dívida.** `withLimit` ([query.go:156](internal/cli/query.go:156)) reescreve o
    **texto** do SQL: corta na última cláusula `LIMIT` e anexa a sua. Com
    `OFFSET`, `SELECT ... LIMIT 10 OFFSET 20` vira `SELECT ... OFFSET 20 LIMIT 5`
    — ordem inválida, e o usuário recebe erro de sintaxe sobre um texto que não
@@ -240,7 +240,7 @@ melhorias — não sobreviveram à leitura:
 13. **Débito 77 é a armadilha operacional das duas melhorias.** Ligar
    `unknownFields: include` num dataset com linhas **não é recusado** hoje. A
    Melhoria A troca colunas descobertas por colunas declaradas, e o nome novo
-   **é** pego pela guarda `validaDerivadasContraDicionario`
+   **é** pego pela guarda `validateDerivedAgainstDictionary`
    ([store.go:1857](internal/storage/store.go:1857)) — a recriação é cobrada
    corretamente. Mas o débito continua aberto ao lado.
 
@@ -394,7 +394,7 @@ mede alocação e **não CPU**: rodar o A4 antes e depois é o que fecha a prome
 4. Helper `inteiro(n uint64) types.Value` após
    [source.go:183](internal/query/meta/source.go:183).
 5. Nada mais muda: o `sort.Slice` de [source.go:158](internal/query/meta/source.go:158)
-   e o `AppendField` absorvem as colunas novas, e `colunasIDs` também.
+   e o `AppendField` absorvem as colunas novas, e `columnsIDs` também.
 
 **Entrega:** a consulta do documento de melhorias passa a responder:
 ```sql
@@ -455,12 +455,12 @@ medição:
 3. `Reader.CloseSegment(seg)` novo em
    [segment.go](internal/storage/segment/segment.go): `delete(r.fds, seg)` +
    `Close()` sob o `mu` que já existe.
-4. `aposentaSegmento` segura `aposMu.Lock()` do `os.Rename`
+4. `aposentaSegment` segura `aposMu.Lock()` do `os.Rename`
    ([compaction.go:455](internal/storage/compaction.go:455)) até depois do
    `os.Remove` ([:490](internal/storage/compaction.go:490)), com `CloseSegment`
    entre os dois. **Os dois `Checkpoint()` ficam FORA** — eles tomam `wmu` e podem
    levar 30s.
-5. `podaSegmentoAposentado` ([compaction.go:556](internal/storage/compaction.go:556))
+5. `podaSegmentAposentado` ([compaction.go:556](internal/storage/compaction.go:556))
    sai da seção de `aposMu` e vai para depois do unlink.
 6. Rótulo `fechaFd` em `apTrace` ([store.go:445](internal/storage/store.go:445)),
    emitido **de dentro** do helper — pela doutrina de que rótulo ao lado da
@@ -469,7 +469,7 @@ medição:
 > **⚠️ Inversão de ordem de lock — a armadilha desta fase.** `Put` toma `wmu` e,
 > dentro dele, faz `lookup` → `ReadRecord`
 > ([store.go:1087](internal/storage/store.go:1087)) — ou seja, tomaria
-> `aposMu.RLock` **com `wmu` na mão**. E `podaSegmentoAposentado` toma `wmu`
+> `aposMu.RLock` **com `wmu` na mão**. E `podaSegmentAposentado` toma `wmu`
 > ([compaction.go:561](internal/storage/compaction.go:561)). Se a poda ficasse
 > dentro da seção de `aposMu`, seria `aposMu → wmu` de um lado e `wmu → aposMu`
 > do outro: **deadlock**. A invariante fica escrita e vira teste — *`aposMu` é
@@ -508,7 +508,7 @@ exige filesystem real, não `tmpfs`.
    expiração oportunista é do writer.
 3. `executor.Store` ganha `GetByRowIDEm`/`ScanLiveEm`/`LookupBitmapEm`; o
    `fakestorage` acompanha, senão o alloc gate passa a testar outra coisa.
-4. `executor.Open` toma o snapshot **antes** de `fonteDoPlano`
+4. `executor.Open` toma o snapshot **antes** de `sourceOfPlano`
    ([executor.go:125](internal/query/executor/executor.go:125)). `ScanLive` perde
    o cálculo do limite ([store.go:1632](internal/storage/store.go:1632)) — quem o
    fixa passa a ser o executor, para os quatro planos.
@@ -543,7 +543,7 @@ de liveness que o débito 25 fechou.
    `query.timeout`** — um `nishidb.yaml` de hoje produz comportamento byte a byte
    idêntico. Validação: `maxTimeout >= timeout`, senão recusa nomeando as duas
    chaves.
-2. `contextoDaConsulta` ([query.go:212](internal/server/query.go:212)) compara
+2. `contextoOfConsulta` ([query.go:212](internal/server/query.go:212)) compara
    contra `MaxTimeout` em vez de `Timeout`; a ausência de `timeoutMs` passa a usar
    `Timeout` **explicitamente** — o fallback de
    [executor.go:51](internal/query/executor/executor.go:51) é uma segunda fonte de
@@ -620,7 +620,7 @@ vira erro nomeado (`ROW_TOO_LARGE`) em vez de crescimento silencioso.
   que **não** se reusa é o header de 64 bytes de segmento: arquivo de spill não é
   segmento e não pode parecer um no `ListSegments`.
 - **O gate de alocação:** `TestScanAllocsIndependenteDoNumeroDeRows` **não
-  afrouxa** — continua com igualdade exata e `tetoPorQuery = 38`. Muda o **nome**
+  afrouxa** — continua com igualdade exata e `ceilingByQuery = 38`. Muda o **nome**
   e o godoc, para dizer que governa o caminho **sem operador acumulador**. O gate
   novo, `TestMemoriaDoAcumuladorEhLimitadaPeloOrcamentoENaoPeloResultado`, é uma
   afirmação diferente e mede **bytes de heap** com o resultado variando 10×.
@@ -734,7 +734,7 @@ A palavra mais barata primeiro: prova a máquina de reconhecimento contextual em
    bitmap de `status`** e revalida o LIKE.
 
 **Entrega:** `LIKE`/`NOT LIKE` respondem, em varredura, com **zero alocação por
-linha**. E `_meta.fields` ganha o operador de graça — `meta.Abre` reusa o mesmo
+linha**. E `_meta.fields` ganha o operador de graça — `meta.Open` reusa o mesmo
 binder, planner e executor ([meta.go:60-81](internal/query/meta/meta.go:60)).
 **Testes:** `TestSublinhadoCasaUmCaractereEhNaoUmByte` (com `'ç'` e com byte UTF-8
 inválido), `TestNotLikeSobreCampoAusenteEhFalso`,
@@ -748,7 +748,7 @@ senão o zero-alocação do matcher não é medido.
 
 #### D1 — `OFFSET`, e o conserto do `--limit`
 
-> **O achado que torna esta fase obrigatória e não opcional.** `comLimit`
+> **O achado que torna esta fase obrigatória e não opcional.** `withLimit`
 > ([query.go:151](internal/cli/query.go:151)) corta em `ultimoLimit` e **descarta
 > tudo à direita**. Com `... LIMIT 5 OFFSET 10`, o `--limit 3` produz
 > `... LIMIT 3`: a paginação **evapora** e o comando devolve as 3 **primeiras**
@@ -760,7 +760,7 @@ senão o zero-alocação do matcher não é medido.
 `HasLimit`); `parseOffset` reusando as recusas de `parseLimit`
 ([:469](internal/query/parser/parser.go:469)); `offset` sai de
 `unsupportedClauses`; contador de skip antes de `it.emitidas++`
-([executor.go:222](internal/query/executor/executor.go:222)); e `comLimit` passa a
+([executor.go:222](internal/query/executor/executor.go:222)); e `withLimit` passa a
 usar **`parser.Parse`**, cortando em `min(LimitPos, OffsetPos)` e **preservando o
 OFFSET**. Isso paga a metade local do **débito 46**.
 
@@ -1040,7 +1040,7 @@ de crash da aposentadoria), [expiry_test.go](internal/storage/expiry_test.go)
 
 **Gates que mudam, e como:**
 - `TestScanAllocsIndependenteDoNumeroDeRows` **não afrouxa** — igualdade exata e
-  `tetoPorQuery = 38` intactos. Muda o **nome** e o godoc, para dizer que governa
+  `ceilingByQuery = 38` intactos. Muda o **nome** e o godoc, para dizer que governa
   o caminho **sem operador acumulador**, e **ganha uma query com `LIKE`**.
 - Gate novo para o sort, com outra propriedade: `SortBytes` proporcional às
   linhas e **`SortBytes`/linha constante** — é o que separa "buffer que cresce

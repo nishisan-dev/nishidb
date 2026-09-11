@@ -26,14 +26,14 @@ func FuzzAppendRow(f *testing.F) {
 	f.Add(uint8(types.TypeString), []byte("\xff\xfe"), "utf8_invalido")
 	f.Add(uint8(types.TypeString), []byte("x"), "nome\xffcom\nlixo")
 
-	f.Fuzz(func(t *testing.T, tag uint8, dados []byte, nome string) {
-		v := types.Value{Type: types.FieldType(tag), Bytes: dados}
+	f.Fuzz(func(t *testing.T, tag uint8, data []byte, name string) {
+		v := types.Value{Type: types.FieldType(tag), Bytes: data}
 		// Os tipos de largura fixa leem I64; alimentá-lo com os bytes exercita
 		// os dois caminhos com o mesmo corpus.
-		for _, b := range dados {
+		for _, b := range data {
 			v.I64 = v.I64<<8 | int64(b)
 		}
-		out := AppendRow(nil, Row{cols: []ColView{{Name: nome, Val: v}}})
+		out := AppendRow(nil, Row{cols: []ColView{{Name: name, Val: v}}})
 
 		// 1. Framing: exatamente uma quebra de linha, no fim.
 		if n := bytes.Count(out, []byte{'\n'}); n != 1 {
@@ -43,41 +43,41 @@ func FuzzAppendRow(f *testing.F) {
 			t.Fatalf("não termina em LF: %q", out)
 		}
 
-		// 2. A linha é JSON válido — MAS só quando o valor de entrada também
+		// 2. A row é JSON válido — MAS só quando o valor de entrada também
 		// era. Com um `json` de conteúdo inválido o encoder promete
 		// explicitamente APENAS o framing (D-Q16-2): o documento sai verbatim,
-		// sanitizado só nos control chars, e a falha degrada para "uma linha
+		// sanitizado só nos control chars, e a falha degrada para "uma row
 		// com json estranho" em vez de "o stream dessincronizou".
 		//
 		// Sem este guard o alvo exigia do fuzz uma garantia mais forte do que
 		// a que o código promete, e morria no primeiro `{"0":A}`.
-		linha := out[:len(out)-1]
-		if v.Type == types.TypeJSON && len(dados) > 0 && !json.Valid(dados) {
+		row := out[:len(out)-1]
+		if v.Type == types.TypeJSON && len(data) > 0 && !json.Valid(data) {
 			return // framing já aferido acima; validade não é prometida aqui
 		}
-		if !json.Valid(linha) {
-			t.Fatalf("JSON inválido: %q", linha)
+		if !json.Valid(row) {
+			t.Fatalf("JSON inválido: %q", row)
 		}
 
 		// 3. A chave é o nome da coluna, normalizado para UTF-8 válido.
 		var m map[string]json.RawMessage
-		if err := json.Unmarshal(linha, &m); err != nil {
-			t.Fatalf("unmarshal: %v (%q)", err, linha)
+		if err := json.Unmarshal(row, &m); err != nil {
+			t.Fatalf("unmarshal: %v (%q)", err, row)
 		}
 		if len(m) != 1 {
-			t.Fatalf("%d chaves, want 1: %q", len(m), linha)
+			t.Fatalf("%d chaves, want 1: %q", len(m), row)
 		}
-		if _, ok := m[normalizaUTF8([]byte(nome))]; !ok {
-			t.Fatalf("chave não bate: %q em %q", nome, linha)
+		if _, ok := m[normalizaUTF8([]byte(name))]; !ok {
+			t.Fatalf("chave não bate: %q em %q", name, row)
 		}
 
 		// 4. Para string, o valor volta igual ao original UTF-8-normalizado.
 		if v.Type == types.TypeString {
 			var s string
-			if err := json.Unmarshal(m[normalizaUTF8([]byte(nome))], &s); err != nil {
+			if err := json.Unmarshal(m[normalizaUTF8([]byte(name))], &s); err != nil {
 				t.Fatalf("valor não é string: %v", err)
 			}
-			if want := normalizaUTF8(dados); s != want {
+			if want := normalizaUTF8(data); s != want {
 				t.Fatalf("valor voltou %q, want %q", s, want)
 			}
 		}

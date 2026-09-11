@@ -13,13 +13,13 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
-// specComTexto é um dataset com uma coluna de texto LARGA e sem índice.
+// specWithText é um dataset com uma coluna de texto LARGA e sem índice.
 //
 // Sem índice de propósito: o campo bitmap tem teto de 65535 bytes por valor
 // (values.dict), então uma linha patológica construída sobre ele seria recusada
 // pela INGESTÃO e o teste mediria outra coisa. O que se quer exercer é o
 // orçamento de BUFFER DE SAÍDA, que é do caminho de consulta.
-const specComTexto = `version: 1
+const specWithText = `version: 1
 name: %s
 materialization:
   key:
@@ -42,23 +42,23 @@ schema:
 // resultado parcial que se anuncia como parcial, que é a razão de a moldura
 // NDJSON existir.
 func TestLinhaAcimaDoOrcamentoSaiComoRowTooLargeNoFecho(t *testing.T) {
-	a := novoAmbienteComStorage(t,
-		blocoPadrao+"runtime:\n  memoryTarget: 8MiB\n  query:\n    maxBufferPerQuery: 8KiB\n", "")
-	a.escreveDataset("d", strings.ReplaceAll(specComTexto, "%s", "d"))
-	semeiaComTextoLargo(t, a, "d")
+	a := newEnvWithStorage(t,
+		blockPadrao+"runtime:\n  memoryTarget: 8MiB\n  query:\n    maxBufferPerQuery: 8KiB\n", "")
+	a.writeDataset("d", strings.ReplaceAll(specWithText, "%s", "d"))
+	seedWithTextLargo(t, a, "d")
 
-	cfg := a.carrega()
-	srv, err := server.Novo(cfg, server.Opcoes{})
+	cfg := a.load()
+	srv, err := server.Novo(cfg, server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 
 	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id, texto FROM d"}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, quer 200: o schema sai antes de a linha grande aparecer", resp.StatusCode)
 	}
-	n, codigo := desfechoDoStream(t, resp)
+	n, codigo := desfechoOfStream(t, resp)
 	if codigo != protocol.CodeRowTooLarge {
 		t.Fatalf("fecho = %q com %d rows, quer %q", codigo, n, protocol.CodeRowTooLarge)
 	}
@@ -68,7 +68,7 @@ func TestLinhaAcimaDoOrcamentoSaiComoRowTooLargeNoFecho(t *testing.T) {
 
 	// E a recusa alimenta o contador do PROCESSO, que é o número pelo qual o
 	// operador decide subir a chave.
-	if v := valorDaMetrica(t, srv, "nishidb_query_budget_rejected_total"); v < 1 {
+	if v := valueOfMetrica(t, srv, "nishidb_query_budget_rejected_total"); v < 1 {
 		t.Errorf("nishidb_query_budget_rejected_total = %v, quer >= 1", v)
 	}
 }
@@ -79,20 +79,20 @@ func TestLinhaAcimaDoOrcamentoSaiComoRowTooLargeNoFecho(t *testing.T) {
 // de "esta consulta não funciona": um erro qualquer no caminho produziria o
 // mesmo vermelho. Só o par prova que quem decidiu foi a CHAVE.
 func TestAMesmaLinhaPassaComOrcamentoQueAComporta(t *testing.T) {
-	a := novoAmbienteComStorage(t,
-		blocoPadrao+"runtime:\n  memoryTarget: 8MiB\n  query:\n    maxBufferPerQuery: 1MiB\n", "")
-	a.escreveDataset("d", strings.ReplaceAll(specComTexto, "%s", "d"))
-	semeiaComTextoLargo(t, a, "d")
+	a := newEnvWithStorage(t,
+		blockPadrao+"runtime:\n  memoryTarget: 8MiB\n  query:\n    maxBufferPerQuery: 1MiB\n", "")
+	a.writeDataset("d", strings.ReplaceAll(specWithText, "%s", "d"))
+	seedWithTextLargo(t, a, "d")
 
-	cfg := a.carrega()
-	srv, err := server.Novo(cfg, server.Opcoes{})
+	cfg := a.load()
+	srv, err := server.Novo(cfg, server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 
 	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id, texto FROM d"}`)
-	n, codigo := desfechoDoStream(t, resp)
+	n, codigo := desfechoOfStream(t, resp)
 	if codigo != "" {
 		t.Fatalf("fecho = %q com 1MiB de orçamento: a linha de 64KiB cabe", codigo)
 	}
@@ -101,22 +101,22 @@ func TestAMesmaLinhaPassaComOrcamentoQueAComporta(t *testing.T) {
 	}
 }
 
-// semeiaComTextoLargo materializa poucas linhas pequenas e UMA enorme.
+// seedWithTextLargo materializa poucas linhas pequenas e UMA enorme.
 //
 // A ordem importa: as pequenas primeiro, para que o teste possa afirmar que o
 // cliente recebeu linhas VÁLIDAS antes da recusa. Uma linha grande na primeira
 // posição faria "0 rows + erro" — indistinguível de uma consulta que falhou na
 // abertura.
-func semeiaComTextoLargo(t *testing.T, a *ambiente, nome string) {
+func seedWithTextLargo(t *testing.T, a *env, name string) {
 	t.Helper()
-	cfg := a.carrega()
-	spec, err := schema.Load(cfg.DatasetSpecPath(nome), cfg.QueryDefaults())
+	cfg := a.load()
+	spec, err := schema.Load(cfg.DatasetSpecPath(name), cfg.QueryDefaults())
 	if err != nil {
 		t.Fatal(err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:         cfg.DatasetDir(nome),
-		Dataset:     nome,
+		Dir:         cfg.DatasetDir(name),
+		Dataset:     name,
 		SegmentSize: cfg.SegmentSize(),
 	})
 	if err != nil {
@@ -162,8 +162,8 @@ func semeiaComTextoLargo(t *testing.T, a *ambiente, nome string) {
 func TestOrcamentoVoltaAoFimDeCadaConsulta(t *testing.T) {
 	// Orçamento que comporta DUAS consultas simultâneas de 64 KiB, mas não
 	// vinte acumuladas.
-	srv := servidorComBlocoDeQuery(t, 20,
-		blocoPadrao+"runtime:\n  memoryTarget: 256KiB\n  query:\n    maxBufferPerQuery: 64KiB\n",
+	srv := serverWithBlockOfQuery(t, 20,
+		blockPadrao+"runtime:\n  memoryTarget: 256KiB\n  query:\n    maxBufferPerQuery: 64KiB\n",
 		"")
 
 	for i := 0; i < 20; i++ {
@@ -171,7 +171,7 @@ func TestOrcamentoVoltaAoFimDeCadaConsulta(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("consulta %d: status = %d", i, resp.StatusCode)
 		}
-		if n, codigo := desfechoDoStream(t, resp); codigo != "" || n != 20 {
+		if n, codigo := desfechoOfStream(t, resp); codigo != "" || n != 20 {
 			t.Fatalf("consulta %d: %d rows, fecho %q — o orçamento não foi devolvido", i, n, codigo)
 		}
 	}
@@ -186,8 +186,8 @@ func TestOrcamentoVoltaAoFimDeCadaConsulta(t *testing.T) {
 	// corrida do próprio teste, não do produto. O que o teste afirma é que o
 	// medidor VOLTA a zero, não que volta antes de o cliente enxergar o fecho.
 	var ultimo float64
-	esperaAte(t, func() bool {
-		ultimo = valorDaMetrica(t, srv, "nishidb_query_buffer_bytes")
+	waitUntil(t, func() bool {
+		ultimo = valueOfMetrica(t, srv, "nishidb_query_buffer_bytes")
 		return ultimo == 0
 	}, "nishidb_query_buffer_bytes não voltou a zero sem consulta em voo")
 	if ultimo != 0 {

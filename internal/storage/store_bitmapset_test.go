@@ -29,14 +29,14 @@ func TestCamposIndexadosPorNomeResolvemPeloDicionario(t *testing.T) {
 	// e o dicionário vive dentro do Store. Sem declarar por nome, o
 	// bootstrap exigiria abrir sem índices, compilar, fechar e reabrir.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexadosPorNome: []string{"id", "status", "counter"}}
+	opts := Options{Dir: dir, IndexedFieldsByName: []string{"id", "status", "counter"}}
 	s := audOpen(t, opts)
 	defer s.Close()
 
 	// A ordem de criação no dicionário fixa os IDs 1..3.
 	for _, want := range []types.FieldID{fldID, fldStatus, fldCounter} {
 		if !s.Indexed(want) {
-			t.Fatalf("campo %d declarado por nome deveria ser indexado; conjunto=%v", want, s.CamposIndexados())
+			t.Fatalf("campo %d declarado por nome deveria ser indexado; conjunto=%v", want, s.FieldsIndexados())
 		}
 	}
 	mustPut(t, s, "bn", 1, statusPayload(t, s, "bn", "Start", 1), nil)
@@ -61,11 +61,11 @@ func TestCamposIndexadosPorIDEPorNomeSaoUniao(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}, CamposIndexadosPorNome: []string{"id", "status"}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}, IndexedFieldsByName: []string{"id", "status"}}
 	s2 := audOpen(t, opts)
 	defer s2.Close()
 	// "status" aparece dos dois lados: entra uma vez só.
-	if got := s2.CamposIndexados(); len(got) != 2 {
+	if got := s2.FieldsIndexados(); len(got) != 2 {
 		t.Fatalf("união deveria ter 2 campos distintos, obtido %v", got)
 	}
 }
@@ -99,7 +99,7 @@ func TestIndiceNovoEmDatasetPovoadoEhAceitoEResponde(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2, err := Open(Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}})
+	s2, err := Open(Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}})
 	if err != nil {
 		t.Fatalf("declarar índice sobre dataset povoado deveria ser aceito: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestIndiceNovoEmDatasetPovoadoEhAceitoEResponde(t *testing.T) {
 // escritos no intervalo simplesmente não têm a seção do campo, e enumeram.
 func TestAbrirSemUmCampoAntesIndexadoEhAceito(t *testing.T) {
 	dir := t.TempDir()
-	s := audOpen(t, Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}})
+	s := audOpen(t, Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}})
 	mustPut(t, s, "ra", 1, statusPayload(t, s, "ra", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
@@ -153,7 +153,7 @@ func TestIndiceNovoEmDatasetVazioEhPermitido(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2, err := Open(Options{Dir: dir, CamposIndexadosPorNome: []string{"id", "status", "counter"}})
+	s2, err := Open(Options{Dir: dir, IndexedFieldsByName: []string{"id", "status", "counter"}})
 	if err != nil {
 		t.Fatalf("dataset vazio deveria aceitar índice novo: %v", err)
 	}
@@ -187,10 +187,10 @@ func TestSegmentoQueEncolheuEhFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Trunca para um tamanho INTERMEDIÁRIO: maior que o header, menor que o
+	// Trunca para um size INTERMEDIÁRIO: maior que o header, menor que o
 	// registrado. Não é tail rasgado — é perda de records já checkpointados.
-	tamanho := fileSizeAud(t, audSegPath(dir, 1))
-	if err := os.Truncate(audSegPath(dir, 1), tamanho/2); err != nil {
+	size := fileSizeAud(t, audSecPath(dir, 1))
+	if err := os.Truncate(audSecPath(dir, 1), size/2); err != nil {
 		t.Fatal(err)
 	}
 

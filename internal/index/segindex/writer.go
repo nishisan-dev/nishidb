@@ -50,7 +50,7 @@ func (e *Writer) IsEmpty() bool { return len(e.ents) == 0 }
 // diretório. Writer vazio NÃO cria arquivo: "sem índice" é um estado que o
 // Lookup trata por enumeração, e um arquivo vazio faria a reconstrução
 // considerar o segmento pronto.
-func (e *Writer) WriteSealed(path string, seg uint32) error {
+func (e *Writer) WriteSealed(path string, sec uint32) error {
 	if e.IsEmpty() {
 		return nil
 	}
@@ -88,7 +88,7 @@ func (e *Writer) WriteSealed(path string, seg uint32) error {
 	// com posting, e o fielddict tem teto de 65.535 campos — o formato herda o
 	// teto da fonte dos FieldIDs.
 	buf = binary.LittleEndian.AppendUint16(buf, uint16(secCount))
-	buf = binary.LittleEndian.AppendUint64(buf, uint64(seg))
+	buf = binary.LittleEndian.AppendUint64(buf, uint64(sec))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(base))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(maxRow))
 	buf = append(buf, width)

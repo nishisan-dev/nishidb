@@ -17,7 +17,7 @@
 Valem para **todas** as tarefas.
 
 1. **§54 — compaction não carrega segmento em memória.** Streaming record a record, buffer reutilizado. Nenhum `[]types.Record` acumulado, nenhuma leitura de segmento inteiro.
-2. **§128 `NO multi-writer v1`.** Toda mutação de índice continua passando pelo writer único, sob `s.wmu`. `Publish`, `ApplyOverlay` e `segTally` permanecem writer-only.
+2. **§128 `NO multi-writer v1`.** Toda mutação de índice continua passando pelo writer único, sob `s.wmu`. `Publish`, `ApplyOverlay` e `secTally` permanecem writer-only.
 3. **Durabilidade por um caminho só.** `checkpoint.writeAtomic` ([manifest.go:250](../internal/storage/checkpoint/manifest.go:250)) é o único caminho de durabilidade provado do projeto, e o comentário lá proíbe duplicá-lo. A compaction não escreve manifest por conta própria: ela chama `Checkpoint()`.
 4. **Nenhuma dependência nova** (§97: binário único).
 5. **Idioma e estilo:** comentários, erros e nomes de teste em PT-BR, no estilo argumentativo existente — o comentário explica **por quê**, cita `§NN` e o débito que fecha. Sentinela por pacote + `errors.Is` na fronteira. Stdlib `testing`, zero testify.
@@ -53,7 +53,7 @@ O trabalho é **ciclo de vida de arquivo e coordenação com o writer**, não mo
 
 | # | Decisão | Escolha | Alternativa rejeitada |
 |---|---|---|---|
-| **D1** | Destino dos records vivos | **Copy-forward pelo segmento corrente**: re-apendar pelo `segW.Append` normal | Construir arquivo novo com ID próprio. Esbarra em três restrições reais: `checkHeader` amarra o `segmentID` ao nome do arquivo ([segment.go:70](../internal/storage/segment/segment.go:70)), `openNew` usa `O_EXCL`, e IDs vêm de `segID+1` no writer. Copy-forward faz as três desaparecerem e reusa rotação, tally e durabilidade já provadas |
+| **D1** | Destino dos records vivos | **Copy-forward pelo segmento corrente**: re-apendar pelo `secW.Append` normal | Construir arquivo novo com ID próprio. Esbarra em três restrições reais: `checkHeader` amarra o `segmentID` ao nome do arquivo ([segment.go:70](../internal/storage/segment/segment.go:70)), `openNew` usa `O_EXCL`, e IDs vêm de `secID+1` no writer. Copy-forward faz as três desaparecerem e reusa rotação, tally e durabilidade já provadas |
 | **D2** | Critério de "vivo" | **A location ainda nomeia este record** (`Unpack(locs.Get(rowID)) == (seg, off)`) | "Row visível". Um record **tombstoned** precisa ser copiado também: a location aponta para ele, e não copiá-lo deixaria a location pendurada num arquivo removido. Recuperar tombstone exige limpar location e primary, que é trabalho do TTL (M6) |
 | **D3** | Corrida com a ingestão | **Verificação e append na MESMA seção crítica de `s.wmu`** | Verificar fora do lock e apendar depois. Um update entre os dois faria o payload **antigo** vencer o novo — perda de dado silenciosa. É o motivo de existir `reapendaSeVivo` em vez de chamar `Put` |
 | **D4** | Tally do segmento esvaziado | **Zerado por autoridade da varredura completa** | Confiar nos decrementos. Não fecha: o tally é limite superior (débitos 38 e 45), então os decrementos param no resíduo órfão e nunca alcançam zero. A varredura viu **todos** os records e é a única fonte exata — é exatamente o que [manifest.go:73](../internal/storage/checkpoint/manifest.go:73) prevê ao dizer "só uma varredura do segmento reconstrói o tally" |
@@ -68,7 +68,7 @@ O trabalho é **ciclo de vida de arquivo e coordenação com o writer**, não mo
 
 | Arquivo | Responsabilidade |
 |---|---|
-| `internal/storage/compaction.go` **(novo)** | `reapendaSeVivo`, `compactaSegmento`, `aposentaSegmento`, seleção de candidatos. Todo o motor num arquivo só |
+| `internal/storage/compaction.go` **(novo)** | `reapendaSeVivo`, `compactaSegment`, `aposentaSegment`, seleção de candidatos. Todo o motor num arquivo só |
 | `internal/storage/compaction_test.go` **(novo)** | Unidade: liveness, corrida com update, tally zerado |
 | `internal/storage/compaction_crash_test.go` **(novo)** | As duas janelas de crash do D5, com SIGKILL real |
 | `internal/storage/store.go` | `Stats` ganha campos de disco; ciclo de vida da goroutine; `Close` cancela e aguarda |
@@ -130,7 +130,7 @@ git commit -m "Tira o teto do lint, que fazia a baseline esconder apontamento no
 
 **Files:** Modify `internal/storage/store.go`, `internal/storage/store_checkpoint.go`; Test: `internal/storage/store_test.go`
 
-O passo 3 da Task 1 prescreveu `s.wmu.Lock()` para ler `segTally` e `segSize`. Está **errado**, e o próprio godoc de `Stats` dizia por quê antes de ser alterado: `Stats` é seguro para leitores concorrentes porque o segmento corrente vem de um **espelho atômico**, não do writer.
+O passo 3 da Task 1 prescreveu `s.wmu.Lock()` para ler `secTally` e `segSize`. Está **errado**, e o próprio godoc de `Stats` dizia por quê antes de ser alterado: `Stats` é seguro para leitores concorrentes porque o segmento corrente vem de um **espelho atômico**, não do writer.
 
 `Checkpoint` segura `wmu` do início ao fim, e o histograma dele vai até 30s. Com o lock, todo scrape de `/metrics` e toda chamada de `/v1/stats` param atrás do checkpoint — ou seja, o painel cega exatamente sob a pressão que ele existe para observar. Num milestone cujo objetivo é tornar a curva de disco visível, é a regressão mais cara possível.
 
@@ -173,7 +173,7 @@ Expected: FAIL por timeout de 2s — é o defeito.
 
 - [ ] **Step 3: Implementar espelhos atômicos**
 
-Trocar a iteração de mapa por três espelhos, no mesmo padrão que `curSegID` já usa neste arquivo:
+Trocar a iteração de mapa por três espelhos, no mesmo padrão que `curSecID` já usa neste arquivo:
 
 ```go
 	// Espelhos atômicos dos agregados do tally. Existem para que Stats NUNCA
@@ -276,7 +276,7 @@ Um detector que ninguém prova disparando é pior que detector nenhum: lê-se co
 
 - [ ] **Step 1: Escrever o teste que mata M7, M8 e M14**
 
-Um subteste por espelho. O hook de corrupção entra em `export_test.go`, no estilo do `zeraTallyDoSegmento` que já existe lá.
+Um subteste por espelho. O hook de corrupção entra em `export_test.go`, no estilo do `zeraTallyOfSegment` que já existe lá.
 
 ```go
 // TestConferenciaDeEspelhosAcusaCadaEspelhoDivergente prova que o detector
@@ -299,7 +299,7 @@ func TestConferenciaDeEspelhosAcusaCadaEspelhoDivergente(t *testing.T) {
 				t.Fatalf("Checkpoint de base: %v", err)
 			}
 			antes := s.EspelhosDivergentesForTest()
-			s.CorrompeEspelhoParaTeste(c.corrompe) // sob s.wmu
+			s.CorruptEspelhoForTest(c.corrompe) // sob s.wmu
 			if err := s.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint: %v", err)
 			}
@@ -345,7 +345,7 @@ Expected: FAIL — os hooks de teste ainda não existem.
 
 - [ ] **Step 4: Implementar só os hooks**
 
-`CorrompeEspelhoParaTeste` e o ponto de trace ao fim de `recoverFrom`. **Nenhuma mudança de comportamento de produção** — o código já está correto; o que falta é o oráculo.
+`CorruptEspelhoForTest` e o ponto de trace ao fim de `recoverFrom`. **Nenhuma mudança de comportamento de produção** — o código já está correto; o que falta é o oráculo.
 
 - [ ] **Step 5: Re-matar os quatro mutantes, um a um**
 
@@ -366,13 +366,13 @@ git commit -m "Prova que a conferência de espelhos dispara, em vez de supô-lo"
 
 ### Task 2b: fixar `storage_bytes` contra o disco real — **Task 2 continua reprovada**
 
-**Files:** Modify `internal/server/metrics_dataset_test.go`, `internal/server/query_test.go` (helper `servidorComDados`)
+**Files:** Modify `internal/server/metrics_dataset_test.go`, `internal/server/query_test.go` (helper `serverWithData`)
 
-A revisão adversarial provou por mutação: trocar o valor publicado de `st.StorageBytes` para `st.LiveBytesUpperBound` — ou para `st.RowCount` — deixa **a suíte inteira verde**. A única asserção é `bytes.Valor > 0`, que qualquer número positivo satisfaz. É o defeito do débito 6 outra vez: medir sem oráculo.
+A revisão adversarial provou por mutação: trocar o valor publicado de `st.StorageBytes` para `st.LiveBytesUpperBound` — ou para `st.RowCount` — deixa **a suíte inteira verde**. A única asserção é `bytes.Value > 0`, que qualquer número positivo satisfaz. É o defeito do débito 6 outra vez: medir sem oráculo.
 
 O mutante sobrevivente é exatamente a "métrica que mente" que o comentário do arquivo declara estar evitando — publicar o tally de liveness sob um nome que promete tamanho de arquivo.
 
-Bloqueio a remover: `servidorComDados` ([query_test.go:98](../internal/server/query_test.go:98)) descarta o ambiente e não expõe o diretório do dataset.
+Bloqueio a remover: `serverWithData` ([query_test.go:98](../internal/server/query_test.go:98)) descarta o ambiente e não expõe o diretório do dataset.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -382,12 +382,12 @@ Bloqueio a remover: `servidorComDados` ([query_test.go:98](../internal/server/qu
 // isto, publicar o tally de liveness no lugar do tamanho de arquivo passa
 // despercebido — e era esse o mutante que sobrevivia à suíte inteira.
 func TestStorageBytesBateComOsArquivosEmDisco(t *testing.T) {
-	srv, dir := servidorComDadosEDiretorio(t)
-	amostra, ok := achaAmostra(coletaAmostras(t, srv), metrics.MetStorageBytes)
+	srv, dir := serverWithDataEDiretorio(t)
+	amostra, ok := achaAmostra(coletaSamples(t, srv), metrics.MetStorageBytes)
 	if !ok {
 		t.Fatal("nishidb_storage_bytes não foi publicada")
 	}
-	var emDisco int64
+	var inDisk int64
 	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
 	if err != nil {
 		t.Fatalf("glob: %v", err)
@@ -397,24 +397,24 @@ func TestStorageBytesBateComOsArquivosEmDisco(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stat %s: %v", p, err)
 		}
-		emDisco += fi.Size()
+		inDisk += fi.Size()
 	}
-	if emDisco == 0 {
+	if inDisk == 0 {
 		t.Fatal("nenhum segmento em disco: o teste não estaria provando nada")
 	}
-	if int64(amostra.Valor) != emDisco {
-		t.Errorf("storage_bytes = %d, arquivos em disco somam %d", int64(amostra.Valor), emDisco)
+	if int64(amostra.Value) != inDisk {
+		t.Errorf("storage_bytes = %d, arquivos em disco somam %d", int64(amostra.Value), inDisk)
 	}
 }
 ```
 
 - [ ] **Step 2: Provar que o teste mata o mutante**
 
-Trocar `Valor: float64(st.StorageBytes)` por `float64(st.LiveBytesUpperBound)` em [metrics_dataset.go:95](../internal/server/metrics_dataset.go:95), rodar o teste, **confirmar FAIL**, e reverter. Um teste que não mata este mutante não fecha a Task 2.
+Trocar `Value: float64(st.StorageBytes)` por `float64(st.LiveBytesUpperBound)` em [metrics_dataset.go:95](../internal/server/metrics_dataset.go:95), rodar o teste, **confirmar FAIL**, e reverter. Um teste que não mata este mutante não fecha a Task 2.
 
 - [ ] **Step 3: Implementar**
 
-Expor o diretório no helper (`servidorComDadosEDiretorio`, com `servidorComDados` delegando a ele para não tocar nos chamadores existentes).
+Expor o diretório no helper (`serverWithDataEDiretorio`, com `serverWithData` delegando a ele para não tocar nos chamadores existentes).
 
 - [ ] **Step 4: Rodar e confirmar que passa**
 
@@ -498,7 +498,7 @@ Acrescentar ao struct `Stats`:
 	LiveBytesUpperBound uint64
 ```
 
-Em `Stats()`, trocar a derivação por contagem real do tally (que o checkpoint já mantém alinhado com `ListSegments`) e acumular os bytes. `s.segTally` é writer-only, então a leitura acontece sob `s.wmu`:
+Em `Stats()`, trocar a derivação por contagem real do tally (que o checkpoint já mantém alinhado com `ListSegments`) e acumular os bytes. `s.secTally` é writer-only, então a leitura acontece sob `s.wmu`:
 
 ```go
 	s.wmu.Lock()
@@ -507,7 +507,7 @@ Em `Stats()`, trocar a derivação por contagem real do tally (que o checkpoint 
 		liveBytes    uint64
 		segmentos    uint32
 	)
-	for id, t := range s.segTally {
+	for id, t := range s.secTally {
 		segmentos++
 		liveBytes += t.liveBytes
 		if info, ok := s.segSize[id]; ok {
@@ -549,14 +549,14 @@ O comentário atual ([metrics_dataset.go:16](../internal/server/metrics_dataset.
 // texto de ajuda. Publicar o segundo sem a ressalva repetiria o defeito que o
 // comentário do M2 evitou.
 func TestMetricaDeDiscoEhPublicadaComSemanticaDeLimite(t *testing.T) {
-	srv := servidorDeTeste(t)
-	amostras := coletaAmostras(t, srv)
+	srv := serverOfTest(t)
+	amostras := coletaSamples(t, srv)
 	bytes, ok := achaAmostra(amostras, metrics.MetStorageBytes)
 	if !ok {
 		t.Fatal("nishidb_storage_bytes não foi publicada")
 	}
-	if bytes.Valor <= 0 {
-		t.Errorf("storage_bytes = %v, queria > 0", bytes.Valor)
+	if bytes.Value <= 0 {
+		t.Errorf("storage_bytes = %v, queria > 0", bytes.Value)
 	}
 	lixo, ok := achaAmostra(amostras, metrics.MetStorageGarbageBytes)
 	if !ok {
@@ -579,19 +579,19 @@ No coletor existente, acrescentar as duas amostras e **reescrever o comentário 
 ```go
 			metrics.Sample{
 				Family: metrics.MetStorageBytes,
-				Nome:    metrics.MetStorageBytes,
+				Name:    metrics.MetStorageBytes,
 				Ajuda:   "bytes ocupados pelos segmentos do dataset em disco",
 				Tipo:    metrics.TypeGauge,
 				Labels:  rotulo,
-				Valor:   float64(st.StorageBytes),
+				Value:   float64(st.StorageBytes),
 			},
 			metrics.Sample{
 				Family: metrics.MetStorageGarbageBytes,
-				Nome:    metrics.MetStorageGarbageBytes,
+				Name:    metrics.MetStorageGarbageBytes,
 				Ajuda:   "bytes de garbage nos segmentos: há PELO MENOS isto de lixo (limite inferior, porque a liveness é limite superior — débitos 38 e 45)",
 				Tipo:    metrics.TypeGauge,
 				Labels:  rotulo,
-				Valor:   float64(uint64(st.StorageBytes) - min(uint64(st.StorageBytes), st.LiveBytesUpperBound)),
+				Value:   float64(uint64(st.StorageBytes) - min(uint64(st.StorageBytes), st.LiveBytesUpperBound)),
 			},
 ```
 
@@ -636,16 +636,16 @@ git commit -m "Publica a curva de disco, que é o alarme que antecede o ENOSPC"
 >    rename, e o segundo `Checkpoint()` **antes** do unlink (Task 6).
 > 4. Toda escrita que um espelho atômico descreve ajusta **o espelho, na mesma
 >    seção crítica**. São **quatro**, não três: `segCount`, `liveBytesAll` e
->    `diskBytesAll` espelham os agregados de `segTally`/`segSize`, e
->    **`curSegID` espelha o segmento em que o writer apenda** — ou seja,
->    qualquer caminho que chame `segW.Append` e possa rotacionar tem de
+>    `diskBytesAll` espelham os agregados de `secTally`/`segSize`, e
+>    **`curSecID` espelha o segmento em que o writer apenda** — ou seja,
+>    qualquer caminho que chame `secW.Append` e possa rotacionar tem de
 >    atualizá-lo.
 >
->    O `curSegID` é o mais perigoso dos quatro porque é o **único que nada
+>    O `curSecID` é o mais perigoso dos quatro porque é o **único que nada
 >    reconcilia**: a recarga do checkpoint refaz os outros três e o
 >    `conferaEspelhos()` os confere, mas ele não entra em nenhum dos dois — uma
 >    vez atrasado, fica atrasado. Foi encontrado assim na Task 4, onde apagar o
->    `curSegID.Store` deixava a suíte inteira verde. O estrago aterrissa na
+>    `curSecID.Store` deixava a suíte inteira verde. O estrago aterrissa na
 >    Task 7: a decisão D6 é "nunca eleger o segmento corrente", e é este campo
 >    que responde qual é ele — com o espelho obsoleto, a compaction elegeria o
 >    segmento em que o writer está apendando, que é exatamente o que a D6
@@ -654,7 +654,7 @@ git commit -m "Publica a curva de disco, que é o alarme que antecede o ENOSPC"
 > ### O que a Fase A′ mudou para esta fase
 >
 > `segCount`, `liveBytesAll` e `diskBytesAll` são espelhos atômicos dos
-> agregados de `segTally`/`segSize` ([store.go:213](../internal/storage/store.go:213)),
+> agregados de `secTally`/`segSize` ([store.go:213](../internal/storage/store.go:213)),
 > e existem para que `Stats()` não bloqueie atrás do writer. Eles são mantidos
 > em **exatamente três lugares**: o `applyRecord`
 > ([store.go:904](../internal/storage/store.go:904) e
@@ -771,7 +771,7 @@ func TestCopyForwardNaoRessuscitaPayloadAntigoSobUpdateConcorrente(t *testing.T)
 	if _, _, err := st.Put(key, 2, 0, payloadCom(t, "v", "novo"), nil); err != nil {
 		t.Fatalf("Put do update: %v", err)
 	}
-	rec := recordEm(t, st, seg, off)
+	rec := recordIn(t, st, seg, off)
 	copiado, _, err := st.ReapendaSeVivoParaTeste(seg, off, rec)
 	if err != nil {
 		t.Fatalf("reapendaSeVivo: %v", err)
@@ -833,11 +833,11 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (bool, int, er
 	if err != nil {
 		return false, 0, err
 	}
-	novoSeg, novoOff, err := s.segW.Append(buf)
+	novoSeg, novoOff, err := s.secW.Append(buf)
 	if err != nil {
 		return false, 0, s.failWriter(err)
 	}
-	s.curSegID.Store(novoSeg)
+	s.curSecID.Store(novoSeg)
 	// prevPayload é o PRÓPRIO payload: é o que faz o decremento de liveness
 	// do applyRecord descontar exatamente o tamanho do record de origem. Os
 	// bitmaps ficam sem trabalho pela mesma razão — o SET liga os bits que já
@@ -861,7 +861,7 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (bool, int, er
 }
 ```
 
-Expor `ReapendaSeVivoParaTeste`, `LocationDeTeste` e `recordEm` em `internal/storage/export_test.go`, seguindo o que já existe lá.
+Expor `ReapendaSeVivoParaTeste`, `LocationDeTeste` e `recordIn` em `internal/storage/export_test.go`, seguindo o que já existe lá.
 
 - [ ] **Step 4: Rodar e confirmar que passa**
 
@@ -877,14 +877,14 @@ git commit -m "Copia record vivo para frente sem deixar update concorrente perde
 
 ---
 
-### Task 5: `compactaSegmento` — varredura e o tally que a varredura zera
+### Task 5: `compactaSegment` — varredura e o tally que a varredura zera
 
 **Files:**
 - Modify: `internal/storage/compaction.go`
 - Test: `internal/storage/compaction_test.go`
 
 **Interfaces:**
-- Produces: `func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (copiados uint64, lidos, escritos int64, err error)` — consumido pelas Tasks 6 e 7.
+- Produces: `func (s *Store) compactaSegment(ctx context.Context, seg uint32) (copiados uint64, lidos, escritos int64, err error)` — consumido pelas Tasks 6 e 7.
 
 O ponto sutil: os decrementos do `applyRecord` **não** levam o tally da origem a zero, porque ele parte de um limite superior (débitos 38 e 45) e o resíduo órfão sobrevive a qualquer número de decrementos. Quem zera é a varredura, que viu todos os records — exatamente o que [manifest.go:73](../internal/storage/checkpoint/manifest.go:73) antecipa.
 
@@ -902,7 +902,7 @@ func TestVarreduraCompletaZeraOTallyMesmoComResiduoOrfao(t *testing.T) {
 	inflaTallyDeTeste(t, st, 1, 7, 441) // 7 records / 441 bytes órfãos
 
 	if _, _, _, err := st.CompactaSegmentoParaTeste(context.Background(), 1); err != nil {
-		t.Fatalf("compactaSegmento: %v", err)
+		t.Fatalf("compactaSegment: %v", err)
 	}
 	live, recs := st.TallyDeTeste(1)
 	if live != 0 || recs != 0 {
@@ -918,7 +918,7 @@ Run: `go test ./internal/storage/ -run TestVarreduraCompletaZera -v` → FAIL.
 - [ ] **Step 3: Implementar**
 
 ```go
-// compactaSegmento varre seg record a record e copia para frente os que a
+// compactaSegment varre seg record a record e copia para frente os que a
 // location ainda nomeia (§55). Streaming puro: um record por vez, buffer
 // reutilizado pelo ScanFrom, nada proporcional ao tamanho do segmento (§54).
 //
@@ -928,12 +928,12 @@ Run: `go test ./internal/storage/ -run TestVarreduraCompletaZera -v` → FAIL.
 // 45): os decrementos param no resíduo órfão do replay e nunca alcançam zero.
 // A varredura é a única leitura exata do segmento que existe no produto, e
 // esta é a linha que fecha os dois débitos.
-func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (uint64, int64, int64, error) {
+func (s *Store) compactaSegment(ctx context.Context, seg uint32) (uint64, int64, int64, error) {
 	var (
 		copiados          uint64
 		lidos, escritos   int64
 	)
-	_, err := s.segR.ScanFrom(seg, segment.HeaderSize, func(off uint32, rec types.Record) error {
+	_, err := s.secR.ScanFrom(seg, segment.HeaderSize, func(off uint32, rec types.Record) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -952,7 +952,7 @@ func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (uint64, int64
 		return copiados, lidos, escritos, err
 	}
 	s.wmu.Lock()
-	if t := s.segTally[seg]; t != nil {
+	if t := s.secTally[seg]; t != nil {
 		// NORMATIVO: o espelho acompanha o mapa na MESMA seção crítica.
 		// Zerar só o mapa deixa liveBytesAll à frente dele, e o
 		// conferaEspelhos() do próximo checkpoint acusa divergência a cada
@@ -1044,7 +1044,7 @@ git commit -m "Zera o tally pela varredura, que é a única leitura exata do seg
 - Create: `internal/storage/compaction_crash_test.go`
 
 **Interfaces:**
-- Produces: `func (s *Store) aposentaSegmento(seg uint32) error`.
+- Produces: `func (s *Store) aposentaSegment(seg uint32) error`.
 
 A sequência do D5, com o que cada crash deixa:
 
@@ -1109,7 +1109,7 @@ Em `compaction.go`:
 // manifest, em que o segmento listado e ausente vira ErrDatasetCorrupt.
 const sufixoAposentado = ".retired"
 
-func (s *Store) aposentaSegmento(seg uint32) error {
+func (s *Store) aposentaSegment(seg uint32) error {
 	dir := filepath.Join(s.opts.Dir, "data")
 	canonico := filepath.Join(dir, fmt.Sprintf("segment-%08d.dat", seg))
 	aposentado := canonico + sufixoAposentado
@@ -1136,14 +1136,14 @@ func (s *Store) aposentaSegmento(seg uint32) error {
 ```
 
 **A poda dos mapas é NORMATIVA (invariante 4).** O segmento aposentado sai de
-`segTally` e de `segSize`, e `segCount`/`diskBytesAll` acompanham na mesma
+`secTally` e de `segSize`, e `segCount`/`diskBytesAll` acompanham na mesma
 seção crítica. A reconciliação do checkpoint se cura sozinha depois — ela
 reconstrói tudo do `ListSegments` —, mas entre a poda e o checkpoint seguinte
 os números publicados por `Stats()` estariam errados, e o `conferaEspelhos()`
 acusaria. Um teste tem de provar que `SegmentsTotal` **desce** e que o
 checkpoint seguinte não registra divergência.
 
-Em `store_recovery.go`, antes da checagem de segmento listado e ausente, rodar `reparaAposentados(dir, m.Segments)`: restaura o `.retired` cujo ID está no manifest, remove o que não está.
+Em `store_recovery.go`, antes da checagem de segmento listado e ausente, rodar `repairAposentados(dir, m.Segments)`: restaura o `.retired` cujo ID está no manifest, remove o que não está.
 
 - [ ] **Step 4: Rodar e confirmar que passa**
 
@@ -1202,7 +1202,7 @@ git commit -m "Aposenta o segmento por rename, e ensina o Open a reparar as duas
 - Test: `internal/storage/compaction_test.go`
 
 **Interfaces:**
-- Produces: `func (s *Store) IniciaCompaction(ctx context.Context, ratio float64)` e `func (s *Store) ParaCompaction()`.
+- Produces: `func (s *Store) StartCompaction(ctx context.Context, ratio float64)` e `func (s *Store) ForCompaction()`.
 
 - [ ] **Step 1: Escrever os testes que falham**
 
@@ -1226,7 +1226,7 @@ func TestSegmentoCorrenteNuncaEhCandidato(t *testing.T) {
 func TestCloseCancelaEAguardaACompaction(t *testing.T) {
 	st := abreStoreParaTeste(t)
 	popula(t, st, 20000)
-	st.IniciaCompaction(context.Background(), 0.99)
+	st.StartCompaction(context.Background(), 0.99)
 
 	feito := make(chan error, 1)
 	go func() { feito <- st.Close() }()
@@ -1256,11 +1256,11 @@ Seleção pelo §53, lendo o tally como limite superior — o que apenas **adia*
 // direção segura registrada no débito 38 — subestimar faria a compaction
 // descartar dado vivo, superestimar só adia.
 func (s *Store) candidatos(ratio float64) []uint32 {
-	corrente := s.curSegID.Load()
+	corrente := s.curSecID.Load()
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	var out []uint32
-	for id, t := range s.segTally {
+	for id, t := range s.secTally {
 		if id == corrente {
 			continue // D6: não se compacta o segmento em que se apenda
 		}
@@ -1283,7 +1283,7 @@ O laço de background dorme entre passadas, respeita `ctx`, e **para na primeira
 	// A compaction é cancelada e AGUARDADA antes do quiesce: Close só recebe
 	// vida.Lock() quando nenhuma operação está em voo, e a varredura é uma
 	// operação longa. Sem o join aqui, Close esperaria a passada inteira.
-	s.ParaCompaction()
+	s.ForCompaction()
 ```
 
 Ligar no servidor a partir da config da Task 3.
@@ -1334,7 +1334,7 @@ git commit -m "Elege candidato pelo §53 e dá à compaction um ciclo de vida qu
 func TestSeriesDeCompactionGanhamAlimentador(t *testing.T) {
 	srv := servidorComCompaction(t)
 	rodaUmaPassada(t, srv)
-	amostras := coletaAmostras(t, srv)
+	amostras := coletaSamples(t, srv)
 	for _, nome := range []string{
 		metrics.MetCompactionRunning,
 		metrics.MetCompactionBytesRead,
@@ -1358,7 +1358,7 @@ Run: `go test ./internal/server/ -run TestSeriesDeCompaction -v` → FAIL.
 
 - [ ] **Step 3: Implementar**
 
-`running` é medidor 0/1; `bytes_read`/`bytes_written` são contadores monotônicos alimentados pelos retornos de `compactaSegmento`. Remover o comentário `// sem alimentador até o M4` de `names.go`.
+`running` é medidor 0/1; `bytes_read`/`bytes_written` são contadores monotônicos alimentados pelos retornos de `compactaSegment`. Remover o comentário `// sem alimentador até o M4` de `names.go`.
 
 - [ ] **Step 4: Rodar e confirmar que passa**
 
@@ -1438,9 +1438,9 @@ Nascem **remotos** (`--server`), pelo argumento do flock exclusivo: se forem só
 // comando do débito 54: ele tem de responder COM o servidor de pé, que é
 // justamente quando o flock barra o caminho local.
 func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
-	srv := servidorDeTeste(t)
+	srv := serverOfTest(t)
 	var out bytes.Buffer
-	code := cli.Roda([]string{"status", "--server", srv.Endereco()}, &out, io.Discard)
+	code := cli.Run([]string{"status", "--server", srv.Endereco()}, &out, io.Discard)
 	if code != 0 {
 		t.Fatalf("exit = %d, queria 0: %s", code, out.String())
 	}
@@ -1452,7 +1452,7 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 
 - [ ] **Step 2: Rodar e confirmar a falha** → FAIL: comando não registrado.
 
-- [ ] **Step 3: Implementar.** `status` resume storage, rows, segmentos e ingestão; `datasets` lista; `inspect <dataset>` detalha colunas e índices a partir do `/v1/metadata`. Reusar `normalizaEndereco` e a tradução código→exit code de `query_remote.go:124`. Atualizar o texto de uso em `cli.go:58`.
+- [ ] **Step 3: Implementar.** `status` resume storage, rows, segmentos e ingestão; `datasets` lista; `inspect <dataset>` detalha colunas e índices a partir do `/v1/metadata`. Reusar `normalizeAddress` e a tradução código→exit code de `query_remote.go:124`. Atualizar o texto de uso em `cli.go:58`.
 
 - [ ] **Step 4: Rodar** `go test ./... && go test ./... -race && golangci-lint run`
 
@@ -1481,11 +1481,11 @@ git commit -m "Entrega os comandos de leitura do §96 pelo caminho que o flock n
 // não está medindo nada — é o mesmo erro do oráculo do débito 6.
 func TestGateDeDiscoReprovaCrescimentoLinear(t *testing.T) {
 	linear := []int64{1e9, 2e9, 3e9, 4e9, 5e9, 6e9}
-	if g := avaliaGateDeDisco(linear); g.Status != GateFail {
+	if g := evaluateGateOfDisk(linear); g.Status != GateFail {
 		t.Errorf("gate = %v para crescimento linear, queria fail", g.Status)
 	}
 	plateau := []int64{1e9, 1.8e9, 2.1e9, 2.15e9, 2.1e9, 2.2e9}
-	if g := avaliaGateDeDisco(plateau); g.Status != GatePass {
+	if g := evaluateGateOfDisk(plateau); g.Status != GatePass {
 		t.Errorf("gate = %v para plateau, queria pass", g.Status)
 	}
 }
@@ -1548,8 +1548,8 @@ instrumento, não de produto. Entram na Task 12 ou viram débito com dono.
 
 | # | Resíduo | Por que importa |
 |---|---|---|
-| R1 | `discoDosSegmentos` ([compaction_e2e_test.go:449](../internal/cli/compaction_e2e_test.go:449)) faz `continue` para **qualquer** erro de `os.Stat` | É o gêmeo desleixado do helper que a Task 7b corrigiu do lado do storage — e o argumento do próprio commit se aplica a ele: todo `stat` engolido **diminui** a soma, que é a direção que a asserção lê como "o disco caiu". Agrava por ser o instrumento que responde o **item 2 do critério normativo** da Task 7 |
-| R2 | `bytesApendadosNoDestino` e `tamanhosDosSegmentosPorArquivo` sem oráculo direto | O primeiro carrega aritmética real (desconto de `segment.HeaderSize` por arquivo novo, exclusão de arquivo que sumiu). Funciona e mata mutante por uso indireto, mas o próprio commit que os introduziu argumentou que helper com aritmética precisa de oráculo |
+| R1 | `diskOfSegmentos` ([compaction_e2e_test.go:449](../internal/cli/compaction_e2e_test.go:449)) faz `continue` para **qualquer** erro de `os.Stat` | É o gêmeo desleixado do helper que a Task 7b corrigiu do lado do storage — e o argumento do próprio commit se aplica a ele: todo `stat` engolido **diminui** a soma, que é a direção que a asserção lê como "o disco caiu". Agrava por ser o instrumento que responde o **item 2 do critério normativo** da Task 7 |
+| R2 | `bytesApendadosInDest` e `tamanhosOfSegmentosByArquivo` sem oráculo direto | O primeiro carrega aritmética real (desconto de `segment.HeaderSize` por arquivo novo, exclusão de arquivo que sumiu). Funciona e mata mutante por uso indireto, mas o próprio commit que os introduziu argumentou que helper com aritmética precisa de oráculo |
 | R3 | A asserção do **piso** do plateau está calibrada com folga de 17× | Na rodada medida, o piso subiu 37.440 contra um teto de 654.000, enquanto o pico ficou em 62% do limite. Quem carrega o item 2 na prática é a asserção do **pico**; a do piso só dispararia num colapso total. Nenhuma das duas é vácua — as duas disparam com a compaction desligada — mas a do piso não apanha o que se propõe a apanhar |
 
 ## 5. O que este milestone NÃO entrega

@@ -10,7 +10,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-const specComHistorico = `version: 1
+const specWithHistory = `version: 1
 name: events
 materialization:
   key:
@@ -32,27 +32,27 @@ schema:
 // histFake é o dublê da tabela irmã: guarda os payloads e conta as chamadas,
 // que é como se prova que a degradação é sticky.
 type histFake struct {
-	linhas  [][]byte
-	falha   error
+	rows    [][]byte
+	fail    error
 	chamado int
 }
 
 func (h *histFake) Apenda(payload []byte) (types.RowID, error) {
 	h.chamado++
-	if h.falha != nil {
-		return 0, h.falha
+	if h.fail != nil {
+		return 0, h.fail
 	}
 	// Cópia: o materializer reutiliza o buffer entre eventos.
-	linha := make([]byte, len(payload))
-	copy(linha, payload)
-	h.linhas = append(h.linhas, linha)
-	return types.RowID(len(h.linhas)), nil
+	row := make([]byte, len(payload))
+	copy(row, payload)
+	h.rows = append(h.rows, row)
+	return types.RowID(len(h.rows)), nil
 }
 
-// specComRaw é a mesma spec com a coluna _raw ligada. Duas constantes em vez
+// specWithRaw é a mesma spec com a coluna _raw ligada. Duas constantes em vez
 // de cirurgia de string: o YAML é o insumo do teste, e um insumo montado por
 // substituição textual esconde o que está sendo testado.
-const specComRaw = `version: 1
+const specWithRaw = `version: 1
 name: events
 materialization:
   key:
@@ -72,14 +72,14 @@ schema:
       frozenFrom: severity
 `
 
-// parComHistorico monta o materializer do dataset base com a tabela irmã
+// pairWithHistory monta o materializer do dataset base com a tabela irmã
 // ligada, compilando as duas specs contra o MESMO dicionário — que é a
 // condição sem a qual os FieldIDs divergem e o payload decodifica errado.
-func parComHistorico(t *testing.T, comRaw bool) (*Materializer, *schema.Compiled, *histFake) {
+func pairWithHistory(t *testing.T, withRaw bool) (*Materializer, *schema.Compiled, *histFake) {
 	t.Helper()
-	yaml := specComHistorico
-	if comRaw {
-		yaml = specComRaw
+	yaml := specWithHistory
+	if withRaw {
+		yaml = specWithRaw
 	}
 	spec, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
@@ -99,14 +99,14 @@ func parComHistorico(t *testing.T, comRaw bool) (*Materializer, *schema.Compiled
 	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 	h := &histFake{}
 	var raw *schema.CompiledField
-	if comRaw {
+	if withRaw {
 		f, ok := ch.FieldByName([]byte(schema.RawFieldName))
 		if !ok {
 			t.Fatal("a spec derivada não tem _raw")
 		}
 		raw = f
 	}
-	m.LigaHistorico(h, raw)
+	m.TurnonHistory(h, raw)
 	// O Compiled do HISTÓRICO volta junto porque é ele que conhece o _raw: a
 	// coluna não existe no schema do base, e resolver a linha contra o base
 	// diria que o campo não existe.
@@ -116,17 +116,17 @@ func parComHistorico(t *testing.T, comRaw bool) (*Materializer, *schema.Compiled
 // A propriedade central: dois eventos da MESMA entidade são uma linha no base
 // e duas no histórico.
 func TestOHistoricoRecebeUmaLinhaPorEvento(t *testing.T) {
-	m, _, h := parComHistorico(t, false)
+	m, _, h := pairWithHistory(t, false)
 	for _, ev := range []string{`{"id":"a","severity":1}`, `{"id":"a","severity":5}`} {
 		if res := m.Apply([]byte(ev)); res.Category != CategoryNone {
 			t.Fatalf("Apply(%s) = %v", ev, res.Category)
 		}
 	}
-	if len(h.linhas) != 2 {
-		t.Fatalf("%d linhas no histórico, quer 2", len(h.linhas))
+	if len(h.rows) != 2 {
+		t.Fatalf("%d linhas no histórico, quer 2", len(h.rows))
 	}
-	if got := m.Metrics().HistoricoLinhas; got != 2 {
-		t.Fatalf("HistoricoLinhas = %d, quer 2", got)
+	if got := m.Metrics().HistoricoRows; got != 2 {
+		t.Fatalf("HistoryRows = %d, quer 2", got)
 	}
 }
 
@@ -134,23 +134,23 @@ func TestOHistoricoRecebeUmaLinhaPorEvento(t *testing.T) {
 // preserva o primeiro. No histórico, originalSeverity seria igual a severity
 // em toda linha.
 func TestACongeladaNaoVaiParaOHistorico(t *testing.T) {
-	m, ch, h := parComHistorico(t, false)
+	m, ch, h := pairWithHistory(t, false)
 	if res := m.Apply([]byte(`{"id":"a","severity":3}`)); res.Category != CategoryNone {
 		t.Fatalf("Apply = %v", res.Category)
 	}
-	if len(h.linhas) != 1 {
-		t.Fatalf("%d linhas, quer 1", len(h.linhas))
+	if len(h.rows) != 1 {
+		t.Fatalf("%d linhas, quer 1", len(h.rows))
 	}
-	nomes := colunasDaLinha(t, ch, h.linhas[0])
-	if temColuna(nomes, "originalSeverity") {
+	nomes := columnsOfRow(t, ch, h.rows[0])
+	if hasColumn(nomes, "originalSeverity") {
 		t.Fatalf("a congelada foi para o histórico: %v", nomes)
 	}
-	if !temColuna(nomes, "severity") {
+	if !hasColumn(nomes, "severity") {
 		t.Fatalf("a origem da congelada sumiu junto: %v", nomes)
 	}
 }
 
-func colunasDaLinha(t *testing.T, c *schema.Compiled, payload []byte) []string {
+func columnsOfRow(t *testing.T, c *schema.Compiled, payload []byte) []string {
 	t.Helper()
 	var r encoding.FieldReader
 	r.Reset(payload)
@@ -172,9 +172,9 @@ func colunasDaLinha(t *testing.T, c *schema.Compiled, payload []byte) []string {
 	return out
 }
 
-func temColuna(nomes []string, alvo string) bool {
+func hasColumn(nomes []string, target string) bool {
 	for _, n := range nomes {
-		if n == alvo {
+		if n == target {
 			return true
 		}
 	}
@@ -184,8 +184,8 @@ func temColuna(nomes []string, alvo string) bool {
 // O histórico é ferramenta; o produto é o dataset base. Uma falha ali não
 // pode mudar o desfecho da ingestão.
 func TestFalhaNoHistoricoNaoMudaOApplyResult(t *testing.T) {
-	m, _, h := parComHistorico(t, false)
-	h.falha = errors.New("disco cheio")
+	m, _, h := pairWithHistory(t, false)
+	h.fail = errors.New("disco cheio")
 	res := m.Apply([]byte(`{"id":"a","severity":1}`))
 	if res.Category != CategoryNone {
 		t.Fatalf("Category = %v, quer nenhuma", res.Category)
@@ -198,8 +198,8 @@ func TestFalhaNoHistoricoNaoMudaOApplyResult(t *testing.T) {
 // Sem a marca sticky, cada evento tentaria de novo e o log viraria uma linha
 // por evento sobre uma condição que não muda sozinha.
 func TestFalhaNoHistoricoEhSticky(t *testing.T) {
-	m, _, h := parComHistorico(t, false)
-	h.falha = errors.New("disco cheio")
+	m, _, h := pairWithHistory(t, false)
+	h.fail = errors.New("disco cheio")
 	for range 5 {
 		m.Apply([]byte(`{"id":"a","severity":1}`))
 	}
@@ -207,38 +207,38 @@ func TestFalhaNoHistoricoEhSticky(t *testing.T) {
 		t.Fatalf("o histórico foi chamado %d vezes depois de falhar, quer 1", h.chamado)
 	}
 	snap := m.Metrics()
-	if !snap.HistoricoDegradado {
+	if !snap.HistoryDegradado {
 		t.Error("o snapshot não marca a degradação")
 	}
-	if snap.HistoricoDescartadas != 5 {
-		t.Errorf("HistoricoDescartadas = %d, quer 5", snap.HistoricoDescartadas)
+	if snap.HistoryDescartadas != 5 {
+		t.Errorf("HistoryDescartadas = %d, quer 5", snap.HistoryDescartadas)
 	}
 }
 
 // Sem a coluna _raw não há o que guardar de um JSON inválido, e o evento que
 // nunca virou linha continua sendo só um número num contador.
 func TestEventoRuimVaiParaOHistoricoComRaw(t *testing.T) {
-	m, ch, h := parComHistorico(t, true)
+	m, ch, h := pairWithHistory(t, true)
 	res := m.Apply([]byte(`{"id":"a", isso não é json`))
 	if !res.Category.BadEvent() {
 		t.Fatalf("Category = %v, quer evento ruim", res.Category)
 	}
-	if len(h.linhas) != 1 {
-		t.Fatalf("%d linhas, quer 1", len(h.linhas))
+	if len(h.rows) != 1 {
+		t.Fatalf("%d linhas, quer 1", len(h.rows))
 	}
-	nomes := colunasDaLinha(t, ch, h.linhas[0])
-	if temColuna(nomes, "id") {
+	nomes := columnsOfRow(t, ch, h.rows[0])
+	if hasColumn(nomes, "id") {
 		t.Fatalf("a linha do evento ruim tem colunas do schema: %v", nomes)
 	}
 }
 
 func TestEventoRuimNaoVaiSemRaw(t *testing.T) {
-	m, _, h := parComHistorico(t, false)
+	m, _, h := pairWithHistory(t, false)
 	if res := m.Apply([]byte(`{"id":"a", isso não é json`)); !res.Category.BadEvent() {
 		t.Fatalf("Category = %v, quer evento ruim", res.Category)
 	}
-	if len(h.linhas) != 0 {
-		t.Fatalf("%d linhas sem rawPayload, quer 0", len(h.linhas))
+	if len(h.rows) != 0 {
+		t.Fatalf("%d linhas sem rawPayload, quer 0", len(h.rows))
 	}
 }
 
@@ -246,26 +246,26 @@ func TestEventoRuimNaoVaiSemRaw(t *testing.T) {
 // é necessariamente o maior: toda coluna descoberta depois do Compile do
 // histórico ganha um id maior que o dele.
 func TestRawEntraNaPosicaoDoFieldID(t *testing.T) {
-	m, ch, h := parComHistorico(t, true)
+	m, ch, h := pairWithHistory(t, true)
 	// A chave `zzz` é descoberta em runtime e ganha um FieldID MAIOR que o
 	// de _raw, que foi atribuído quando o histórico compilou.
 	if res := m.Apply([]byte(`{"id":"a","severity":1,"zzz":"depois"}`)); res.Category != CategoryNone {
 		t.Fatalf("Apply = %v", res.Category)
 	}
-	if len(h.linhas) != 1 {
-		t.Fatalf("%d linhas, quer 1", len(h.linhas))
+	if len(h.rows) != 1 {
+		t.Fatalf("%d linhas, quer 1", len(h.rows))
 	}
-	if _, err := encoding.ValidatePayload(h.linhas[0]); err != nil {
+	if _, err := encoding.ValidatePayload(h.rows[0]); err != nil {
 		t.Fatalf("payload do histórico fora de ordem: %v", err)
 	}
-	nomes := colunasDaLinha(t, ch, h.linhas[0])
-	if !temColuna(nomes, schema.RawFieldName) || !temColuna(nomes, "zzz") {
+	nomes := columnsOfRow(t, ch, h.rows[0])
+	if !hasColumn(nomes, schema.RawFieldName) || !hasColumn(nomes, "zzz") {
 		t.Fatalf("colunas = %v", nomes)
 	}
 }
 
 func TestSemHistoricoNadaEhGravado(t *testing.T) {
-	spec, err := schema.Parse([]byte(specComHistorico), schema.BuiltinDefaults)
+	spec, err := schema.Parse([]byte(specWithHistory), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,12 +277,12 @@ func TestSemHistoricoNadaEhGravado(t *testing.T) {
 	if res := m.Apply([]byte(`{"id":"a","severity":1}`)); res.Category != CategoryNone {
 		t.Fatalf("Apply = %v", res.Category)
 	}
-	if snap := m.Metrics(); snap.HistoricoLinhas != 0 || snap.HistoricoDescartadas != 0 {
+	if snap := m.Metrics(); snap.HistoricoRows != 0 || snap.HistoryDescartadas != 0 {
 		t.Fatalf("contadores do histórico se moveram sem histórico: %+v", snap)
 	}
 }
 
-const specComSequence = `version: 1
+const specWithSequence = `version: 1
 name: events
 materialization:
   key:
@@ -306,7 +306,7 @@ schema:
 // descarte por stale: ele vai para o histórico, e é por isso que o enxerto
 // fica ANTES da checagem, e não depois.
 func TestOEventoStaleVaiParaOHistorico(t *testing.T) {
-	spec, err := schema.Parse([]byte(specComSequence), schema.BuiltinDefaults)
+	spec, err := schema.Parse([]byte(specWithSequence), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestOEventoStaleVaiParaOHistorico(t *testing.T) {
 	}
 	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 	h := &histFake{}
-	m.LigaHistorico(h, nil)
+	m.TurnonHistory(h, nil)
 
 	if res := m.Apply([]byte(`{"id":"a","seq":10,"severity":1}`)); res.Action != ActionCreated {
 		t.Fatalf("primeiro Apply = %v", res.Action)
@@ -328,7 +328,7 @@ func TestOEventoStaleVaiParaOHistorico(t *testing.T) {
 	if res := m.Apply([]byte(`{"id":"a","seq":5,"severity":9}`)); res.Action != ActionStale {
 		t.Fatalf("segundo Apply = %v, quer stale", res.Action)
 	}
-	if len(h.linhas) != 2 {
-		t.Fatalf("%d linhas no histórico, quer 2 (o stale também é evidência)", len(h.linhas))
+	if len(h.rows) != 2 {
+		t.Fatalf("%d linhas no histórico, quer 2 (o stale também é evidência)", len(h.rows))
 	}
 }

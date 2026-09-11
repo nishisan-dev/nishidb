@@ -17,49 +17,49 @@ import (
 // Fora do build com -race, onde a instrumentação altera a contagem.
 func TestGateAllocsApply(t *testing.T) {
 	casos := []struct {
-		nome   string
-		build  func(t *testing.T) (*materializer.Materializer, [][]byte)
-		want   materializer.Action
-		teto   float64
-		porque string
+		name    string
+		build   func(t *testing.T) (*materializer.Materializer, [][]byte)
+		want    materializer.Action
+		ceiling float64
+		porque  string
 	}{
 		{
-			nome: "create",
+			name: "create",
 			build: func(t *testing.T) (*materializer.Materializer, [][]byte) {
 				ev := corpusCheio(t, 7, 512)
 				return mustNew(t, compiledSetup(t), &voidStore{rowID: 1}), ev
 			},
-			want: materializer.ActionCreated,
-			teto: 0,
+			want:    materializer.ActionCreated,
+			ceiling: 0,
 		},
 		{
-			nome: "merge",
+			name: "merge",
 			build: func(t *testing.T) (*materializer.Materializer, [][]byte) {
 				ev := corpusPatch(t, 8, 512)
-				key, payload := estadoDeReferenciaT(t, corpusCheio(t, 8, 1))
+				key, payload := stateOfReferenceT(t, corpusCheio(t, 8, 1))
 				return mustNew(t, compiledSetup(t), &voidStore{
 					rowID: 42, seq: 1, key: key, payload: payload, found: true,
 				}), ev
 			},
-			want: materializer.ActionUpdated,
-			teto: 0,
+			want:    materializer.ActionUpdated,
+			ceiling: 0,
 		},
 		{
-			nome: "stale",
+			name: "stale",
 			build: func(t *testing.T) (*materializer.Materializer, [][]byte) {
 				ev := corpusPatch(t, 9, 512)
-				key, payload := estadoDeReferenciaT(t, corpusCheio(t, 9, 1))
+				key, payload := stateOfReferenceT(t, corpusCheio(t, 9, 1))
 				return mustNew(t, compiledSetup(t), &voidStore{
 					rowID: 42, seq: 1 << 40, key: key, payload: payload, found: true,
 				}), ev
 			},
-			want: materializer.ActionStale,
-			teto: 0,
+			want:    materializer.ActionStale,
+			ceiling: 0,
 		},
 	}
 
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			m, events := tc.build(t)
 			// Warm-up: registra os campos do corpus no dicionário e faz os
 			// buffers chegarem ao tamanho de regime.
@@ -79,8 +79,8 @@ func TestGateAllocsApply(t *testing.T) {
 				}
 				i++
 			})
-			if got > tc.teto {
-				t.Errorf("Apply alocou %.1f objetos/evento, teto %.0f", got, tc.teto)
+			if got > tc.ceiling {
+				t.Errorf("Apply alocou %.1f objetos/evento, teto %.0f", got, tc.ceiling)
 			}
 		})
 	}
@@ -95,7 +95,7 @@ func TestGateAllocsApply(t *testing.T) {
 // o bastante para acusar mudança real. Afrouxar até o alvo do design é decisão
 // consciente, não conserto de teste vermelho.
 func TestGateAllocsIngestFake(t *testing.T) {
-	const teto = 4.0
+	const ceiling = 4.0
 	m, _, _ := fakeSetup(t)
 	events := corpusMisto(t, 10, 1024)
 	aplicaTudo(t, m, events[:256])
@@ -107,17 +107,17 @@ func TestGateAllocsIngestFake(t *testing.T) {
 		}
 		i++
 	})
-	if got > teto {
-		t.Errorf("ingestão com dublê alocou %.1f objetos/evento, teto %.0f", got, teto)
+	if got > ceiling {
+		t.Errorf("ingestão com dublê alocou %.1f objetos/evento, teto %.0f", got, ceiling)
 	}
-	t.Logf("allocs/evento com dublê: %.1f (teto %.0f)", got, teto)
+	t.Logf("allocs/evento com dublê: %.1f (teto %.0f)", got, ceiling)
 }
 
 // Leitura por primary key no Store REAL: o caminho que o executor SQL vai
 // usar em toda query com igualdade na key. Exige NISHIDB_BENCH_DIR porque
 // carrega um dataset com fallocate real.
 func TestGateAllocsPointLookupReal(t *testing.T) {
-	const teto = 2.0
+	const ceiling = 2.0
 	dir := benchDirOuSkip(t)
 	m, st, _ := realSetup(t, dir, 2000)
 	events := corpusCheio(t, 21, 2000)
@@ -125,7 +125,7 @@ func TestGateAllocsPointLookupReal(t *testing.T) {
 
 	keys := make([][]byte, 0, len(events))
 	for _, e := range events {
-		keys = append(keys, keyDoEvento(t, e))
+		keys = append(keys, keyOfEvent(t, e))
 	}
 
 	var buf []byte
@@ -146,10 +146,10 @@ func TestGateAllocsPointLookupReal(t *testing.T) {
 		}
 		i++
 	})
-	if got > teto {
-		t.Errorf("GetByKey alocou %.1f objetos/lookup, teto %.0f", got, teto)
+	if got > ceiling {
+		t.Errorf("GetByKey alocou %.1f objetos/lookup, teto %.0f", got, ceiling)
 	}
-	t.Logf("allocs/lookup no Store real: %.1f (teto %.0f)", got, teto)
+	t.Logf("allocs/lookup no Store real: %.1f (teto %.0f)", got, ceiling)
 }
 
 // benchDirOuSkip é o writableBenchDir para *testing.T.
@@ -168,9 +168,9 @@ func benchDirOuSkip(t *testing.T) string {
 	return dir
 }
 
-// estadoDeReferenciaT é o estadoDeReferencia para *testing.T (os gates rodam
+// stateOfReferenceT é o stateOfReference para *testing.T (os gates rodam
 // como teste, os benchmarks como benchmark).
-func estadoDeReferenciaT(t *testing.T, events [][]byte) (key, payload []byte) {
+func stateOfReferenceT(t *testing.T, events [][]byte) (key, payload []byte) {
 	t.Helper()
 	m, st, _ := fakeSetup(t)
 	r := m.Apply(events[0])

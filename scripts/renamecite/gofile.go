@@ -160,7 +160,7 @@ func (m *Mapping) rewriteLiteralIdents(val string, rep *Report, line int) string
 	}
 	return replaceAll(reDottedToken, val, func(tok string, _ int) string {
 		if m.Protected[tok] {
-			rep.pula(line, tok, "protegido")
+			rep.skip(line, tok, "protegido")
 			return tok
 		}
 		if !strings.Contains(tok, ".") && !hasInnerUpper(tok) && !startsUpper(tok) {
@@ -168,7 +168,7 @@ func (m *Mapping) rewriteLiteralIdents(val string, rep *Report, line int) string
 		}
 		out, skipped := m.rewriteToken(tok)
 		if skipped != nil {
-			rep.pula(line, skipped.Token, skipped.Reason)
+			rep.skip(line, skipped.Token, skipped.Reason)
 		}
 		rep.aplica(line, tok, out, "literal")
 		return out

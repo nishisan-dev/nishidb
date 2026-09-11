@@ -25,7 +25,7 @@ func TestParamMontaOValueDeWireDeCadaTipo(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.arg, func(t *testing.T) {
-			var l listaDeParametros
+			var l listaOfParametros
 			if err := l.Set(c.arg); err != nil {
 				t.Fatalf("Set(%q): %v", c.arg, err)
 			}
@@ -41,7 +41,7 @@ func TestParamMontaOValueDeWireDeCadaTipo(t *testing.T) {
 // Dois-pontos é comum demais em valor real — endereço com porta, hora, URL —
 // para que a flag o trate como separador em toda ocorrência.
 func TestParamStringComDoisPontosNoValorNaoEhCortada(t *testing.T) {
-	var l listaDeParametros
+	var l listaOfParametros
 	if err := l.Set("string:http://x:9142/v1"); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestParamStringComDoisPontosNoValorNaoEhCortada(t *testing.T) {
 // A ordem da linha de comando é a ordem posicional dos ?, e nada no caminho
 // pode virar map.
 func TestParamRepetidoPreservaAOrdemPosicional(t *testing.T) {
-	var l listaDeParametros
+	var l listaOfParametros
 	for _, arg := range []string{"string:primeiro", "int64:2", "string:terceiro"} {
 		if err := l.Set(arg); err != nil {
 			t.Fatal(err)
@@ -71,7 +71,7 @@ func TestParamRepetidoPreservaAOrdemPosicional(t *testing.T) {
 }
 
 func TestParamSemDoisPontosEhErroDeUsoQueNomeiaOsTipos(t *testing.T) {
-	var l listaDeParametros
+	var l listaOfParametros
 	err := l.Set("Stop")
 	if err == nil {
 		t.Fatal("quer erro: falta o <tipo>:")
@@ -84,7 +84,7 @@ func TestParamSemDoisPontosEhErroDeUsoQueNomeiaOsTipos(t *testing.T) {
 }
 
 func TestParamComTipoForaDosQuatroNomeiaOsAceitos(t *testing.T) {
-	var l listaDeParametros
+	var l listaOfParametros
 	err := l.Set("timestamp:2026-08-23T00:00:00Z")
 	if err == nil {
 		t.Fatal("quer erro: timestamp não é tipo de WIRE")
@@ -99,7 +99,7 @@ func TestParamComTipoForaDosQuatroNomeiaOsAceitos(t *testing.T) {
 // `nishidb query --help`, que é a primeira coisa que alguém faz ao descobrir
 // a flag.
 func TestParamStringNoValorZeroNaoPanica(t *testing.T) {
-	var l listaDeParametros
+	var l listaOfParametros
 	if got := l.String(); got != "" {
 		t.Errorf("String() no zero = %q, quer vazio", got)
 	}

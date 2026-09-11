@@ -52,10 +52,10 @@ func (s *storeLento) SourceOffsets() (checkpoint.SourceOffsets, bool, error) {
 
 func (s *storeLento) RowCount() uint64 { return 0 }
 
-// leTudo percorre o mapa guardado pelo store, imitando o que o gravador do
+// readTudo percorre o mapa guardado pelo store, imitando o que o gravador do
 // manifest faz com ele. É aqui que a referência compartilhada apareceria como
 // leitura concorrente de mapa.
-func (s *storeLento) leTudo() {
+func (s *storeLento) readTudo() {
 	s.mu.Lock()
 	o := s.offsets
 	s.mu.Unlock()
@@ -86,7 +86,7 @@ func (s *storeLento) leTudo() {
 func TestCheckpointDaRevogacaoNaoCorreComOWriter(t *testing.T) {
 	st := &storeLento{demora: 2 * time.Millisecond}
 	cfg := &Config{Dataset: "eventos", Topic: "eventos", GroupID: "g", Brokers: []string{"127.0.0.1:9092"}}
-	met := registraMetricas(nil, "eventos")
+	met := registerMetrics(nil, "eventos")
 
 	commit := func(_ context.Context, off map[int32]int64) error {
 		// Percorre o mapa recebido, como o franz-go faz ao montar a requisição
@@ -97,7 +97,7 @@ func TestCheckpointDaRevogacaoNaoCorreComOWriter(t *testing.T) {
 		return nil
 	}
 
-	w := NovoWriter(cfg, nil, st, nil, nil, met, map[int32]int64{0: 0},
+	w := NewWriter(cfg, nil, st, nil, nil, met, map[int32]int64{0: 0},
 		Cadencia{Eventos: 5, Intervalo: time.Millisecond}, commit)
 
 	ctx := context.Background()
@@ -110,7 +110,7 @@ func TestCheckpointDaRevogacaoNaoCorreComOWriter(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < voltas; i++ {
-			w.avanca(&kgo.Record{Partition: int32(i % 4), Offset: int64(i)})
+			w.advance(&kgo.Record{Partition: int32(i % 4), Offset: int64(i)})
 		}
 	}()
 
@@ -134,7 +134,7 @@ func TestCheckpointDaRevogacaoNaoCorreComOWriter(t *testing.T) {
 				t.Errorf("checkpoint da revogação: %v", err)
 				return
 			}
-			st.leTudo()
+			st.readTudo()
 		}
 	}()
 

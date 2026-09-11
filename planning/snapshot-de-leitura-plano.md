@@ -57,7 +57,7 @@ payload. O leitor lê a versão antiga por `ReadRecord(segAntigo, offAntigo)`.
 
 Consequência boa: `escritas` e `prazos` da versão antiga **não precisam ser
 guardados**. São índices derivados cuja fonte da verdade é o campo de sistema
-do payload — `instanteDeEscrita` ([store.go:1826](internal/storage/store.go:1826))
+do payload — `writeInstant` ([store.go:1826](internal/storage/store.go:1826))
 os extrai do record antigo lido, que é exatamente o que o `applyRecord` faz.
 
 **2. O copy-forward da compaction NÃO pode versionar.** `reapendaSeVivo` chama
@@ -157,7 +157,7 @@ portas para a mesma pergunta é o que o repositório condena em toda parte. E
 em `Lookup`.
 
 - `executor.Store` ganha o `Snapshot` nos três métodos de leitura.
-- `executor.Open` abre o snapshot **antes** de `fonteDoPlano`
+- `executor.Open` abre o snapshot **antes** de `sourceOfPlano`
   ([executor.go:231](internal/query/executor/executor.go:231)); o `Close` do
   iterador o fecha, em todos os caminhos de saída.
 - `ScanLive` perde o cálculo do teto — quem o fixa passa a ser o snapshot, para
@@ -231,7 +231,7 @@ Testes: `TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo`,
 recusa na subida se fora de faixa, nunca arredonda). Estourado o teto, o
 snapshot **mais antigo** é invalidado e a consulta que o usa falha na próxima
 leitura com `SNAPSHOT_TOO_OLD` — a ingestão nunca para por causa de uma
-consulta. Sentinela `ErrSnapshotExpirado` + `errors.Is` em `codigoDoErro`,
+consulta. Sentinela `ErrSnapshotExpirado` + `errors.Is` em `errorCode`,
 código de wire estável, SQLSTATE no driver JDBC e exceção mapeada no client
 Python (o gate cobra os três).
 
@@ -242,7 +242,7 @@ paridade dos clients.
 
 ### E5 — Observabilidade e documentação
 
-`consultaEmVoo` ([inflight.go:31](internal/server/inflight.go:31)) ganha a época e o
+`consultaInVoo` ([inflight.go:31](internal/server/inflight.go:31)) ganha a época e o
 instante do snapshot, alimentando `/v1/stats` e o `nishidb status`. Métricas
 novas, todas por constante em `internal/metrics/names.go`, nascendo com zero na
 subida: `nishidb_query_snapshot_oldest_seconds` (prevista no M6 e nunca criada),

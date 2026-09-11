@@ -14,17 +14,17 @@ import (
 // Chave e texto vêm do dicionário (memória estável); o payload é montado no
 // buffer do chamador.
 func TestTabelaDoContadorNaoAlocaPorLinha(t *testing.T) {
-	c := abreContador(t, defPorPON("pon"))
+	c := openCounter(t, defByPON("pon"))
 	populaPON(t, c)
-	_, fonte, err := counters.Tabela(c.Def(), c)
+	_, source, err := counters.Table(c.Def(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap := fonte.OpenSnapshot()
-	defer fonte.CloseSnapshot(snap)
+	snap := source.OpenSnapshot()
+	defer source.CloseSnapshot(snap)
 	var buf []byte
 	// Aquecimento: o buffer cresce na primeira linha.
-	if _, b, ok, err := fonte.GetByRowID(snap, 1, buf); err != nil || !ok {
+	if _, b, ok, err := source.GetByRowID(snap, 1, buf); err != nil || !ok {
 		t.Fatalf("linha 1: %v %v", ok, err)
 	} else {
 		buf = b
@@ -32,7 +32,7 @@ func TestTabelaDoContadorNaoAlocaPorLinha(t *testing.T) {
 	id := types.RowID(0)
 	if n := testing.AllocsPerRun(1000, func() {
 		id = id%4 + 1
-		rec, b, ok, err := fonte.GetByRowID(snap, id, buf)
+		rec, b, ok, err := source.GetByRowID(snap, id, buf)
 		buf = b
 		if err != nil || !ok || len(rec.Payload) == 0 {
 			t.Fatalf("linha %d: %v %v", id, ok, err)
@@ -40,9 +40,9 @@ func TestTabelaDoContadorNaoAlocaPorLinha(t *testing.T) {
 	}); n != 0 {
 		t.Errorf("allocs/linha = %.1f, quer 0", n)
 	}
-	chave := []byte("PRCTA_G1M10|1|12")
+	key := []byte("PRCTA_G1M10|1|12")
 	if n := testing.AllocsPerRun(1000, func() {
-		_, b, ok, err := fonte.GetByKey(snap, chave, buf)
+		_, b, ok, err := source.GetByKey(snap, key, buf)
 		buf = b
 		if err != nil || !ok {
 			t.Fatalf("point lookup: %v %v", ok, err)

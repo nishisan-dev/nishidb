@@ -20,19 +20,19 @@ import (
 // papel já validado no parse (B1, enum fechado RoleRead/RoleAdmin).
 //
 // A B3 monta o middleware HTTP Basic sobre um mapa username -> credencial
-// (ver Servidor.credenciais). A comparação em tempo constante
+// (ver Server.credenciais). A comparação em tempo constante
 // (subtle.ConstantTimeCompare) e o tratamento do usuário inexistente
 // (credencial-fantasma, para que o 401 seja byte-idêntico entre "usuário não
 // existe" e "senha errada") são dela — aqui o digest já fica pronto no
 // formato de 32 bytes fixos que subtle.ConstantTimeCompare exige.
 type credencial struct {
-	digestSenha [sha256.Size]byte
-	role        string
+	digestPassword [sha256.Size]byte
+	role           string
 }
 
-// resolveCredenciais lê, na subida e ANTES do bind, o VALOR de cada
+// resolveCredentials lê, na subida e ANTES do bind, o VALOR de cada
 // credencial declarada em server.authentication.users — no molde de
-// kafka.Resolve/kafka.env (internal/kafka/config.go:154-169): o parse (B1)
+// kafka.ResolveKafkaConfig/kafka.env (internal/kafka/config.go:154-169): o parse (B1)
 // só validou o NOME da variável ou o CAMINHO do arquivo; é aqui, na
 // ativação, que a variável é lida ou o arquivo é aberto, e uma falha de
 // credencial tem de abortar a subida antes que qualquer listener abra —
@@ -50,27 +50,27 @@ type credencial struct {
 // false ou ausente (débito 49, doutrina da B1) — mas não há por que exigir a
 // variável de ambiente ou o arquivo do operador antes de a autenticação
 // existir de fato.
-func resolveCredenciais(cfg *config.Config) (map[string]credencial, error) {
+func resolveCredentials(cfg *config.Config) (map[string]credencial, error) {
 	if !cfg.AuthenticationEnabled() {
 		return nil, nil
 	}
 	out := make(map[string]credencial, len(cfg.Server.Authentication.Users))
 	for _, u := range cfg.Server.Authentication.Users {
-		digest, err := resolveSenha(u)
+		digest, err := resolvePassword(u)
 		if err != nil {
 			return nil, err
 		}
-		out[u.Username] = credencial{digestSenha: digest, role: u.Role}
+		out[u.Username] = credencial{digestPassword: digest, role: u.Role}
 	}
 	return out, nil
 }
 
-// resolveSenha lê a credencial de UM usuário do ambiente (env ou arquivo,
+// resolvePassword lê a credencial de UM usuário do ambiente (env ou arquivo,
 // XOR já garantido pela B1) e devolve o digest SHA-256 — nunca a senha em
 // si além do escopo desta função.
-func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
+func resolvePassword(u config.UserSpec) ([sha256.Size]byte, error) {
 	var zero [sha256.Size]byte
-	var senha string
+	var password string
 
 	switch {
 	case u.PasswordEnv != "":
@@ -90,7 +90,7 @@ func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
 				"server.authentication.users: usuário %q: variável de ambiente %s (passwordEnv) está definida e vazia",
 				u.Username, u.PasswordEnv)
 		}
-		senha = v
+		password = v
 
 	case u.PasswordFile != "":
 		info, err := os.Stat(u.PasswordFile)
@@ -99,7 +99,7 @@ func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
 				"server.authentication.users: usuário %q: passwordFile %s: %w",
 				u.Username, u.PasswordFile, err)
 		}
-		// Regra NOVA em relação ao molde do kafka.Resolve: lá security.caFile
+		// Regra NOVA em relação ao molde do kafka.ResolveKafkaConfig: lá security.caFile
 		// é uma CA pública, e ninguém perde nada se outro usuário da máquina
 		// a ler. Uma senha é o oposto — group/world-readable é o mesmo
 		// descuido de deixar a chave privada TLS com o modo errado, só que
@@ -121,7 +121,7 @@ func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
 		// aparar, a senha resolvida levaria o `\n`/`\r\n` para dentro do
 		// digest, e a mesma senha digitada sem o operador ter usado echo
 		// deixaria de autenticar — a chave mentiria sobre qual é a senha.
-		senha = strings.TrimRight(string(b), "\r\n")
+		password = strings.TrimRight(string(b), "\r\n")
 		// Mesma doutrina do passwordEnv vazio, algumas linhas acima: um
 		// arquivo vazio ou só com quebra de linha — o que um `touch
 		// senha.txt` de script de provisionamento produz sem querer — apara
@@ -129,7 +129,7 @@ func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
 		// A B3 aceitaria essa credencial em qualquer HTTP Basic com senha em
 		// branco, e não teria como perceber depois: o cache já perdeu a
 		// informação de que o arquivo estava vazio, só guarda o digest.
-		if senha == "" {
+		if password == "" {
 			return zero, fmt.Errorf(
 				"server.authentication.users: usuário %q: passwordFile %s está vazio (ou só contém "+
 					"quebra de linha) após aparar o \\n/\\r\\n final",
@@ -145,22 +145,22 @@ func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
 			u.Username)
 	}
 
-	return sha256.Sum256([]byte(senha)), nil
+	return sha256.Sum256([]byte(password)), nil
 }
 
-// validaCertificadoNaSubida confere, na subida e ANTES do bind, que o par
+// validateCertificateAtStartup confere, na subida e ANTES do bind, que o par
 // certificado/chave de server.tls CARREGA — LoadX509KeyPair e não apenas
 // "os arquivos existem", porque um PEM corrompido ou uma chave que não
 // corresponde ao certificado só apareceria hoje no primeiro handshake TLS,
 // e nesse ponto o listener já está aberto e aceitando conexão.
 //
 // Devolve o par CARREGADO (nil quando TLS está desligado) para que o Serve
-// (B4, sobeHTTP em server.go) reuse o MESMO tls.Certificate no ServeTLS, e
-// avisaValidadeDoCertificado (abaixo) leia o leaf sem um segundo
+// (B4, risesHTTP em server.go) reuse o MESMO tls.Certificate no ServeTLS, e
+// avisaValidadeOfCert (abaixo) leia o leaf sem um segundo
 // LoadX509KeyPair — o par nunca é relido do disco depois deste ponto;
 // rotação de certificado é reiniciar o processo (limite nomeado: não há
-// SIGHUP-reload aqui, mesma decisão de resolveCredenciais acima).
-func validaCertificadoNaSubida(cfg *config.Config) (*tls.Certificate, error) {
+// SIGHUP-reload aqui, mesma decisão de resolveCredentials acima).
+func validateCertificateAtStartup(cfg *config.Config) (*tls.Certificate, error) {
 	if !cfg.TLSEnabled() {
 		return nil, nil
 	}
@@ -172,15 +172,15 @@ func validaCertificadoNaSubida(cfg *config.Config) (*tls.Certificate, error) {
 	return &cert, nil
 }
 
-// avisoDeExpiracaoDoCertificado é o piso do WARN de validade do leaf: sem
+// avisoOfExpirationOfCert é o piso do WARN de validade do leaf: sem
 // SIGHUP-reload, trocar o certificado exige um restart planejado, e isso
 // precisa de aviso ANTES do vencimento, não no dia — 30 dias dá tempo de
 // pedir um certificado novo a uma CA corporativa sem pressa (§ decisão 4 do
 // plano do ciclo).
-const avisoDeExpiracaoDoCertificado = 30 * 24 * time.Hour
+const avisoOfExpirationOfCert = 30 * 24 * time.Hour
 
-// avisaValidadeDoCertificado parseia o leaf do certificado já CARREGADO por
-// validaCertificadoNaSubida (nunca relido do disco) e publica a métrica de
+// avisaValidadeOfCert parseia o leaf do certificado já CARREGADO por
+// validateCertificateAtStartup (nunca relido do disco) e publica a métrica de
 // expiração — SEMPRE que TLS está ligado, para que o operador derive "quanto
 // falta" no painel/alerta sem que esta função precise decidir o que é "pouco
 // tempo" além do próprio WARN abaixo.
@@ -192,8 +192,8 @@ const avisoDeExpiracaoDoCertificado = 30 * 24 * time.Hour
 // exatamente o cenário que "ERRO no log + métrica" cobre em vez de recusa.
 // Só devolve erro se o leaf em si não decodificar, o que não deveria
 // acontecer com um par que já passou por LoadX509KeyPair (violação de
-// invariante, mesma doutrina do `default` de resolveSenha).
-func avisaValidadeDoCertificado(cert tls.Certificate, log *logging.Logger, reg *metrics.Registry) error {
+// invariante, mesma doutrina do `default` de resolvePassword).
+func avisaValidadeOfCert(cert tls.Certificate, log *logging.Logger, reg *metrics.Registry) error {
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
 		return fmt.Errorf("server.tls: leaf do certificado não decodifica (violação de invariante: "+
@@ -212,7 +212,7 @@ func avisaValidadeDoCertificado(cert tls.Certificate, log *logging.Logger, reg *
 				"as consultas) — troque o par certificado/chave e reinicie (rotação é restart, sem "+
 				"SIGHUP-reload)",
 			"notAfter", notAfter)
-	case restante < avisoDeExpiracaoDoCertificado:
+	case restante < avisoOfExpirationOfCert:
 		log.Warn("tls.certificado_expirando",
 			"o certificado de server.tls vence em menos de 30 dias",
 			"notAfter", notAfter)
@@ -220,7 +220,7 @@ func avisaValidadeDoCertificado(cert tls.Certificate, log *logging.Logger, reg *
 	return nil
 }
 
-// enderecoLoopback resolve o endereço do listener secundário do plano
+// loopbackAddress resolve o endereço do listener secundário do plano
 // loopback (decisão 4 do plano do ciclo, §77-78) a partir de
 // server.loopback. Devolve "" quando desligado — nenhum listener a mais.
 //
@@ -231,7 +231,7 @@ func avisaValidadeDoCertificado(cert tls.Certificate, log *logging.Logger, reg *
 // silencioso (a porta principal + 1, por exemplo) escolheria pelo operador
 // numa decisão que é dele — a mesma doutrina do resto do §77: recusar,
 // nomeando a chave, nunca assumir.
-func enderecoLoopback(cfg *config.Config) (string, error) {
+func loopbackAddress(cfg *config.Config) (string, error) {
 	if !cfg.LoopbackEnabled() {
 		return "", nil
 	}
@@ -243,10 +243,10 @@ func enderecoLoopback(cfg *config.Config) (string, error) {
 	return fmt.Sprintf("127.0.0.1:%d", *cfg.Server.Loopback.Port), nil
 }
 
-// avaliaExposicaoEAutenticacao substitui o aviso avisaSobreAExposicao (que só
+// evaluateExposicaoEAuth substitui o aviso avisaAboutAExposicao (que só
 // CONSTATAVA exposição e nunca recusava) pela matriz de recusa do §77: a
 // combinação de bind exposto, autenticação e TLS decide se o servidor PODE
-// subir, e não só se ele deveria avisar. Roda ANTES do bind.
+// subir, e não só se ele deveria avisar. Run ANTES do bind.
 //
 // As cinco células da matriz do plano (a ordem de checagem abaixo não é a
 // ordem da tabela, mas cobre as mesmas cinco, cada uma com teste em
@@ -270,7 +270,7 @@ func enderecoLoopback(cfg *config.Config) (string, error) {
 //     aberta — não é o mesmo risco pequeno do loopback.
 //  5. bind exposto + autenticação ligada + TLS ligado -> sobe, sem aviso: é
 //     a combinação que o §77 pede.
-func avaliaExposicaoEAutenticacao(cfg *config.Config, log *logging.Logger) error {
+func evaluateExposicaoEAuth(cfg *config.Config, log *logging.Logger) error {
 	if !cfg.BindExposed() {
 		if cfg.AuthenticationEnabled() && !cfg.TLSEnabled() {
 			log.Warn("auth.sem_tls",
@@ -293,7 +293,7 @@ func avaliaExposicaoEAutenticacao(cfg *config.Config, log *logging.Logger) error
 	if !cfg.AuthenticationEnabled() {
 		// enabled: false EXPLÍCITO: a decisão já foi tomada, e o aviso de
 		// sempre é o que resta a fazer.
-		avisaSobreAExposicao(cfg, log)
+		avisaAboutAExposicao(cfg, log)
 		return nil
 	}
 
@@ -307,7 +307,7 @@ func avaliaExposicaoEAutenticacao(cfg *config.Config, log *logging.Logger) error
 	return nil
 }
 
-// avisaSobreAExposicao registra, uma vez por subida, que o bind escolhido
+// avisaAboutAExposicao registra, uma vez por subida, que o bind escolhido
 // alcança a rede. Só é chamada quando o operador já tomou a decisão — bind
 // exposto com authentication.enabled: false EXPLÍCITO (célula 3 da matriz
 // acima); a recusa por ausência da seção (célula 2) e a recusa por
@@ -319,9 +319,9 @@ func avaliaExposicaoEAutenticacao(cfg *config.Config, log *logging.Logger) error
 // sobre uma escolha que ele fez de propósito. E não pode citar só
 // /v1/query: desde a Fase 11 a mesma porta sem credencial também serve
 // POST /v1/compact e POST /v1/checkpoint (ADMIN) anônimos no plano
-// principal (godoc de montaMux/comAutenticacao, auth.go) — quem
+// principal (godoc de buildMux/withAuth, auth.go) — quem
 // alcança o bind lê E MUTA o dataset, não só lê.
-func avisaSobreAExposicao(cfg *config.Config, log *logging.Logger) {
+func avisaAboutAExposicao(cfg *config.Config, log *logging.Logger) {
 	log.Warn("bind.exposto",
 		"o servidor vai escutar FORA do loopback com server.authentication.enabled: false — decisão explícita "+
 			"do operador, não lacuna do produto: quem alcançar esta porta lê (POST /v1/query) E MUTA "+

@@ -12,12 +12,12 @@ espaço.
 
 > **Errata (25/08/2026): "devolvidos ao filesystem" era LISTING, não filesystem.**
 > Os 3,68 GB desta rodada foram medidos somando o diretório de dados, e o
-> diretório mentia. `compactaSegmento` lê o segmento que vai aposentar pelo
+> diretório mentia. `compactaSegment` lê o segmento que vai aposentar pelo
 > `ScanFrom`, que **cacheia o descritor**; o cache do `segment.Reader` não tinha
 > despejo; e o `os.Remove` da aposentadoria removia o **nome** e nunca o
 > **inode**. Os blocos seguiam alocados enquanto o processo vivesse — um inode
 > preso por aposentadoria, de forma determinística. `dirBytes` do harness,
-> `discoDosSegmentos` do e2e e o `Stats.StorageBytes` somam o listing, e para os
+> `diskOfSegmentos` do e2e e o `Stats.StorageBytes` somam o listing, e para os
 > três o arquivo tinha sumido; o próprio `bytes_devolvidos` do log da
 > aposentadoria anunciava bytes que ninguém recebeu. **`df` e `du` discordavam, e
 > nenhum instrumento deste projeto os consultava.**
@@ -142,7 +142,7 @@ mede na escala de 8M estão marcadas com o documento em que estão.
 > Este parágrafo dizia "não há amostra dentro do bloqueio — e é por isso que o
 > gate continua valendo". A primeira metade da frase é verdadeira e a conclusão
 > é falsa: não há amostra DENTRO do bloqueio, mas há a amostra do **FIM** dele,
-> e é ela o extremo que `avaliaGateDeDisco` lê como segunda metade. Durante os
+> e é ela o extremo que `evaluateGateOfDisk` lê como segunda metade. Durante os
 > 727,6 s parados a compaction seguiu moendo com **zero evento entrando** e
 > devolveu 33,5 MiB, de modo que a série termina 33,5 MiB **abaixo** da última
 > amostra sob carga. Não é um trecho plano injetado no extremo — é uma
@@ -161,7 +161,7 @@ isto:
 > (pico da 1ª metade em 749,6 MiB)`
 
 **E esse número não prova plateau nenhum.** A 422ª amostra — o extremo que
-`taxaPorAmostra` usa como fim da segunda metade — foi colhida em
+`taxaByAmostra` usa como fim da segunda metade — foi colhida em
 `elapsed = 1.936,70 s`, com 8.400.001 eventos. A 421ª está em
 `elapsed = 1.209,05 s`, com 8.400.000. São **727,65 s de vão** com **um** evento
 de avanço: é o bloqueio do débito 67 por inteiro, e o único evento é o que foi
@@ -290,7 +290,7 @@ neste commit.
 do `ingest-bench` produz exatamente `taxa × duração` eventos no tópico e depois
 os consome na mesma taxa. Quando o consumidor alcança o fim do tópico antes de
 o relógio da fase fechar — e ele alcança, porque o limitador se recupera de
-qualquer atraso —, `fonteKafka.Next` bloqueia em `fila.Recebe(context.Background())`
+qualquer atraso —, `sourceKafka.Next` bloqueia em `fila.Recebe(context.Background())`
 e **não sai mais**: a checagem de duração do laço acontece antes do `Next`, e
 nunca é reavaliada. A rodada ficou **12 minutos parada** nesse ponto (última
 aposentadoria às 07:38:17, processo vivo e mudo até as 07:50) e só seguiu depois
@@ -393,7 +393,7 @@ make test && make test-race && make lint
 | Item | Onde fica |
 |---|---|
 | **O plateau de disco em 1M de entidades com segmento de 64 MiB** | **Não provado.** A compaction devolve disco e desacelera o crescimento, mas as **quatro** rodadas de 64 MiB com 1 a 2 milhões de entidades reprovam o `disk_plateau` com o extremo da série honesto (0,452 a 0,510). A única aprovação de 64 MiB é a de 250 mil entidades, com **três** segmentos na janela. Falta o experimento que separa tamanho de segmento de número de entidades — débito 65 |
-| O gate ler de onde vem cada amostra | Débito 68. `avaliaGateDeDisco` usa `serie[len-1]` como extremo sem conferir se aquela amostra foi colhida sob carga |
+| O gate ler de onde vem cada amostra | Débito 68. `evaluateGateOfDisk` usa `serie[len-1]` como extremo sem conferir se aquela amostra foi colhida sob carga |
 | `POST /v1/compact` e `nishidb compact`/`checkpoint` | M5, atrás do papel ADMIN. Rotas **mutantes** não existem neste milestone (decisão D3 do roadmap) |
 | Recuperação de tombstone | Record tombstoned é **copiado para frente** (decisão D2): a location aponta para ele. Limpar location e primary é do TTL, no M6 |
 | `Stats`/`Sequence` com `Store` fechado (débito 34) | **Continua aberto** — o M4 passou sem tocar nisso, e o registro está na errata de [`debitos.md`](debitos.md). Muda a assinatura do `Store`, e portanto todo chamador |

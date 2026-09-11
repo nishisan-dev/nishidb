@@ -123,7 +123,7 @@ func TestParidadeDoTetoDeValorIndexado(t *testing.T) {
 
 	fake := fakestorage.New(fakestorage.Indexes{Fields: []types.FieldID{1}})
 	realStore, err := storage.Open(storage.Options{
-		Dir: filepath.Join(t.TempDir(), "ds"), CamposIndexadosPorNome: []string{"campo"},
+		Dir: filepath.Join(t.TempDir(), "ds"), IndexedFieldsByName: []string{"campo"},
 	})
 	if err != nil {
 		t.Fatal(err)

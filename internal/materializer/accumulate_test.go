@@ -60,7 +60,7 @@ func TestAcumulaRecomecaDepoisDeNullExplicito(t *testing.T) {
 	h := newHarness(t, acumulaYAML)
 	h.apply(`{"id":"a","matchedCounter":7}`)
 	h.apply(`{"id":"a","matchedCounter":null}`)
-	if _, tem := h.state("a")["matchedCounter"]; tem {
+	if _, has := h.state("a")["matchedCounter"]; has {
 		t.Fatal("null explícito não removeu a coluna")
 	}
 	h.apply(`{"id":"a","matchedCounter":2}`)

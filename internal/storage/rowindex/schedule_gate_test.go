@@ -13,7 +13,7 @@ import (
 // POR QUE ELE EXISTE, e por que agora. `Update` roda em TODA escrita — é o
 // que substituiu a varredura de TTL —, e `internal/storage` não tinha um único
 // gate de alocação. A ausência não era neutra: foi exatamente assim que a
-// alocação por evento do `Writer.avanca` do Kafka atravessou o M2 inteiro sem
+// alocação por evento do `Writer.advance` do Kafka atravessou o M2 inteiro sem
 // ser vista, e só apareceu quando alguém foi olhar com profile na mão. Uma
 // alocação por evento aqui é pressão de GC permanente numa ingestão 24/7.
 //

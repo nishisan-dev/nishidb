@@ -22,7 +22,7 @@ partition "Ingestão — uma passada por evento" {
     endif
     stop
   endif
-  :encodePatchHistorico: copia as entries,
+  :encodePatchHistory: copia as entries,
   PULA as congeladas, insere _raw na posição do FieldID;
   note right
     A congelada sai porque a captura emite o valor
@@ -46,7 +46,7 @@ partition "Ingestão — uma passada por evento" {
 partition "Apenda — o que ele NÃO faz" {
   :rowID = nextRowID++ (sem lookup de key);
   :BuildRecord com key VAZIA;
-  :segW.Append;
+  :secW.Append;
   :applyRecord: sem primary, sem sequence,
   sem decremento de liveness, sem fase de CLEAR;
   note right
@@ -74,7 +74,7 @@ partition "Retenção — uma passada por minuto" {
     :avança rowIDBase;
   endif
   while (segmento mais antigo coberto pela marca?) is (sim)
-    :aposentaSegmento — os MESMOS quatro passos
+    :aposentaSegment — os MESMOS quatro passos
     da compaction, sem o copy-forward antes;
     note right
       1. Checkpoint    (a marca vira durável)

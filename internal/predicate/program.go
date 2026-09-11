@@ -63,14 +63,14 @@ type Programa struct {
 	prog []instr
 }
 
-// Avalia roda o programa. Sem alocação, sem chamada recursiva, sem pilha.
+// Evaluate roda o programa. Sem alocação, sem chamada recursiva, sem pilha.
 //
 // mismatches conta os campos cujo tipo físico não bate com o do literal —
 // payload heterogêneo na mesma coluna. É ponteiro e aceita nil porque os dois
 // chamadores têm necessidades opostas: o executor o publica como métrica de
 // query, e a ingestão avalia uma regra por evento e não tem onde pendurar um
 // contador por avaliação.
-func (p *Programa) Avalia(slots []Slot, mismatches *int64) bool {
+func (p *Programa) Evaluate(slots []Slot, mismatches *int64) bool {
 	acc := true
 	for pc := 0; pc < len(p.prog); {
 		in := &p.prog[pc]
@@ -223,10 +223,10 @@ type tarefa struct {
 	dir        binder.BoundExpr
 }
 
-// Compila transforma a expressão ligada num programa linear. nSlots é o
+// Compile transforma a expressão ligada num programa linear. nSlots é o
 // tamanho da lista de slots contra a qual o programa vai rodar: um slot fora
 // da faixa é recusado AQUI, no plan-time, e não silenciosamente na avaliação.
-func Compila(e binder.BoundExpr, nSlots int) (*Programa, error) {
+func Compile(e binder.BoundExpr, nSlots int) (*Programa, error) {
 	p := &Programa{}
 	if e == nil {
 		return p, nil

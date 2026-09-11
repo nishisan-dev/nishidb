@@ -45,7 +45,7 @@ type Store interface {
 // storage.checkpoint.interval), e não uma chave nova — o §48 fixa a ORDEM do
 // fluxo, não a periodicidade.
 //
-// Onde as duas regras divergem, e por quê: o precisaCheckpoint do
+// Onde as duas regras divergem, e por quê: o needsCheckpoint do
 // `internal/cli/ingest.go` cai para um padrão quando o intervalo é <= 0 e não
 // tem guarda de "nenhum evento desde o último checkpoint". Ele pode se dar a
 // esse luxo porque lê uma entrada FINITA do começo ao fim — só é consultado
@@ -75,12 +75,12 @@ type Writer struct {
 	// entrada do writer. Com decodeWorkers=1 ela tem um produtor só, e ainda
 	// assim está no caminho: um caminho de código, dimensionado diferente.
 	est *esteira
-	// limiarDeEncolhimento é o teto de memória retida por slot acima do qual os
-	// buffers são soltos ao liberar o slot. Ver o godoc de limiarDeSlot.
-	limiarDeEncolhimento int
+	// limiarOfEncolhimento é o teto de memória retida por slot acima do qual os
+	// buffers são soltos ao liberar o slot. Ver o godoc de slotThreshold.
+	limiarOfEncolhimento int
 	log                  *logging.Logger
 	met                  *metricas
-	origem               checkpoint.Source
+	source               checkpoint.Source
 	cad                  Cadencia
 
 	// commit publica o offset no broker DEPOIS do checkpoint durável (§48).
@@ -121,7 +121,7 @@ type Writer struct {
 	pausa    error
 	desfecho Desfecho
 
-	// parado fecha quando Roda retorna, e existe para o Quiesce.
+	// parado fecha quando Run retorna, e existe para o Quiesce.
 	//
 	// É o braço que impede o modo de falha mais perigoso desta mudança: um
 	// writer que já saiu (por ErrPausado, por exemplo) nunca alcançaria a
@@ -130,14 +130,14 @@ type Writer struct {
 	// seriam revogadas e a ingestão morreria em silêncio.
 	parado chan struct{}
 
-	// iniciado fecha quando Roda começa, e é o QUARTO caso do Quiesce.
+	// iniciado fecha quando Run começa, e é o QUARTO caso do Quiesce.
 	//
 	// O plano da Fase 3 nomeou três: barreira pronta, writer que já saiu, e
 	// contexto. Falta o writer que NUNCA subiu — e ele existe de verdade: o
 	// group do franz-go pode revogar partições durante o próprio Abre, antes de
-	// o Consumidor.Roda ter lançado goroutine nenhuma. Nesse instante a fila
+	// o Consumidor.Run ter lançado goroutine nenhuma. Nesse instante a fila
 	// aceita a barreira (está aberta), ninguém a consome, `parado` não está
-	// fechado porque Roda não retornou, e o contexto que o franz-go passa ao
+	// fechado porque Run não retornou, e o contexto que o franz-go passa ao
 	// callback de revogação não está cancelado. O Quiesce espera para sempre,
 	// dentro de um callback: o group cai, e o Close do cliente trava atrás dele.
 	//
@@ -161,8 +161,8 @@ type Desfecho struct {
 	Falhas      int64
 }
 
-// NovoWriter monta o writer.
-func NovoWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fila,
+// NewWriter monta o writer.
+func NewWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fila,
 	log *logging.Logger, met *metricas, offsets map[int32]int64, cad Cadencia,
 	commit func(context.Context, map[int32]int64) error,
 ) *Writer {
@@ -175,11 +175,11 @@ func NovoWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fil
 	}
 	return &Writer{
 		cfg: cfg, mat: mat, store: st, fila: fila,
-		est:                  novaEsteira(cfg.MaxPollRecords),
-		limiarDeEncolhimento: limiarDeSlot(cfg),
+		est:                  newPipeline(cfg.MaxPollRecords),
+		limiarOfEncolhimento: slotThreshold(cfg),
 		log:                  log.Component("kafka").Dataset(cfg.Dataset),
 		met:                  met,
-		origem:               cfg.Origem(),
+		source:               cfg.Source(),
 		cad:                  cad,
 		commit:               commit,
 		offsets:              o,
@@ -203,14 +203,14 @@ func (w *Writer) Desfecho() Desfecho {
 	return w.desfecho
 }
 
-// Roda drena a fila até o contexto acabar, a fila fechar ou a ingestão
+// Run drena a fila até o contexto acabar, a fila fechar ou a ingestão
 // pausar. Devolve ErrPausado quando parou por política.
-func (w *Writer) Roda(ctx context.Context) error {
+func (w *Writer) Run(ctx context.Context) error {
 	// Antes de qualquer outra coisa: é este fechamento que autoriza o Quiesce a
 	// esperar. Fechá-lo depois deixaria uma janela — estreita, e já basta — em
 	// que a revogação vê o writer como "não iniciado" enquanto ele está subindo.
 	close(w.iniciado)
-	acorda, paraDespertador := w.despertador()
+	wake, paraDespertador := w.despertador()
 	defer paraDespertador()
 	// Fechar isto é o que destrava um Quiesce que chegou tarde demais.
 	defer close(w.parado)
@@ -220,7 +220,7 @@ func (w *Writer) Roda(ctx context.Context) error {
 	defer w.est.abandona()
 
 	for {
-		s, ok, acordou := w.est.consome(ctx, acorda)
+		s, ok, acordou := w.est.consome(ctx, wake)
 		switch {
 		case acordou:
 			// Débito 56: sem evento novo o disparo por CONTAGEM nunca vem, e
@@ -230,7 +230,7 @@ func (w *Writer) Roda(ctx context.Context) error {
 			// milhão de atraso num consumidor que não tem atraso nenhum.
 			//
 			// O despertar só AVALIA a regra — quem decide continua sendo o
-			// precisaCheckpoint.
+			// needsCheckpoint.
 			if err := w.talvezCheckpoint(ctx); err != nil {
 				return err
 			}
@@ -250,10 +250,10 @@ func (w *Writer) Roda(ctx context.Context) error {
 			// tudo o que foi enfileirado antes dela, mesmo com K
 			// decodificadores terminando fora de ordem.
 			s.barreira.conclui(w.checkpoint(ctx))
-			w.liberaSlot()
+			w.releaseSlot()
 		default:
 			err := w.aplica(ctx, s)
-			w.liberaSlot()
+			w.releaseSlot()
 			if err != nil {
 				return err
 			}
@@ -272,7 +272,7 @@ func (w *Writer) despertador() (<-chan time.Time, func()) {
 		return nil, func() {}
 	}
 	// Ticker, e não timer rearmado a cada checkpoint: o despertar é barato
-	// (precisaCheckpoint é aritmética) e um tique que chega cedo demais
+	// (needsCheckpoint é aritmética) e um tique que chega cedo demais
 	// simplesmente não faz nada. O custo de errar para o lado do timer seria
 	// pior — esquecer um Reset num caminho de erro deixa o laço mudo de novo,
 	// que é exatamente o débito que se está fechando.
@@ -280,12 +280,12 @@ func (w *Writer) despertador() (<-chan time.Time, func()) {
 	return t.C, t.Stop
 }
 
-// liberaSlot devolve o slot ao anel e contabiliza o encolhimento.
+// releaseSlot devolve o slot ao anel e contabiliza o encolhimento.
 //
 // Sempre depois de aplicar, inclusive no caminho de erro: o slot preso seria
 // uma vaga a menos para sempre, e com a janela cheia os decodificadores param.
-func (w *Writer) liberaSlot() {
-	if w.est.avanca(w.limiarDeEncolhimento) {
+func (w *Writer) releaseSlot() {
+	if w.est.advance(w.limiarOfEncolhimento) {
 		w.met.slotsEncolhidos.Inc()
 	}
 }
@@ -301,10 +301,10 @@ func (w *Writer) aplica(ctx context.Context, s *slot) error {
 	// decode passa a ser concorrente, e somá-lo aqui faria o histograma medir
 	// a soma de trabalhos paralelos como se fosse latência serial. O que este
 	// número responde é "o writer é o gargalo?", e o writer é o Aplica.
-	inicio := time.Now()
+	start := time.Now()
 	r := w.mat.Aplica(&s.dec)
-	w.met.aplicaSeg.Observe(time.Since(inicio).Seconds())
-	w.conta(r)
+	w.met.aplicaSec.Observe(time.Since(start).Seconds())
+	w.count(r)
 
 	switch {
 	case r.Fatal():
@@ -315,7 +315,7 @@ func (w *Writer) aplica(ctx context.Context, s *slot) error {
 			"writer.falho", it.Rec)
 
 	case r.Category.BadEvent():
-		if w.cfg.InvalidEvent == schema.InvalidEventStop {
+		if w.cfg.InvalidEventPolicy == schema.InvalidEventStop {
 			return w.para(ctx, fmt.Errorf("%w: errors.invalidEvent=stop e o evento é %s: %w",
 				ErrPausado, r.Category, r.Err), "evento.parou", it.Rec)
 		}
@@ -325,7 +325,7 @@ func (w *Writer) aplica(ctx context.Context, s *slot) error {
 			"categoria", r.Category.String(),
 			"partition", it.Rec.Partition, "offset", it.Rec.Offset,
 			"erro", r.Err.Error())
-		w.avanca(it.Rec)
+		w.advance(it.Rec)
 
 	case r.Err != nil:
 		// STORAGE_ERROR e INTERNAL_STATE: não é culpa do evento e não há
@@ -336,12 +336,12 @@ func (w *Writer) aplica(ctx context.Context, s *slot) error {
 			ErrPausado, r.Category, r.Err), "storage.falhou", it.Rec)
 
 	default:
-		w.avanca(it.Rec)
+		w.advance(it.Rec)
 	}
 	return w.talvezCheckpoint(ctx)
 }
 
-func (w *Writer) conta(r materializer.ApplyResult) {
+func (w *Writer) count(r materializer.ApplyResult) {
 	w.mu.Lock()
 	w.desfecho.Eventos++
 	switch {
@@ -370,19 +370,19 @@ func (w *Writer) conta(r materializer.ApplyResult) {
 	}
 }
 
-// avanca move a posição da partição para o PRÓXIMO offset a consumir. Só é
+// advance move a posição da partição para o PRÓXIMO offset a consumir. Só é
 // chamado para eventos DECIDIDOS — aplicados, stale ou descartados por
 // política. Evento que parou a ingestão nunca avança.
-func (w *Writer) avanca(rec *kgo.Record) {
+func (w *Writer) advance(rec *kgo.Record) {
 	w.posMu.Lock()
 	w.offsets[rec.Partition] = rec.Offset + 1
 	w.desdeCP++
 	w.posMu.Unlock()
-	w.met.posicaoDe(rec.Partition).Store(rec.Offset + 1)
+	w.met.positionOf(rec.Partition).Store(rec.Offset + 1)
 }
 
 // para registra a pausa de forma observável e torna durável o que já entrou.
-func (w *Writer) para(ctx context.Context, motivo error, evento string, rec *kgo.Record) error {
+func (w *Writer) para(ctx context.Context, motivo error, event string, rec *kgo.Record) error {
 	// Checkpoint ANTES de parar: os eventos já aplicados têm de ficar
 	// duráveis, e o offset persistido tem de apontar exatamente para o
 	// evento problemático — é isso que permite ao operador vê-lo e decidir.
@@ -396,7 +396,7 @@ func (w *Writer) para(ctx context.Context, motivo error, evento string, rec *kgo
 	}
 	w.mu.Unlock()
 	w.met.bloqueado.Set(1)
-	w.log.Error(evento, "ingestão PARADA; as consultas seguem de pé (§51). Use `nishidb offsets` para reposicionar",
+	w.log.Error(event, "ingestão PARADA; as consultas seguem de pé (§51). Use `nishidb offsets` para reposicionar",
 		"partition", rec.Partition, "offset", rec.Offset, "motivo", motivo.Error())
 	return w.Pausa()
 }
@@ -412,7 +412,7 @@ func (w *Writer) para(ctx context.Context, motivo error, evento string, rec *kgo
 // "uma FIFO, um consumidor". Está escrito aqui porque a barreira parecia
 // sustentá-la, e sem o registro a próxima revisão a reintroduz "por segurança".
 //
-// Roda dentro de um callback do franz-go, então NUNCA pode esperar para
+// Run dentro de um callback do franz-go, então NUNCA pode esperar para
 // sempre: os três braços do select são a barreira, o writer que já saiu, e o
 // contexto.
 func (w *Writer) Quiesce(ctx context.Context) error {
@@ -426,7 +426,7 @@ func (w *Writer) Quiesce(ctx context.Context) error {
 		return nil
 	}
 
-	b := novaBarreira()
+	b := newBarrier()
 	if err := w.fila.EnviaBarreira(ctx, b); err != nil {
 		if errors.Is(err, ErrFilaFechada) {
 			// O consumidor está encerrando: o writer drena o que sobrou e faz
@@ -450,7 +450,7 @@ func (w *Writer) Quiesce(ctx context.Context) error {
 
 func (w *Writer) talvezCheckpoint(ctx context.Context) error {
 	w.posMu.Lock()
-	precisa := precisaCheckpoint(w.cad, w.desdeCP, w.ultimoCP)
+	precisa := needsCheckpoint(w.cad, w.desdeCP, w.ultimoCP)
 	w.posMu.Unlock()
 	if !precisa {
 		return nil
@@ -487,7 +487,7 @@ func (w *Writer) checkpoint(ctx context.Context) error {
 	for p, v := range w.offsets {
 		snap[p] = v
 	}
-	o := checkpoint.SourceOffsets{Source: w.origem, Offsets: snap}
+	o := checkpoint.SourceOffsets{Source: w.source, Offsets: snap}
 	if err := w.store.SetSourceOffsets(o); err != nil {
 		return err
 	}
@@ -514,12 +514,12 @@ func (w *Writer) finaliza(ctx context.Context) error {
 	// Contexto próprio: o ctx do consumer já pode estar cancelado no
 	// encerramento, e um checkpoint que não roda por causa disso jogaria
 	// fora trabalho já aplicado.
-	cctx, cancela := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancela()
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	return w.checkpoint(cctx)
 }
 
-// precisaCheckpoint dispara por contagem OU por tempo, o que vier primeiro.
+// needsCheckpoint dispara por contagem OU por tempo, o que vier primeiro.
 // Eventos == 0 desliga os dois.
 //
 // `desde == 0` também desliga, e a guarda passou a importar quando o laço
@@ -528,7 +528,7 @@ func (w *Writer) finaliza(ctx context.Context) error {
 // commitar, e um dataset parado reescreveria o manifest e daria fsync a cada
 // intervalo, para sempre. Pelo caminho do evento a guarda é redundante —
 // avanca() sempre incrementa antes —, e é por isso que ela não existia.
-func precisaCheckpoint(c Cadencia, desde int64, ultimo time.Time) bool {
+func needsCheckpoint(c Cadencia, desde int64, ultimo time.Time) bool {
 	if c.Eventos <= 0 || desde <= 0 {
 		return false
 	}

@@ -21,45 +21,45 @@ import (
 // mesma ordem do sort que se quer medir. Ele apareceria dos DOIS lados, e é
 // justamente isso que estragaria a comparação — ruído comum não se cancela numa
 // razão, ele a achata em direção a 1 e faz o ganho parecer menor do que é.
-type fonteDeBancada struct {
+type sourceOfBench struct {
 	ids      []types.RowID
 	payloads [][]byte
-	it       iteradorDeBancada
+	it       iteradorOfBench
 }
 
-func (f *fonteDeBancada) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+func (f *sourceOfBench) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	buf = append(buf[:0], f.payloads[id]...)
 	return types.Record{RowID: id, Payload: buf}, buf, true, nil
 }
 
-func (f *fonteDeBancada) GetByKey(_ types.Snapshot, _, buf []byte) (types.Record, []byte, bool, error) {
+func (f *sourceOfBench) GetByKey(_ types.Snapshot, _, buf []byte) (types.Record, []byte, bool, error) {
 	return types.Record{}, buf, false, nil
 }
 
 // ScanLive REUSA o iterador: a bancada roda serialmente, e devolver um novo a
 // cada query poria uma alocação por query na medida do lado que abre mais
 // queries — que são os dois, igualmente, mas o ponto é medir o operador.
-func (f *fonteDeBancada) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
+func (f *sourceOfBench) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
 
-func (f *fonteDeBancada) CloseSnapshot(types.Snapshot) {}
+func (f *sourceOfBench) CloseSnapshot(types.Snapshot) {}
 
-func (f *fonteDeBancada) ScanLive(types.Snapshot) types.RowIDIterator {
+func (f *sourceOfBench) ScanLive(types.Snapshot) types.RowIDIterator {
 	f.it.f, f.it.pos = f, 0
 	return &f.it
 }
 
-func (f *fonteDeBancada) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
+func (f *sourceOfBench) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	return nil, fmt.Errorf("%w: bancada sem bitmap", types.ErrInvalidArgument)
 }
 
-func (f *fonteDeBancada) Indexed(types.FieldID) bool { return false }
+func (f *sourceOfBench) Indexed(types.FieldID) bool { return false }
 
-type iteradorDeBancada struct {
-	f   *fonteDeBancada
+type iteradorOfBench struct {
+	f   *sourceOfBench
 	pos int
 }
 
-func (i *iteradorDeBancada) Next() bool {
+func (i *iteradorOfBench) Next() bool {
 	if i.pos >= len(i.f.ids) {
 		return false
 	}
@@ -67,32 +67,32 @@ func (i *iteradorDeBancada) Next() bool {
 	return true
 }
 
-func (i *iteradorDeBancada) RowID() types.RowID { return i.f.ids[i.pos-1] }
-func (i *iteradorDeBancada) Err() error         { return nil }
-func (i *iteradorDeBancada) Close() error       { return nil }
+func (i *iteradorOfBench) RowID() types.RowID { return i.f.ids[i.pos-1] }
+func (i *iteradorOfBench) Err() error         { return nil }
+func (i *iteradorOfBench) Close() error       { return nil }
 
-// montaFonte serializa o corpus uma vez, fora do cronômetro.
+// buildSource serializa o corpus uma vez, fora do cronômetro.
 //
 // O schema vem POR ARGUMENTO, e não compilado aqui: os payloads precisam usar
 // exatamente os FieldIDs que a query ligada endereça. Um segundo Compile daria
 // um segundo dicionário, e bastaria ele numerar diferente para a bancada medir
 // uma consulta sobre colunas ausentes — rápida, silenciosa e sem significado.
-func montaFonte(tb testing.TB, c *schema.Compiled, linhas []linhaTopN) *fonteDeBancada {
+func buildSource(tb testing.TB, c *schema.Compiled, rows []rowTopN) *sourceOfBench {
 	tb.Helper()
-	id, nome, num := campo(tb, c, "id"), campo(tb, c, "nome"), campo(tb, c, "n")
+	id, name, num := field(tb, c, "id"), field(tb, c, "nome"), field(tb, c, "n")
 	// Os três campos vão na ordem de FieldID, que neste schema é id, n, nome.
 	ordem := []struct {
 		fid types.FieldID
-		val func(l linhaTopN) (types.Value, bool)
+		val func(l rowTopN) (types.Value, bool)
 	}{
-		{id.ID, func(l linhaTopN) (types.Value, bool) {
+		{id.ID, func(l rowTopN) (types.Value, bool) {
 			return types.Value{Type: types.TypeString, Bytes: []byte(l.id)}, true
 		}},
-		{num.ID, func(l linhaTopN) (types.Value, bool) {
+		{num.ID, func(l rowTopN) (types.Value, bool) {
 			return types.Value{Type: types.TypeInt64, I64: l.n}, true
 		}},
-		{nome.ID, func(l linhaTopN) (types.Value, bool) {
-			return types.Value{Type: types.TypeString, Bytes: []byte(l.nome)}, l.temNome
+		{name.ID, func(l rowTopN) (types.Value, bool) {
+			return types.Value{Type: types.TypeString, Bytes: []byte(l.name)}, l.hasName
 		}},
 	}
 	for i := 1; i < len(ordem); i++ {
@@ -101,11 +101,11 @@ func montaFonte(tb testing.TB, c *schema.Compiled, linhas []linhaTopN) *fonteDeB
 		}
 	}
 
-	f := &fonteDeBancada{
-		ids:      make([]types.RowID, len(linhas)),
-		payloads: make([][]byte, len(linhas)),
+	f := &sourceOfBench{
+		ids:      make([]types.RowID, len(rows)),
+		payloads: make([][]byte, len(rows)),
 	}
-	for i, l := range linhas {
+	for i, l := range rows {
 		var p []byte
 		var err error
 		for _, o := range ordem {
@@ -122,7 +122,7 @@ func montaFonte(tb testing.TB, c *schema.Compiled, linhas []linhaTopN) *fonteDeB
 	return f
 }
 
-// corpusDeBancada é o corpus de 100 mil linhas, em três FORMAS.
+// corpusOfBench é o corpus de 100 mil linhas, em três FORMAS.
 //
 // A forma importa porque ela decide quantas linhas o heap ACEITA, que é o único
 // trabalho que o top-N faz além de comparar:
@@ -138,27 +138,27 @@ func montaFonte(tb testing.TB, c *schema.Compiled, linhas []linhaTopN) *fonteDeB
 // Medir só o "aleatorio" daria um ganho bonito sem dizer o que acontece no dia
 // ruim; medir só o "pior" faria o modo parecer caro num caso que quase não
 // ocorre. O teto de N sai dos três.
-func corpusDeBancada(forma string, linhas int) []linhaTopN {
-	out := make([]linhaTopN, 0, linhas)
+func corpusOfBench(forma string, rows int) []rowTopN {
+	out := make([]rowTopN, 0, rows)
 	// LCG determinístico: o corpus tem de ser o mesmo entre rodadas, senão a
 	// comparação com -count=6 mistura variação de máquina com variação de dado.
 	semente := uint64(0x9E3779B97F4A7C15)
-	for i := 0; i < linhas; i++ {
-		var chave int
+	for i := 0; i < rows; i++ {
+		var key int
 		switch forma {
 		case "pior":
-			chave = linhas - i
+			key = rows - i
 		case "melhor":
-			chave = i
+			key = i
 		default:
 			semente = semente*6364136223846793005 + 1442695040888963407
-			chave = int(semente >> 40)
+			key = int(semente >> 40)
 		}
-		out = append(out, linhaTopN{
+		out = append(out, rowTopN{
 			id:      fmt.Sprintf("k%07d", i),
-			nome:    fmt.Sprintf("g%08d", chave),
-			temNome: i%13 != 0,
-			n:       int64(chave % 1024),
+			name:    fmt.Sprintf("g%08d", key),
+			hasName: i%13 != 0,
+			n:       int64(key % 1024),
 		})
 	}
 	return out
@@ -227,30 +227,30 @@ func BenchmarkOrdenaCorpusCurto(b *testing.B) {
 		[]int64{1_024, 4_096, 16_384})
 }
 
-func medeOsDoisCaminhos(b *testing.B, linhas int, formas []string, tamanhos []int64) {
+func medeOsDoisCaminhos(b *testing.B, rows int, formas []string, sizes []int64) {
 	b.Helper()
-	c := compilaSchemaTopN(b)
-	chaves := []binder.BoundOrderKey{chaveNome(b, c, false, false), chaveN(b, c, true)}
+	c := compileSchemaTopN(b)
+	keys := []binder.BoundOrderKey{keyName(b, c, false, false), keyN(b, c, true)}
 
 	for _, forma := range formas {
-		fonte := montaFonte(b, c, corpusDeBancada(forma, linhas))
-		for _, n := range tamanhos {
-			bq := bqTopN(b, c, chaves, n, 0)
+		source := buildSource(b, c, corpusOfBench(forma, rows))
+		for _, n := range sizes {
+			bq := bqTopN(b, c, keys, n, 0)
 			// bqTopN corta o limite efetivo em maxRows; a bancada precisa do N
 			// pedido inteiro para medir o heap desse tamanho.
 			bq.MaxRows, bq.EffectiveLimit = 1_000_000, n
-			for _, caminho := range []string{"topn", "completo"} {
+			for _, path := range []string{"topn", "completo"} {
 				// O lado rápido leva TopNMax = n, e não o teto padrão: sem
 				// isso o n=16384 cairia no caminho completo dos DOIS lados e a
 				// bancada compararia o caminho completo consigo mesmo — foi o
 				// que aconteceu na primeira rodada, e é exatamente o número que
 				// falta para justificar onde o teto fica.
-				opts := executor.Options{Store: fonte, TopNMax: n}
-				if caminho == "completo" {
+				opts := executor.Options{Store: source, TopNMax: n}
+				if path == "completo" {
 					opts.TopNMax = -1
 				}
-				b.Run(fmt.Sprintf("forma=%s/n=%d/caminho=%s", forma, n, caminho), func(b *testing.B) {
-					confereModo(b, bq, opts, caminho == "topn")
+				b.Run(fmt.Sprintf("forma=%s/n=%d/caminho=%s", forma, n, path), func(b *testing.B) {
+					confereModo(b, bq, opts, path == "topn")
 					b.ReportAllocs()
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {

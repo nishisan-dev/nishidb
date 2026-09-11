@@ -21,12 +21,12 @@ import (
 // Os cinco valores são diferentes de propósito: com dois iguais, um contador
 // impresso no lugar do outro passaria despercebido.
 func TestResumoDaIngestaoTrazOsContadoresDoDatasetQueConsome(t *testing.T) {
-	ligada := protocol.IngestionStats{
+	on := protocol.IngestionStats{
 		Enabled: true, State: "UP",
 		Events: 1, Applied: 2, Stale: 3, Discarded: 4, Failed: 5,
 	}
 
-	got := resumoDaIngestao(ligada)
+	got := ingestionStatsSummary(on)
 	for _, quer := range []string{"UP", "1 eventos", "2 aplicados", "3 stale", "4 descartados", "5 falhas"} {
 		if !strings.Contains(got, quer) {
 			t.Errorf("o resumo não traz %q: %q", quer, got)
@@ -41,18 +41,18 @@ func TestResumoDaIngestaoTrazOsContadoresDoDatasetQueConsome(t *testing.T) {
 
 	// Com motivo, ele viaja junto do estado — é o que distingue "está parada"
 	// de "por que está parada".
-	parada := ligada
+	parada := on
 	parada.State, parada.Paused = "DEGRADED", "erro de desserialização em 3 partições"
-	if got := resumoDaIngestao(parada); !strings.Contains(got, "; parada: "+parada.Paused) {
+	if got := ingestionStatsSummary(parada); !strings.Contains(got, "; parada: "+parada.Paused) {
 		t.Errorf("o resumo não traz o motivo da parada: %q", got)
 	}
 
 	// O dataset DESLIGADO não tem contador para mostrar. Publicar cinco zeros
 	// para ele faria o operador procurar por que nada é aplicado num dataset
 	// que ninguém pediu para consumir.
-	desligada := ligada
+	desligada := on
 	desligada.Enabled, desligada.State = false, "DISABLED"
-	if got := resumoDaIngestao(desligada); got != "DISABLED" {
+	if got := ingestionStatsSummary(desligada); got != "DISABLED" {
 		t.Errorf("resumo do dataset desligado = %q, queria só o estado", got)
 	}
 }

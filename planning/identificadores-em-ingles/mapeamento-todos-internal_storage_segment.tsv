@@ -1,0 +1,18 @@
+pacote	especie	endereco	novo	motivo
+internal/storage/segment	param	OpenWriter.segID	secID	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	param	Reader.file.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	param	Reader.ReadRecord.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	param	readRecordAt.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	param	Reader.ScanFrom.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	param	scanFrom.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	param	Reader.CloseSegment.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	field	Writer.segID	secID	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	local	TestRotacaoCriaNovoSegmento.segSize	secSize	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	local	TestRotacaoCriaNovoSegmento.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	local	TestReopenParaAppendTruncaLixo.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	local	TestReadRecordDetectaCorrupcao.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	local	TestReadRecordComLengthCorrompidoNaoAlocaGigante.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	local	TestReadRecordGrande.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	local	TestListSegments.segSize	secSize	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	field#gopls	TestAppendReadRoundTrip.loc.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/segment	local#ambiguo	TestAppendReadRoundTrip.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado

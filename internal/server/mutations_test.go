@@ -12,11 +12,11 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
-// postComAuth faz o POST com corpo e Basic OPCIONAIS (usuario == "" significa
+// postWithAuth faz o POST com corpo e Basic OPCIONAIS (usuario == "" significa
 // SEM header Authorization nenhum; corpo == "" significa SEM corpo nenhum —
 // não "{}" — para exercitar a leitura tolerante a io.EOF de
-// leRequisicaoDataset).
-func postComAuth(t *testing.T, srv *server.Servidor, caminho, corpo, usuario, senha string) *http.Response {
+// readRequisicaoDataset).
+func postWithAuth(t *testing.T, srv *server.Server, path, corpo, usuario, password string) *http.Response {
 	t.Helper()
 	var body *strings.Reader
 	if corpo == "" {
@@ -24,12 +24,12 @@ func postComAuth(t *testing.T, srv *server.Servidor, caminho, corpo, usuario, se
 	} else {
 		body = strings.NewReader(corpo)
 	}
-	req, err := http.NewRequest(http.MethodPost, "http://"+srv.Endereco()+caminho, body)
+	req, err := http.NewRequest(http.MethodPost, "http://"+srv.Endereco()+path, body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if usuario != "" {
-		req.SetBasicAuth(usuario, senha)
+		req.SetBasicAuth(usuario, password)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -38,19 +38,19 @@ func postComAuth(t *testing.T, srv *server.Servidor, caminho, corpo, usuario, se
 	return resp
 }
 
-// contadorDeCheckpoint lê nishidb_checkpoint_duration_seconds_count do
+// counterOfCheckpoint lê nishidb_checkpoint_duration_seconds_count do
 // scrape — é um CONTADOR, e por isso o oráculo certo para "o checkpoint
 // aconteceu de verdade": ao contrário do gauge de último sucesso (segundos
 // desde a época, granularidade de 1s), ele incrementa de forma determinística
 // a cada chamada, mesmo dentro do mesmo segundo de relógio.
-func contadorDeCheckpoint(t *testing.T, corpo, dataset string) int64 {
+func counterOfCheckpoint(t *testing.T, corpo, dataset string) int64 {
 	t.Helper()
 	prefixo := metrics.MetCheckpointDurationSeconds + `_count{dataset="` + dataset + `"} `
-	for _, linha := range strings.Split(corpo, "\n") {
-		if v, ok := strings.CutPrefix(linha, prefixo); ok {
+	for _, row := range strings.Split(corpo, "\n") {
+		if v, ok := strings.CutPrefix(row, prefixo); ok {
 			n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
 			if err != nil {
-				t.Fatalf("contador de checkpoint ilegível: %q: %v", linha, err)
+				t.Fatalf("contador de checkpoint ilegível: %q: %v", row, err)
 			}
 			return int64(n)
 		}
@@ -63,11 +63,11 @@ func contadorDeCheckpoint(t *testing.T, corpo, dataset string) int64 {
 // no plano exposto (o loopback, que é READ-only por construção, tem suíte
 // própria em loopback_test.go).
 func TestMutantesExigemAutenticacao(t *testing.T) {
-	srv := servidorComAutenticacao(t, 1, "")
+	srv := serverWithAuth(t, 1, "")
 
-	for _, caminho := range []string{"/v1/compact", "/v1/checkpoint"} {
-		t.Run(caminho, func(t *testing.T) {
-			resp := postComAuth(t, srv, caminho, "", "", "")
+	for _, path := range []string{"/v1/compact", "/v1/checkpoint"} {
+		t.Run(path, func(t *testing.T) {
+			resp := postWithAuth(t, srv, path, "", "", "")
 			defer fecha(t, resp)
 			if resp.StatusCode != http.StatusUnauthorized {
 				t.Errorf("status = %d, quer 401", resp.StatusCode)
@@ -82,13 +82,13 @@ func TestMutantesExigemAutenticacao(t *testing.T) {
 // de produção. papel READ não alcança rota ADMIN — 403, nunca 200 nem 401
 // (a credencial É válida, só o papel não basta).
 func TestMutantesRecusamPapelREAD(t *testing.T) {
-	srv := servidorComAutenticacao(t, 1, "")
+	srv := serverWithAuth(t, 1, "")
 
-	for _, caminho := range []string{"/v1/compact", "/v1/checkpoint"} {
-		t.Run(caminho, func(t *testing.T) {
-			resp := postComAuth(t, srv, caminho, "", "leitor", senhaLeitorAuth)
-			status := resp.StatusCode // falhaDe fecha o corpo; lido antes
-			if f := falhaDe(t, resp); f.Code != protocol.CodeForbidden {
+	for _, path := range []string{"/v1/compact", "/v1/checkpoint"} {
+		t.Run(path, func(t *testing.T) {
+			resp := postWithAuth(t, srv, path, "", "leitor", passwordReaderAuth)
+			status := resp.StatusCode // failOf fecha o corpo; lido antes
+			if f := failOf(t, resp); f.Code != protocol.CodeForbidden {
 				t.Errorf("código = %q, quer %q", f.Code, protocol.CodeForbidden)
 			}
 			if status != http.StatusForbidden {
@@ -104,19 +104,19 @@ func TestMutantesRecusamPapelREAD(t *testing.T) {
 // método por dentro do handler em vez de deixar o mux gerar o 405 cru em
 // texto puro.
 func TestMutantesRecusamMetodoErrado(t *testing.T) {
-	srv := servidorComDados(t, 1, blocoPadrao)
+	srv := serverWithData(t, 1, blockPadrao)
 
-	for _, caminho := range []string{"/v1/compact", "/v1/checkpoint"} {
-		t.Run(caminho, func(t *testing.T) {
-			resp, err := http.Get("http://" + srv.Endereco() + caminho)
+	for _, path := range []string{"/v1/compact", "/v1/checkpoint"} {
+		t.Run(path, func(t *testing.T) {
+			resp, err := http.Get("http://" + srv.Endereco() + path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if resp.StatusCode != http.StatusMethodNotAllowed {
-				t.Fatalf("GET %s = %d, quer 405", caminho, resp.StatusCode)
+				t.Fatalf("GET %s = %d, quer 405", path, resp.StatusCode)
 			}
-			if f := falhaDe(t, resp); f.Code != protocol.CodeMethod {
-				t.Fatalf("GET %s: código = %q", caminho, f.Code)
+			if f := failOf(t, resp); f.Code != protocol.CodeMethod {
+				t.Fatalf("GET %s: código = %q", path, f.Code)
 			}
 		})
 	}
@@ -127,11 +127,11 @@ func TestMutantesRecusamMetodoErrado(t *testing.T) {
 // AUSENTE (não "{}") é o caminho "todos os datasets" — aqui há só um, mas é
 // esse caminho que o teste exercita.
 func TestCheckpointComAdminAvancaOContadorEDevolveODataset(t *testing.T) {
-	srv := servidorComAutenticacao(t, 3, "")
+	srv := serverWithAuth(t, 3, "")
 
-	antes := contadorDeCheckpoint(t, pegaCorpoComAuth(t, srv, "/metrics", "chefe", senhaChefeAuth), "d")
+	before := counterOfCheckpoint(t, fetchCorpoWithAuth(t, srv, "/metrics", "chefe", passwordChefeAuth), "d")
 
-	resp := postComAuth(t, srv, "/v1/checkpoint", "", "chefe", senhaChefeAuth)
+	resp := postWithAuth(t, srv, "/v1/checkpoint", "", "chefe", passwordChefeAuth)
 	if resp.StatusCode != http.StatusOK {
 		defer fecha(t, resp)
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
@@ -149,10 +149,10 @@ func TestCheckpointComAdminAvancaOContadorEDevolveODataset(t *testing.T) {
 		t.Errorf("durationMs = %d, quer >= 0", out.Datasets[0].DurationMs)
 	}
 
-	depois := contadorDeCheckpoint(t, pegaCorpoComAuth(t, srv, "/metrics", "chefe", senhaChefeAuth), "d")
-	if depois != antes+1 {
+	depois := counterOfCheckpoint(t, fetchCorpoWithAuth(t, srv, "/metrics", "chefe", passwordChefeAuth), "d")
+	if depois != before+1 {
 		t.Errorf("nishidb_checkpoint_duration_seconds_count foi de %d para %d, queria +1: "+
-			"o checkpoint manual não é diferenciável de um no-op", antes, depois)
+			"o checkpoint manual não é diferenciável de um no-op", before, depois)
 	}
 }
 
@@ -161,17 +161,17 @@ func TestCheckpointComAdminAvancaOContadorEDevolveODataset(t *testing.T) {
 // sem update), a eleição não acha candidato e a resposta sai com os campos
 // ZERADOS e status 200 — não é erro, é "nada para compactar agora".
 func TestCompactComAdminEEnabledFalseFunciona(t *testing.T) {
-	// servidorComAutenticacao não tem parâmetro de storageExtra (só de
+	// serverWithAuth não tem parâmetro de storageExtra (só de
 	// maisConfig, que entra DEPOIS do bloco `server:`, e um `storage:` ali
 	// seria uma SEGUNDA chave de topo colidindo com a que a bancada já
 	// escreve) — desce ao helper de baixo, que aceita as duas partes
 	// separadas, para acrescentar `compaction: enabled: false` DENTRO do
 	// bloco `storage:` existente.
-	t.Setenv(varLeitorAuth, senhaLeitorAuth)
-	t.Setenv(varChefeAuth, senhaChefeAuth)
-	srv, _ := servidorComDadosDiretorioEStorage(t, 3, blocoAutenticacao(""), "  compaction:\n    enabled: false\n")
+	t.Setenv(varReaderAuth, passwordReaderAuth)
+	t.Setenv(varChefeAuth, passwordChefeAuth)
+	srv, _ := serverWithDataDiretorioEStorage(t, 3, blockAuth(""), "  compaction:\n    enabled: false\n")
 
-	resp := postComAuth(t, srv, "/v1/compact", "", "chefe", senhaChefeAuth)
+	resp := postWithAuth(t, srv, "/v1/compact", "", "chefe", passwordChefeAuth)
 	if resp.StatusCode != http.StatusOK {
 		defer fecha(t, resp)
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
@@ -195,11 +195,11 @@ func TestCompactComAdminEEnabledFalseFunciona(t *testing.T) {
 // ?dataset= em /v1/metadata: nome desconhecido é 404 com UNKNOWN_DATASET, e
 // nome presente restringe sem tocar nos demais.
 func TestCheckpointFiltraPorDatasetOuRecusaDesconhecido(t *testing.T) {
-	srv := servidorComAutenticacao(t, 1, "")
+	srv := serverWithAuth(t, 1, "")
 
-	resp := postComAuth(t, srv, "/v1/checkpoint", `{"dataset":"fantasma"}`, "chefe", senhaChefeAuth)
-	status := resp.StatusCode // falhaDe fecha o corpo; lido antes
-	f := falhaDe(t, resp)
+	resp := postWithAuth(t, srv, "/v1/checkpoint", `{"dataset":"fantasma"}`, "chefe", passwordChefeAuth)
+	status := resp.StatusCode // failOf fecha o corpo; lido antes
+	f := failOf(t, resp)
 	if status != http.StatusNotFound {
 		t.Fatalf("status = %d, quer 404", status)
 	}
@@ -208,19 +208,19 @@ func TestCheckpointFiltraPorDatasetOuRecusaDesconhecido(t *testing.T) {
 	}
 }
 
-// servidorComDoisDatasets sobe um servidor de verdade com DOIS datasets sem
+// serverWithDoisDatasets sobe um servidor de verdade com DOIS datasets sem
 // Kafka — o suficiente para exercitar "todos os datasets" com mais de um
 // elemento de verdade, sem precisar de Kafka nenhum.
-func servidorComDoisDatasets(t *testing.T, blocoServer string) *server.Servidor {
+func serverWithDoisDatasets(t *testing.T, blockServer string) *server.Server {
 	t.Helper()
-	a := novoAmbienteCom(t, blocoServer)
-	a.escreveDataset("alfa", strings.ReplaceAll(specSemKafka, "%s", "alfa"))
-	a.escreveDataset("beta", strings.ReplaceAll(specSemKafka, "%s", "beta"))
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	a := newEnvWith(t, blockServer)
+	a.writeDataset("alfa", strings.ReplaceAll(specWithoutKafka, "%s", "alfa"))
+	a.writeDataset("beta", strings.ReplaceAll(specWithoutKafka, "%s", "beta"))
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 	return srv
 }
 
@@ -231,9 +231,9 @@ func servidorComDoisDatasets(t *testing.T, blocoServer string) *server.Servidor 
 // um teste de unidade com dublê (mutations_internal_test.go), que prova a
 // LÓGICA de parar-no-primeiro-erro mas não a fiação real com s.datasets.
 func TestCheckpointComTodosOsDatasetsRespeitaAOrdemDeterministicaDaSubida(t *testing.T) {
-	srv := servidorComDoisDatasets(t, blocoPadrao)
+	srv := serverWithDoisDatasets(t, blockPadrao)
 
-	resp := postComAuth(t, srv, "/v1/checkpoint", "", "", "")
+	resp := postWithAuth(t, srv, "/v1/checkpoint", "", "", "")
 	if resp.StatusCode != http.StatusOK {
 		defer fecha(t, resp)
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
@@ -258,7 +258,7 @@ func TestCheckpointComTodosOsDatasetsRespeitaAOrdemDeterministicaDaSubida(t *tes
 // enabled: true, o caso majoritário), a rota NÃO pode ficar morta para
 // sempre — ela só falha BUSY enquanto uma passada está de fato em voo,
 // nunca só porque o laço automático existe (era esse o bug: checar
-// compCancela, que fica não-nil da primeira à última hora do laço).
+// compCancel, que fica não-nil da primeira à última hora do laço).
 //
 // Sem garbage nenhum, a primeira passada automática (imediata, sem cochilo
 // antes) é uma eleição vazia que dura microssegundos — a janela ocupada é
@@ -267,12 +267,12 @@ func TestCheckpointComTodosOsDatasetsRespeitaAOrdemDeterministicaDaSubida(t *tes
 // bug que a revisão achou), NENHUMA das tentativas teria sucesso, e o teste
 // falharia alto no teto em vez de convergir.
 func TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo(t *testing.T) {
-	srv := servidorComAutenticacao(t, 3, "") // storage.compaction ausente = enabled: true (default)
+	srv := serverWithAuth(t, 3, "") // storage.compaction ausente = enabled: true (default)
 
 	const tentativas = 200
 	var resp *http.Response
 	for i := 0; i < tentativas; i++ {
-		resp = postComAuth(t, srv, "/v1/compact", "", "chefe", senhaChefeAuth)
+		resp = postWithAuth(t, srv, "/v1/compact", "", "chefe", passwordChefeAuth)
 		if resp.StatusCode == http.StatusOK {
 			break
 		}
@@ -299,25 +299,25 @@ func TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo(t *testing.T) {
 // gate determinístico; o que falta provar aqui é que ela sobrevive à
 // viagem pela porta HTTP, com o servidor de verdade decidindo a resposta.
 func TestCompactDuasChamadasSimultaneasPeloHTTPUmaGanhaUmaRecebe409(t *testing.T) {
-	srv, _, _, _ := bancadaDeCompaction(t, "false")
+	srv, _, _, _ := benchOfCompaction(t, "false")
 
 	partida := make(chan struct{})
-	resultados := make(chan int, 2)
+	results := make(chan int, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
 			<-partida
 			resp, err := http.Post("http://"+srv.Endereco()+"/v1/compact", "", nil)
 			if err != nil {
-				resultados <- -1
+				results <- -1
 				return
 			}
 			defer func() { _ = resp.Body.Close() }()
-			resultados <- resp.StatusCode
+			results <- resp.StatusCode
 		}()
 	}
 	close(partida) // as duas goroutines partem juntas
 
-	a, b := <-resultados, <-resultados
+	a, b := <-results, <-results
 	oks, conflitos := 0, 0
 	for _, status := range []int{a, b} {
 		switch status {

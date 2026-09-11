@@ -11,7 +11,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-const yamlComExpire = `
+const yamlWithExpire = `
 version: 1
 name: alarmes
 materialization:
@@ -30,7 +30,7 @@ schema:
       type: int64
 `
 
-func compiladoComExpire(t *testing.T, yaml string) (*schema.Compiled, *fakestorage.Store) {
+func compiladoWithExpire(t *testing.T, yaml string) (*schema.Compiled, *fakestorage.Store) {
 	t.Helper()
 	spec, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
@@ -43,8 +43,8 @@ func compiladoComExpire(t *testing.T, yaml string) (*schema.Compiled, *fakestora
 	return c, fakestorage.New(fakestorage.Indexes{})
 }
 
-// leInstanteDeEscrita extrai o campo de sistema do payload materializado.
-func leInstanteDeEscrita(t *testing.T, c *schema.Compiled, st *fakestorage.Store, key string) (int64, bool) {
+// readInstantOfWrite extrai o campo de sistema do payload materializado.
+func readInstantOfWrite(t *testing.T, c *schema.Compiled, st *fakestorage.Store, key string) (int64, bool) {
 	t.Helper()
 	rec, _, presente, err := st.GetByKey(st.OpenSnapshot(), []byte(key), nil)
 	if err != nil {
@@ -75,8 +75,8 @@ func leInstanteDeEscrita(t *testing.T, c *schema.Compiled, st *fakestorage.Store
 func TestCadaEscritaRenovaOInstante(t *testing.T) {
 	for _, modo := range []string{"merge", "replace"} {
 		t.Run(modo, func(t *testing.T) {
-			yaml := strings.Replace(yamlComExpire, "mode: merge", "mode: "+modo, 1)
-			c, st := compiladoComExpire(t, yaml)
+			yaml := strings.Replace(yamlWithExpire, "mode: merge", "mode: "+modo, 1)
+			c, st := compiladoWithExpire(t, yaml)
 			m := mustNew(t, c, st)
 
 			relogio := time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)
@@ -84,7 +84,7 @@ func TestCadaEscritaRenovaOInstante(t *testing.T) {
 			if r := m.Apply([]byte(`{"id":"A","severidade":3}`)); r.Err != nil {
 				t.Fatal(r.Err)
 			}
-			primeiro, ok := leInstanteDeEscrita(t, c, st, "A")
+			primeiro, ok := readInstantOfWrite(t, c, st, "A")
 			if !ok {
 				t.Fatal("o campo de sistema não foi gravado na criação")
 			}
@@ -96,7 +96,7 @@ func TestCadaEscritaRenovaOInstante(t *testing.T) {
 			if r := m.Apply([]byte(`{"id":"A","severidade":4}`)); r.Err != nil {
 				t.Fatal(r.Err)
 			}
-			segundo, ok := leInstanteDeEscrita(t, c, st, "A")
+			segundo, ok := readInstantOfWrite(t, c, st, "A")
 			if !ok {
 				t.Fatal("o campo de sistema sumiu no update")
 			}
@@ -109,8 +109,8 @@ func TestCadaEscritaRenovaOInstante(t *testing.T) {
 
 // Sem expiração declarada não há por que pagar 11 bytes por record.
 func TestSemExpireAfterWriteNaoHaCampoDeSistema(t *testing.T) {
-	yaml := strings.Replace(yamlComExpire, "  ttl:\n    - expireAfterWrite: 2h\n", "", 1)
-	c, st := compiladoComExpire(t, yaml)
+	yaml := strings.Replace(yamlWithExpire, "  ttl:\n    - expireAfterWrite: 2h\n", "", 1)
+	c, st := compiladoWithExpire(t, yaml)
 	if c.WriteInstantField != nil {
 		t.Fatal("campo de sistema compilado sem expiração declarada")
 	}
@@ -138,7 +138,7 @@ func TestSemExpireAfterWriteNaoHaCampoDeSistema(t *testing.T) {
 // Aceitar o campo vindo do evento deixaria o produtor controlar quando a
 // própria entidade expira — um valor no futuro a tornaria imortal, sem erro.
 func TestEventoQueTrazOCampoDeSistemaEhRecusado(t *testing.T) {
-	c, st := compiladoComExpire(t, yamlComExpire)
+	c, st := compiladoWithExpire(t, yamlWithExpire)
 	m := mustNew(t, c, st)
 	r := m.Apply([]byte(`{"id":"A","` + schema.WriteInstantFieldName + `":253402300799000}`))
 	if r.Err == nil {
@@ -155,7 +155,7 @@ func TestEventoQueTrazOCampoDeSistemaEhRecusado(t *testing.T) {
 // Todo campo do mesmo evento carimba o MESMO instante: um time.Now por campo
 // produziria carimbos distintos dentro de uma escrita só.
 func TestOInstanteEhOMesmoParaOEventoInteiro(t *testing.T) {
-	c, st := compiladoComExpire(t, yamlComExpire)
+	c, st := compiladoWithExpire(t, yamlWithExpire)
 	m := mustNew(t, c, st)
 	chamadas := 0
 	base := time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)
@@ -198,7 +198,7 @@ schema:
     severidade:
       type: int64
 `
-	c, st := compiladoComExpire(t, yaml)
+	c, st := compiladoWithExpire(t, yaml)
 	m := mustNew(t, c, st)
 
 	if r := m.Apply([]byte(`{"id":"A","seq":10,"severidade":3}`)); r.Err != nil {
@@ -238,7 +238,7 @@ schema:
 // entidade que reabre: um alarme novo herdaria a severidade do que foi
 // fechado.
 func TestRessurreicaoNaoFazMergeSobreOPayloadDaLapide(t *testing.T) {
-	c, st := compiladoComExpire(t, yamlComExpire)
+	c, st := compiladoWithExpire(t, yamlWithExpire)
 	m := mustNew(t, c, st)
 
 	if r := m.Apply([]byte(`{"id":"A","severidade":3,"extra":"velho"}`)); r.Err != nil {

@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	// ErrPosicaoDesconhecida indica dataset COM linhas e SEM offsets locais.
+	// ErrPositionDesconhecida indica dataset COM linhas e SEM offsets locais.
 	//
 	// É o buraco que o `autoOffsetReset` sozinho não cobre: "não há offset
 	// local" também é verdade quando o kafka.offsets sumiu, ficou ilegível ou
@@ -28,14 +28,14 @@ var (
 	// tópico retido inteiro e `latest` pularia tudo — os dois em silêncio. O
 	// sinal para detectar já é persistido (RowCount no manifest), então a
 	// recusa é barata e a alternativa é corrupção lógica silenciosa.
-	ErrPosicaoDesconhecida = errors.New("kafka: dataset tem linhas e não tem offsets locais")
+	ErrPositionDesconhecida = errors.New("kafka: dataset tem linhas e não tem offsets locais")
 
-	// ErrOrigemDivergente indica que o YAML aponta para um fluxo diferente do
+	// ErrSourceDivergente indica que o YAML aponta para um fluxo diferente do
 	// que gerou os offsets persistidos.
-	ErrOrigemDivergente = errors.New("kafka: a origem mudou desde o último checkpoint")
+	ErrSourceDivergente = errors.New("kafka: a origem mudou desde o último checkpoint")
 
-	// ErrTopicoAusente indica tópico inexistente ou sem partições no cluster.
-	ErrTopicoAusente = errors.New("kafka: tópico ausente")
+	// Open indica tópico inexistente ou sem partições no cluster.
+	Open = errors.New("kafka: tópico ausente")
 
 	// ErrAssignmentParcial indica que o group não entregou todas as partições
 	// do tópico a esta instância.
@@ -57,19 +57,19 @@ type Consumidor struct {
 	w      *Writer
 	log    *logging.Logger
 	met    *metricas
-	origem checkpoint.Source
+	source checkpoint.Source
 
-	// erroAssign carrega a falha detectada dentro do callback de assignment,
+	// errAssign carrega a falha detectada dentro do callback de assignment,
 	// que não tem por onde devolver erro.
-	erroAssign atomic.Value
-	// erroVigia guarda a causa do watchdog. Escrito ANTES do cancelamento
-	// que ele dispara, para que o Roda a encontre depois de o poll voltar.
-	erroVigia atomic.Value
-	// cancelaPoll interrompe o PollRecords em curso. Sem ele, uma recusa de
+	errAssign atomic.Value
+	// errVigia guarda a causa do watchdog. Escrito ANTES do cancelamento
+	// que ele dispara, para que o Run a encontre depois de o poll voltar.
+	errVigia atomic.Value
+	// cancelPoll interrompe o PollRecords em curso. Sem ele, uma recusa de
 	// assignment só seria vista quando o poll voltasse — e num assignment
 	// parcial o poll pode não voltar nunca, porque as partições que sobraram
 	// para esta instância podem estar sem tráfego nenhum.
-	cancelaPoll atomic.Value
+	cancelPoll atomic.Value
 
 	// offsetsIniciais é a posição de onde retomar, por partição.
 	offsetsIniciais map[int32]int64
@@ -83,9 +83,9 @@ type Consumidor struct {
 	// barreira, aoAtribuir tocava c.adm nil nessa janela e o processo morria
 	// de SIGSEGV inteiro — não uma falha de ingestão.
 	//
-	// Fecha assim que c.adm é atribuído (logo após kgo.NewClient devolver com
+	// Close assim que c.adm é atribuído (logo após kgo.NewClient devolver com
 	// sucesso), e não no fim do construtor: bloquear pelo tempo de
-	// resolveOrigemEPosicao (que faz I/O de rede) atrasaria o rebalance sem
+	// resolveSourceEPosition (que faz I/O de rede) atrasaria o rebalance sem
 	// necessidade, e um erro ali chamaria cl.Close() antes de um defer no fim
 	// da função ter a chance de abrir o gate — cl.Close() esperaria a
 	// goroutine da sessão do group sair do callback, e o callback esperaria
@@ -101,15 +101,15 @@ type Consumidor struct {
 	// própria, disparada assim que aoAtribuir retorna — busca os offsets do
 	// group e invoca AdjustFetchOffsetsFn (ajustaOffsets). admPronto fecha
 	// logo depois de kgo.NewClient devolver, bem ANTES de
-	// resolveOrigemEPosicao terminar de escrever c.offsetsIniciais (que faz
+	// resolveSourceEPosition terminar de escrever c.offsetsIniciais (que faz
 	// I/O de rede e de disco): aoAtribuir já pode ter retornado — e a
 	// goroutine de fetchOffsets já pode estar chamando ajustaOffsets —
-	// enquanto resolveOrigemEPosicao ainda está no meio da escrita do mapa.
+	// enquanto resolveSourceEPosition ainda está no meio da escrita do mapa.
 	// Sem uma barreira própria para este campo, isso é leitura concorrente
 	// com mapassign — não "mapa nil degrada com segurança" como a triagem
 	// original do débito 69 presumiu: o -race pegou isso ao vivo no CI.
 	//
-	// Fecha assim que resolveOrigemEPosicao retorna — sucesso OU erro —, e
+	// Close assim que resolveSourceEPosition retorna — sucesso OU erro —, e
 	// SEMPRE antes do cl.Close() do caminho de erro logo em seguida, pela
 	// mesma razão do admPronto: se o gate só fechasse depois (ou nunca, no
 	// caminho de erro), o Close esperaria a goroutine de fetchOffsets —
@@ -117,8 +117,8 @@ type Consumidor struct {
 	//
 	// Deliberadamente um gate PRÓPRIO, e não o mesmo admPronto: aoAtribuir
 	// não toca offsetsIniciais, e fundir os dois atrasaria o
-	// totalDeParticoes de aoAtribuir (uma chamada de rede) até
-	// resolveOrigemEPosicao terminar, quando as duas hoje correm em
+	// totalOfPartitions de aoAtribuir (uma chamada de rede) até
+	// resolveSourceEPosition terminar, quando as duas hoje correm em
 	// paralelo — uma no callback do group, outra na goroutine do construtor.
 	offsetsPronto chan struct{}
 
@@ -126,8 +126,8 @@ type Consumidor struct {
 	// família 60/69, achado pela varredura que a revisão do 69 pediu sobre
 	// os demais callbacks).
 	//
-	// c.w só é atribuído ao FIM de Abre, depois de resolveOrigemEPosicao E
-	// de NovaFila. A checagem `if c.w == nil` em aoRevogar impede o
+	// c.w só é atribuído ao FIM de Abre, depois de resolveSourceEPosition E
+	// de NewQueue. A checagem `if c.w == nil` em aoRevogar impede o
 	// nil-deref, mas não sincroniza a LEITURA do ponteiro com a escrita: o
 	// loop do group nasce assíncrono no metadata loop (mesma raiz do 60) e
 	// pode completar join→assign→heartbeat→revoke — `manageFailWait` chama
@@ -137,13 +137,13 @@ type Consumidor struct {
 	// mapa: sem esta barreira, o "degrada com segurança" do nil-check não é
 	// garantia de sincronização, só de não panicar.
 	//
-	// Reordenar a atribuição de c.w para mais cedo NÃO é opção: NovoWriter
-	// depende de c.fila (criada depois de resolveOrigemEPosicao) e de
-	// c.offsetsIniciais (escrita POR resolveOrigemEPosicao), então c.w não
+	// Reordenar a atribuição de c.w para mais cedo NÃO é opção: NewWriter
+	// depende de c.fila (criada depois de resolveSourceEPosition) e de
+	// c.offsetsIniciais (escrita POR resolveSourceEPosition), então c.w não
 	// pode existir antes desse ponto — a barreira é a única saída, como já
 	// era para admPronto e offsetsPronto.
 	//
-	// Fecha em TODO caminho de saída de Abre, sempre antes de qualquer
+	// Close em TODO caminho de saída de Abre, sempre antes de qualquer
 	// cl.Close() dentro da própria função: Close() chama LeaveGroupContext e
 	// espera `<-c.g.left`, e o caminho de erro do group (`manageFailWait`,
 	// acionado pelo cl.ctx cancelado que o Close provoca) chama onRevoked
@@ -154,11 +154,11 @@ type Consumidor struct {
 	// offsetsIniciais, e um gate único atrasaria os três até o mais lento.
 	wPronto chan struct{}
 
-	fecha sync.Once
+	close sync.Once
 }
 
-// Opcoes reúne o que o consumidor precisa de fora.
-type Opcoes struct {
+// Options reúne o que o consumidor precisa de fora.
+type Options struct {
 	Store    Store
 	Mat      *materializer.Materializer
 	Log      *logging.Logger
@@ -175,13 +175,13 @@ type Opcoes struct {
 // A ordem das checagens importa: identidade e posição são conferidas antes de
 // qualquer fetch, porque um seek num offset de outro fluxo não tem sintoma —
 // o consumo simplesmente começa no meio.
-func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
+func Abre(ctx context.Context, cfg *Config, o Options) (*Consumidor, error) {
 	log := o.Log
 	if log == nil {
 		log = logging.Discard()
 	}
 	log = log.Component("kafka").Dataset(cfg.Dataset)
-	met := registraMetricas(o.Metrics, cfg.Dataset)
+	met := registerMetrics(o.Metrics, cfg.Dataset)
 	// O gauge é escrito AQUI, antes de qualquer caminho de erro do Abre.
 	// A família materializa a série em zero assim que é criada, e zero nunca é
 	// um valor válido desta chave — o parse recusa 0. Um dataset cujo consumidor
@@ -191,13 +191,13 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	met.decodeWorkers.Set(float64(cfg.DecodeWorkers))
 
 	c := &Consumidor{
-		cfg: cfg, log: log, met: met, origem: cfg.Origem(),
+		cfg: cfg, log: log, met: met, source: cfg.Source(),
 		admPronto:     make(chan struct{}),
 		offsetsPronto: make(chan struct{}),
 		wPronto:       make(chan struct{}),
 	}
 
-	opts := append(cfg.opcoesDoCliente(),
+	opts := append(cfg.clientOptions(),
 		kgo.OnPartitionsAssigned(c.aoAtribuir),
 		kgo.OnPartitionsRevoked(c.aoRevogar),
 		kgo.AdjustFetchOffsetsFn(c.ajustaOffsets),
@@ -221,11 +221,11 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	c.adm = kadm.NewClient(cl)
 	close(c.admPronto)
 
-	// c.offsetsIniciais ganha seu valor final dentro de resolveOrigemEPosicao
+	// c.offsetsIniciais ganha seu valor final dentro de resolveSourceEPosition
 	// (ou fica nil, se ela falhar). offsetsPronto fecha logo em seguida, e
 	// SEMPRE antes do cl.Close() abaixo — nunca depois, pela razão do
 	// deadlock documentada no campo.
-	err = c.resolveOrigemEPosicao(ctx, o.Store)
+	err = c.resolveSourceEPosition(ctx, o.Store)
 	close(c.offsetsPronto)
 	if err != nil {
 		// c.w nunca vai existir para este Consumidor (a construção parou
@@ -236,41 +236,41 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 		return nil, err
 	}
 
-	c.fila = NovaFila(cfg.QueueSize, cfg.QueueBytes)
+	c.fila = NewQueue(cfg.QueueSize, cfg.QueueBytes)
 	met.OlhaAFila(c.fila.Profundidade)
 	met.OlhaOsTempos(c.fila.Tempos)
-	c.w = NovoWriter(cfg, o.Mat, o.Store, c.fila, log, met, c.offsetsIniciais, o.Cadencia, c.commitNoBroker)
-	met.OlhaAEsteira(c.w.est.bytesRetidos, c.w.est.Ocioso)
+	c.w = NewWriter(cfg, o.Mat, o.Store, c.fila, log, met, c.offsetsIniciais, o.Cadencia, c.commitInBroker)
+	met.OlhaAEsteira(c.w.est.bytesRetidos, c.w.est.IDle)
 	log.Info("decode.workers", "decodificadores da ingestão",
-		"workers", cfg.DecodeWorkers, "janela", c.w.est.tamanho(),
-		"limiarPorSlot", c.w.limiarDeEncolhimento)
+		"workers", cfg.DecodeWorkers, "janela", c.w.est.size(),
+		"limiarPorSlot", c.w.limiarOfEncolhimento)
 	close(c.wPronto)
 	return c, nil
 }
 
-// resolveOrigemEPosicao completa a identidade com o cluster id, confere a
+// resolveSourceEPosition completa a identidade com o cluster id, confere a
 // divergência (D14) e resolve de onde retomar (D11).
-func (c *Consumidor) resolveOrigemEPosicao(ctx context.Context, st Store) error {
+func (c *Consumidor) resolveSourceEPosition(ctx context.Context, st Store) error {
 	md, err := c.adm.Metadata(ctx, c.cfg.Topic)
 	if err != nil {
 		c.met.errosKafka.Inc()
 		return fmt.Errorf("kafka: metadados do tópico %q: %w", c.cfg.Topic, err)
 	}
-	c.origem.ClusterID = md.Cluster
+	c.source.ClusterID = md.Cluster
 
-	persistidos, existe, err := st.SourceOffsets()
+	persistidos, exists, err := st.SourceOffsets()
 	switch {
 	case err != nil:
 		// Arquivo existia e estava ilegível. Tratar como "sem posição" faria
-		// exatamente o que ErrPosicaoDesconhecida existe para impedir.
-		return fmt.Errorf("%w: %w", ErrPosicaoDesconhecida, err)
+		// exatamente o que ErrPositionDesconhecida existe para impedir.
+		return fmt.Errorf("%w: %w", ErrPositionDesconhecida, err)
 
-	case existe:
-		if campo := persistidos.Source.Divergence(c.origem); campo != "" {
+	case exists:
+		if field := persistidos.Source.Divergence(c.source); field != "" {
 			return fmt.Errorf("%w: %s mudou (persistido %q, configurado %q); "+
 				"use `nishidb offsets` para reposicionar deliberadamente",
-				ErrOrigemDivergente, campo,
-				valorDoCampo(persistidos.Source, campo), valorDoCampo(c.origem, campo))
+				ErrSourceDivergente, field,
+				fieldValue(persistidos.Source, field), fieldValue(c.source, field))
 		}
 		c.offsetsIniciais = persistidos.Offsets
 
@@ -281,7 +281,7 @@ func (c *Consumidor) resolveOrigemEPosicao(ctx context.Context, st Store) error 
 			return fmt.Errorf("%w: %d linhas materializadas sem posição conhecida; "+
 				"autoOffsetReset=%s reprocessaria ou pularia uma janela arbitrária em silêncio. "+
 				"Use `nishidb offsets` para decidir explicitamente",
-				ErrPosicaoDesconhecida, n, c.cfg.AutoOffsetReset)
+				ErrPositionDesconhecida, n, c.cfg.AutoOffsetReset)
 		}
 		c.offsetsIniciais = map[int32]int64{}
 		c.log.Info("posicao.inicial", "dataset vazio e sem offsets locais; vale o autoOffsetReset",
@@ -306,18 +306,18 @@ func (c *Consumidor) resolveOrigemEPosicao(ctx context.Context, st Store) error 
 	d, ok := md.Topics[c.cfg.Topic]
 	switch {
 	case !ok:
-		return fmt.Errorf("%w: o tópico %q não existe no cluster", ErrTopicoAusente, c.cfg.Topic)
+		return fmt.Errorf("%w: o tópico %q não existe no cluster", Open, c.cfg.Topic)
 	case d.Err != nil:
-		return fmt.Errorf("%w: tópico %q: %w", ErrTopicoAusente, c.cfg.Topic, d.Err)
+		return fmt.Errorf("%w: tópico %q: %w", Open, c.cfg.Topic, d.Err)
 	case len(d.Partitions) == 0:
-		return fmt.Errorf("%w: o tópico %q não tem partição nenhuma", ErrTopicoAusente, c.cfg.Topic)
+		return fmt.Errorf("%w: o tópico %q não tem partição nenhuma", Open, c.cfg.Topic)
 	}
 	c.met.partTotal.Set(float64(len(d.Partitions)))
 	return nil
 }
 
-func valorDoCampo(o checkpoint.Source, campo string) string {
-	switch campo {
+func fieldValue(o checkpoint.Source, field string) string {
+	switch field {
 	case "topic":
 		return o.Topic
 	case "consumer.groupId":
@@ -346,14 +346,14 @@ func (c *Consumidor) aoAtribuir(ctx context.Context, _ *kgo.Client, atribuidas m
 	partes := atribuidas[c.cfg.Topic]
 	c.met.partAtribuidas.Set(float64(len(partes)))
 
-	total, err := c.totalDeParticoes(ctx)
+	total, err := c.totalOfPartitions(ctx)
 	if err != nil {
 		c.met.errosKafka.Inc()
 		c.log.Warn("particoes.desconhecidas",
 			"não foi possível confirmar o total de partições do tópico; a guarda de instância única não pôde ser aplicada",
 			"erro", err.Error())
 	} else if len(partes) != total {
-		c.erroAssign.Store(fmt.Errorf("%w: o group %q entregou %d de %d partições de %q — "+
+		c.errAssign.Store(fmt.Errorf("%w: o group %q entregou %d de %d partições de %q — "+
 			"o v1 é single-writer (§27) com checkpoint local autoritativo (§49), o que exige "+
 			"UMA instância ativa por group; com duas, cada dataset materializa estado parcial e "+
 			"nenhuma métrica acusa",
@@ -379,42 +379,42 @@ func (c *Consumidor) aoAtribuir(ctx context.Context, _ *kgo.Client, atribuidas m
 // WithEpoch(-1) desliga a detecção de data loss do cliente: reposicionar para
 // trás é a operação PRETENDIDA aqui, e com epoch não negativo o cliente a
 // trataria como truncamento do log.
-func (c *Consumidor) ajustaOffsets(_ context.Context, doGroup map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error) {
+func (c *Consumidor) ajustaOffsets(_ context.Context, ofGroup map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error) {
 	// Débito 69: fetchOffsets (que chama este callback) pode disparar assim
-	// que aoAtribuir retorna, antes de resolveOrigemEPosicao terminar de
+	// que aoAtribuir retorna, antes de resolveSourceEPosition terminar de
 	// escrever c.offsetsIniciais. offsetsPronto fecha só depois — ver o
 	// comentário do campo.
 	<-c.offsetsPronto
 
 	if len(c.offsetsIniciais) == 0 {
-		return doGroup, nil
+		return ofGroup, nil
 	}
-	porParticao, ok := doGroup[c.cfg.Topic]
+	byParticao, ok := ofGroup[c.cfg.Topic]
 	if !ok {
-		return doGroup, nil
+		return ofGroup, nil
 	}
-	ajustado := make(map[int32]kgo.Offset, len(porParticao))
-	usados := make([]int32, 0, len(porParticao))
-	for p, o := range porParticao {
-		local, temLocal := c.offsetsIniciais[p]
-		if !temLocal {
+	adjusted := make(map[int32]kgo.Offset, len(byParticao))
+	usados := make([]int32, 0, len(byParticao))
+	for p, o := range byParticao {
+		local, hasLocal := c.offsetsIniciais[p]
+		if !hasLocal {
 			// Partição sem posição local (tópico cresceu depois do último
 			// checkpoint): vale o que o group diz, ou o autoOffsetReset.
-			ajustado[p] = o
+			adjusted[p] = o
 			continue
 		}
-		ajustado[p] = kgo.NewOffset().At(local).WithEpoch(-1)
+		adjusted[p] = kgo.NewOffset().At(local).WithEpoch(-1)
 		usados = append(usados, p)
 	}
-	saida := make(map[string]map[int32]kgo.Offset, len(doGroup))
-	for t, v := range doGroup {
+	saida := make(map[string]map[int32]kgo.Offset, len(ofGroup))
+	for t, v := range ofGroup {
 		saida[t] = v
 	}
-	saida[c.cfg.Topic] = ajustado
+	saida[c.cfg.Topic] = adjusted
 
 	sort.Slice(usados, func(i, j int) bool { return usados[i] < usados[j] })
 	for _, p := range usados {
-		c.met.posicaoDe(p).Store(c.offsetsIniciais[p])
+		c.met.positionOf(p).Store(c.offsetsIniciais[p])
 	}
 	c.log.Info("offsets.seek", "retomando pela posição do checkpoint local (§49)",
 		"particoes", len(usados))
@@ -459,7 +459,7 @@ func (c *Consumidor) aoRevogar(ctx context.Context, _ *kgo.Client, revogadas map
 		"particoes", len(revogadas[c.cfg.Topic]))
 }
 
-func (c *Consumidor) totalDeParticoes(ctx context.Context) (int, error) {
+func (c *Consumidor) totalOfPartitions(ctx context.Context) (int, error) {
 	d, err := c.adm.ListTopics(ctx, c.cfg.Topic)
 	if err != nil {
 		return 0, err
@@ -474,12 +474,12 @@ func (c *Consumidor) totalDeParticoes(ctx context.Context) (int, error) {
 	return len(t.Partitions), nil
 }
 
-// commitNoBroker publica a posição no group DEPOIS do checkpoint durável.
+// commitInBroker publica a posição no group DEPOIS do checkpoint durável.
 //
 // O commit existe para lag e para ferramentas de terceiros; ele NUNCA
 // posiciona o consumer no boot (§49). Por isso a falha aqui é registrada e
 // não interrompe nada.
-func (c *Consumidor) commitNoBroker(ctx context.Context, offsets map[int32]int64) error {
+func (c *Consumidor) commitInBroker(ctx context.Context, offsets map[int32]int64) error {
 	if len(offsets) == 0 {
 		return nil
 	}
@@ -489,49 +489,49 @@ func (c *Consumidor) commitNoBroker(ctx context.Context, offsets map[int32]int64
 	}
 	// CommitOffsetsSync não devolve erro: o resultado chega no callback. É
 	// síncrono, então ler a variável depois do retorno é seguro.
-	var erroCommit error
+	var errCommit error
 	c.cl.CommitOffsetsSync(ctx,
 		map[string]map[int32]kgo.EpochOffset{c.cfg.Topic: m},
 		func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 			if err != nil {
-				erroCommit = err
+				errCommit = err
 				return
 			}
 			for _, t := range resp.Topics {
 				for _, p := range t.Partitions {
 					if p.ErrorCode != 0 {
-						erroCommit = fmt.Errorf("partição %d: código de erro %d", p.Partition, p.ErrorCode)
+						errCommit = fmt.Errorf("partição %d: código de erro %d", p.Partition, p.ErrorCode)
 						return
 					}
 				}
 			}
 		})
-	return erroCommit
+	return errCommit
 }
 
-// Roda executa o pipeline até o contexto acabar ou a ingestão parar.
-func (c *Consumidor) Roda(ctx context.Context) error {
-	ctx, cancela := context.WithCancel(ctx)
-	defer cancela()
-	c.cancelaPoll.Store(cancela)
+// Run executa o pipeline até o contexto acabar ou a ingestão parar.
+func (c *Consumidor) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	c.cancelPoll.Store(cancel)
 
 	// Os decodificadores sobem ANTES do writer. A ordem inversa deixaria o
 	// writer esperando num anel que ninguém alimenta até a última goroutine
 	// nascer — inofensivo, mas o encerramento tem ordem oposta e simétrica, e
 	// escrever as duas na mesma direção é o que torna a simetria legível.
-	pool := novoPoolDeDecode(c.cfg.DecodeWorkers, c.fila, c.w.est, c.w.mat, c.met, c.w.limiarDeEncolhimento)
-	esperaDecode := pool.Sobe(ctx)
+	pool := newDecodePool(c.cfg.DecodeWorkers, c.fila, c.w.est, c.w.mat, c.met, c.w.limiarOfEncolhimento)
+	waitDecode := pool.Rises(ctx)
 
-	erroWriter := make(chan error, 1)
+	errWriter := make(chan error, 1)
 	go func() {
-		err := c.w.Roda(ctx)
-		erroWriter <- err
+		err := c.w.Run(ctx)
+		errWriter <- err
 		if err != nil {
 			// Acorda o poll: a pausa do writer só seria vista quando o
 			// PollRecords voltasse, e ele pode não voltar tão cedo — um
 			// tópico sem tráfego novo deixaria o consumer "parado" sem
 			// ninguém saber por um prazo inteiro de fetch.
-			cancela()
+			cancel()
 		}
 	}()
 
@@ -542,29 +542,29 @@ func (c *Consumidor) Roda(ctx context.Context) error {
 	// encerramento limpo e ninguém tentaria de novo.
 	go func() {
 		if err := c.vigia(ctx, c.cfg.WatchdogTimeout); err != nil {
-			c.erroVigia.Store(err)
-			cancela()
+			c.errVigia.Store(err)
+			cancel()
 		}
 	}()
 
-	erro := c.poll(ctx)
+	err := c.poll(ctx)
 
-	// Fecha a fila; os decodificadores drenam o que sobrou, publicam tudo o
+	// Close a fila; os decodificadores drenam o que sobrou, publicam tudo o
 	// que reservaram e saem. SÓ ENTÃO a esteira é declarada sem mais eventos —
 	// com um decodificador vivo, um slot vazio no meio do anel é
 	// indistinguível de um decode em curso, e o writer encerraria com evento
 	// por aplicar.
-	c.fila.Fecha()
-	esperaDecode()
-	if e := <-erroWriter; e != nil && erro == nil {
-		erro = e
+	c.fila.Close()
+	waitDecode()
+	if e := <-errWriter; e != nil && err == nil {
+		err = e
 	}
 	// A causa do watchdog vence o nil do poll, e perde para um erro real: uma
 	// falha de assignment ou do writer descreve melhor o que houve.
-	if v := c.erroVigia.Load(); v != nil && erro == nil {
-		erro = v.(error)
+	if v := c.errVigia.Load(); v != nil && err == nil {
+		err = v.(error)
 	}
-	return erro
+	return err
 }
 
 // poll é o laço do §27: um fetch por vez, tudo para a fila limitada.
@@ -587,7 +587,7 @@ func (c *Consumidor) poll(ctx context.Context) error {
 		if fetches.IsClientClosed() {
 			return nil
 		}
-		if err := c.registraErrosDeFetch(fetches); err != nil {
+		if err := c.registerErrosOfFetch(fetches); err != nil {
 			c.cl.AllowRebalance()
 			return err
 		}
@@ -609,7 +609,7 @@ func (c *Consumidor) poll(ctx context.Context) error {
 		// acontece; o teste que a acompanha diz isso em vez de fingir o
 		// contrário (TestUltimoLoteNaoAndaSemProducao).
 		if fetches.NumRecords() > 0 {
-			c.met.marcaLote(time.Now())
+			c.met.markLote(time.Now())
 		}
 		fetches.EachRecord(func(r *kgo.Record) {
 			if ctx.Err() != nil {
@@ -643,33 +643,33 @@ func (c *Consumidor) poll(ctx context.Context) error {
 
 // interrompePoll acorda o PollRecords para que a falha seja vista agora.
 func (c *Consumidor) interrompePoll() {
-	if v := c.cancelaPoll.Load(); v != nil {
+	if v := c.cancelPoll.Load(); v != nil {
 		v.(context.CancelFunc)()
 	}
 }
 
 func (c *Consumidor) assignmentInvalido() error {
-	if v := c.erroAssign.Load(); v != nil {
+	if v := c.errAssign.Load(); v != nil {
 		return v.(error)
 	}
 	return nil
 }
 
-// registraErrosDeFetch trata erro de BROKER no balde próprio (D8).
+// registerErrosOfFetch trata erro de BROKER no balde próprio (D8).
 //
 // Fica antes e fora do Apply de propósito: o classify do materializer tem
 // `default: CategoryStorage`, então um erro de rede que passasse por lá seria
 // contado como perda de dado — diagnóstico errado que levaria o operador a
 // procurar corrupção onde há indisponibilidade.
-func (c *Consumidor) registraErrosDeFetch(f kgo.Fetches) error {
+func (c *Consumidor) registerErrosOfFetch(f kgo.Fetches) error {
 	var fatal error
-	f.EachError(func(topico string, particao int32, err error) {
+	f.EachError(func(topic string, partition int32, err error) {
 		c.met.errosKafka.Inc()
 		if errors.Is(err, context.Canceled) {
 			return
 		}
 		c.log.Warn("fetch.erro", "erro de fetch; o cliente tenta de novo com backoff próprio",
-			"topico", topico, "partition", particao, "erro", err.Error())
+			"topico", topic, "partition", partition, "erro", err.Error())
 		if errors.Is(err, kgo.ErrClientClosed) {
 			fatal = err
 		}
@@ -677,7 +677,7 @@ func (c *Consumidor) registraErrosDeFetch(f kgo.Fetches) error {
 	return fatal
 }
 
-// AtualizaMarcaDagua lê o fim do log no broker (§92). É chamado pelo scrape, e
+// AtualizaMarkDagua lê o fim do log no broker (§92). É chamado pelo scrape, e
 // não por um timer: consultar num timer publicaria um número velho cuja idade
 // o operador não conhece.
 //
@@ -686,14 +686,14 @@ func (c *Consumidor) registraErrosDeFetch(f kgo.Fetches) error {
 //  1. CORRETUDE. kadm.Lag devolve o lag do offset COMMITADO no group, e o
 //     commit só sai depois do checkpoint durável (§48). Entre dois checkpoints
 //     a série crescia à taxa de produção com o consumidor em dia — ver o godoc
-//     de amostrasDaPosicao para a medição no piloto.
+//     de samplesOfPosition para a medição no piloto.
 //  2. CUSTO. kadm.Lag é um processo de TRÊS requisições (DescribeGroups,
 //     FetchOffsets, ListEndOffsets). Esta é UMA. O scrape passa a custar um
 //     terço do que já custava; não há trade-off a negociar aqui.
 //
 // Erro por PARTIÇÃO omite só aquela partição, não a leitura inteira: uma
 // partição sem líder não é razão para o painel perder as outras.
-func (c *Consumidor) AtualizaMarcaDagua(ctx context.Context) {
+func (c *Consumidor) AtualizaMarkDagua(ctx context.Context) {
 	fins, err := c.adm.ListEndOffsets(ctx, c.cfg.Topic)
 	if err != nil {
 		c.met.errosKafka.Inc()
@@ -713,7 +713,7 @@ func (c *Consumidor) AtualizaMarcaDagua(ctx context.Context) {
 		c.met.errosKafka.Inc()
 		return
 	}
-	c.met.publicaMarca(m, time.Now())
+	c.met.publicaMark(m, time.Now())
 }
 
 // Pausa devolve o motivo da parada da ingestão, ou nil.
@@ -722,9 +722,9 @@ func (c *Consumidor) Pausa() error { return c.w.Pausa() }
 // Desfecho devolve os contadores da ingestão.
 func (c *Consumidor) Desfecho() Desfecho { return c.w.Desfecho() }
 
-// Fecha encerra o cliente. Idempotente.
-func (c *Consumidor) Fecha() {
-	c.fecha.Do(func() {
+// Close encerra o cliente. Idempotente.
+func (c *Consumidor) Close() {
+	c.close.Do(func() {
 		if c.cl != nil {
 			c.cl.Close()
 		}

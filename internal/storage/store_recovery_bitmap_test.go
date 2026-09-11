@@ -28,7 +28,7 @@ func TestReplayRestauraPostingComBitmapAtrasDasLocations(t *testing.T) {
 	// frente do manifest —, e é ele que decide se o replay do tail repõe a
 	// posting.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := audOpen(t, opts)
 	id, _ := mustPut(t, s, "bm", 1, statusPayload(t, s, "bm", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
@@ -76,10 +76,10 @@ func TestReplayNaoDecrementaLivenessDeRecordVivo(t *testing.T) {
 	// resíduo documentado em replayRecord — LiveRecords superestimado, que é
 	// o lado seguro. Este teste NÃO cobre esse caso; quem o mede, e prova que
 	// ele não converge, é o TestResiduoDeLivenessDoReplayNaoConverge.
-	monta := func(t *testing.T, modo string) []checkpoint.SegmentInfo {
+	build := func(t *testing.T, modo string) []checkpoint.SegmentInfo {
 		t.Helper()
 		dir := t.TempDir()
-		opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+		opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 		s := audOpen(t, opts)
 		for i := 0; i < 4; i++ {
 			k := fmt.Sprintf("tl-%d", i)
@@ -124,14 +124,14 @@ func TestReplayNaoDecrementaLivenessDeRecordVivo(t *testing.T) {
 		return m.Segments
 	}
 
-	escrita := monta(t, "escrita")
+	write := build(t, "escrita")
 	for _, modo := range []string{"replay", "replay_overlay_aplicado"} {
-		got := monta(t, modo)
-		if len(got) != len(escrita) {
-			t.Fatalf("modo %s: número de segmentos %d, esperado %d", modo, len(got), len(escrita))
+		got := build(t, modo)
+		if len(got) != len(write) {
+			t.Fatalf("modo %s: número de segmentos %d, esperado %d", modo, len(got), len(write))
 		}
-		for i := range escrita {
-			e, g := escrita[i], got[i]
+		for i := range write {
+			e, g := write[i], got[i]
 			if e.TotalRecords != g.TotalRecords || e.LiveRecords != g.LiveRecords || e.LiveBytes != g.LiveBytes {
 				t.Fatalf("modo %s divergiu da escrita no segmento %d:\n  escrita = %+v\n  obtido  = %+v", modo, e.ID, e, g)
 			}

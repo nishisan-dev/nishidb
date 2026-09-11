@@ -93,8 +93,8 @@ func (r *Report) aplica(line int, old, newText, rule string) {
 	r.Applied = append(r.Applied, Applied{Line: line, Old: old, New: newText, Rule: rule})
 }
 
-// pula registra no relatório uma ocorrência que casou e ficou de fora.
-func (r *Report) pula(line int, token, reason string) {
+// skip registra no relatório uma ocorrência que casou e ficou de fora.
+func (r *Report) skip(line int, token, reason string) {
 	r.Skipped = append(r.Skipped, Skipped{Line: line, Token: token, Reason: reason})
 }
 
@@ -161,16 +161,16 @@ func (m *Mapping) buildIndex() {
 		idx.byLeaf[leafOf(e.Old)] = append(idx.byLeaf[leafOf(e.Old)], e)
 		idx.pkgNames[shortPkg(e.Pkg)] = true
 	}
-	for old, novo := range m.Packages {
+	for old, nw := range m.Packages {
 		idx.pkgNames[old] = true
-		idx.pkgNames[novo] = true
+		idx.pkgNames[nw] = true
 	}
-	for old, novo := range m.Paths {
+	for old, nw := range m.Paths {
 		if strings.Contains(old, ".go") {
 			continue
 		}
 		idx.pkgNames[shortPkg(old)] = true
-		idx.pkgNames[shortPkg(novo)] = true
+		idx.pkgNames[shortPkg(nw)] = true
 	}
 	for name := range m.PackageDirs {
 		idx.pkgNames[name] = true
@@ -299,7 +299,7 @@ func (m *Mapping) isPackageName(tok string) bool { return m.index().pkgNames[tok
 // resolve decide o endereço novo de um token entre crases. `qual` é o
 // qualificador (pacote curto ou tipo), vazio quando o token vem nu.
 //
-// Nu: substitui só se todo pacote que declara `old` concorda no `new`.
+// Nu: substitui só se todo pacote que declara `old` concorda no `nw`.
 // Qualificado por pacote (velho ou novo nome curto): só as entradas daquele
 // pacote. Qualificado por tipo (`Fila.Empurra`): o próprio Old da entrada.
 func (m *Mapping) resolve(qual, old string) (string, string, bool) {
@@ -548,7 +548,7 @@ func (m *Mapping) applyCommon(s string, rep *Report, base int) string {
 		}
 		out, skipped := m.rewriteToken(inner)
 		if skipped != nil {
-			rep.pula(lineAt(base, s, off), skipped.Token, skipped.Reason)
+			rep.skip(lineAt(base, s, off), skipped.Token, skipped.Reason)
 		}
 		if out == inner && !isSimpleToken(inner) {
 			out = m.rewriteCompound(inner, rep, lineAt(base, s, off))
@@ -590,9 +590,9 @@ func (m *Mapping) applyPaths(s string, rep *Report, base int, rule string) strin
 	}
 	sort.Slice(keys, func(i, j int) bool { return len(keys[i]) > len(keys[j]) })
 	for _, k := range keys {
-		texto, novo := s, m.Paths[k]
-		s = replacePath(s, k, novo, func(off int) {
-			rep.aplica(lineAt(base, texto, off), k, novo, rule)
+		text, nw := s, m.Paths[k]
+		s = replacePath(s, k, nw, func(off int) {
+			rep.aplica(lineAt(base, text, off), k, nw, rule)
 		})
 	}
 	return s
@@ -659,7 +659,7 @@ func (m *Mapping) applyGoCommentExtras(s string, rep *Report, base int) string {
 		inner := x[1 : len(x)-1]
 		out, skipped := m.rewriteToken(inner)
 		if skipped != nil {
-			rep.pula(lineAt(base, s, off), skipped.Token, skipped.Reason)
+			rep.skip(lineAt(base, s, off), skipped.Token, skipped.Reason)
 		}
 		rep.aplica(lineAt(base, s, off), inner, out, "doclink")
 		return "[" + out + "]"
@@ -706,7 +706,7 @@ func (m *Mapping) rewriteCompound(inner string, rep *Report, line int) string {
 		}
 		out, skipped := m.rewriteToken(tok)
 		if skipped != nil {
-			rep.pula(line, skipped.Token, skipped.Reason)
+			rep.skip(line, skipped.Token, skipped.Reason)
 		}
 		return out
 	})
@@ -766,7 +766,7 @@ func (m *Mapping) applyProseTokens(s string, rep *Report, base int, kind proseKi
 		if strings.Contains(tok, ".") {
 			out, skipped := m.rewriteToken(tok)
 			if skipped != nil {
-				rep.pula(lineAt(base, s, off), skipped.Token, skipped.Reason)
+				rep.skip(lineAt(base, s, off), skipped.Token, skipped.Reason)
 			}
 			rep.aplica(lineAt(base, s, off), tok, out, "qualificado")
 			return out
@@ -781,13 +781,13 @@ func (m *Mapping) applyProseTokens(s string, rep *Report, base int, kind proseKi
 			return tok
 		}
 		if m.Protected[tok] {
-			rep.pula(lineAt(base, s, off), tok, "protegido")
+			rep.skip(lineAt(base, s, off), tok, "protegido")
 			return tok
 		}
 		out, reason, ok := m.resolveLeaf(tok)
 		if !ok {
 			if reason != "" {
-				rep.pula(lineAt(base, s, off), tok, reason)
+				rep.skip(lineAt(base, s, off), tok, reason)
 			}
 			return tok
 		}
@@ -833,20 +833,20 @@ func goFenceRanges(s string) [][2]int {
 	var faixas [][2]int
 	abertura := -1
 	for i := 0; i < len(s); {
-		fim := strings.IndexByte(s[i:], '\n')
-		if fim < 0 {
-			fim = len(s) - i
+		end := strings.IndexByte(s[i:], '\n')
+		if end < 0 {
+			end = len(s) - i
 		}
-		linha := strings.TrimSpace(s[i : i+fim])
-		if strings.HasPrefix(linha, "```") {
+		row := strings.TrimSpace(s[i : i+end])
+		if strings.HasPrefix(row, "```") {
 			if abertura >= 0 {
 				faixas = append(faixas, [2]int{abertura, i})
 				abertura = -1
-			} else if strings.TrimSpace(strings.TrimPrefix(linha, "```")) == "go" {
-				abertura = i + fim + 1
+			} else if strings.TrimSpace(strings.TrimPrefix(row, "```")) == "go" {
+				abertura = i + end + 1
 			}
 		}
-		i += fim + 1
+		i += end + 1
 	}
 	if abertura >= 0 {
 		faixas = append(faixas, [2]int{abertura, len(s)})

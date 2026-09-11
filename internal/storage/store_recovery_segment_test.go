@@ -23,7 +23,7 @@ func TestOpenComSegmentoDeZeroBytes(t *testing.T) {
 		if err := s.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(audSegPath(dir, 2), nil, 0o644); err != nil {
+		if err := os.WriteFile(audSecPath(dir, 2), nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -48,7 +48,7 @@ func TestOpenComSegmentoDeZeroBytes(t *testing.T) {
 		if err := os.Remove(audManifestPath(dir)); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(audSegPath(dir, 1), nil, 0o644); err != nil {
+		if err := os.WriteFile(audSecPath(dir, 1), nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -83,16 +83,16 @@ func TestOpenComSegmentoDeZeroBytes(t *testing.T) {
 		// Sem checkpoint após os puts: o manifest inicial só conhece o
 		// segmento 1, então o 2 não é "encolhido" — é intermediário sem
 		// header, que é o caso desta guarda.
-		if err := os.WriteFile(audSegPath(dir, 2), nil, 0o644); err != nil {
+		if err := os.WriteFile(audSecPath(dir, 2), nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		tamanhos := map[uint32]int64{1: fileSizeAud(t, audSegPath(dir, 1)), 3: fileSizeAud(t, audSegPath(dir, 3))}
+		sizes := map[uint32]int64{1: fileSizeAud(t, audSecPath(dir, 1)), 3: fileSizeAud(t, audSecPath(dir, 3))}
 
 		if _, err := Open(opts); !errors.Is(err, ErrDatasetCorrupt) {
 			t.Fatalf("segmento intermediário sem header deveria ser fatal, obtido %v", err)
 		}
-		for id, want := range tamanhos {
-			if got := fileSizeAud(t, audSegPath(dir, id)); got != want {
+		for id, want := range sizes {
+			if got := fileSizeAud(t, audSecPath(dir, id)); got != want {
 				t.Fatalf("o Open recusado não pode truncar nada: segmento %d %d → %d", id, want, got)
 			}
 		}
@@ -112,7 +112,7 @@ func TestOpenComSegmentoDeZeroBytes(t *testing.T) {
 		if err := s.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(audSegPath(dir, 1), nil, 0o644); err != nil {
+		if err := os.WriteFile(audSecPath(dir, 1), nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
 

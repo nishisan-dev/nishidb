@@ -31,7 +31,7 @@ func scrape(t *testing.T, r *metrics.Registry) string {
 // scrapes SEM que nada do consumidor rode.
 func TestProfundidadeDaFilaNaoCongelaQuandoOPollerPara(t *testing.T) {
 	r := metrics.NewRegistry()
-	met := registraMetricas(r, "events")
+	met := registerMetrics(r, "events")
 
 	// Nenhuma fonte instalada: o dataset sem consumidor Kafka não tem fila, e
 	// publicar zero afirmaria que existe uma e está vazia.
@@ -39,8 +39,8 @@ func TestProfundidadeDaFilaNaoCongelaQuandoOPollerPara(t *testing.T) {
 		t.Fatalf("a série saiu sem fila instalada:\n%s", s)
 	}
 
-	registros, bytes := 479, int64(1_039_285)
-	met.OlhaAFila(func() (int, int64) { return registros, bytes })
+	records, bytes := 479, int64(1_039_285)
+	met.OlhaAFila(func() (int, int64) { return records, bytes })
 
 	if s := scrape(t, r); !strings.Contains(s, `nishidb_kafka_queue_depth{dataset="events"} 479`) {
 		t.Fatalf("primeira leitura não reflete a fila:\n%s", s)
@@ -48,7 +48,7 @@ func TestProfundidadeDaFilaNaoCongelaQuandoOPollerPara(t *testing.T) {
 
 	// O writer drena e o poller NÃO roda mais — que é exatamente o estado do
 	// incidente. Na implementação antiga, nada reescreveria o medidor.
-	registros, bytes = 0, 0
+	records, bytes = 0, 0
 	s := scrape(t, r)
 	if !strings.Contains(s, `nishidb_kafka_queue_depth{dataset="events"} 0`) {
 		t.Fatalf("a profundidade congelou depois de a fila esvaziar:\n%s", s)
@@ -62,8 +62,8 @@ func TestProfundidadeDaFilaNaoCongelaQuandoOPollerPara(t *testing.T) {
 // está ligado ao objeto que o writer drena.
 func TestOColetorLeAFilaDeVerdade(t *testing.T) {
 	r := metrics.NewRegistry()
-	met := registraMetricas(r, "events")
-	f := NovaFila(8, 1<<20)
+	met := registerMetrics(r, "events")
+	f := NewQueue(8, 1<<20)
 	met.OlhaAFila(f.Profundidade)
 
 	if s := scrape(t, r); !strings.Contains(s, `nishidb_kafka_queue_depth{dataset="events"} 0`) {

@@ -22,14 +22,14 @@ import (
 // O contrato novo: operação após o Close devolve ErrDatasetClosed. Erro, não
 // panic, porque o chamador tem política para erro.
 
-func abre(t *testing.T, campos ...string) (*storage.Store, string) {
+func open(t *testing.T, fields ...string) (*storage.Store, string) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "ds")
 	st, err := storage.Open(storage.Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range campos {
+	for _, c := range fields {
 		if _, err := st.FieldDict().LookupOrCreate([]byte(c)); err != nil {
 			t.Fatal(err)
 		}
@@ -37,7 +37,7 @@ func abre(t *testing.T, campos ...string) (*storage.Store, string) {
 	return st, dir
 }
 
-func payloadDe(t *testing.T, v string) []byte {
+func payloadOf(t *testing.T, v string) []byte {
 	t.Helper()
 	p, err := encoding.AppendField(nil, types.FieldID(1),
 		types.Value{Type: types.TypeString, Bytes: []byte(v)})
@@ -49,8 +49,8 @@ func payloadDe(t *testing.T, v string) []byte {
 
 // O caso do writer: Put em voo enquanto o Close acontece.
 func TestCloseConcorrenteComPutNaoEntraEmPanic(t *testing.T) {
-	st, _ := abre(t, "campo")
-	p := payloadDe(t, "v")
+	st, _ := open(t, "campo")
+	p := payloadOf(t, "v")
 
 	var (
 		wg      sync.WaitGroup
@@ -114,17 +114,17 @@ func TestCloseConcorrenteComPutNaoEntraEmPanic(t *testing.T) {
 // O caso dos LEITORES, que o design registrou como a outra metade do defeito:
 // o godoc promete leitura concorrente com o writer, e elas morriam igual.
 func TestCloseConcorrenteComLeiturasNaoEntraEmPanic(t *testing.T) {
-	st, _ := abre(t, "campo")
-	p := payloadDe(t, "v")
+	st, _ := open(t, "campo")
+	p := payloadOf(t, "v")
 	for i := 0; i < 500; i++ {
 		if _, _, err := st.Put([]byte{'K', byte(i), byte(i >> 8)}, 1, 0, p, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	const leitores = 6
+	const readers = 6
 	var wg sync.WaitGroup
-	for l := 0; l < leitores; l++ {
+	for l := 0; l < readers; l++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -190,7 +190,7 @@ func TestCloseConcorrenteComLeiturasNaoEntraEmPanic(t *testing.T) {
 // em voo, outro processo não pode assumir o diretório. Aqui o segundo "outro
 // processo" é um segundo Open no mesmo diretório.
 func TestLockSoEhLiberadoDepoisDoQuiesce(t *testing.T) {
-	st, dir := abre(t, "campo")
+	st, dir := open(t, "campo")
 
 	// Com o dataset aberto, o segundo Open falha.
 	if _, err := storage.Open(storage.Options{Dir: dir}); err == nil {
@@ -214,7 +214,7 @@ func TestLockSoEhLiberadoDepoisDoQuiesce(t *testing.T) {
 // Close é idempotente: o CLI e os defers do chamador o chamam mais de uma vez
 // sem que isso vire erro nem duplo release do lock.
 func TestCloseEhIdempotente(t *testing.T) {
-	st, dir := abre(t, "campo")
+	st, dir := open(t, "campo")
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}

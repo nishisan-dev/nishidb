@@ -83,7 +83,8 @@ const (
 	// TypeNull é reservado no wire format: nunca é codificado em payload
 	// materializado (NULL = campo ausente). Existe apenas para representar
 	// null em Value durante o processamento de patches.
-	TypeNull       FieldType = 0x00
+	TypeNull FieldType = 0x00
+	// TypeInt64 ...
 	TypeInt64      FieldType = 0x01 // 8 bytes LE
 	TypeDouble     FieldType = 0x02 // 8 bytes IEEE-754 LE
 	TypeBool       FieldType = 0x03 // 1 byte (0/1)

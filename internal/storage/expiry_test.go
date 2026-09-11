@@ -13,66 +13,66 @@ import (
 // um dataset com expiração registra o campo de sistema antes de qualquer
 // outro. Em vez de fixar números — que mudariam junto com essa ordem —, os
 // testes daqui resolvem cada id pelo dicionário do próprio store.
-func idDoCampo(t *testing.T, s *Store, nome string) types.FieldID {
+func idOfField(t *testing.T, s *Store, name string) types.FieldID {
 	t.Helper()
-	id, err := s.FieldDict().LookupOrCreate([]byte(nome))
+	id, err := s.FieldDict().LookupOrCreate([]byte(name))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-type relogioDeTeste struct{ t time.Time }
+type relogioOfTest struct{ t time.Time }
 
-func (r *relogioDeTeste) agora() time.Time       { return r.t }
-func (r *relogioDeTeste) avanca(d time.Duration) { r.t = r.t.Add(d) }
+func (r *relogioOfTest) agora() time.Time        { return r.t }
+func (r *relogioOfTest) advance(d time.Duration) { r.t = r.t.Add(d) }
 
-// storeComExpiracao abre um dataset com idle timeout e relógio controlado.
-func storeComExpiracao(t *testing.T, dir string, d time.Duration) (*Store, *relogioDeTeste) {
+// storeWithExpiration abre um dataset com idle timeout e relógio controlado.
+func storeWithExpiration(t *testing.T, dir string, d time.Duration) (*Store, *relogioOfTest) {
 	t.Helper()
 	s := openStore(t, Options{
-		Dir:            dir,
-		TTLAtivo:       true,
-		DuracaoDeFundo: d,
-		CampoDeEscrita: "_writtenAt",
-		CampoDePrazo:   "_expiresIn",
+		Dir:                   dir,
+		ActiveTTL:             true,
+		FallbackDuration:      d,
+		WriteInstantFieldName: "_writtenAt",
+		TTLFieldName:          "_expiresIn",
 	})
-	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	rel := &relogioOfTest{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 	return s, rel
 }
 
-// payloadSemEscrita monta o payload de um dataset materializado ANTES de a
+// payloadWithoutWrite monta o payload de um dataset materializado ANTES de a
 // expiração ser declarada: sem o campo de sistema.
-func payloadSemEscrita(t *testing.T, s *Store, key string) []byte {
+func payloadWithoutWrite(t *testing.T, s *Store, key string) []byte {
 	t.Helper()
 	return payloadOrdenado(t, s, map[string]types.Value{
 		"id": {Type: types.TypeString, Bytes: []byte(key)},
 	})
 }
 
-// payloadComEscrita monta um payload com o campo de sistema, como o
+// payloadWithWrite monta um payload com o campo de sistema, como o
 // materializer o produziria.
-func payloadComEscrita(t *testing.T, s *Store, key, status string, escrita time.Time) []byte {
+func payloadWithWrite(t *testing.T, s *Store, key, status string, write time.Time) []byte {
 	t.Helper()
 	return payloadOrdenado(t, s, map[string]types.Value{
 		"id":         {Type: types.TypeString, Bytes: []byte(key)},
 		"status":     {Type: types.TypeString, Bytes: []byte(status)},
-		"_writtenAt": {Type: types.TypeTimestamp, I64: escrita.UnixMilli()},
+		"_writtenAt": {Type: types.TypeTimestamp, I64: write.UnixMilli()},
 	})
 }
 
 // payloadOrdenado resolve os ids pelo dicionário e emite os campos em ordem
 // crescente — invariante que o Put revalida antes de tornar o record durável.
-func payloadOrdenado(t *testing.T, s *Store, campos map[string]types.Value) []byte {
+func payloadOrdenado(t *testing.T, s *Store, fields map[string]types.Value) []byte {
 	t.Helper()
-	type par struct {
+	type pair struct {
 		id types.FieldID
 		v  types.Value
 	}
-	pares := make([]par, 0, len(campos))
-	for nome, v := range campos {
-		pares = append(pares, par{idDoCampo(t, s, nome), v})
+	pares := make([]pair, 0, len(fields))
+	for name, v := range fields {
+		pares = append(pares, pair{idOfField(t, s, name), v})
 	}
 	sort.Slice(pares, func(i, j int) bool { return pares[i].id < pares[j].id })
 	var p []byte
@@ -86,8 +86,8 @@ func payloadOrdenado(t *testing.T, s *Store, campos map[string]types.Value) []by
 // vencida continuaria aparecendo até o coletor passar, e `nishidb query` e
 // `nishidb server` divergiriam sobre o mesmo dataset.
 func TestRowVencidaSomeDaLeituraSemNenhumColetorTerRodado(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 
 	if _, _, ok, err := s.GetByKey(s.presente(), []byte("A"), nil); err != nil || !ok {
 		t.Fatalf("antes do prazo: ok=%v err=%v", ok, err)
@@ -96,7 +96,7 @@ func TestRowVencidaSomeDaLeituraSemNenhumColetorTerRodado(t *testing.T) {
 		t.Fatalf("ScanLive antes do prazo: %v", rows)
 	}
 
-	rel.avanca(time.Hour + time.Minute)
+	rel.advance(time.Hour + time.Minute)
 
 	if _, _, ok, err := s.GetByKey(s.presente(), []byte("A"), nil); err != nil || ok {
 		t.Fatalf("depois do prazo GetByKey: ok=%v err=%v", ok, err)
@@ -119,19 +119,19 @@ func TestRowVencidaSomeDaLeituraSemNenhumColetorTerRodado(t *testing.T) {
 
 // Toda escrita renova: alarme que recebe update sem parar nunca expira.
 func TestEscritaNovaRenovaOPrazo(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 
-	rel.avanca(50 * time.Minute)
+	rel.advance(50 * time.Minute)
 	rec, _, pres, err := s.State([]byte("A"), nil)
 	if err != nil || pres != types.PresenceLive {
 		t.Fatalf("pres=%v err=%v", pres, err)
 	}
-	if _, _, err := s.Put([]byte("A"), 2, 0, payloadComEscrita(t, s, "A", "Alive", rel.t), &rec); err != nil {
+	if _, _, err := s.Put([]byte("A"), 2, 0, payloadWithWrite(t, s, "A", "Alive", rel.t), &rec); err != nil {
 		t.Fatal(err)
 	}
 
-	rel.avanca(50 * time.Minute) // 100 min do primeiro Put, 50 do segundo
+	rel.advance(50 * time.Minute) // 100 min do primeiro Put, 50 do segundo
 	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || !ok {
 		t.Fatalf("a escrita não renovou o prazo: ok=%v err=%v", ok, err)
 	}
@@ -140,12 +140,12 @@ func TestEscritaNovaRenovaOPrazo(t *testing.T) {
 // Zero é DESCONHECIDO. Row anterior à ativação da expiração — ou que perdeu o
 // índice — não pode sumir por falta de informação.
 func TestRowSemInstanteDeEscritaNaoVence(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
+	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
 	// payload SEM o campo de sistema, como um dataset materializado antes de
 	// a expiração ser declarada.
-	id, _ := mustPut(t, s, "A", 1, payloadSemEscrita(t, s, "A"), nil)
+	id, _ := mustPut(t, s, "A", 1, payloadWithoutWrite(t, s, "A"), nil)
 
-	rel.avanca(100 * time.Hour)
+	rel.advance(100 * time.Hour)
 	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || !ok {
 		t.Fatalf("row com prazo desconhecido sumiu: ok=%v err=%v", ok, err)
 	}
@@ -156,10 +156,10 @@ func TestRowSemInstanteDeEscritaNaoVence(t *testing.T) {
 // lápide só na location seria apagada pelo primeiro replay.
 func TestExpiraPublicaLapideDuravelEBaixaALiveness(t *testing.T) {
 	dir := t.TempDir()
-	s, rel := storeComExpiracao(t, dir, time.Hour)
-	id, _ := mustPut(t, s, "A", 7, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	s, rel := storeWithExpiration(t, dir, time.Hour)
+	id, _ := mustPut(t, s, "A", 7, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 
-	rel.avanca(2 * time.Hour)
+	rel.advance(2 * time.Hour)
 	expirou, err := s.Expira(id)
 	if err != nil {
 		t.Fatal(err)
@@ -184,8 +184,8 @@ func TestExpiraPublicaLapideDuravelEBaixaALiveness(t *testing.T) {
 	}
 
 	// Reabre: a lápide sobreviveu porque é record.
-	s2, rel2 := storeComExpiracao(t, dir, time.Hour)
-	rel2.avanca(3 * time.Hour)
+	s2, rel2 := storeWithExpiration(t, dir, time.Hour)
+	rel2.advance(3 * time.Hour)
 	if _, _, ok, err := s2.GetByRowID(s2.presente(), id, nil); err != nil || ok {
 		t.Fatalf("a row voltou a ser visível depois de reabrir: ok=%v err=%v", ok, err)
 	}
@@ -197,16 +197,16 @@ func TestExpiraPublicaLapideDuravelEBaixaALiveness(t *testing.T) {
 // A corrida com o Put não tem janela: os dois tomam o wmu, e o Expira relê a
 // location E o prazo lá dentro.
 func TestExpiraAbortaSemEscreverQuandoARowFoiRenovada(t *testing.T) {
-	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", rel.t), nil)
 
-	rel.avanca(2 * time.Hour)
+	rel.advance(2 * time.Hour)
 	rec, _, pres, err := s.State([]byte("A"), nil)
 	if err != nil || pres != types.PresenceExpired {
 		t.Fatalf("pres=%v err=%v", pres, err)
 	}
 	// Renova ANTES de o coletor chamar Expira.
-	if _, _, err := s.Put([]byte("A"), 2, 0, payloadComEscrita(t, s, "A", "Alive", rel.t), &rec); err != nil {
+	if _, _, err := s.Put([]byte("A"), 2, 0, payloadWithWrite(t, s, "A", "Alive", rel.t), &rec); err != nil {
 		t.Fatal(err)
 	}
 	expirou, err := s.Expira(id)
@@ -226,23 +226,23 @@ func TestExpiraAbortaSemEscreverQuandoARowFoiRenovada(t *testing.T) {
 // ficaria com prazo desconhecido para sempre depois de um crash.
 func TestExpiryIdxEhReconstruidoPeloReplayDoTail(t *testing.T) {
 	dir := t.TempDir()
-	s, rel := storeComExpiracao(t, dir, time.Hour)
-	escrita := rel.t
-	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", escrita), nil)
+	s, rel := storeWithExpiration(t, dir, time.Hour)
+	write := rel.t
+	id, _ := mustPut(t, s, "A", 1, payloadWithWrite(t, s, "A", "Start", write), nil)
 	// SEM checkpoint: o record está no segmento e o manifest não o conhece.
 	// É a janela que o replay do tail cobre.
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	s2, rel2 := storeComExpiracao(t, dir, time.Hour)
+	s2, rel2 := storeWithExpiration(t, dir, time.Hour)
 	// O instante reconstruído tem de ser o do PAYLOAD, não o do replay: se
 	// viesse do relógio, o prazo teria sido empurrado para frente.
-	rel2.t = escrita.Add(2 * time.Hour)
+	rel2.t = write.Add(2 * time.Hour)
 	if _, _, ok, err := s2.GetByRowID(s2.presente(), id, nil); err != nil || ok {
 		t.Fatalf("o prazo foi reancorado no replay: ok=%v err=%v", ok, err)
 	}
-	rel2.t = escrita.Add(30 * time.Minute)
+	rel2.t = write.Add(30 * time.Minute)
 	if _, _, ok, err := s2.GetByRowID(s2.presente(), id, nil); err != nil || !ok {
 		t.Fatalf("antes do prazo a row sumiu: ok=%v err=%v", ok, err)
 	}
@@ -251,7 +251,7 @@ func TestExpiryIdxEhReconstruidoPeloReplayDoTail(t *testing.T) {
 // FieldID 0 é reservado: sem o campo, nada teria de onde tirar o instante e
 // a expiração nunca aconteceria, em silêncio.
 func TestExpiracaoSemCampoDeEscritaEhRecusadaNaAbertura(t *testing.T) {
-	_, err := Open(Options{Dir: t.TempDir(), TTLAtivo: true})
+	_, err := Open(Options{Dir: t.TempDir(), ActiveTTL: true})
 	if err == nil {
 		t.Fatal("aberto sem CampoDeEscrita")
 	}
@@ -265,7 +265,7 @@ func TestExpiraEmDatasetSemExpiracaoEhErro(t *testing.T) {
 	}
 }
 
-// instanteDeEscrita para no primeiro FieldID maior: o payload é ordenado, e
+// writeInstant para no primeiro FieldID maior: o payload é ordenado, e
 // varrer o resto seria custo por row sem ganho.
 func TestInstanteDeEscritaLeOCampoCertoOuNadaInforma(t *testing.T) {
 	var p []byte
@@ -273,19 +273,19 @@ func TestInstanteDeEscritaLeOCampoCertoOuNadaInforma(t *testing.T) {
 	p = mustAppendFieldSolto(t, p, 9, types.Value{Type: types.TypeTimestamp, I64: 1787878442000})
 	p = mustAppendFieldSolto(t, p, 12, types.Value{Type: types.TypeInt64, I64: 20})
 
-	if ms, ok := instanteDeEscrita(p, 9); !ok || ms != 1787878442000 {
+	if ms, ok := writeInstant(p, 9); !ok || ms != 1787878442000 {
 		t.Fatalf("ms=%d ok=%v", ms, ok)
 	}
-	if _, ok := instanteDeEscrita(p, 7); ok {
+	if _, ok := writeInstant(p, 7); ok {
 		t.Error("campo ausente foi reportado como conhecido")
 	}
-	if _, ok := instanteDeEscrita(p, 20); ok {
+	if _, ok := writeInstant(p, 20); ok {
 		t.Error("campo além do fim foi reportado como conhecido")
 	}
 	// Tipo errado no campo não vira instante plausível.
 	var q []byte
 	q = mustAppendFieldSolto(t, q, 9, types.Value{Type: types.TypeInt64, I64: 5})
-	if _, ok := instanteDeEscrita(q, 9); ok {
+	if _, ok := writeInstant(q, 9); ok {
 		t.Error("campo com tipo não-timestamp foi aceito")
 	}
 }

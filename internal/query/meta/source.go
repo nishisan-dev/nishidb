@@ -22,7 +22,7 @@ type dicionario struct {
 	nomes []string
 }
 
-func novoDicionario() *dicionario {
+func newDicionario() *dicionario {
 	return &dicionario{ids: map[string]types.FieldID{}}
 }
 
@@ -58,32 +58,32 @@ func (d *dicionario) Name(id types.FieldID) (string, bool) {
 	return d.nomes[id-1], true
 }
 
-// fonte é o Store virtual. Ele não lê disco: cada rowID endereça um campo do
+// source é o Store virtual. Ele não lê disco: cada rowID endereça um campo do
 // schema compilado do dataset alvo, e o record é codificado sob demanda.
 //
-// O snapshot dos campos é tirado UMA vez, no Abre. Sem ele, um campo
-// autodescoberto registrado no meio da varredura mudaria o tamanho da fonte
+// O snapshot dos campos é tirado UMA vez, no Open. Sem ele, um campo
+// autodescoberto registrado no meio da varredura mudaria o tamanho da source
 // entre o ScanLive e o GetByRowID, e a query veria uma linha a mais ou a
 // menos sem explicação.
-type fonte struct {
-	campos []*schema.CompiledField
+type source struct {
+	fields []*schema.CompiledField
 	caps   Capacidades
 	ids    map[string]types.FieldID
 }
 
-func novaFonte(alvo *schema.Compiled, caps Capacidades, _ *schema.Compiled) *fonte {
-	return &fonte{campos: alvo.FieldsForMetadata(), caps: caps, ids: colunasIDs}
+func newSource(target *schema.Compiled, caps Capacidades, _ *schema.Compiled) *source {
+	return &source{fields: target.FieldsForMetadata(), caps: caps, ids: columnsIDs}
 }
 
-func (f *fonte) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
-	if int(id) >= len(f.campos) {
+func (f *source) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+	if int(id) >= len(f.fields) {
 		return types.Record{}, buf, false, nil
 	}
-	return f.record(id, f.campos[id], buf)
+	return f.record(id, f.fields[id], buf)
 }
 
-func (f *fonte) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
-	for i, c := range f.campos {
+func (f *source) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
+	for i, c := range f.fields {
 		if c.Name == string(key) {
 			return f.record(types.RowID(i), c, buf)
 		}
@@ -91,31 +91,31 @@ func (f *fonte) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byt
 	return types.Record{}, buf, false, nil
 }
 
-func (f *fonte) ScanLive(types.Snapshot) types.RowIDIterator {
-	return &iterador{n: len(f.campos), i: -1}
+func (f *source) ScanLive(types.Snapshot) types.RowIDIterator {
+	return &iterador{n: len(f.fields), i: -1}
 }
 
 // OpenSnapshot devolve o snapshot ZERO, e o ignora na leitura: a fonte já é um
-// retrato, tirado uma vez no Abre (ver o godoc do tipo). Não há relógio que
+// retrato, tirado uma vez no Open (ver o godoc do tipo). Não há relógio que
 // ande nem rowId que nasça no meio da varredura — o que o snapshot congela no
 // Store de verdade, aqui já está congelado por construção.
-func (f *fonte) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
+func (f *source) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
 
-// CloseSnapshot é no-op porque o Abre não retém nada: não há journal de
+// CloseSnapshot é no-op porque o Open não retém nada: não há journal de
 // versões sobre uma fonte que não é escrita.
-func (f *fonte) CloseSnapshot(types.Snapshot) {}
+func (f *source) CloseSnapshot(types.Snapshot) {}
 
 // Indexed responde SEMPRE false: a tabela virtual não declara índice no seu
 // YAML, então o planner degrada para varredura completa — que sobre sete
 // colunas e algumas dezenas de linhas é o plano certo de qualquer forma.
 // Confundir esta resposta com a do dataset ALVO seria o defeito: a coluna
 // `indexed` fala do alvo, este método fala da tabela.
-func (f *fonte) Indexed(types.FieldID) bool { return false }
+func (f *source) Indexed(types.FieldID) bool { return false }
 
 // Lookup nunca é chamado: a tabela virtual não declara índice nenhum no
 // YAML, então o planner jamais escolhe um plano indexado sobre ela. O erro
 // aqui é rede de segurança contra um plano impossível, não um caminho vivo.
-func (f *fonte) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
+func (f *source) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
 	return nil, fmt.Errorf("meta: a tabela virtual não tem índice (campo %d)", field)
 }
 
@@ -124,7 +124,7 @@ func (f *fonte) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator,
 // O payload exige FieldID crescente, sem duplicata e sem nulo — a ordenação
 // abaixo é o que honra isso, e ela é sobre os IDs que o compilador atribuiu,
 // não sobre a ordem em que as colunas foram escritas na spec.
-func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (types.Record, []byte, bool, error) {
+func (f *source) record(row types.RowID, c *schema.CompiledField, buf []byte) (types.Record, []byte, bool, error) {
 	tipo := "unknown"
 	if t := c.EffectiveType(); t != types.TypeNull {
 		tipo = t.String()
@@ -134,20 +134,20 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 	// e está valendo?". Enquanto só o bitmap tinha motor, uma coluna com
 	// `index: hash` saía com index=hash e indexed=false — correto na época,
 	// mentira a partir do motor físico.
-	indexado := false
+	indexed := false
 	if f.caps != nil {
-		indexado = f.caps.Indexed(c.ID)
+		indexed = f.caps.Indexed(c.ID)
 	}
 
 	vals := []struct {
-		nome string
+		name string
 		v    types.Value
 	}{
-		{"name", texto(c.Name)},
-		{"type", texto(tipo)},
+		{"name", text(c.Name)},
+		{"type", text(tipo)},
 		{"auto", booleano(c.IsAuto)},
-		{"index", texto(c.IndexName())},
-		{"indexed", booleano(indexado)},
+		{"index", text(c.IndexName())},
+		{"indexed", booleano(indexed)},
 		{"id", types.Value{Type: types.TypeInt64, I64: int64(c.ID)}},
 	}
 	// `parent` só existe para a coluna derivada. Campo de topo o deixa
@@ -161,34 +161,34 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 	// bem-vindo, `WHERE typeMismatches > 0` já filtra o topo naturalmente.
 	if c.Parent != nil {
 		vals = append(vals, struct {
-			nome string
+			name string
 			v    types.Value
-		}{"parent", texto(c.Parent.Name)},
+		}{"parent", text(c.Parent.Name)},
 			struct {
-				nome string
+				name string
 				v    types.Value
 			}{"occurrences", inteiro(c.OccurrenceCount())},
 			struct {
-				nome string
+				name string
 				v    types.Value
 			}{"typeMismatches", inteiro(c.DivergenceCount())},
 			struct {
-				nome string
+				name string
 				v    types.Value
 			}{"coercions", inteiro(c.CoercionCount())})
 	}
 
-	type par struct {
+	type pair struct {
 		id types.FieldID
 		v  types.Value
 	}
-	pares := make([]par, 0, len(vals))
+	pares := make([]pair, 0, len(vals))
 	for _, kv := range vals {
-		id, ok := f.ids[kv.nome]
+		id, ok := f.ids[kv.name]
 		if !ok {
-			return types.Record{}, buf, false, fmt.Errorf("meta: coluna %q sem FieldID", kv.nome)
+			return types.Record{}, buf, false, fmt.Errorf("meta: coluna %q sem FieldID", kv.name)
 		}
-		pares = append(pares, par{id, kv.v})
+		pares = append(pares, pair{id, kv.v})
 	}
 	sort.Slice(pares, func(i, j int) bool { return pares[i].id < pares[j].id })
 
@@ -207,7 +207,7 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 	}, buf, true, nil
 }
 
-func texto(s string) types.Value { return types.Value{Type: types.TypeString, Bytes: []byte(s)} }
+func text(s string) types.Value { return types.Value{Type: types.TypeString, Bytes: []byte(s)} }
 
 // inteiro converte um contador para o int64 da coluna. Os contadores são
 // uint64 e a coluna é int64 porque o SQL do produto não tem inteiro sem sinal:

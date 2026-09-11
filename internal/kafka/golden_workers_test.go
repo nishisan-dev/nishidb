@@ -107,12 +107,12 @@ func corpusGolden() []string {
 	return ev
 }
 
-// rodaPipeline monta o pipeline REAL — fila, pool de decodificadores, esteira e
+// runPipeline monta o pipeline REAL — fila, pool de decodificadores, esteira e
 // writer — e devolve o retrato do dataset que sobrou.
 //
 // Usa as peças de produção, e não uma imitação: um harness que chamasse
 // mat.Apply em laço passaria com a esteira quebrada.
-func rodaPipeline(t *testing.T, workers int, eventos []string) retratoDoDataset {
+func runPipeline(t *testing.T, workers int, eventos []string) retratoOfDataset {
 	t.Helper()
 	spec, err := schema.Parse([]byte(goldenYAML), schema.BuiltinDefaults)
 	if err != nil {
@@ -141,20 +141,20 @@ func rodaPipeline(t *testing.T, workers int, eventos []string) retratoDoDataset 
 		Dataset: "eventos", Topic: "eventos", GroupID: "g",
 		Brokers: []string{"127.0.0.1:9092"}, MaxPollRecords: 32,
 		QueueSize: 64, QueueBytes: 1 << 20, DecodeWorkers: workers,
-		InvalidEvent: schema.InvalidEventLogAndSkip,
+		InvalidEventPolicy: schema.InvalidEventLogAndSkip,
 	}
-	fila := NovaFila(cfg.QueueSize, cfg.QueueBytes)
-	met := registraMetricas(nil, "eventos")
-	w := NovoWriter(cfg, mat, storeGolden{}, fila, nil, met,
+	fila := NewQueue(cfg.QueueSize, cfg.QueueBytes)
+	met := registerMetrics(nil, "eventos")
+	w := NewWriter(cfg, mat, storeGolden{}, fila, nil, met,
 		map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
 
-	ctx, cancela := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancela()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	pool := novoPoolDeDecode(workers, fila, w.est, mat, met, w.limiarDeEncolhimento)
-	esperaDecode := pool.Sobe(ctx)
+	pool := newDecodePool(workers, fila, w.est, mat, met, w.limiarOfEncolhimento)
+	waitDecode := pool.Rises(ctx)
 	writerPronto := make(chan error, 1)
-	go func() { writerPronto <- w.Roda(ctx) }()
+	go func() { writerPronto <- w.Run(ctx) }()
 
 	for i, ev := range eventos {
 		r := &kgo.Record{Partition: 0, Offset: int64(i), Value: []byte(ev)}
@@ -162,24 +162,24 @@ func rodaPipeline(t *testing.T, workers int, eventos []string) retratoDoDataset 
 			t.Fatalf("Envia(%d): %v", i, err)
 		}
 	}
-	fila.Fecha()
-	esperaDecode()
+	fila.Close()
+	waitDecode()
 	if err := <-writerPronto; err != nil {
 		t.Fatalf("writer: %v", err)
 	}
 
-	return retratoDoDataset{
-		linhas:   consulta(t, eng, "SELECT * FROM eventos ORDER BY id"),
-		campos:   consulta(t, eng, "SELECT name, type, auto, occurrences, typeMismatches, coercions FROM _meta.fields"),
+	return retratoOfDataset{
+		rows:     consulta(t, eng, "SELECT * FROM eventos ORDER BY id"),
+		fields:   consulta(t, eng, "SELECT name, type, auto, occurrences, typeMismatches, coercions FROM _meta.fields"),
 		desfecho: w.Desfecho(),
 		serial:   mat.Metrics().DecodeSerialTotal,
 	}
 }
 
-// retratoDoDataset é o que se compara entre as duas rodadas.
-type retratoDoDataset struct {
-	linhas   string
-	campos   string
+// retratoOfDataset é o que se compara entre as duas rodadas.
+type retratoOfDataset struct {
+	rows     string
+	fields   string
 	desfecho Desfecho
 	serial   int64
 }
@@ -208,7 +208,7 @@ func consulta(t *testing.T, eng *query.Engine, sql string) string {
 			if col.Null {
 				sb.WriteString("<null>")
 			} else {
-				sb.WriteString(textoDoValor(col.Val))
+				sb.WriteString(textOfValue(col.Val))
 			}
 			sb.WriteByte('\t')
 		}
@@ -220,7 +220,7 @@ func consulta(t *testing.T, eng *query.Engine, sql string) string {
 	return sb.String()
 }
 
-func textoDoValor(v types.Value) string {
+func textOfValue(v types.Value) string {
 	switch v.Type {
 	case types.TypeString, types.TypeJSON:
 		return string(v.Bytes)
@@ -249,23 +249,23 @@ func textoDoValor(v types.Value) string {
 //     duas vezes.
 func TestGoldenUmWorkerContraOitoProduzOMesmoDataset(t *testing.T) {
 	corpus := corpusGolden()
-	um := rodaPipeline(t, 1, corpus)
-	oito := rodaPipeline(t, 8, corpus)
+	um := runPipeline(t, 1, corpus)
+	oito := runPipeline(t, 8, corpus)
 
-	if um.linhas != oito.linhas {
+	if um.rows != oito.rows {
 		t.Errorf("SELECT * divergiu entre 1 e 8 decodificadores:\n%s",
-			primeiraDiferenca(um.linhas, oito.linhas))
+			primeiraDiferenca(um.rows, oito.rows))
 	}
-	if um.campos != oito.campos {
+	if um.fields != oito.fields {
 		t.Errorf("_meta.fields divergiu entre 1 e 8 decodificadores:\n%s",
-			primeiraDiferenca(um.campos, oito.campos))
+			primeiraDiferenca(um.fields, oito.fields))
 	}
 	if um.desfecho != oito.desfecho {
 		t.Errorf("desfecho divergiu: 1 worker = %+v, 8 workers = %+v", um.desfecho, oito.desfecho)
 	}
 	// Sanidade do próprio teste: um golden sobre dataset vazio compararia duas
 	// strings vazias e passaria por vacuidade.
-	if len(um.linhas) == 0 || len(um.campos) == 0 {
+	if len(um.rows) == 0 || len(um.fields) == 0 {
 		t.Fatal("o golden comparou saída VAZIA; o corpus não materializou nada")
 	}
 	if um.desfecho.Aplicados == 0 {

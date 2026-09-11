@@ -13,11 +13,11 @@ de tabela desconhecida nomeia as que existem).
 ## Desenho
 
 - **Uma tabela virtual registrada no motor** sob o namespace `_meta`, pelo
-  mesmo `RegistraVirtual` que serve `_counters.<nome>`. Mora em
+  mesmo `RegisterVirtual` que serve `_counters.<nome>`. Mora em
   `internal/counters`, e não em `internal/query/meta`: o `meta` descreve o
   dataset pela definição estática e não conhece o storage; os números vivos
-  vêm de `EstatisticasDeContadores`, e o pacote que já cola schema, motor e
-  storage é o `contadores`.
+  vêm de `EstatisticasOfCounters`, e o pacote que já cola schema, motor e
+  storage é o `counters`.
 - **Roteamento**: `_meta.fields` continua indo para o pacote `meta`; qualquer
   outra tabela do `_meta` vai ao registro de tabelas virtuais. A recusa de
   tabela desconhecida em `_meta` lista `fields` mais as registradas.
@@ -34,7 +34,7 @@ de tabela desconhecida nomeia as que existem).
 
 ## Tarefas
 
-1. `internal/counters/meta.go`: `Contado`, `TabelaMeta`, fonte; `Registra`
+1. `internal/counters/meta.go`: `Contado`, `TableMeta`, fonte; `Retain`
    registra `_meta.counters` sempre.
 2. `internal/query/engine.go`: roteamento e mensagem de recusa do `_meta`.
 3. Testes: tabela (lista, vazia, auditoria nula até a primeira, point lookup),

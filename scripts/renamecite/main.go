@@ -94,6 +94,13 @@ var textExtensions = map[string]bool{".md": true, ".puml": true, ".sh": true, ".
 // penduradas, e o godoc dele EXPLICA a regra com os nomes velhos de verdade
 // (`Epoca`, `LimiteRowID`, `specsDoMarcador`). Varrido, o gate passa a
 // explicar a regra com os nomes novos — e some com a razão de existir dele.
+//
+// Os três últimos são o registro do fechamento à mão do ciclo (11/09/2026):
+// o plano e o checkpoint que acompanharam os renames feitos na IDE, que são
+// tabelas DE → PARA, e o aceite, que nomeia o que foi renomeado para
+// registrar o rename. Mesma razão dos quatro primeiros — e a passada de
+// 11/09 provou o colapso na prática: 65 linhas do plano viraram `X → X`
+// antes de o arquivo entrar aqui e ser restaurado.
 var defaultExcludes = []string{
 	"docs/glossario.md",
 	"planning/identificadores-em-ingles.md",
@@ -101,6 +108,9 @@ var defaultExcludes = []string{
 	"planning/identificadores-em-ingles",
 	"scripts/renamecite",
 	"internal/gates/dangling_citations_test.go",
+	"planning/rename_pt_functions_plan.md",
+	"planning/checkpoint_variaveis.md",
+	"docs/aceite-identificadores-em-ingles.md",
 }
 
 // excluded diz se o caminho relativo cai em algum padrão — o próprio caminho
@@ -366,15 +376,15 @@ func collectDeclarations(dir string, m *Mapping) error {
 		if filepath.Ext(p) != ".go" {
 			return nil
 		}
-		dirDoArquivo := filepath.Dir(p)
-		m.PackageDirs[filepath.Base(dirDoArquivo)] = true
+		dirDoFile := filepath.Dir(p)
+		m.PackageDirs[filepath.Base(dirDoFile)] = true
 		fset := token.NewFileSet()
 		f, parseErr := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
 		if parseErr != nil {
 			return nil
 		}
-		pkg := filepath.Base(dirDoArquivo)
-		if rel, relErr := filepath.Rel(dir, dirDoArquivo); relErr == nil {
+		pkg := filepath.Base(dirDoFile)
+		if rel, relErr := filepath.Rel(dir, dirDoFile); relErr == nil {
 			pkg = filepath.ToSlash(rel)
 		}
 		declara := func(name string) {

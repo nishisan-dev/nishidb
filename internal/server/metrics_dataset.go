@@ -6,7 +6,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
 
-// lixoDeDisco é a conta de nishidb_storage_garbage_bytes: o que está em disco
+// garbageOfDisk é a conta de nishidb_storage_garbage_bytes: o que está em disco
 // menos o que o tally reivindica como vivo, com piso em zero.
 //
 // Está fora do coletor por um motivo só, e ele é de prova: dentro do closure a
@@ -27,14 +27,14 @@ import (
 // A direção do erro é o que se garante e vale sempre: como o vivo é limite
 // SUPERIOR (débitos 38 e 45), a diferença é limite INFERIOR do lixo — "há pelo
 // menos isto de garbage", que é o que a Ajuda da série diz ao operador.
-func lixoDeDisco(st storage.Stats) uint64 {
+func garbageOfDisk(st storage.Stats) uint64 {
 	if st.StorageBytes > 0 && uint64(st.StorageBytes) > st.LiveBytesUpperBound {
 		return uint64(st.StorageBytes) - st.LiveBytesUpperBound
 	}
 	return 0
 }
 
-// registraMetricasDeDataset publica as séries do §92 que saem do Store.Stats().
+// registerMetricsOfDataset publica as séries do §92 que saem do Store.Stats().
 //
 // Elas eram nome sem alimentador desde o M2 (débito 16): o Store sempre soube
 // quantas linhas vivas e quantos segmentos tem, e nada expunha. A rota
@@ -74,7 +74,7 @@ func lixoDeDisco(st storage.Stats) uint64 {
 // e inclusive antes da primeira passada. Série que só aparece quando há o que
 // mostrar vira lacuna no gráfico, e lacuna não se distingue de alvo fora do ar
 // — zero é uma resposta, ausência não é.
-func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
+func registerMetricsOfDataset(reg *metrics.Registry, s *Server) {
 	reg.Register(metrics.CollectorFunc(func() []metrics.Sample {
 		out := make([]metrics.Sample, 0, len(s.datasets)*16)
 		for _, d := range s.datasets {
@@ -87,17 +87,17 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 			// dataset base. As séries de política de escrita saem no rótulo
 			// de quem as aplicou.
 			if d.mat != nil {
-				out = append(out, amostrasDeMaterializacao(d.nome, d.spec, d.mat.Metrics())...)
+				out = append(out, samplesOfMaterializacao(d.nome, d.spec, d.mat.Metrics())...)
 			}
-			out = append(out, amostrasDeHistorico(d)...)
+			out = append(out, samplesOfHistory(d)...)
 			// As séries do índice por segmento saem para TODO dataset, e não só
 			// para o histórico: o motor de índice é um só nos dois modos (D1), e
 			// um materializado que responda por enumeração é a mesma degradação
 			// pela mesma porta. Elas vêm de uma leitura própria porque a
-			// EstatisticasDeRetencao não vale fora do histórico.
-			out = append(out, amostrasDeIndice(d.nome, d.st.EstatisticasDeIndice())...)
-			out = append(out, amostrasDeIsolamento(d.nome, d.st)...)
-			out = append(out, amostrasDeContadores(d.nome, d.st.EstatisticasDeContadores())...)
+			// EstatisticasOfRetention não vale fora do histórico.
+			out = append(out, samplesOfIndex(d.nome, d.st.EstatisticasOfIndex())...)
+			out = append(out, samplesOfIsolamento(d.nome, d.st)...)
+			out = append(out, samplesOfCounters(d.nome, d.st.EstatisticasOfCounters())...)
 			rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: d.nome}}
 			// O formato de exposição só tem número, e Go não converte bool
 			// para float: o 0/1 do medidor se escreve aqui, uma vez, em vez de
@@ -162,7 +162,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Help:   "bytes de garbage nos segmentos: há pelo menos isto de lixo (limite INFERIOR, porque a liveness é limite superior — débitos 38 e 45)",
 					Type:   metrics.TypeGauge,
 					Labels: rotulo,
-					Value:  float64(lixoDeDisco(st)),
+					Value:  float64(garbageOfDisk(st)),
 				},
 				metrics.Sample{
 					Family: metrics.MetCompactionRunning,
@@ -202,7 +202,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Help:   "entidades que ganharam lápide por inatividade, pelas duas rotas: o coletor e a descoberta oportunista da compaction",
 					Type:   metrics.TypeCounter,
 					Labels: rotulo,
-					Value:  float64(st.Expiradas),
+					Value:  float64(st.ExpiredCount),
 				},
 				metrics.Sample{
 					Family: metrics.MetExpiryGraceTotal,
@@ -210,7 +210,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Help:   "carências dadas a entidades sem instante de escrita; é o que sobe nos primeiros minutos depois de ligar a expiração num dataset já materializado, quando ainda não há nada a expirar",
 					Type:   metrics.TypeCounter,
 					Labels: rotulo,
-					Value:  float64(st.Carencias),
+					Value:  float64(st.PendingCount),
 				},
 				metrics.Sample{
 					Family: metrics.MetExpiryScannedTotal,
@@ -218,7 +218,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Help:   "entradas do índice de escritas examinadas pelo coletor; comparada com o total de rows, diz se o cursor dá a volta ou empaca",
 					Type:   metrics.TypeCounter,
 					Labels: rotulo,
-					Value:  float64(st.ExpiryExaminadas),
+					Value:  float64(st.ExpiredExamined),
 				})
 		}
 		return out
@@ -234,13 +234,13 @@ func umSeVerdadeiro(v bool) float64 {
 	return 0
 }
 
-// amostrasDeContadores publica as dez séries de cada contador mantido na
-// escrita, da MESMA leitura (EstatisticasDeContadores) que o /v1/stats faz.
+// samplesOfCounters publica as dez séries de cada contador mantido na
+// escrita, da MESMA leitura (EstatisticasOfCounters) que o /v1/stats faz.
 //
 // Nascem com zero na subida, como todas as que podem alarmar: um dataset com
 // contador e nenhuma linha emite as dez, zeradas — lacuna não se distingue de
 // alvo fora do ar. O rótulo `counter` vem do YAML, conjunto fechado.
-func amostrasDeContadores(dataset string, ests []counter.Stats) []metrics.Sample {
+func samplesOfCounters(dataset string, ests []counter.Stats) []metrics.Sample {
 	out := make([]metrics.Sample, 0, len(ests)*10)
 	for _, e := range ests {
 		rotulo := []metrics.Label{
@@ -333,7 +333,7 @@ func amostrasDeContadores(dataset string, ests []counter.Stats) []metrics.Sample
 	return out
 }
 
-// amostrasDeIsolamento publica o que o snapshot de leitura está segurando
+// samplesOfIsolamento publica o que o snapshot de leitura está segurando
 // neste dataset.
 //
 // As quatro nascem com ZERO na subida, como todas as que podem alarmar: uma
@@ -344,7 +344,7 @@ func amostrasDeContadores(dataset string, ests []counter.Stats) []metrics.Sample
 // longest_running: a idade cresce sozinha com o tempo, e um medidor escrito
 // quando a consulta abriu ficaria congelado mostrando a idade que ela tinha ao
 // nascer — que é sempre zero.
-func amostrasDeIsolamento(dataset string, st *storage.Store) []metrics.Sample {
+func samplesOfIsolamento(dataset string, st *storage.Store) []metrics.Sample {
 	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: dataset}}
 	return []metrics.Sample{
 		{
@@ -360,7 +360,7 @@ func amostrasDeIsolamento(dataset string, st *storage.Store) []metrics.Sample {
 			Name:   metrics.MetQuerySnapshotOldestSeconds,
 			Help:   "há quanto tempo a consulta mais antiga segura o passado; 0 quando não há nenhuma",
 			Type:   metrics.TypeGauge,
-			Value:  st.IdadeDoSnapshotMaisAntigo().Seconds(),
+			Value:  st.IDadeOfSnapshotMaisAntigo().Seconds(),
 			Labels: rotulo,
 		},
 		{

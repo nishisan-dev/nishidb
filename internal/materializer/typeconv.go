@@ -281,8 +281,8 @@ func InferType(f jsonp.Field) types.FieldType {
 // O `json` também fica fora, e ali por outro motivo: object e array são as duas
 // formas nativas dele, não uma. Um par de formas legítimas não cabe nesta função
 // e não precisa caber — o Convert já recusa qualquer terceira.
-func kindNativo(alvo types.FieldType) (jsonp.Kind, bool) {
-	switch alvo {
+func kindNativo(target types.FieldType) (jsonp.Kind, bool) {
+	switch target {
 	case types.TypeString:
 		return jsonp.KindString, true
 	case types.TypeInt64, types.TypeDouble:

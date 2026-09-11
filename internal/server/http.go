@@ -17,16 +17,16 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
-// permitidoEmLeitura é o valor do header Allow das duas rotas que aceitam HEAD.
+// permitidoInLeitura é o valor do header Allow das duas rotas que aceitam HEAD.
 //
 // HEAD é GET sem corpo, e o net/http já o serve assim quando o handler escreve
 // normalmente — descartar o corpo é trabalho dele. Aceitá-lo aqui preserva o
 // que o mux fazia sozinho quando o padrão era "GET /metrics".
-const permitidoEmLeitura = "GET, HEAD"
+const permitidoInLeitura = "GET, HEAD"
 
-// metodoDeLeitura responde se o método é um dos que /metrics e /v1/health
+// metodoOfLeitura responde se o método é um dos que /metrics e /v1/health
 // servem.
-func metodoDeLeitura(r *http.Request) bool {
+func metodoOfLeitura(r *http.Request) bool {
 	return r.Method == http.MethodGet || r.Method == http.MethodHead
 }
 
@@ -34,23 +34,23 @@ func metodoDeLeitura(r *http.Request) bool {
 //
 // O lag é atualizado AQUI, no scrape, e não por um timer: perguntar ao broker
 // num timer publicaria um número velho cuja idade o operador não conhece.
-func (s *Servidor) handleMetrics(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	// PRIMEIRA linha do handler, antes do laço abaixo. Enquanto o método vivia
 	// no padrão de registro, o mux recusava de graça; agora a recusa é nossa, e
 	// pô-la depois do laço faria cada POST inválido disparar a consulta ao
 	// broker, com o timeout de 5 s do scrape — numa rota que um cron raspa.
-	if !metodoDeLeitura(r) {
-		s.recusaSimples(w, r, permitidoEmLeitura)
+	if !metodoOfLeitura(r) {
+		s.rejectSimples(w, r, permitidoInLeitura)
 		return
 	}
-	ctx, cancela := timeoutDoScrape(r)
-	defer cancela()
+	ctx, cancel := timeoutOfScrape(r)
+	defer cancel()
 	// Em PARALELO, e com prazo POR DATASET. Em série, dentro de um orçamento
 	// único, o último dataset da lista recebe o que sobrou dos anteriores — e
 	// com brokers lentos isso é zero, então ele nunca publica marca d'água
 	// enquanto os primeiros publicam sempre. O prazo próprio é o que mantém a
 	// leitura de cada dataset independente da sorte dos vizinhos.
-	var espera sync.WaitGroup
+	var wait sync.WaitGroup
 	for _, d := range s.datasets {
 		d.mu.Lock()
 		cons := d.cons
@@ -58,22 +58,22 @@ func (s *Servidor) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		if cons == nil {
 			continue
 		}
-		espera.Add(1)
+		wait.Add(1)
 		go func(c *kafka.Consumidor) {
-			defer espera.Done()
-			ctxD, cancelaD := context.WithTimeout(ctx, kafka.PrazoDaMarcaDagua)
-			defer cancelaD()
-			c.AtualizaMarcaDagua(ctxD)
+			defer wait.Done()
+			ctxD, cancelD := context.WithTimeout(ctx, kafka.PrazoDaMarcaDagua)
+			defer cancelD()
+			c.AtualizaMarkDagua(ctxD)
 		}(cons)
 	}
-	espera.Wait()
+	wait.Wait()
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	if _, err := s.reg.WriteTo(w); err != nil {
 		s.log.Warn("metrics.escrita_falhou", "scrape interrompido", "erro", err.Error())
 	}
 }
 
-func timeoutDoScrape(r *http.Request) (context.Context, context.CancelFunc) {
+func timeoutOfScrape(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
 
@@ -82,9 +82,9 @@ func timeoutDoScrape(r *http.Request) (context.Context, context.CancelFunc) {
 // A chave "kafka" agrega: basta UM dataset com ingestão parada para ela sair
 // de UP. É deliberado — um health que dissesse UP com metade da ingestão
 // parada seria pior que não existir.
-func (s *Servidor) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if !metodoDeLeitura(r) {
-		s.recusaSimples(w, r, permitidoEmLeitura)
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if !metodoOfLeitura(r) {
+		s.rejectSimples(w, r, permitidoInLeitura)
 		return
 	}
 	h := protocol.Health{
@@ -94,19 +94,19 @@ func (s *Servidor) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Datasets: make(map[string]string, len(s.datasets)),
 		Details:  map[string]string{},
 	}
-	comIngestao := 0
+	withIngestion := 0
 
 	for _, d := range s.datasets {
-		estado, detalhe := estadoDaIngestao(d)
-		if estado != protocol.StateDisabled {
-			comIngestao++
+		state, detalhe := stateOfIngestion(d)
+		if state != protocol.StateDisabled {
+			withIngestion++
 		}
 		if detalhe != "" {
 			h.Details[d.nome] = detalhe
 		}
-		h.Datasets[d.nome] = estado
+		h.Datasets[d.nome] = state
 
-		switch estado {
+		switch state {
 		case protocol.StateDown:
 			h.Kafka = protocol.StateDown
 			h.Status = protocol.StateDegraded
@@ -116,7 +116,7 @@ func (s *Servidor) handleHealth(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if comIngestao == 0 {
+	if withIngestion == 0 {
 		// Nenhum dataset consome: dizer "kafka: UP" seria afirmar saúde de um
 		// subsistema que não está em uso.
 		h.Kafka = protocol.StateDisabled
@@ -135,16 +135,16 @@ func (s *Servidor) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// estadoDaIngestao classifica a ingestão de UM dataset no vocabulário do §94, e
+// stateOfIngestion classifica a ingestão de UM dataset no vocabulário do §94, e
 // devolve junto o motivo — vazio quando não há o que explicar.
 //
 // É uma função só porque tem dois chamadores: o /v1/health e o /v1/stats. Com a
 // classificação duplicada, as duas rotas descreveriam a mesma realidade com
 // palavras diferentes no dia em que uma delas ganhasse um caso novo — e o
 // operador teria de descobrir qual das duas está certa.
-func estadoDaIngestao(d *dataset) (estado, detalhe string) {
+func stateOfIngestion(d *dataset) (estado, detalhe string) {
 	d.mu.Lock()
-	cons, erro := d.cons, d.erroIngestao
+	cons, err := d.cons, d.erroIngestao
 	d.mu.Unlock()
 
 	k := d.spec.Source.Kafka
@@ -153,8 +153,8 @@ func estadoDaIngestao(d *dataset) (estado, detalhe string) {
 		// Sem fonte declarada, ou pausado pelo `enabled: false`. Não é
 		// anomalia e não pode contaminar a chave agregada.
 		return protocol.StateDisabled, ""
-	case erro != nil:
-		return protocol.StateDown, erro.Error()
+	case err != nil:
+		return protocol.StateDown, err.Error()
 	case cons == nil:
 		return protocol.StateDegraded, "ingestão ainda subindo"
 	}
@@ -164,17 +164,17 @@ func estadoDaIngestao(d *dataset) (estado, detalhe string) {
 	return protocol.StateUp, ""
 }
 
-// sobePprof liga os endpoints do §112 num listener PRÓPRIO.
-// taxaDoBlockProfile amostra um evento de bloqueio a cada N nanossegundos de
+// risesPprof liga os endpoints do §112 num listener PRÓPRIO.
+// taxaOfBlockProfile amostra um evento de bloqueio a cada N nanossegundos de
 // espera acumulada. 10 µs registra o que dura o suficiente para importar sem
 // instrumentar cada sincronização curta.
-const taxaDoBlockProfile = 10_000
+const taxaOfBlockProfile = 10_000
 
-// fracaoDoMutexProfile amostra 1 em cada N eventos de contenção. 100 é o valor
+// fractionOfMutexProfile amostra 1 em cada N eventos de contenção. 100 é o valor
 // que a documentação do runtime usa como ponto de partida razoável.
-const fracaoDoMutexProfile = 100
+const fractionOfMutexProfile = 100
 
-func (s *Servidor) sobePprof(addr string) {
+func (s *Server) risesPprof(addr string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -196,8 +196,8 @@ func (s *Servidor) sobePprof(addr string) {
 	// aquisição de lock e em TODO bloqueio, e o pprof já é modo
 	// administrativo. Quem abre a porta aceita o preço; quem não a abre não
 	// paga nada.
-	runtime.SetBlockProfileRate(taxaDoBlockProfile)
-	runtime.SetMutexProfileFraction(fracaoDoMutexProfile)
+	runtime.SetBlockProfileRate(taxaOfBlockProfile)
+	runtime.SetMutexProfileFraction(fractionOfMutexProfile)
 
 	s.pprofSrv = &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -210,21 +210,21 @@ func (s *Servidor) sobePprof(addr string) {
 		"endereco", addr)
 }
 
-// sobeLoopback liga o SEGUNDO listener do plano loopback (decisão 4 do plano
-// do ciclo, §77-78): serve o MESMO mux (montado de novo por montaMux — sem
+// risesLoopback liga o SEGUNDO listener do plano loopback (decisão 4 do plano
+// do ciclo, §77-78): serve o MESMO mux (montado de novo por buildMux — sem
 // estado compartilhado, ver o report da B3), sem TLS e sem o middleware de
 // autenticação, sobre s.loopbackLn (já bindado por Novo).
 //
-// O handler NÃO é mais rt.Cru() puro desde a Task B5: é muxLoopback(rt), que
+// O handler NÃO é mais rt.Raw() puro desde a Task B5: é muxLoopback(rt), que
 // aplica o RULING do §77b sobre o MESMO mux — rota READ continua anônima
 // (paridade com o que este listener já fazia), rota ADMIN (as duas novas do
 // §96) responde 403. É o que preserva o painel, o script de update e o cron
 // locais funcionando sem credencial, sem abrir compact/checkpoint anônimos
 // para qualquer usuário local do host do piloto — precedente arquitetural:
-// sobePprof, acima, também é um segundo listener isolado do principal,
+// risesPprof, acima, também é um segundo listener isolado do principal,
 // embora com objetivo diferente (debug vs. ferramental local).
-func (s *Servidor) sobeLoopback() {
-	rt := s.montaMux()
+func (s *Server) risesLoopback() {
+	rt := s.buildMux()
 	s.loopbackSrv = &http.Server{
 		Handler:           s.muxLoopback(rt),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -250,18 +250,18 @@ func (s *Servidor) sobeLoopback() {
 // listener nomeia a origem ("principal" ou "loopback") — os DOIS http.Server
 // usam este adaptador, cada um com o seu rótulo, para que uma linha de erro
 // não fique ambígua sobre qual dos dois listeners a gerou.
-func (s *Servidor) errorLog(listener string) *log.Logger {
-	return log.New(errorLogParaLogger{log: s.log, listener: listener}, "", 0)
+func (s *Server) errorLog(listener string) *log.Logger {
+	return log.New(errorLogForLogger{log: s.log, listener: listener}, "", 0)
 }
 
-// errorLogParaLogger é o io.Writer por trás de errorLog: cada Write de
+// errorLogForLogger é o io.Writer por trás de errorLog: cada Write de
 // net/http vira UM evento estruturado, nunca uma linha crua.
-type errorLogParaLogger struct {
+type errorLogForLogger struct {
 	log      *logging.Logger
 	listener string
 }
 
-func (w errorLogParaLogger) Write(p []byte) (int, error) {
+func (w errorLogForLogger) Write(p []byte) (int, error) {
 	w.log.Warn("http.erro_transporte",
 		"net/http reportou um erro de conexão/handshake (comum com scanners batendo na porta)",
 		"listener", w.listener, "mensagem", strings.TrimRight(string(p), "\n"))
@@ -270,15 +270,15 @@ func (w errorLogParaLogger) Write(p []byte) (int, error) {
 
 // Pausas devolve, por dataset, o motivo de a ingestão estar parada. Vazio
 // quando tudo corre bem. Serve ao teste e ao futuro `nishidb status`.
-func (s *Servidor) Pausas() map[string]error {
+func (s *Server) Pausas() map[string]error {
 	out := map[string]error{}
 	for _, d := range s.datasets {
 		d.mu.Lock()
-		cons, erro := d.cons, d.erroIngestao
+		cons, err := d.cons, d.erroIngestao
 		d.mu.Unlock()
 		switch {
-		case erro != nil:
-			out[d.nome] = erro
+		case err != nil:
+			out[d.nome] = err
 		case cons != nil:
 			if p := cons.Pausa(); p != nil {
 				out[d.nome] = p

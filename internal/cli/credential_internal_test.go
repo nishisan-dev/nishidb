@@ -20,15 +20,15 @@ import (
 )
 
 // Testes de caixa branca das regras de precedência de fonte de senha
-// (flagsRemotas.resolve) e da montagem do client HTTP compartilhado
-// (clienteRemoto/aplicaCredencial) — os dois mecanismos que credential_test.go
+// (remoteFlags.resolve) e da montagem do client HTTP compartilhado
+// (remoteClient/aplicaCredencial) — os dois mecanismos que credential_test.go
 // (package cli_test) exercita ponta a ponta contra um servidor de verdade.
 // Aqui o oráculo é a REGRA em si, sem precisar subir nada.
 
-func flagsParaTeste(t *testing.T, args ...string) *flagsRemotas {
+func flagsForTest(t *testing.T, args ...string) *remoteFlags {
 	t.Helper()
 	fs := flag.NewFlagSet("teste", flag.ContinueOnError)
-	f := registraFlagsRemotas(fs)
+	f := setupRemoteFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		t.Fatal(err)
 	}
@@ -46,70 +46,70 @@ func TestFlagsRemotasResolveRegrasDePrecedencia(t *testing.T) {
 	}
 
 	casos := []struct {
-		nome        string
-		args        []string
-		env         string // "" = não seta a variável
-		querErro    bool
-		querUsuario string
-		querSenha   string
-		querTLSCA   string
+		name         string
+		args         []string
+		env          string // "" = não seta a variável
+		querErr      bool
+		querUsuario  string
+		querPassword string
+		querTLSCA    string
 	}{
 		{
-			nome: "nenhuma flag nem env: sem credencial, sem erro",
+			name: "nenhuma flag nem env: sem credencial, sem erro",
 		},
 		{
-			nome:     "user sem nenhuma fonte de senha: erro",
-			args:     []string{"--user", "chefe"},
-			querErro: true,
+			name:    "user sem nenhuma fonte de senha: erro",
+			args:    []string{"--user", "chefe"},
+			querErr: true,
 		},
 		{
-			nome:     "password-file sem user: erro",
-			args:     []string{"--password-file", arq},
-			querErro: true,
+			name:    "password-file sem user: erro",
+			args:    []string{"--password-file", arq},
+			querErr: true,
 		},
 		{
-			nome:     "env sem user: erro",
-			env:      "abc",
-			querErro: true,
+			name:    "env sem user: erro",
+			env:     "abc",
+			querErr: true,
 		},
 		{
-			nome:        "user + env: ok",
-			args:        []string{"--user", "chefe"},
-			env:         "abc",
-			querUsuario: "chefe",
-			querSenha:   "abc",
+			name:         "user + env: ok",
+			args:         []string{"--user", "chefe"},
+			env:          "abc",
+			querUsuario:  "chefe",
+			querPassword: "abc",
 		},
 		{
-			nome:        "user + password-file: ok, apara \\r\\n",
-			args:        []string{"--user", "chefe", "--password-file", arq},
-			querUsuario: "chefe",
-			querSenha:   "abc",
+			name:         "user + password-file: ok, apara \\r\\n",
+			args:         []string{"--user", "chefe", "--password-file", arq},
+			querUsuario:  "chefe",
+			querPassword: "abc",
 		},
 		{
-			nome:     "user + as duas fontes ao mesmo tempo: erro",
-			args:     []string{"--user", "chefe", "--password-file", arq},
-			env:      "abc",
-			querErro: true,
+			name:    "user + as duas fontes ao mesmo tempo: erro",
+			args:    []string{"--user", "chefe", "--password-file", arq},
+			env:     "abc",
+			querErr: true,
 		},
 		{
-			nome:     "user + password-file vazio (só quebra de linha): erro",
-			args:     []string{"--user", "chefe", "--password-file", arqVazio},
-			querErro: true,
+			name:    "user + password-file vazio (só quebra de linha): erro",
+			args:    []string{"--user", "chefe", "--password-file", arqVazio},
+			querErr: true,
 		},
 		{
-			nome:      "--tls-ca sozinho, sem user: ok, tlsCA preenchido",
+			name:      "--tls-ca sozinho, sem user: ok, tlsCA preenchido",
 			args:      []string{"--tls-ca", "/algum/caminho.pem"},
 			querTLSCA: "/algum/caminho.pem",
 		},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			if c.env != "" {
-				t.Setenv(envSenha, c.env)
+				t.Setenv(envPass, c.env)
 			}
-			f := flagsParaTeste(t, c.args...)
+			f := flagsForTest(t, c.args...)
 			cred, err := f.resolve()
-			if c.querErro {
+			if c.querErr {
 				if err == nil {
 					t.Fatalf("queria erro, saiu nil (cred=%+v)", cred)
 				}
@@ -118,9 +118,9 @@ func TestFlagsRemotasResolveRegrasDePrecedencia(t *testing.T) {
 			if err != nil {
 				t.Fatalf("erro inesperado: %v", err)
 			}
-			if cred.usuario != c.querUsuario || cred.senha != c.querSenha || cred.tlsCA != c.querTLSCA {
+			if cred.user != c.querUsuario || cred.pass != c.querPassword || cred.tlsCA != c.querTLSCA {
 				t.Fatalf("cred = %+v, queria usuario=%q senha=%q tlsCA=%q",
-					cred, c.querUsuario, c.querSenha, c.querTLSCA)
+					cred, c.querUsuario, c.querPassword, c.querTLSCA)
 			}
 		})
 	}
@@ -135,9 +135,9 @@ func TestFlagsRemotasResolveMensagensNaoEcoamSenha(t *testing.T) {
 	if err := os.WriteFile(arq, []byte(segredo), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(envSenha, segredo)
+	t.Setenv(envPass, segredo)
 
-	f := flagsParaTeste(t, "--user", "chefe", "--password-file", arq)
+	f := flagsForTest(t, "--user", "chefe", "--password-file", arq)
 	_, err := f.resolve()
 	if err == nil {
 		t.Fatal("queria erro (as duas fontes presentes)")
@@ -148,36 +148,36 @@ func TestFlagsRemotasResolveMensagensNaoEcoamSenha(t *testing.T) {
 }
 
 // TestUserComNISHIDBPASSWORDDefinidaEVaziaEhRecusado é o Minor 8 da revisão
-// final: t.Setenv(envSenha, "") deixa a variável DEFINIDA
+// final: t.Setenv(envPass, "") deixa a variável DEFINIDA
 // (os.LookupEnv devolve ok=true), só vazia — antes desta recusa, resolve()
 // não tinha case nenhum que casasse esta combinação (temUsuario && temEnv
 // && !temArquivo, com o VALOR vazio) e caía no caminho feliz com senha ==
 // "": o Basic saía com senha vazia, e o servidor respondia 401 sem nenhuma
 // pista, porque para o operador a variável "está setada". Espelha
-// resolveSenha (internal/server/security.go), que já distingue "ausente"
+// resolvePassword (internal/server/security.go), que já distingue "ausente"
 // de "definida e vazia" para o MESMO cenário do lado do servidor.
 func TestUserComNISHIDBPASSWORDDefinidaEVaziaEhRecusado(t *testing.T) {
-	t.Setenv(envSenha, "")
-	f := flagsParaTeste(t, "--user", "chefe")
+	t.Setenv(envPass, "")
+	f := flagsForTest(t, "--user", "chefe")
 	_, err := f.resolve()
 	if err == nil {
 		t.Fatal("queria erro: NISHIDB_PASSWORD definida e vazia com --user")
 	}
-	if !strings.Contains(err.Error(), envSenha) {
-		t.Errorf("a mensagem não nomeia %s: %v", envSenha, err)
+	if !strings.Contains(err.Error(), envPass) {
+		t.Errorf("a mensagem não nomeia %s: %v", envPass, err)
 	}
 	if !strings.Contains(err.Error(), "VAZIA") {
 		t.Errorf("a mensagem não diz que a variável está definida e vazia: %v", err)
 	}
 }
 
-// certPEMDeTeste gera um certificado autoassinado mínimo, só para exercitar
-// clienteRemoto lendo e parseando um PEM de verdade — o handshake TLS de
+// certPEMOfTest gera um certificado autoassinado mínimo, só para exercitar
+// remoteClient lendo e parseando um PEM de verdade — o handshake TLS de
 // ponta a ponta (SAN, validade) é responsabilidade do e2e em credential_test.go
 // (package cli_test, que não pode enxergar este arquivo _internal_test.go).
-func certPEMDeTeste(t *testing.T) string {
+func certPEMOfTest(t *testing.T) string {
 	t.Helper()
-	chave, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func certPEMDeTeste(t *testing.T) string {
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 	}
-	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &chave.PublicKey, chave)
+	der, err := x509.CreateCertificate(rand.Reader, modelo, modelo, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func certPEMDeTeste(t *testing.T) string {
 // linha (transport.Proxy = nil) comentada, um e2e com proxy fake continuou
 // verde. Este teste É a prova que resta — leitura direta do campo.
 func TestClienteRemotoTransportTemProxyNil(t *testing.T) {
-	client, err := clienteRemoto(credencialRemota{})
+	client, err := remoteClient(remoteCredential{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,13 +229,13 @@ func TestClienteRemotoTransportTemProxyNil(t *testing.T) {
 	}
 }
 
-// Revisão da B6, Important 1: clienteRemoto tem de instalar CheckRedirect —
+// Revisão da B6, Important 1: remoteClient tem de instalar CheckRedirect —
 // sem ele, o *http.Client usa a política default do stdlib, que segue
 // redirect same-host reenviando Authorization. A prova ponta a ponta (302
 // de verdade, credencial nunca chega ao alvo) mora em credential_test.go;
 // aqui é só a fiação.
 func TestClienteRemotoInstalaCheckRedirect(t *testing.T) {
-	client, err := clienteRemoto(credencialRemota{})
+	client, err := remoteClient(remoteCredential{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,15 +245,15 @@ func TestClienteRemotoInstalaCheckRedirect(t *testing.T) {
 }
 
 func TestRecusaRedirectNomeiaOStatusEODestino(t *testing.T) {
-	alvo, err := url.Parse("http://10.0.0.9:9142/v1/stats")
+	target, err := url.Parse("http://10.0.0.9:9142/v1/stats")
 	if err != nil {
 		t.Fatal(err)
 	}
 	req := &http.Request{
-		URL:      alvo,
+		URL:      target,
 		Response: &http.Response{StatusCode: http.StatusFound},
 	}
-	err = recusaRedirect(req, nil)
+	err = refuseRedirect(req, nil)
 	if err == nil {
 		t.Fatal("queria erro: redirect tem de ser recusado sempre")
 	}
@@ -272,19 +272,19 @@ func TestRecusaRedirectNomeiaOStatusEODestino(t *testing.T) {
 // req.Response pode ser nil em tese (a função não deve confiar cegamente);
 // a recusa continua valendo, só sem o número do status.
 func TestRecusaRedirectSemResponseAindaAssimRecusa(t *testing.T) {
-	alvo, err := url.Parse("http://10.0.0.9:9142/v1/stats")
+	target, err := url.Parse("http://10.0.0.9:9142/v1/stats")
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := &http.Request{URL: alvo}
-	if err := recusaRedirect(req, nil); err == nil {
+	req := &http.Request{URL: target}
+	if err := refuseRedirect(req, nil); err == nil {
 		t.Fatal("queria erro mesmo sem req.Response")
 	}
 }
 
 func TestClienteRemotoComTLSCAMontaCertPoolEMinVersion(t *testing.T) {
-	caPath := certPEMDeTeste(t)
-	client, err := clienteRemoto(credencialRemota{tlsCA: caPath})
+	caPath := certPEMOfTest(t)
+	client, err := remoteClient(remoteCredential{tlsCA: caPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestClienteRemotoComTLSCAMontaCertPoolEMinVersion(t *testing.T) {
 }
 
 func TestClienteRemotoComTLSCAInexistenteDevolveErro(t *testing.T) {
-	_, err := clienteRemoto(credencialRemota{tlsCA: filepath.Join(t.TempDir(), "nao-existe.pem")})
+	_, err := remoteClient(remoteCredential{tlsCA: filepath.Join(t.TempDir(), "nao-existe.pem")})
 	if err == nil {
 		t.Fatal("queria erro para --tls-ca apontando para um arquivo inexistente")
 	}
@@ -315,7 +315,7 @@ func TestClienteRemotoComTLSCAInvalidaDevolveErro(t *testing.T) {
 	if err := os.WriteFile(path, []byte("isto não é um certificado PEM"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := clienteRemoto(credencialRemota{tlsCA: path})
+	_, err := remoteClient(remoteCredential{tlsCA: path})
 	if err == nil {
 		t.Fatal("queria erro para --tls-ca apontando para um PEM inválido")
 	}
@@ -326,7 +326,7 @@ func TestAplicaCredencialSoDefineBasicComUsuario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	aplicaCredencial(req, credencialRemota{})
+	applyCredential(req, remoteCredential{})
 	if _, _, ok := req.BasicAuth(); ok {
 		t.Fatal("sem usuário, não deveria haver Authorization nenhum")
 	}
@@ -335,7 +335,7 @@ func TestAplicaCredencialSoDefineBasicComUsuario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	aplicaCredencial(req2, credencialRemota{usuario: "chefe", senha: "s"})
+	applyCredential(req2, remoteCredential{user: "chefe", pass: "s"})
 	u, p, ok := req2.BasicAuth()
 	if !ok || u != "chefe" || p != "s" {
 		t.Fatalf("BasicAuth = %q/%q/%v, queria chefe/s/true", u, p, ok)
@@ -354,7 +354,7 @@ func TestDicaDeEsquemaSoDisparaNoCorpoEStatusExatos(t *testing.T) {
 		{http.StatusBadRequest, "", false},
 	}
 	for _, c := range casos {
-		got := dicaDeEsquema(c.status, []byte(c.corpo))
+		got := schemaHint(c.status, []byte(c.corpo))
 		if (got != "") != c.querDica {
 			t.Errorf("status=%d corpo=%q: dica=%q, queria presente=%v", c.status, c.corpo, got, c.querDica)
 		}

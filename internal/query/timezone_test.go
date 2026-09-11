@@ -22,7 +22,7 @@ const envFusoFilho = "NISHIDB_TESTE_FUSO_FILHO"
 
 func TestOFusoDoHostVemDaVariavelTZ(t *testing.T) {
 	if os.Getenv(envFusoFilho) != "" {
-		rodaCasoDeFusoNoFilho(t)
+		runCasoOfFusoInFilho(t)
 		return
 	}
 
@@ -44,7 +44,7 @@ func TestOFusoDoHostVemDaVariavelTZ(t *testing.T) {
 			if err != nil {
 				t.Fatalf("subprocesso com TZ=%s falhou: %v\n%s", c.tz, err, saida)
 			}
-			got, ok := extraiMillis(string(saida))
+			got, ok := extractMillis(string(saida))
 			if !ok {
 				t.Fatalf("subprocesso não imprimiu o millis:\n%s", saida)
 			}
@@ -58,10 +58,10 @@ func TestOFusoDoHostVemDaVariavelTZ(t *testing.T) {
 	}
 }
 
-const marcaMillis = "MILLIS_DO_FILHO="
+const markMillis = "MILLIS_DO_FILHO="
 
-func rodaCasoDeFusoNoFilho(t *testing.T) {
-	h := novoTiposHarness(t)
+func runCasoOfFusoInFilho(t *testing.T) {
+	h := newTiposHarness(t)
 	h.ingere(`{"id":"K1","_SEQ":1,"momento":"Aug 22, 2026 08:54:02 PM"}`)
 
 	// Confere contra o oráculo da stdlib NESTE processo, com ESTE time.Local:
@@ -71,17 +71,17 @@ func rodaCasoDeFusoNoFilho(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("o valor ingerido não bate com time.Date em time.Local (%s)", time.Local)
 	}
-	fmt.Printf("%s%d\n", marcaMillis, oraculo)
+	fmt.Printf("%s%d\n", markMillis, oraculo)
 }
 
-func extraiMillis(saida string) (int64, bool) {
-	for _, linha := range strings.Split(saida, "\n") {
-		linha = strings.TrimSpace(linha)
-		if !strings.HasPrefix(linha, marcaMillis) {
+func extractMillis(saida string) (int64, bool) {
+	for _, row := range strings.Split(saida, "\n") {
+		row = strings.TrimSpace(row)
+		if !strings.HasPrefix(row, markMillis) {
 			continue
 		}
 		var v int64
-		if _, err := fmt.Sscanf(linha[len(marcaMillis):], "%d", &v); err == nil {
+		if _, err := fmt.Sscanf(row[len(markMillis):], "%d", &v); err == nil {
 			return v, true
 		}
 	}

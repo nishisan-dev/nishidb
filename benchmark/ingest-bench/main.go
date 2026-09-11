@@ -152,7 +152,7 @@ problema — compaction_running e compaction_bytes_read em store_stats.
 
 	fmt.Fprintln(os.Stderr, "\n--- GATES ---")
 	for _, g := range rep.Gates {
-		fmt.Fprintf(os.Stderr, "%-8s %-22s %-6s %s\n", rotuloDoGate(g), g.Name, g.Spec, g.Detail)
+		fmt.Fprintf(os.Stderr, "%-8s %-22s %-6s %s\n", rotuloOfGate(g), g.Name, g.Spec, g.Detail)
 	}
 	// As duas reprovações saem separadas: violado manda investigar regressão,
 	// NÃO AVALIADO manda repetir a rodada com o insumo que faltou. Juntá-las

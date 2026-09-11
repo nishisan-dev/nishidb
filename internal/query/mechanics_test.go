@@ -27,20 +27,20 @@ type stub struct {
 	keys     map[string]types.RowID
 	mortas   map[types.RowID]bool
 
-	erroEm      types.RowID // GetByRowID falha nesta row
-	temErro     bool
+	errEm       types.RowID // GetByRowID falha nesta row
+	temErr      bool
 	lentidao    time.Duration // atraso por candidato (teste de timeout)
 	aoAvancar   func(n int)   // gancho: chamado a cada candidato consumido
 	avancos     int
 	gets        int
-	getsPorKey  int
+	getsByKey   int
 	scans       int
 	fechamentos int
 }
 
 func (s *stub) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	s.gets++
-	if s.temErro && id == s.erroEm {
+	if s.temErr && id == s.errEm {
 		return types.Record{}, buf, false, fmt.Errorf("disco caiu na row %d", id)
 	}
 	if s.mortas[id] {
@@ -55,7 +55,7 @@ func (s *stub) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.R
 }
 
 func (s *stub) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
-	s.getsPorKey++
+	s.getsByKey++
 	id, ok := s.keys[string(key)]
 	if !ok {
 		return types.Record{}, buf, false, nil
@@ -135,24 +135,24 @@ query:
   timeout: %s
 `
 
-// montaStub cria n rows com nome="linha" e n=índice.
-func montaStub(tb testing.TB, sch *schema.Compiled, n int) *stub {
+// buildStub cria n rows com nome="linha" e n=índice.
+func buildStub(tb testing.TB, sch *schema.Compiled, n int) *stub {
 	tb.Helper()
 	id, _ := sch.FieldByName([]byte("id"))
-	nome, _ := sch.FieldByName([]byte("nome"))
+	name, _ := sch.FieldByName([]byte("nome"))
 	num, _ := sch.FieldByName([]byte("n"))
 
-	campos := []struct {
+	fields := []struct {
 		f *schema.CompiledField
 		v func(i int) types.Value
 	}{
 		{id, func(i int) types.Value {
 			return types.Value{Type: types.TypeString, Bytes: []byte(fmt.Sprintf("K%05d", i))}
 		}},
-		{nome, func(int) types.Value { return types.Value{Type: types.TypeString, Bytes: []byte("linha")} }},
+		{name, func(int) types.Value { return types.Value{Type: types.TypeString, Bytes: []byte("linha")} }},
 		{num, func(i int) types.Value { return types.Value{Type: types.TypeInt64, I64: int64(i)} }},
 	}
-	sort.SliceStable(campos, func(a, b int) bool { return campos[a].f.ID < campos[b].f.ID })
+	sort.SliceStable(fields, func(a, b int) bool { return fields[a].f.ID < fields[b].f.ID })
 
 	s := &stub{
 		payloads: make(map[types.RowID][]byte, n),
@@ -162,7 +162,7 @@ func montaStub(tb testing.TB, sch *schema.Compiled, n int) *stub {
 	for i := 0; i < n; i++ {
 		var p []byte
 		var err error
-		for _, c := range campos {
+		for _, c := range fields {
 			if p, err = encoding.AppendField(p, c.f.ID, c.v(i)); err != nil {
 				tb.Fatal(err)
 			}
@@ -182,18 +182,18 @@ type stubHarness struct {
 	engine *query.Engine
 }
 
-func novoStubHarness(t *testing.T, rows, maxRows int, timeout string) *stubHarness {
+func newStubHarness(t *testing.T, rows, maxRows int, timeout string) *stubHarness {
 	t.Helper()
-	return montaStubHarness(t, rows, maxRows, timeout)
+	return buildStubHarness(t, rows, maxRows, timeout)
 }
 
-// novoStubHarnessB é o mesmo para benchmarks (teto e timeout folgados).
-func novoStubHarnessB(b *testing.B, rows int) *stubHarness {
+// newStubHarnessB é o mesmo para benchmarks (teto e timeout folgados).
+func newStubHarnessB(b *testing.B, rows int) *stubHarness {
 	b.Helper()
-	return montaStubHarness(b, rows, 10_000_000, "5m")
+	return buildStubHarness(b, rows, 10_000_000, "5m")
 }
 
-func montaStubHarness(tb testing.TB, rows, maxRows int, timeout string) *stubHarness {
+func buildStubHarness(tb testing.TB, rows, maxRows int, timeout string) *stubHarness {
 	tb.Helper()
 	spec, err := schema.Parse([]byte(fmt.Sprintf(stubYAML, maxRows, timeout)), schema.BuiltinDefaults)
 	if err != nil {
@@ -203,7 +203,7 @@ func montaStubHarness(tb testing.TB, rows, maxRows int, timeout string) *stubHar
 	if err != nil {
 		tb.Fatal(err)
 	}
-	st := montaStub(tb, sch, rows)
+	st := buildStub(tb, sch, rows)
 	eng := query.NewEngine()
 	if err := eng.Register("linhas", sch, st); err != nil {
 		tb.Fatal(err)
@@ -211,7 +211,7 @@ func montaStubHarness(tb testing.TB, rows, maxRows int, timeout string) *stubHar
 	return &stubHarness{tb: tb, sch: sch, store: st, engine: eng}
 }
 
-func (h *stubHarness) abre(ctx context.Context, sql string) executor.RowIterator {
+func (h *stubHarness) open(ctx context.Context, sql string) executor.RowIterator {
 	h.tb.Helper()
 	it, err := h.engine.Execute(ctx, "linhas", sql, nil)
 	if err != nil {
@@ -220,9 +220,9 @@ func (h *stubHarness) abre(ctx context.Context, sql string) executor.RowIterator
 	return it
 }
 
-func (h *stubHarness) conta(sql string) (int, error) {
+func (h *stubHarness) count(sql string) (int, error) {
 	h.tb.Helper()
-	it := h.abre(context.Background(), sql)
+	it := h.open(context.Background(), sql)
 	defer it.Close()
 	n := 0
 	for it.Next() {
@@ -237,9 +237,9 @@ func (h *stubHarness) conta(sql string) (int, error) {
 // — um executor que varresse o milhão inteiro e devolvesse as 3 primeiras
 // passaria nisso e seria inutilizável.
 func TestLimitEarlyExit(t *testing.T) {
-	h := novoStubHarness(t, 1000, 100000, "30s")
+	h := newStubHarness(t, 1000, 100000, "30s")
 
-	it := h.abre(context.Background(), `SELECT id FROM linhas LIMIT 3`)
+	it := h.open(context.Background(), `SELECT id FROM linhas LIMIT 3`)
 	n := 0
 	for it.Next() {
 		n++
@@ -260,8 +260,8 @@ func TestLimitEarlyExit(t *testing.T) {
 // seguinte: com LIMIT 3 sobre um milhão de candidatos, segurar o iterador do
 // índice até o consumidor decidir avançar é o mesmo que não ter early-exit.
 func TestLimitFechaFonteAoEmitirAUltimaLinha(t *testing.T) {
-	h := novoStubHarness(t, 1000, 100000, "30s")
-	it := h.abre(context.Background(), `SELECT id FROM linhas LIMIT 2`)
+	h := newStubHarness(t, 1000, 100000, "30s")
+	it := h.open(context.Background(), `SELECT id FROM linhas LIMIT 2`)
 	defer it.Close()
 
 	for i := 0; i < 2; i++ {
@@ -276,8 +276,8 @@ func TestLimitFechaFonteAoEmitirAUltimaLinha(t *testing.T) {
 
 // LIMIT 0 não pode tocar o Store: o iterador nem chega a abrir a varredura.
 func TestLimitZeroNaoTocaOStore(t *testing.T) {
-	h := novoStubHarness(t, 100, 100000, "30s")
-	it := h.abre(context.Background(), `SELECT id FROM linhas LIMIT 0`)
+	h := newStubHarness(t, 100, 100000, "30s")
+	it := h.open(context.Background(), `SELECT id FROM linhas LIMIT 0`)
 	defer it.Close()
 
 	if it.Next() {
@@ -294,8 +294,8 @@ func TestLimitZeroNaoTocaOStore(t *testing.T) {
 // Teto IMPLÍCITO: o resultado foi truncado e o cliente precisa saber. Um corte
 // silencioso entrega resposta parcial com cara de resposta completa.
 func TestMaxRowsImplicitoSinalizaTruncamento(t *testing.T) {
-	h := novoStubHarness(t, 20, 5, "30s")
-	n, err := h.conta(`SELECT id FROM linhas`)
+	h := newStubHarness(t, 20, 5, "30s")
+	n, err := h.count(`SELECT id FROM linhas`)
 
 	if n != 5 {
 		t.Fatalf("linhas = %d, want 5", n)
@@ -321,8 +321,8 @@ func TestMaxRowsImplicitoSinalizaTruncamento(t *testing.T) {
 // aceitável; truncamento silencioso não é. O teste existente usava 20 rows com
 // teto 5, e por isso não distinguia os dois casos.
 func TestTetoExatoAindaReportaTruncamento(t *testing.T) {
-	h := novoStubHarness(t, 5, 5, "30s") // exatamente maxRows linhas
-	n, err := h.conta(`SELECT id FROM linhas`)
+	h := newStubHarness(t, 5, 5, "30s") // exatamente maxRows linhas
+	n, err := h.count(`SELECT id FROM linhas`)
 
 	if n != 5 {
 		t.Fatalf("linhas = %d, want 5", n)
@@ -334,8 +334,8 @@ func TestTetoExatoAindaReportaTruncamento(t *testing.T) {
 
 // E o complemento: ABAIXO do teto não há alarme nenhum.
 func TestAbaixoDoTetoNaoReportaTruncamento(t *testing.T) {
-	h := novoStubHarness(t, 4, 5, "30s")
-	n, err := h.conta(`SELECT id FROM linhas`)
+	h := newStubHarness(t, 4, 5, "30s")
+	n, err := h.count(`SELECT id FROM linhas`)
 	if n != 4 || err != nil {
 		t.Errorf("linhas=%d err=%v, want 4/nil", n, err)
 	}
@@ -344,8 +344,8 @@ func TestAbaixoDoTetoNaoReportaTruncamento(t *testing.T) {
 // LIMIT explícito abaixo do teto NÃO é truncamento: o usuário pediu 3 e
 // recebeu 3.
 func TestLimitMenorQueMaxRowsNaoErra(t *testing.T) {
-	h := novoStubHarness(t, 20, 5, "30s")
-	n, err := h.conta(`SELECT id FROM linhas LIMIT 3`)
+	h := newStubHarness(t, 20, 5, "30s")
+	n, err := h.count(`SELECT id FROM linhas LIMIT 3`)
 	if n != 3 || err != nil {
 		t.Fatalf("linhas=%d err=%v, want 3/nil", n, err)
 	}
@@ -359,7 +359,7 @@ func TestLimitMenorQueMaxRowsNaoErra(t *testing.T) {
 // §91: o full scan é cancelável. A cadência no full scan é de UM candidato —
 // um scan de 8M rows não pode ignorar o cancelamento por 256 leituras.
 func TestCtxCanceladoNoMeioDoFullScan(t *testing.T) {
-	h := novoStubHarness(t, 1000, 100000, "30s")
+	h := newStubHarness(t, 1000, 100000, "30s")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	h.store.aoAvancar = func(n int) {
@@ -368,7 +368,7 @@ func TestCtxCanceladoNoMeioDoFullScan(t *testing.T) {
 		}
 	}
 
-	it := h.abre(ctx, `SELECT id FROM linhas`)
+	it := h.open(ctx, `SELECT id FROM linhas`)
 	defer it.Close()
 	n := 0
 	for it.Next() {
@@ -394,10 +394,10 @@ func TestCtxCanceladoNoMeioDoFullScan(t *testing.T) {
 // O timeout do DATASET (query.timeout do YAML) vale mesmo com ctx sem
 // deadline: é o teto que impede uma query de segurar recursos para sempre.
 func TestTimeoutDoDataset(t *testing.T) {
-	h := novoStubHarness(t, 1000, 100000, "5ms")
+	h := newStubHarness(t, 1000, 100000, "5ms")
 	h.store.lentidao = time.Millisecond
 
-	_, err := h.conta(`SELECT id FROM linhas`)
+	_, err := h.count(`SELECT id FROM linhas`)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Err() = %v, want DeadlineExceeded", err)
 	}
@@ -408,8 +408,8 @@ func TestTimeoutDoDataset(t *testing.T) {
 // O contrato zero-copy AFIRMADO, não só comentado: os bytes da row anterior
 // são sobrescritos pelo Next seguinte.
 func TestRowInvalidaAposNext(t *testing.T) {
-	h := novoStubHarness(t, 3, 100000, "30s")
-	it := h.abre(context.Background(), `SELECT id FROM linhas`)
+	h := newStubHarness(t, 3, 100000, "30s")
+	it := h.open(context.Background(), `SELECT id FROM linhas`)
 	defer it.Close()
 
 	if !it.Next() {
@@ -440,14 +440,14 @@ func TestRowInvalidaAposNext(t *testing.T) {
 // JDBC, onde getInt() devolve o valor e wasNull() devolve o flag, nessa ordem:
 // o valor da row anterior sairia como dado plausível de um campo nulo.
 func TestValEhZeradoQuandoAColunaEhNull(t *testing.T) {
-	h := novoStubHarness(t, 2, 100000, "30s")
+	h := newStubHarness(t, 2, 100000, "30s")
 	// A ORDEM é o ponto: a row COM o campo vem PRIMEIRO, e é o valor dela que
 	// fica no slot para vazar na segunda. Com a ausente primeiro o slot ainda
 	// está zerado e o teste não prova nada — foi assim que a primeira versão
 	// deste teste deixou a mutação passar.
-	h.store.payloads[1] = payloadSemNome(t, h.sch)
+	h.store.payloads[1] = payloadWithoutName(t, h.sch)
 
-	it := h.abre(context.Background(), `SELECT nome FROM linhas`)
+	it := h.open(context.Background(), `SELECT nome FROM linhas`)
 	defer it.Close()
 
 	if !it.Next() {
@@ -471,22 +471,22 @@ func TestValEhZeradoQuandoAColunaEhNull(t *testing.T) {
 	}
 }
 
-// payloadSemNome monta um payload com id e n, sem o campo `nome`.
-func payloadSemNome(t *testing.T, sch *schema.Compiled) []byte {
+// payloadWithoutName monta um payload com id e n, sem o campo `nome`.
+func payloadWithoutName(t *testing.T, sch *schema.Compiled) []byte {
 	t.Helper()
 	id, _ := sch.FieldByName([]byte("id"))
 	num, _ := sch.FieldByName([]byte("n"))
-	campos := []struct {
+	fields := []struct {
 		f *schema.CompiledField
 		v types.Value
 	}{
 		{id, types.Value{Type: types.TypeString, Bytes: []byte("K00001")}},
 		{num, types.Value{Type: types.TypeInt64, I64: 1}},
 	}
-	sort.SliceStable(campos, func(a, b int) bool { return campos[a].f.ID < campos[b].f.ID })
+	sort.SliceStable(fields, func(a, b int) bool { return fields[a].f.ID < fields[b].f.ID })
 	var p []byte
 	var err error
-	for _, c := range campos {
+	for _, c := range fields {
 		if p, err = encoding.AppendField(p, c.f.ID, c.v); err != nil {
 			t.Fatal(err)
 		}
@@ -495,8 +495,8 @@ func payloadSemNome(t *testing.T, sch *schema.Compiled) []byte {
 }
 
 func TestRowZeroAposFim(t *testing.T) {
-	h := novoStubHarness(t, 2, 100000, "30s")
-	it := h.abre(context.Background(), `SELECT id FROM linhas`)
+	h := newStubHarness(t, 2, 100000, "30s")
+	it := h.open(context.Background(), `SELECT id FROM linhas`)
 	defer it.Close()
 	for it.Next() {
 	}
@@ -506,8 +506,8 @@ func TestRowZeroAposFim(t *testing.T) {
 }
 
 func TestCloseIdempotenteEFechaUpstream(t *testing.T) {
-	h := novoStubHarness(t, 10, 100000, "30s")
-	it := h.abre(context.Background(), `SELECT id FROM linhas`)
+	h := newStubHarness(t, 10, 100000, "30s")
+	it := h.open(context.Background(), `SELECT id FROM linhas`)
 	it.Next()
 
 	if err := it.Close(); err != nil {
@@ -527,10 +527,10 @@ func TestCloseIdempotenteEFechaUpstream(t *testing.T) {
 // Erro de leitura ABORTA a query: pular a row transformaria falha de disco em
 // resultado silenciosamente incompleto.
 func TestErroDeLeituraAbortaQuery(t *testing.T) {
-	h := novoStubHarness(t, 10, 100000, "30s")
-	h.store.temErro, h.store.erroEm = true, types.RowID(3)
+	h := newStubHarness(t, 10, 100000, "30s")
+	h.store.temErr, h.store.errEm = true, types.RowID(3)
 
-	it := h.abre(context.Background(), `SELECT id FROM linhas`)
+	it := h.open(context.Background(), `SELECT id FROM linhas`)
 	defer it.Close()
 	n := 0
 	for it.Next() {
@@ -550,11 +550,11 @@ func TestErroDeLeituraAbortaQuery(t *testing.T) {
 // Payload corrompido também aborta — e com o sentinela do encoding, para o
 // operador distinguir corrupção de erro de I/O.
 func TestPayloadCorrompidoAbortaQuery(t *testing.T) {
-	h := novoStubHarness(t, 5, 100000, "30s")
+	h := newStubHarness(t, 5, 100000, "30s")
 	// Tag 0x00 é reservada e nunca aparece em payload válido.
 	h.store.payloads[2] = []byte{0x01, 0x00, 0x00, 0xff}
 
-	it := h.abre(context.Background(), `SELECT id FROM linhas`)
+	it := h.open(context.Background(), `SELECT id FROM linhas`)
 	defer it.Close()
 	for it.Next() {
 	}
@@ -568,11 +568,11 @@ func TestPayloadCorrompidoAbortaQuery(t *testing.T) {
 
 // Row sem location (o índice denso não a conhece) é pulada como a tombstoned.
 func TestFullScanIgnoraRowsSemLocation(t *testing.T) {
-	h := novoStubHarness(t, 10, 100000, "30s")
+	h := newStubHarness(t, 10, 100000, "30s")
 	for id := types.RowID(0); id < 10; id += 2 {
 		delete(h.store.payloads, id)
 	}
-	n, err := h.conta(`SELECT id FROM linhas`)
+	n, err := h.count(`SELECT id FROM linhas`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -588,25 +588,25 @@ func TestFullScanIgnoraRowsSemLocation(t *testing.T) {
 // ORDER BY), mas os testes dependem dela e uma mudança silenciosa aqui
 // quebraria todos de uma vez.
 func TestOrdemDeSaidaEhRowIDCrescente(t *testing.T) {
-	h := novoStubHarness(t, 50, 100000, "30s")
-	it := h.abre(context.Background(), `SELECT id FROM linhas`)
+	h := newStubHarness(t, 50, 100000, "30s")
+	it := h.open(context.Background(), `SELECT id FROM linhas`)
 	defer it.Close()
 
 	anterior := ""
 	for it.Next() {
-		atual := string(it.Row().Col(0).Val.Bytes)
-		if atual <= anterior {
-			t.Fatalf("ordem quebrada: %q após %q", atual, anterior)
+		current := string(it.Row().Col(0).Val.Bytes)
+		if current <= anterior {
+			t.Fatalf("ordem quebrada: %q após %q", current, anterior)
 		}
-		anterior = atual
+		anterior = current
 	}
 }
 
 // SELECT * projeta todos os campos conhecidos, em ordem de FieldID, com
 // Null=true para os ausentes na row.
 func TestProjecaoStar(t *testing.T) {
-	h := novoStubHarness(t, 1, 100000, "30s")
-	it := h.abre(context.Background(), `SELECT * FROM linhas`)
+	h := newStubHarness(t, 1, 100000, "30s")
+	it := h.open(context.Background(), `SELECT * FROM linhas`)
 	defer it.Close()
 
 	if !it.Next() {

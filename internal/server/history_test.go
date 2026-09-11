@@ -19,7 +19,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
-const specComHistorico = `version: 1
+const specWithHistory = `version: 1
 name: eventos
 materialization:
   key:
@@ -39,23 +39,23 @@ schema:
       type: int64
 `
 
-func servidorComHistorico(t *testing.T, spec string) *server.Servidor {
+func serverWithHistory(t *testing.T, spec string) *server.Server {
 	t.Helper()
-	a := novoAmbienteCom(t, blocoPadrao)
-	a.escreveDataset("eventos", spec)
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	a := newEnvWith(t, blockPadrao)
+	a.writeDataset("eventos", spec)
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 	return srv
 }
 
 // A tabela irmã é um dataset de pleno direito para o /v1/metadata, e é isso
 // que a faz aparecer na árvore do DBeaver sem nenhuma mudança no driver.
 func TestATabelaIrmaApareceNoMetadata(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
-	meta := leJSON[protocol.Metadata](t, srv, "/v1/metadata")
+	srv := serverWithHistory(t, specWithHistory)
+	meta := readJSON[protocol.Metadata](t, srv, "/v1/metadata")
 	nomes := map[string]bool{}
 	for _, d := range meta.Datasets {
 		nomes[d.Name] = true
@@ -71,7 +71,7 @@ func TestATabelaIrmaApareceNoMetadata(t *testing.T) {
 // A consulta à irmã sai de graça: ela é registrada no motor sob o próprio
 // nome, e o binder confere o nome do FROM contra o Compiled dela.
 func TestConsultaNaTabelaIrmaFunciona(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
+	srv := serverWithHistory(t, specWithHistory)
 	resp := consulta(t, srv, `{"dataset":"eventos_history","sql":"SELECT id FROM eventos_history"}`)
 	defer fecha(t, resp)
 	if resp.StatusCode != http.StatusOK {
@@ -82,15 +82,15 @@ func TestConsultaNaTabelaIrmaFunciona(t *testing.T) {
 // As duas tabelas têm as MESMAS colunas: é o dicionário compartilhado que
 // garante isso, e é o requisito que a feature existe para cumprir.
 func TestAsDuasTabelasTemAsMesmasColunas(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
-	meta := leJSON[protocol.Metadata](t, srv, "/v1/metadata")
-	colunas := map[string][]string{}
+	srv := serverWithHistory(t, specWithHistory)
+	meta := readJSON[protocol.Metadata](t, srv, "/v1/metadata")
+	columns := map[string][]string{}
 	for _, d := range meta.Datasets {
 		for _, c := range d.Columns {
-			colunas[d.Name] = append(colunas[d.Name], c.Name+":"+c.Type)
+			columns[d.Name] = append(columns[d.Name], c.Name+":"+c.Type)
 		}
 	}
-	base, irma := colunas["eventos"], colunas["eventos_history"]
+	base, irma := columns["eventos"], columns["eventos_history"]
 	if len(base) == 0 {
 		t.Fatal("o base não publicou coluna nenhuma")
 	}
@@ -103,8 +103,8 @@ func TestAsDuasTabelasTemAsMesmasColunas(t *testing.T) {
 // É essa ausência que impede o planner de eleger o point lookup sobre um
 // Store que não tem contra o que resolvê-lo.
 func TestATabelaIrmaNaoDeclaraKey(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
-	meta := leJSON[protocol.Metadata](t, srv, "/v1/metadata")
+	srv := serverWithHistory(t, specWithHistory)
+	meta := readJSON[protocol.Metadata](t, srv, "/v1/metadata")
 	for _, d := range meta.Datasets {
 		if d.Name != "eventos_history" {
 			continue
@@ -120,10 +120,10 @@ func TestATabelaIrmaNaoDeclaraKey(t *testing.T) {
 // Os dois disputariam o mesmo diretório, com dois writers, dois contadores de
 // rowId e dois manifests. A recusa vem ANTES de abrir qualquer coisa.
 func TestNomeDaIrmaQueColideComDatasetDeclaradoRecusaASubida(t *testing.T) {
-	a := novoAmbienteCom(t, blocoPadrao)
-	a.escreveDataset("eventos", specComHistorico)
-	a.escreveDataset("eventos_history", strings.ReplaceAll(specSemKafka, "%s", "eventos_history"))
-	if _, err := server.Novo(a.carrega(), server.Opcoes{}); err == nil {
+	a := newEnvWith(t, blockPadrao)
+	a.writeDataset("eventos", specWithHistory)
+	a.writeDataset("eventos_history", strings.ReplaceAll(specWithoutKafka, "%s", "eventos_history"))
+	if _, err := server.Novo(a.load(), server.Options{}); err == nil {
 		t.Fatal("a subida foi aceita com a colisão de nome")
 	} else if !strings.Contains(err.Error(), "eventos_history") {
 		t.Fatalf("a mensagem precisa nomear a tabela: %v", err)
@@ -132,8 +132,8 @@ func TestNomeDaIrmaQueColideComDatasetDeclaradoRecusaASubida(t *testing.T) {
 
 // Sem o bloco `history` nada muda: o dataset sobe sozinho, como sempre.
 func TestSemBlocoHistoryNaoHaTabelaIrma(t *testing.T) {
-	srv := servidorComHistorico(t, strings.ReplaceAll(specSemKafka, "%s", "eventos"))
-	meta := leJSON[protocol.Metadata](t, srv, "/v1/metadata")
+	srv := serverWithHistory(t, strings.ReplaceAll(specWithoutKafka, "%s", "eventos"))
+	meta := readJSON[protocol.Metadata](t, srv, "/v1/metadata")
 	if len(meta.Datasets) != 1 {
 		t.Fatalf("%d datasets, quer 1: %+v", len(meta.Datasets), meta.Datasets)
 	}
@@ -143,8 +143,8 @@ func TestSemBlocoHistoryNaoHaTabelaIrma(t *testing.T) {
 // não tem materializer — quem escreve nela é o do dataset base —, e o laço
 // que percorre todos os datasets passa por ela.
 func TestStatsRespondeComATabelaIrma(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
-	st := leJSON[protocol.Stats](t, srv, "/v1/stats")
+	srv := serverWithHistory(t, specWithHistory)
+	st := readJSON[protocol.Stats](t, srv, "/v1/stats")
 	var base, irma *protocol.DatasetStats
 	for i := range st.Datasets {
 		switch st.Datasets[i].Name {
@@ -178,8 +178,8 @@ func TestStatsRespondeComATabelaIrma(t *testing.T) {
 }
 
 func TestMetricasDoHistoricoSaemNoRotuloDoBase(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
-	corpo := pega(t, srv, "/metrics")
+	srv := serverWithHistory(t, specWithHistory)
+	corpo := fetch(t, srv, "/metrics")
 	for _, serie := range []string{
 		"nishidb_history_rows_total",
 		"nishidb_history_dropped_total",
@@ -203,15 +203,15 @@ func TestMetricasDoHistoricoSaemNoRotuloDoBase(t *testing.T) {
 // lacuna não se distingue de alvo fora do ar. Alarmar em "desistiu" exige que
 // ela exista ANTES de desistir — que é justamente quando ninguém está olhando.
 func TestSeriesDoWatchdogNascemComZero(t *testing.T) {
-	a := novoAmbienteCom(t, blocoPadrao)
-	a.escreveDataset("eventos", preenche(specComKafka, "eventos", "true"))
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	a := newEnvWith(t, blockPadrao)
+	a.writeDataset("eventos", preenche(specWithKafka, "eventos", "true"))
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 
-	corpo := pega(t, srv, "/metrics")
+	corpo := fetch(t, srv, "/metrics")
 	for _, serie := range []string{
 		`nishidb_kafka_watchdog_trips_total{dataset="eventos"} 0`,
 		`nishidb_kafka_watchdog_desistiu{dataset="eventos"} 0`,
@@ -224,7 +224,7 @@ func TestSeriesDoWatchdogNascemComZero(t *testing.T) {
 
 // Uma janela maior que a retenção: não indexa nada a mais, porque a retenção
 // aposenta o segmento antes de a janela o alcançar.
-const specComJanelaInocua = `version: 1
+const specWithWindowInocua = `version: 1
 name: eventos
 materialization:
   key:
@@ -250,35 +250,35 @@ schema:
 // transformaria redundância em queda de serviço, e aceitar calado deixaria o
 // operador com uma chave que não faz o que ele acha que faz.
 func TestJanelaMaiorQueARetencaoSobeComWarn(t *testing.T) {
-	a := novoAmbienteCom(t, blocoPadrao)
-	a.escreveDataset("eventos", specComJanelaInocua)
-	registro := &registroDoServidor{}
-	srv, err := server.Novo(a.carrega(), server.Opcoes{
-		Log: logging.New(registro, logging.FormatText, slog.LevelInfo),
+	a := newEnvWith(t, blockPadrao)
+	a.writeDataset("eventos", specWithWindowInocua)
+	record := &recordOfServer{}
+	srv, err := server.Novo(a.load(), server.Options{
+		Log: logging.New(record, logging.FormatText, slog.LevelInfo),
 	})
 	if err != nil {
 		t.Fatalf("subida: %v — a janela inócua não pode derrubar o servidor", err)
 	}
-	roda(t, srv)
-	// Sem espera: o aviso sai do abreHistorico, que roda DENTRO do Novo — se
+	run(t, srv)
+	// Sem espera: o aviso sai do openHistory, que roda DENTRO do Novo — se
 	// ele não está aqui, não vai chegar depois.
-	if !strings.Contains(registro.String(), "janela.maior_que_retencao") {
-		t.Fatalf("o WARN nomeado não foi emitido:\n%s", registro.String())
+	if !strings.Contains(record.String(), "window.maior_que_retencao") {
+		t.Fatalf("o WARN nomeado não foi emitido:\n%s", record.String())
 	}
 	// E ele nomeia o dataset BASE, que é onde o YAML com a chave está: nomear
 	// só a tabela irmã mandaria o operador procurar num arquivo que não existe.
-	if !strings.Contains(registro.String(), "dataset=eventos ") {
-		t.Fatalf("o aviso não nomeia o dataset base:\n%s", registro.String())
+	if !strings.Contains(record.String(), "dataset=eventos ") {
+		t.Fatalf("o aviso não nomeia o dataset base:\n%s", record.String())
 	}
 }
 
 // E a janela declarada aparece no /v1/stats junto da cobertura REAL: é a
 // comparação entre as duas que diz se o teto do índice assumiu o comando.
 func TestOStatsPublicaAJanelaDeclaradaEAEfetiva(t *testing.T) {
-	srv := servidorComHistorico(t, strings.Replace(specComHistorico,
+	srv := serverWithHistory(t, strings.Replace(specWithHistory,
 		"  fields:\n    id:\n      index: true\n",
 		"  index:\n    window: 6h\n  fields:\n    id:\n      index: true\n", 1))
-	stats := leJSON[protocol.Stats](t, srv, "/v1/stats")
+	stats := readJSON[protocol.Stats](t, srv, "/v1/stats")
 	var achou bool
 	for _, d := range stats.Datasets {
 		if d.History == nil {
@@ -300,74 +300,74 @@ func TestOStatsPublicaAJanelaDeclaradaEAEfetiva(t *testing.T) {
 // `index: true` num campo já povoado e o campo continua enumerando para sempre.
 //
 // A spec declara `history.index.window`, e é isso que arma a armadilha que o
-// janelaDoDataset existe para fechar: o bloco `history` de um dataset BASE
+// windowOfDataset existe para fechar: o bloco `history` de um dataset BASE
 // descreve a tabela IRMÃ, e traduzi-lo para o base — que é materializado — daria
 // uma janela finita que o storage recusa, com razão. Nesse caso o base não subiria
 // o laço e sairia o `reconstrucao.janela_recusada` no log; as duas asserções
 // abaixo são as duas metades disso.
 func TestAReconstrucaoSobeNosDoisModosComAJanelaCerta(t *testing.T) {
-	a := novoAmbienteCom(t, blocoPadrao)
+	a := newEnvWith(t, blockPadrao)
 	// O `index: true` entra nos DOIS lados: no bloco history (a irmã) e no schema
 	// do base. É o que faz este teste medir os dois modos de dataset — a
 	// reconstrução vale para ambos (D1), e é só no materializado que a janela tem
 	// de ser trocada pela infinita.
-	spec := strings.Replace(specComHistorico,
+	spec := strings.Replace(specWithHistory,
 		"  fields:\n    id:\n      index: true\n",
 		"  index:\n    window: 6h\n  fields:\n    id:\n      index: true\n", 1)
 	spec = strings.Replace(spec, "    severity:\n      type: int64\n",
 		"    severity:\n      type: int64\n      index: true\n", 1)
-	a.escreveDataset("eventos", spec)
-	registro := &registroDoServidor{}
-	srv, err := server.Novo(a.carrega(), server.Opcoes{
-		Log: logging.New(registro, logging.FormatText, slog.LevelInfo),
+	a.writeDataset("eventos", spec)
+	record := &recordOfServer{}
+	srv, err := server.Novo(a.load(), server.Options{
+		Log: logging.New(record, logging.FormatText, slog.LevelInfo),
 	})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 
-	// O ligaReconstrucao roda dentro do Roda, que é assíncrono — ao contrário do
+	// O turnonRebuild roda dentro do Run, que é assíncrono — ao contrário do
 	// aviso da janela inócua, que sai do Novo. Esperar pelo evento é o que separa
 	// "não subiu" de "ainda não subiu".
-	linha := esperaLinhaDoLog(t, registro, "reconstrucao.ligada")
-	if strings.Contains(registro.String(), "reconstrucao.janela_recusada") {
+	row := waitRowOfLog(t, record, "reconstrucao.ligada")
+	if strings.Contains(record.String(), "reconstrucao.janela_recusada") {
 		t.Fatalf("a reconstrução recusou a janela de algum dataset: a janela do materializado é infinita por "+
-			"construção, e o bloco history dele descreve a IRMÃ\n%s", registro.String())
+			"construção, e o bloco history dele descreve a IRMÃ\n%s", record.String())
 	}
 	// Os nomes são conferidos com o delimitador, e não por substring solta:
 	// "eventos" é prefixo de "eventos_history", então um Contains cru diria que o
 	// base subiu sempre que a irmã tivesse subido — exatamente o caso que o
-	// janelaDoDataset pode quebrar.
-	for _, nome := range []string{"[eventos ", " eventos_history]"} {
-		if !strings.Contains(linha, nome) {
+	// windowOfDataset pode quebrar.
+	for _, name := range []string{"[eventos ", " eventos_history]"} {
+		if !strings.Contains(row, name) {
 			t.Errorf("o laço de reconstrução não subiu para %q: a fila daquele dataset não é drenada por ninguém, "+
-				"e o índice declarado nunca alcança os segmentos já selados\n%s", nome, linha)
+				"e o índice declarado nunca alcança os segmentos já selados\n%s", name, row)
 		}
 	}
 }
 
-// esperaLinhaDoLog devolve a linha que carrega o evento nomeado, esperando por
+// waitRowOfLog devolve a linha que carrega o evento nomeado, esperando por
 // ela até um prazo. Falha nomeando o evento que faltou: "o evento não apareceu" e
 // "apareceu sem o dataset" são falhas diferentes, e um Contains sobre o log
 // inteiro as confundiria.
-func esperaLinhaDoLog(t *testing.T, registro *registroDoServidor, evento string) string {
+func waitRowOfLog(t *testing.T, record *recordOfServer, event string) string {
 	t.Helper()
 	prazo := time.Now().Add(30 * time.Second)
 	for {
-		log := registro.String()
-		for _, linha := range strings.Split(log, "\n") {
-			if strings.Contains(linha, "event="+evento) {
-				return linha
+		log := record.String()
+		for _, row := range strings.Split(log, "\n") {
+			if strings.Contains(row, "event="+event) {
+				return row
 			}
 		}
 		if time.Now().After(prazo) {
-			t.Fatalf("o evento %q não saiu no log:\n%s", evento, log)
+			t.Fatalf("o evento %q não saiu no log:\n%s", event, log)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 }
 
-// specComJanelaApertada declara uma janela de indexação por BYTES tão pequena
+// specWithWindowApertada declara uma janela de indexação por BYTES tão pequena
 // que ela admite UM segmento selado — o mais novo — e mais nenhum.
 //
 // Por bytes, e não por tempo, porque o corte tem de valer sem depender do
@@ -376,7 +376,7 @@ func esperaLinhaDoLog(t *testing.T, registro *registroDoServidor, evento string)
 // segundo já estoura, tanto ANTES de existir `.sidx` para medir quanto depois.
 // Uma janela por tempo exigiria envelhecer os records, e o `_writtenAt` sai do
 // relógio da ingestão.
-const specComJanelaApertada = `version: 1
+const specWithWindowApertada = `version: 1
 name: eventos
 materialization:
   key:
@@ -398,38 +398,38 @@ schema:
       type: int64
 `
 
-// semeiaHistorico enche a tabela IRMÃ pelo pipeline real — Materializer.Apply
-// com o histórico ligado —, do mesmo jeito que o `semeia` do dataset base, e
+// seedHistory enche a tabela IRMÃ pelo pipeline real — Materializer.Apply
+// com o histórico ligado —, do mesmo jeito que o `seed` do dataset base, e
 // pela mesma razão: o que os testes medem depende de segmentos selados de
 // verdade, com índice escrito pelo writer, e um arquivo montado à mão não
 // exercitaria nem a selagem nem a rotação.
 //
-// A montagem repete a ordem do abreHistorico (dicionário do base para a irmã,
-// compilação contra esse mesmo dicionário, o espelho, e só então o LigaHistorico)
+// A montagem repete a ordem do openHistory (dicionário do base para a irmã,
+// compilação contra esse mesmo dicionário, o espelho, e só então o TurnonHistory)
 // porque é ela que faz os FieldIDs das duas tabelas coincidirem — divergir aqui
 // faria o payload da irmã decodificar colunas trocadas, e o teste mediria outra
 // coisa. Pela mesma razão o segmentSize da irmã segue a regra do servidor: o
 // `history.segmentSize` declarado, ou o global quando ele é omitido.
 //
 // São DOIS contadores de evento porque a presença do campo indexado é o que
-// decide o estado do segmento. Os `comCampo` produzem segmentos que geram .sidx;
-// os `semCampo` não produzem posting nenhuma, logo não geram arquivo, logo ficam
+// decide o estado do segmento. Os `withField` produzem segmentos que geram .sidx;
+// os `withoutField` não produzem posting nenhuma, logo não geram arquivo, logo ficam
 // permanentemente PENDENTES (§2.4) — e eles vão por último de propósito, para
 // caírem entre os segmentos mais novos, que é onde a janela os mantém dentro.
 //
 // Devolve o diretório da irmã, que é onde moram os .sidx que os testes sabotam.
-func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo int) string {
+func seedHistory(t *testing.T, a *env, name string, comField, withoutField int) string {
 	t.Helper()
-	cfg := a.carrega()
-	spec, err := schema.Load(cfg.DatasetSpecPath(nome), cfg.QueryDefaults())
+	cfg := a.load()
+	spec, err := schema.Load(cfg.DatasetSpecPath(name), cfg.QueryDefaults())
 	if err != nil {
 		t.Fatal(err)
 	}
 	base, err := storage.Open(storage.Options{
-		Dir:                    cfg.DatasetRootDir(nome),
-		Dataset:                nome,
-		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
+		Dir:                 cfg.DatasetRootDir(name),
+		Dataset:             name,
+		SegmentSize:         cfg.SegmentSize(),
+		IndexedFieldsByName: schema.IndexedFieldNames(spec),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -440,19 +440,19 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo 
 		}
 	}()
 	specIrma := spec.DeriveHistory()
-	segmentoDaIrma := cfg.SegmentSize()
+	segmentOfIrma := cfg.SegmentSize()
 	if spec.History != nil && spec.History.SegmentSize > 0 {
-		segmentoDaIrma = spec.History.SegmentSize
+		segmentOfIrma = spec.History.SegmentSize
 	}
 	dirIrma := cfg.DatasetRootDir(specIrma.Name)
 	hist, err := storage.Open(storage.Options{
-		Dir:                    dirIrma,
-		Dataset:                specIrma.Name,
-		SegmentSize:            segmentoDaIrma,
-		Modo:                   storage.ModoHistorico,
-		DictCompartilhado:      base.FieldDict(),
-		CamposIndexadosPorNome: schema.IndexedFieldNames(specIrma),
-		CampoDeEscrita:         schema.WriteInstantFieldName,
+		Dir:                   dirIrma,
+		Dataset:               specIrma.Name,
+		SegmentSize:           segmentOfIrma,
+		Mode:                  storage.HistoryMode,
+		SharedDictionary:      base.FieldDict(),
+		IndexedFieldsByName:   schema.IndexedFieldNames(specIrma),
+		WriteInstantFieldName: schema.WriteInstantFieldName,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -475,16 +475,16 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo 
 	if err != nil {
 		t.Fatal(err)
 	}
-	mat.LigaHistorico(hist, nil)
+	mat.TurnonHistory(hist, nil)
 	aplica := func(ev string) {
 		if r := mat.Apply([]byte(ev)); r.Err != nil {
 			t.Fatalf("evento %q: %v", ev, r.Err)
 		}
 	}
-	for i := range comCampo {
+	for i := range comField {
 		aplica(fmt.Sprintf(`{"id":"E-%06d","node":"n%d","severity":%d}`, i, i%3, i%7))
 	}
-	for i := range semCampo {
+	for i := range withoutField {
 		aplica(fmt.Sprintf(`{"id":"S-%06d","severity":%d}`, i, i%4))
 	}
 	if err := hist.Checkpoint(); err != nil {
@@ -496,11 +496,11 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo 
 	return dirIrma
 }
 
-// seladosDoDataset devolve os segmentos selados de um dataset em ordem
+// seladosOfDataset devolve os segmentos selados de um dataset em ordem
 // crescente — todos os `.dat` menos o último, que é o corrente (o writer sempre
 // apenda no de maior id, e este teste não escreve nada depois de o servidor
 // subir).
-func seladosDoDataset(t *testing.T, dir string) []string {
+func seladosOfDataset(t *testing.T, dir string) []string {
 	t.Helper()
 	dats, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
 	if err != nil {
@@ -513,10 +513,10 @@ func seladosDoDataset(t *testing.T, dir string) []string {
 	return dats[:len(dats)-1]
 }
 
-// apagaOsIndicesSelados põe o dataset no estado do gatilho 1 da §2.4 — dado
+// deleteOsIndicesSelados põe o dataset no estado do gatilho 1 da §2.4 — dado
 // gravado por um binário que não escrevia índice —, que é o estado em que a fila
 // de reconstrução nasce cheia.
-func apagaOsIndicesSelados(t *testing.T, dir string) {
+func deleteOsIndicesSelados(t *testing.T, dir string) {
 	t.Helper()
 	sidx, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.sidx"))
 	if err != nil {
@@ -535,9 +535,9 @@ func apagaOsIndicesSelados(t *testing.T, dir string) {
 // TestOLacoDeReconstrucaoObedeceAMESMAJanelaDaExpulsao é a rede da restrição 4, e
 // ela guarda a DIVERGÊNCIA, não um valor.
 //
-// A janela entra na assinatura do IniciaReconstrucao para que quem monta o laço
+// A janela entra na assinatura do StartRebuild para que quem monta o laço
 // não possa esquecê-la, mas o compilador não sabe QUAL é a certa: ela tem de ser
-// a mesma que a expulsão usa (`AplicaJanela`, dentro da passada de retenção). Se
+// a mesma que a expulsão usa (`AplicaWindow`, dentro da passada de retenção). Se
 // as duas discordarem, a que responde "sim" reconstrói o que a outra acabou de
 // apagar: a expulsão tira o `.sidx` do segmento fora da janela, a fila — operando
 // com uma janela mais larga — o relista por AUSÊNCIA do arquivo, o laço o
@@ -555,30 +555,30 @@ func apagaOsIndicesSelados(t *testing.T, dir string) {
 // ordem crescente de segmento, e o admitido é o mais NOVO, logo o último. Quando
 // o `.sidx` dele aparece, quem seria reconstruído a mais já teria sido.
 func TestOLacoDeReconstrucaoObedeceAMESMAJanelaDaExpulsao(t *testing.T) {
-	a := novoAmbienteComStorage(t, blocoPadrao, "  segmentSize: 8KiB\n")
-	a.escreveDataset("eventos", specComJanelaApertada)
-	semeiaHistorico(t, a, "eventos", 0, 600)
+	a := newEnvWithStorage(t, blockPadrao, "  segmentSize: 8KiB\n")
+	a.writeDataset("eventos", specWithWindowApertada)
+	seedHistory(t, a, "eventos", 0, 600)
 
-	cfg := a.carrega()
+	cfg := a.load()
 	dirIrma := cfg.DatasetRootDir("eventos_history")
-	apagaOsIndicesSelados(t, dirIrma)
-	selados := seladosDoDataset(t, dirIrma)
+	deleteOsIndicesSelados(t, dirIrma)
+	selados := seladosOfDataset(t, dirIrma)
 	if len(selados) < 3 {
 		t.Fatalf("a montagem produziu %d selado(s): com menos de três não há como distinguir "+
 			"\"o laço respeitou a janela\" de \"o laço reconstruiu tudo\"", len(selados))
 	}
 	admitido := selados[len(selados)-1] // o mais novo é o único que a janela admite
 
-	srv, err := server.Novo(cfg, server.Opcoes{})
+	srv, err := server.Novo(cfg, server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 
-	esperaAte(t, func() bool { return existe(indiceDe(admitido)) },
+	waitUntil(t, func() bool { return exists(indexOf(admitido)) },
 		"o laço não reconstruiu nem o segmento que a janela admite: sem isso a asserção abaixo passaria por vacuidade")
 	for _, fora := range selados[:len(selados)-1] {
-		if existe(indiceDe(fora)) {
+		if exists(indexOf(fora)) {
 			t.Fatalf("o laço reconstruiu o índice de %s, que está FORA da janela declarada: a expulsão o apaga a cada "+
 				"passada de retenção e a fila o relista por ausência — reconstrói, expulsa, reconstrói, para sempre, "+
 				"a até 512 MiB de leitura por volta", filepath.Base(fora))
@@ -586,17 +586,17 @@ func TestOLacoDeReconstrucaoObedeceAMESMAJanelaDaExpulsao(t *testing.T) {
 	}
 }
 
-func indiceDe(dat string) string { return strings.TrimSuffix(dat, ".dat") + ".sidx" }
+func indexOf(dat string) string { return strings.TrimSuffix(dat, ".dat") + ".sidx" }
 
-func existe(caminho string) bool {
-	_, err := os.Stat(caminho)
+func exists(path string) bool {
+	_, err := os.Stat(path)
 	return err == nil
 }
 
-// esperaAte espera a condição virar verdadeira, e falha nomeando o que não
+// waitUntil espera a condição virar verdadeira, e falha nomeando o que não
 // aconteceu. O prazo é folgado de propósito: ele existe para o teste não pendurar
 // a suíte, não para medir tempo de nada.
-func esperaAte(t *testing.T, cond func() bool, oQueFalhou string) {
+func waitUntil(t *testing.T, cond func() bool, oQueFalhou string) {
 	t.Helper()
 	prazo := time.Now().Add(30 * time.Second)
 	for time.Now().Before(prazo) {

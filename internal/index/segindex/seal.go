@@ -20,8 +20,8 @@ import "github.com/nishisan-dev/nishidb/internal/types"
 // aposAppend garante uma selagem por segmento), e através de um restart o Open
 // descarta os .widx antes de qualquer Seal (§2.5). O estado é alcançável; o
 // caminho que o atravessaria, não.
-func Seal(dir string, seg uint32) error {
-	fields, err := ListWIP(dir, seg)
+func Seal(dir string, sec uint32) error {
+	fields, err := ListWIP(dir, sec)
 	if err != nil {
 		return err
 	}
@@ -33,7 +33,7 @@ func Seal(dir string, seg uint32) error {
 		// slotsMin == 0: abre o .widx já gravado sem redimensionar. Criar um
 		// arquivo aqui faria o segmento passar por indexado sem posting
 		// nenhuma (contrato de OpenWIP em wip.go).
-		w, err := OpenWIP(dir, seg, field, 0)
+		w, err := OpenWIP(dir, sec, field, 0)
 		if err != nil {
 			return err
 		}
@@ -50,24 +50,24 @@ func Seal(dir string, seg uint32) error {
 			return err
 		}
 	}
-	if err := e.WriteSealed(SealedPath(dir, seg), seg); err != nil {
+	if err := e.WriteSealed(SealedPath(dir, sec), sec); err != nil {
 		return err
 	}
-	return RemoveWIPs(dir, seg)
+	return RemoveWIPs(dir, sec)
 }
 
 // RemoveWIPs remove os .widx do segmento, depois que o .sidx já está gravado e
 // durável. É o segundo tempo da selagem, separado de Seal para que a Tarefa 5
 // (rotação) possa reagir ao meio-termo — .sidx presente, .widx ainda de pé —
 // sem precisar reabrir o Writer.
-func RemoveWIPs(dir string, seg uint32) error {
-	fields, err := ListWIP(dir, seg)
+func RemoveWIPs(dir string, sec uint32) error {
+	fields, err := ListWIP(dir, sec)
 	if err != nil {
 		return err
 	}
 	for _, field := range fields {
 		// slotsMin == 0: mesmo motivo de Seal — só abre o que já está lá.
-		w, err := OpenWIP(dir, seg, field, 0)
+		w, err := OpenWIP(dir, sec, field, 0)
 		if err != nil {
 			return err
 		}

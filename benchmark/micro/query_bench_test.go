@@ -10,14 +10,14 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// datasetDeLeitura carrega um dataset pequeno no Store REAL e devolve o store,
+// datasetOfLeitura carrega um dataset pequeno no Store REAL e devolve o store,
 // o schema e as keys ingeridas.
 //
 // Os três benchmarks abaixo medem os caminhos que o executor SQL vai usar por
 // baixo — point lookup, bitmap com limite e scan. Medi-los ANTES do executor
 // existir separa o custo do storage do custo do plano: quando a query ficar
 // lenta, o baseline diz de qual lado olhar.
-func datasetDeLeitura(b *testing.B, entidades int) (*storage.Store, *schema.Compiled, [][]byte) {
+func datasetOfLeitura(b *testing.B, entidades int) (*storage.Store, *schema.Compiled, [][]byte) {
 	b.Helper()
 	m, st, c := realSetup(b, readOnlyDir(b), uint64(entidades))
 	events := corpusCheio(b, 21, entidades)
@@ -26,7 +26,7 @@ func datasetDeLeitura(b *testing.B, entidades int) (*storage.Store, *schema.Comp
 	keys := make([][]byte, 0, len(events))
 	vistas := map[string]bool{}
 	for _, e := range events {
-		k := keyDoEvento(b, e)
+		k := keyOfEvent(b, e)
 		if vistas[string(k)] {
 			continue
 		}
@@ -39,9 +39,9 @@ func datasetDeLeitura(b *testing.B, entidades int) (*storage.Store, *schema.Comp
 	return st, c, keys
 }
 
-// keyDoEvento extrai o campo "id" do evento. Usa encoding/json de propósito:
+// keyOfEvent extrai o campo "id" do evento. Usa encoding/json de propósito:
 // é setup de benchmark, e um oráculo independente do nosso tokenizer.
-func keyDoEvento(tb testing.TB, event []byte) []byte {
+func keyOfEvent(tb testing.TB, event []byte) []byte {
 	tb.Helper()
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(event, &m); err != nil {
@@ -57,7 +57,7 @@ func keyDoEvento(tb testing.TB, event []byte) []byte {
 // BenchmarkQueryPointLookup: resolução por primary key (§89, p95 < 10ms).
 // Inclui a validação de colisão, que obriga a ler o record — é o custo real.
 func BenchmarkQueryPointLookup(b *testing.B) {
-	st, _, keys := datasetDeLeitura(b, 5000)
+	st, _, keys := datasetOfLeitura(b, 5000)
 
 	var buf []byte
 	snap := st.OpenSnapshot()
@@ -84,12 +84,12 @@ func BenchmarkQueryPointLookup(b *testing.B) {
 // 50ms) — lookup no bitmap e materialização dos 100 primeiros candidatos
 // vivos, que é o que o executor fará.
 func BenchmarkQueryBitmapLimit100(b *testing.B) {
-	st, c, _ := datasetDeLeitura(b, 5000)
+	st, c, _ := datasetOfLeitura(b, 5000)
 	field := fieldID(b, c, "Acct-Status-Type")
-	// O valor mais frequente do corpus: o caso em que o LIMIT realmente corta.
-	valor := types.Value{Type: types.TypeString, Bytes: []byte("Interim-Update")}
+	// O value mais frequente do corpus: o caso em que o LIMIT realmente corta.
+	value := types.Value{Type: types.TypeString, Bytes: []byte("Interim-Update")}
 
-	if n := contaPostings(b, st, field, valor); n < 100 {
+	if n := countPostings(b, st, field, value); n < 100 {
 		b.Fatalf("só %d rows com o valor: o LIMIT 100 não seria exercitado", n)
 	}
 
@@ -98,7 +98,7 @@ func BenchmarkQueryBitmapLimit100(b *testing.B) {
 	defer st.CloseSnapshot(snap)
 	b.ReportAllocs()
 	for b.Loop() {
-		it, err := st.Lookup(field, valor)
+		it, err := st.Lookup(field, value)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -125,7 +125,7 @@ func BenchmarkQueryBitmapLimit100(b *testing.B) {
 	}
 }
 
-func contaPostings(b *testing.B, st *storage.Store, field types.FieldID, v types.Value) int {
+func countPostings(b *testing.B, st *storage.Store, field types.FieldID, v types.Value) int {
 	b.Helper()
 	it, err := st.Lookup(field, v)
 	if err != nil {
@@ -145,7 +145,7 @@ func contaPostings(b *testing.B, st *storage.Store, field types.FieldID, v types
 // BenchmarkFullScan1k: varredura de 1000 rows vivas com materialização — o
 // plano de fallback quando não há índice utilizável.
 func BenchmarkFullScan1k(b *testing.B) {
-	st, _, _ := datasetDeLeitura(b, 5000)
+	st, _, _ := datasetOfLeitura(b, 5000)
 
 	var buf []byte
 	snap := st.OpenSnapshot()

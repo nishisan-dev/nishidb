@@ -36,7 +36,7 @@ schema:
 // que ninguém chama vale o mesmo que contador nenhum — que é o defeito que
 // estas séries existem para fechar.
 func TestStatsPublicaOBlocoDeMaterializacao(t *testing.T) {
-	srv := servidorComPoliticas(t)
+	srv := serverWithPoliticas(t)
 
 	var doc struct {
 		Datasets []struct {
@@ -54,7 +54,7 @@ func TestStatsPublicaOBlocoDeMaterializacao(t *testing.T) {
 			} `json:"materialization"`
 		} `json:"datasets"`
 	}
-	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/stats")), &doc); err != nil {
+	if err := json.Unmarshal([]byte(fetch(t, srv, "/v1/stats")), &doc); err != nil {
 		t.Fatalf("/v1/stats ilegível: %v", err)
 	}
 	if len(doc.Datasets) != 1 {
@@ -73,8 +73,8 @@ func TestStatsPublicaOBlocoDeMaterializacao(t *testing.T) {
 }
 
 func TestMetricsPublicaAsSeriesDeMaterializacao(t *testing.T) {
-	srv := servidorComPoliticas(t)
-	corpo := pega(t, srv, "/metrics")
+	srv := serverWithPoliticas(t)
+	corpo := fetch(t, srv, "/metrics")
 
 	for _, serie := range []string{
 		"nishidb_frozen_captured_total",
@@ -91,14 +91,14 @@ func TestMetricsPublicaAsSeriesDeMaterializacao(t *testing.T) {
 	}
 }
 
-func servidorComPoliticas(t *testing.T) *server.Servidor {
+func serverWithPoliticas(t *testing.T) *server.Server {
 	t.Helper()
-	a := novoAmbienteCom(t, blocoPadrao)
-	a.escreveDataset("d", strings.ReplaceAll(specPoliticasYAML, "%s", "d"))
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	a := newEnvWith(t, blockPadrao)
+	a.writeDataset("d", strings.ReplaceAll(specPoliticasYAML, "%s", "d"))
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 	return srv
 }

@@ -87,7 +87,7 @@ type Writer struct {
 	dir         string
 	segmentSize int64
 	f           *os.File
-	segID       uint32
+	secID       uint32
 	offset      int64
 }
 
@@ -97,10 +97,10 @@ type Writer struct {
 // segmento — crash loop no replay.
 const MaxSegmentSize = 1 << 30 // 1 GiB
 
-// OpenWriter abre o diretório de segmentos para escrita. segID=0 cria o
-// segmento 1; segID>0 reabre o segmento existente posicionado em offset,
+// OpenWriter abre o diretório de segmentos para escrita. secID=0 cria o
+// segmento 1; secID>0 reabre o segmento existente posicionado em offset,
 // truncando qualquer lixo além dele (recovery).
-func OpenWriter(dir string, segmentSize int64, segID uint32, offset int64) (*Writer, error) {
+func OpenWriter(dir string, segmentSize int64, secID uint32, offset int64) (*Writer, error) {
 	if segmentSize <= HeaderSize {
 		return nil, fmt.Errorf("segment: segmentSize %d inválido", segmentSize)
 	}
@@ -110,7 +110,7 @@ func OpenWriter(dir string, segmentSize int64, segID uint32, offset int64) (*Wri
 			segmentSize)
 	}
 	w := &Writer{dir: dir, segmentSize: segmentSize}
-	if segID == 0 {
+	if secID == 0 {
 		if err := w.openNew(1); err != nil {
 			return nil, err
 		}
@@ -119,14 +119,14 @@ func OpenWriter(dir string, segmentSize int64, segID uint32, offset int64) (*Wri
 	if offset < HeaderSize {
 		return nil, fmt.Errorf("segment: offset de reopen %d menor que o header (%d)", offset, HeaderSize)
 	}
-	f, err := os.OpenFile(segmentPath(dir, segID), os.O_RDWR, 0)
+	f, err := os.OpenFile(segmentPath(dir, secID), os.O_RDWR, 0)
 	if err != nil {
-		return nil, fmt.Errorf("segment: reabrir segmento %d: %w", segID, err)
+		return nil, fmt.Errorf("segment: reabrir segmento %d: %w", secID, err)
 	}
 	st, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return nil, fmt.Errorf("segment: stat do segmento %d: %w", segID, err)
+		return nil, fmt.Errorf("segment: stat do segmento %d: %w", secID, err)
 	}
 	if st.Size() < HeaderSize {
 		// Rotação interrompida entre o O_CREATE|O_EXCL e o writeHeader do
@@ -139,9 +139,9 @@ func OpenWriter(dir string, segmentSize int64, segID uint32, offset int64) (*Wri
 		if offset != HeaderSize {
 			f.Close()
 			return nil, fmt.Errorf("segment: segmento %d tem %d bytes (sem header) mas o offset pedido é %d",
-				segID, st.Size(), offset)
+				secID, st.Size(), offset)
 		}
-		if err := writeHeader(f, segID, segmentSize); err != nil {
+		if err := writeHeader(f, secID, segmentSize); err != nil {
 			f.Close()
 			return nil, err
 		}
@@ -149,7 +149,7 @@ func OpenWriter(dir string, segmentSize int64, segID uint32, offset int64) (*Wri
 			f.Close()
 			return nil, err
 		}
-	} else if err := checkHeader(f, segID); err != nil {
+	} else if err := checkHeader(f, secID); err != nil {
 		f.Close()
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func OpenWriter(dir string, segmentSize int64, segID uint32, offset int64) (*Wri
 		f.Close()
 		return nil, fmt.Errorf("segment: truncar %s em %d: %w", f.Name(), offset, err)
 	}
-	w.f, w.segID, w.offset = f, segID, offset
+	w.f, w.secID, w.offset = f, secID, offset
 	return w, nil
 }
 
@@ -177,7 +177,7 @@ func (w *Writer) openNew(id uint32) error {
 		f.Close()
 		return err
 	}
-	w.f, w.segID, w.offset = f, id, HeaderSize
+	w.f, w.secID, w.offset = f, id, HeaderSize
 	return nil
 }
 
@@ -207,48 +207,48 @@ func (w *Writer) Append(rec []byte) (uint32, uint32, error) {
 			return 0, 0, err
 		}
 		if err := w.f.Close(); err != nil {
-			return 0, 0, fmt.Errorf("segment: fechar segmento %d: %w", w.segID, err)
+			return 0, 0, fmt.Errorf("segment: fechar segmento %d: %w", w.secID, err)
 		}
-		if err := w.openNew(w.segID + 1); err != nil {
+		if err := w.openNew(w.secID + 1); err != nil {
 			return 0, 0, err
 		}
 	}
 	off := w.offset
 	if _, err := w.f.WriteAt(rec, off); err != nil {
-		return 0, 0, fmt.Errorf("segment: append no segmento %d offset %d: %w", w.segID, off, err)
+		return 0, 0, fmt.Errorf("segment: append no segmento %d offset %d: %w", w.secID, off, err)
 	}
 	w.offset += int64(len(rec))
-	return w.segID, uint32(off), nil
+	return w.secID, uint32(off), nil
 }
 
 // Sync força fdatasync do segmento corrente.
 func (w *Writer) Sync() error {
 	if err := w.f.Sync(); err != nil {
-		return fmt.Errorf("segment: fsync do segmento %d: %w", w.segID, err)
+		return fmt.Errorf("segment: fsync do segmento %d: %w", w.secID, err)
 	}
 	return nil
 }
 
 // Current devolve o segmento corrente e o offset do próximo append.
-func (w *Writer) Current() (uint32, int64) { return w.segID, w.offset }
+func (w *Writer) Current() (uint32, int64) { return w.secID, w.offset }
 
 // Close fecha o segmento corrente.
 func (w *Writer) Close() error { return w.f.Close() }
 
-// SegmentRef descreve um segmento presente no diretório de dados.
-type SegmentRef struct {
+// Ref descreve um segmento presente no diretório de dados.
+type Ref struct {
 	ID        uint32
 	SizeBytes int64
 }
 
 // ListSegments enumera os segmentos do diretório em ordem crescente de ID
 // (usado pelo checkpoint e pelo dir-listing da recovery, design §10.3).
-func ListSegments(dir string) ([]SegmentRef, error) {
+func ListSegments(dir string) ([]Ref, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("segment: listar %s: %w", dir, err)
 	}
-	var refs []SegmentRef
+	var refs []Ref
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -270,9 +270,9 @@ func ListSegments(dir string) ([]SegmentRef, error) {
 			}
 			return nil, err
 		}
-		refs = append(refs, SegmentRef{ID: id, SizeBytes: info.Size()})
+		refs = append(refs, Ref{ID: id, SizeBytes: info.Size()})
 	}
-	slices.SortFunc(refs, func(a, b SegmentRef) int { return cmp.Compare(a.ID, b.ID) })
+	slices.SortFunc(refs, func(a, b Ref) int { return cmp.Compare(a.ID, b.ID) })
 	return refs, nil
 }
 
@@ -292,43 +292,43 @@ func OpenReader(dir string) (*Reader, error) {
 	return &Reader{dir: dir, fds: make(map[uint32]*os.File)}, nil
 }
 
-func (r *Reader) file(seg uint32) (*os.File, error) {
+func (r *Reader) file(sec uint32) (*os.File, error) {
 	r.mu.RLock()
-	f, ok := r.fds[seg]
+	f, ok := r.fds[sec]
 	r.mu.RUnlock()
 	if ok {
 		return f, nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if f, ok := r.fds[seg]; ok {
+	if f, ok := r.fds[sec]; ok {
 		return f, nil
 	}
-	f, err := os.Open(segmentPath(r.dir, seg))
+	f, err := os.Open(segmentPath(r.dir, sec))
 	if err != nil {
-		return nil, fmt.Errorf("segment: abrir segmento %d para leitura: %w", seg, err)
+		return nil, fmt.Errorf("segment: abrir segmento %d para leitura: %w", sec, err)
 	}
-	if err := checkHeader(f, seg); err != nil {
+	if err := checkHeader(f, sec); err != nil {
 		f.Close()
 		return nil, err
 	}
-	r.fds[seg] = f
+	r.fds[sec] = f
 	return f, nil
 }
 
 // ReadRecord lê e valida (CRC) o record em (seg, off), usando buf como
 // buffer reutilizável. Devolve a visão zero-copy sobre o buffer retornado.
-func (r *Reader) ReadRecord(seg, off uint32, buf []byte) (types.Record, []byte, error) {
-	f, err := r.file(seg)
+func (r *Reader) ReadRecord(sec, off uint32, buf []byte) (types.Record, []byte, error) {
+	f, err := r.file(sec)
 	if err != nil {
 		return types.Record{}, buf, err
 	}
-	return readRecordAt(f, seg, off, buf)
+	return readRecordAt(f, sec, off, buf)
 }
 
 // readRecordAt implementa a leitura em (até) dois preads sobre qualquer
 // io.ReaderAt (separado de ReadRecord para ser testável com fakes).
-func readRecordAt(f io.ReaderAt, seg, off uint32, buf []byte) (types.Record, []byte, error) {
+func readRecordAt(f io.ReaderAt, sec, off uint32, buf []byte) (types.Record, []byte, error) {
 	if cap(buf) < speculativeRead {
 		buf = make([]byte, speculativeRead)
 	}
@@ -342,11 +342,11 @@ func readRecordAt(f io.ReaderAt, seg, off uint32, buf []byte) (types.Record, []b
 	first := min(len(buf), speculativeRead)
 	n, err := readFullAt(f, buf[:first], int64(off))
 	if ioErr := genuineIOError(err); ioErr != nil {
-		return types.Record{}, buf, fmt.Errorf("segment: ler segmento %d offset %d: %w", seg, off, ioErr)
+		return types.Record{}, buf, fmt.Errorf("segment: ler segmento %d offset %d: %w", sec, off, ioErr)
 	}
 	if n < encoding.RecordHeaderSize {
 		return types.Record{}, buf, fmt.Errorf("%w: leitura de %d bytes no segmento %d offset %d (err=%v)",
-			encoding.ErrCorrupt, n, seg, off, err)
+			encoding.ErrCorrupt, n, sec, off, err)
 	}
 	h, err := encoding.ParseHeader(buf[:n])
 	if err != nil {
@@ -364,11 +364,11 @@ func readRecordAt(f io.ReaderAt, seg, off uint32, buf []byte) (types.Record, []b
 		}
 		m, err := readFullAt(f, buf[n:total], int64(off)+int64(n))
 		if ioErr := genuineIOError(err); ioErr != nil {
-			return types.Record{}, buf, fmt.Errorf("segment: ler segmento %d offset %d: %w", seg, off, ioErr)
+			return types.Record{}, buf, fmt.Errorf("segment: ler segmento %d offset %d: %w", sec, off, ioErr)
 		}
 		if m < total-n {
 			return types.Record{}, buf, fmt.Errorf("%w: record truncado no segmento %d offset %d (err=%v)",
-				encoding.ErrCorrupt, seg, off, err)
+				encoding.ErrCorrupt, sec, off, err)
 		}
 	}
 	rec, err := encoding.ParseRecord(buf[:total])
@@ -407,21 +407,21 @@ func readFullAt(f io.ReaderAt, b []byte, off int64) (int, error) {
 // primeiro record inválido/incompleto SEM erro (spec §52 — o caller decide
 // truncar naquele offset); erro do callback e erro de I/O genuíno abortam o
 // scan e são propagados.
-func (r *Reader) ScanFrom(seg uint32, from int64, fn func(off uint32, rec types.Record) error) (int64, error) {
-	f, err := r.file(seg)
+func (r *Reader) ScanFrom(sec uint32, from int64, fn func(off uint32, rec types.Record) error) (int64, error) {
+	f, err := r.file(sec)
 	if err != nil {
 		return 0, err
 	}
-	return scanFrom(f, seg, from, fn)
+	return scanFrom(f, sec, from, fn)
 }
 
 // scanFrom implementa o scan sobre qualquer io.ReaderAt (separado de
 // ScanFrom para ser testável com fakes de I/O).
-func scanFrom(f io.ReaderAt, seg uint32, from int64, fn func(off uint32, rec types.Record) error) (int64, error) {
+func scanFrom(f io.ReaderAt, sec uint32, from int64, fn func(off uint32, rec types.Record) error) (int64, error) {
 	off := from
 	var buf []byte
 	for {
-		rec, b, err := readRecordAt(f, seg, uint32(off), buf)
+		rec, b, err := readRecordAt(f, sec, uint32(off), buf)
 		buf = b
 		if err != nil {
 			// Só corrupção/fim de arquivo marca o fim do prefixo válido. Um
@@ -454,16 +454,16 @@ func scanFrom(f io.ReaderAt, seg uint32, from int64, fn func(off uint32, rec typ
 // O CHAMADOR PRECISA GARANTIR que nenhuma leitura esteja em voo sobre este
 // segmento — no Store isso é a barreira aposMu. Fechar sob um pread em
 // andamento faz a leitura falhar com os.ErrClosed, que aborta a query.
-func (r *Reader) CloseSegment(seg uint32) error {
+func (r *Reader) CloseSegment(sec uint32) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	f, ok := r.fds[seg]
+	f, ok := r.fds[sec]
 	if !ok {
 		return nil
 	}
-	delete(r.fds, seg)
+	delete(r.fds, sec)
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("segment: fechar o segmento %d: %w", seg, err)
+		return fmt.Errorf("segment: fechar o segmento %d: %w", sec, err)
 	}
 	return nil
 }

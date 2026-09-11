@@ -30,7 +30,7 @@ type harness struct {
 	engine *query.Engine
 }
 
-func novoHarness(t *testing.T) *harness {
+func newHarness(t *testing.T) *harness {
 	t.Helper()
 	spec, err := schema.Load(fixtureYAML, schema.BuiltinDefaults)
 	if err != nil {
@@ -97,13 +97,13 @@ func (h *harness) rowID(key string) types.RowID {
 	return rec.RowID
 }
 
-// linha é uma row do resultado materializada para asserção (o executor é
+// row é uma row do resultado materializada para asserção (o executor é
 // streaming; os testes é que precisam comparar).
-type linha map[string]string
+type row map[string]string
 
 // consulta executa e materializa TODAS as rows, copiando os valores — o
 // contrato zero-copy exige a cópia antes do próximo Next.
-func (h *harness) consulta(sql string, params ...types.Value) ([]linha, error) {
+func (h *harness) consulta(sql string, params ...types.Value) ([]row, error) {
 	h.t.Helper()
 	it, err := h.engine.Execute(context.Background(), dataset, sql, params)
 	if err != nil {
@@ -111,9 +111,9 @@ func (h *harness) consulta(sql string, params ...types.Value) ([]linha, error) {
 	}
 	defer it.Close()
 
-	var out []linha
+	var out []row
 	for it.Next() {
-		l := make(linha, it.Row().Len())
+		l := make(row, it.Row().Len())
 		for _, c := range it.Row().Cols() {
 			l[c.Name] = render(c)
 		}
@@ -123,7 +123,7 @@ func (h *harness) consulta(sql string, params ...types.Value) ([]linha, error) {
 }
 
 // consultaOK falha o teste em qualquer erro.
-func (h *harness) consultaOK(sql string, params ...types.Value) []linha {
+func (h *harness) consultaOK(sql string, params ...types.Value) []row {
 	h.t.Helper()
 	rows, err := h.consulta(sql, params...)
 	if err != nil {
@@ -134,7 +134,7 @@ func (h *harness) consultaOK(sql string, params ...types.Value) []linha {
 
 // chaves devolve o valor da coluna dada, na ordem de saída — o jeito mais
 // legível de comparar conjuntos de resultado.
-func chaves(rows []linha, col string) []string {
+func chaves(rows []row, col string) []string {
 	out := make([]string, 0, len(rows))
 	for _, l := range rows {
 		out = append(out, l[col])

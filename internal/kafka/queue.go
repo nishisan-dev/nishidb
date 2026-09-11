@@ -50,7 +50,7 @@ type barreira struct {
 	err    error
 }
 
-func novaBarreira() *barreira { return &barreira{pronto: make(chan struct{})} }
+func newBarrier() *barreira { return &barreira{pronto: make(chan struct{})} }
 
 // conclui libera quem espera. Só o writer chama, uma vez.
 func (b *barreira) conclui(err error) {
@@ -88,9 +88,9 @@ type Fila struct {
 
 	mu    sync.Mutex
 	bytes int64
-	// espera é sinalizado (não bloqueante) quando bytes diminuem. Buffer 1
-	// basta porque há um único produtor à espera.
-	espera chan struct{}
+	// wait é sinalizado (não bloqueante) quando bytes diminuem. Buffer 1
+	// basta porque há um único produtor à wait.
+	wait chan struct{}
 
 	// bloqueado e ocioso acumulam NANOSSEGUNDOS de espera de cada lado.
 	//
@@ -104,7 +104,7 @@ type Fila struct {
 	// par de time.Now() por evento no caminho rápido seria instrumentação
 	// mudando o que ela mede.
 	bloqueado atomic.Int64
-	ocioso    atomic.Int64
+	idle      atomic.Int64
 
 	// desdeBloq e desdeOcio marcam o INÍCIO do bloqueio em curso (unix nano;
 	// 0 = ninguém esperando), e Tempos soma esse trecho ao acumulado.
@@ -119,9 +119,9 @@ type Fila struct {
 	desdeOcio atomic.Int64
 
 	// vida protege o par (conferir se está fechada, enfileirar) contra o
-	// Fecha, e existe porque a barreira de quiesce é enfileirada por uma
+	// Close, e existe porque a barreira de quiesce é enfileirada por uma
 	// goroutine que NÃO é o poller: aoRevogar roda na goroutine do group do
-	// franz-go e pode chegar depois de Roda ter fechado a fila. Enfileirar num
+	// franz-go e pode chegar depois de Run ter fechado a fila. Enfileirar num
 	// channel fechado é panic, não erro — e o encerramento é exatamente a
 	// janela em que uma revogação é mais provável.
 	vida    sync.RWMutex
@@ -131,20 +131,20 @@ type Fila struct {
 // ErrFilaFechada é devolvido a quem tenta enfileirar durante o encerramento.
 var ErrFilaFechada = errors.New("kafka: fila encerrada")
 
-// marcaEspera registra o início de uma espera e devolve a função que a fecha,
+// markWait registra o início de uma espera e devolve a função que a fecha,
 // somando o trecho ao acumulado.
-func marcaEspera(inicio, acumulado *atomic.Int64) func() {
+func markWait(start, acumulado *atomic.Int64) func() {
 	comeco := time.Now()
-	inicio.Store(comeco.UnixNano())
+	start.Store(comeco.UnixNano())
 	return func() {
-		inicio.Store(0)
+		start.Store(0)
 		acumulado.Add(int64(time.Since(comeco)))
 	}
 }
 
-// emCurso é o trecho da espera que ainda não terminou, no instante da leitura.
-func emCurso(inicio *atomic.Int64) int64 {
-	t := inicio.Load()
+// inProgress é o trecho da espera que ainda não terminou, no instante da leitura.
+func inProgress(start *atomic.Int64) int64 {
+	t := start.Load()
 	if t == 0 {
 		return 0
 	}
@@ -154,12 +154,12 @@ func emCurso(inicio *atomic.Int64) int64 {
 	return 0
 }
 
-// NovaFila constrói a fila com os dois tetos.
-func NovaFila(registros int, maxBytes int64) *Fila {
+// NewQueue constrói a fila com os dois tetos.
+func NewQueue(records int, maxBytes int64) *Fila {
 	return &Fila{
-		ch:       make(chan Item, registros),
+		ch:       make(chan Item, records),
 		maxBytes: maxBytes,
-		espera:   make(chan struct{}, 1),
+		wait:     make(chan struct{}, 1),
 	}
 }
 
@@ -183,14 +183,14 @@ func (f *Fila) Envia(ctx context.Context, r *kgo.Record) error {
 		return nil
 	default:
 	}
-	fecha := marcaEspera(&f.desdeBloq, &f.bloqueado)
+	close := markWait(&f.desdeBloq, &f.bloqueado)
 	select {
 	case f.ch <- it:
-		fecha()
+		close()
 		return nil
 	case <-ctx.Done():
-		fecha()
-		f.libera(n)
+		close()
+		f.release(n)
 		return ctx.Err()
 	}
 }
@@ -204,10 +204,10 @@ func (f *Fila) EnviaBarreira(ctx context.Context, b *barreira) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// O RLock cobre a checagem E o envio: sem ele, Fecha poderia rodar entre
+	// O RLock cobre a checagem E o envio: sem ele, Close poderia rodar entre
 	// as duas e o send cairia num channel já fechado. Segurar um RLock durante
 	// um envio bloqueante é seguro porque o writer drena sem precisar deste
-	// lock — quem espera aqui é liberado pelo consumo, não pelo Fecha.
+	// lock — quem espera aqui é liberado pelo consumo, não pelo Close.
 	f.vida.RLock()
 	defer f.vida.RUnlock()
 	if f.fechada {
@@ -238,18 +238,18 @@ func (f *Fila) reserva(ctx context.Context, n int64) error {
 		}
 		f.mu.Unlock()
 		// Só aqui houve espera de verdade: o gate de bytes recusou.
-		fecha := marcaEspera(&f.desdeBloq, &f.bloqueado)
+		close := markWait(&f.desdeBloq, &f.bloqueado)
 		select {
-		case <-f.espera:
-			fecha()
+		case <-f.wait:
+			close()
 		case <-ctx.Done():
-			fecha()
+			close()
 			return ctx.Err()
 		}
 	}
 }
 
-func (f *Fila) libera(n int64) {
+func (f *Fila) release(n int64) {
 	if n == 0 {
 		return
 	}
@@ -257,7 +257,7 @@ func (f *Fila) libera(n int64) {
 	f.bytes -= n
 	f.mu.Unlock()
 	select {
-	case f.espera <- struct{}{}:
+	case f.wait <- struct{}{}:
 	default:
 	}
 }
@@ -284,7 +284,7 @@ func (f *Fila) Recebe(ctx context.Context) (Item, bool) {
 // que o writer está processando não está mais nela. Contar o evento em voo
 // tornaria a contabilidade mais conservadora e a API mais fácil de errar (o
 // chamador teria de devolver os bytes em todos os caminhos de erro).
-func (f *Fila) recebeOuAcorda(ctx context.Context, acorda <-chan time.Time) (Item, bool, bool) {
+func (f *Fila) recebeOuAcorda(ctx context.Context, wake <-chan time.Time) (Item, bool, bool) {
 	if ctx.Err() != nil {
 		return Item{}, false, false
 	}
@@ -300,27 +300,27 @@ func (f *Fila) recebeOuAcorda(ctx context.Context, acorda <-chan time.Time) (Ite
 		if !ok {
 			return Item{}, false, false
 		}
-		f.libera(it.bytes)
+		f.release(it.bytes)
 		return it, true, false
-	case <-acorda:
+	case <-wake:
 		return Item{}, false, true
 	default:
 	}
 	// Nada pronto: daqui em diante o writer está ocioso de verdade.
-	fecha := marcaEspera(&f.desdeOcio, &f.ocioso)
+	close := markWait(&f.desdeOcio, &f.idle)
 	select {
 	case it, ok := <-f.ch:
-		fecha()
+		close()
 		if !ok {
 			return Item{}, false, false
 		}
-		f.libera(it.bytes)
+		f.release(it.bytes)
 		return it, true, false
-	case <-acorda:
-		fecha()
+	case <-wake:
+		close()
 		return Item{}, false, true
 	case <-ctx.Done():
-		fecha()
+		close()
 		return Item{}, false, false
 	}
 }
@@ -329,17 +329,17 @@ func (f *Fila) recebeOuAcorda(ctx context.Context, acorda <-chan time.Time) (Ite
 //
 // Somar o trecho em curso é o que torna a série útil no caso que interessa: um
 // lado preso agora aparece agora, e não só quando (ou se) ele destravar.
-func (f *Fila) Tempos() (bloqueado, ocioso time.Duration) {
-	return time.Duration(f.bloqueado.Load() + emCurso(&f.desdeBloq)),
-		time.Duration(f.ocioso.Load() + emCurso(&f.desdeOcio))
+func (f *Fila) Tempos() (bloqueado, idle time.Duration) {
+	return time.Duration(f.bloqueado.Load() + inProgress(&f.desdeBloq)),
+		time.Duration(f.idle.Load() + inProgress(&f.desdeOcio))
 }
 
-// Fecha encerra a fila. Só o produtor pode chamar.
+// Close encerra a fila. Só o produtor pode chamar.
 //
 // Marca a fila como fechada ANTES de fechar o channel, sob o lock que
 // EnviaBarreira também toma: é o que garante que nenhum envio esteja em voo
 // quando o close acontece.
-func (f *Fila) Fecha() {
+func (f *Fila) Close() {
 	f.vida.Lock()
 	f.fechada = true
 	f.vida.Unlock()
@@ -347,7 +347,7 @@ func (f *Fila) Fecha() {
 }
 
 // Profundidade devolve o ocupado nos dois gates, para o §79.
-func (f *Fila) Profundidade() (registros int, bytes int64) {
+func (f *Fila) Profundidade() (records int, bytes int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.ch), f.bytes

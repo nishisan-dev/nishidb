@@ -9,19 +9,19 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
-// umaLinhaDaKafka roda a consulta e devolve a única linha, já decodificada.
-func umaLinhaDaKafka(t *testing.T, srv *server.Servidor, dataset, sql string) map[string]any {
+// oneRowOfKafka roda a consulta e devolve a única linha, já decodificada.
+func oneRowOfKafka(t *testing.T, srv *server.Server, dataset, sql string) map[string]any {
 	t.Helper()
 	resp := consulta(t, srv, `{"dataset":"`+dataset+`","sql":"`+sql+`"}`)
-	linhas, fim := resultado(t, resp)
-	if fim.End() == nil {
+	rows, end := result(t, resp)
+	if end.End() == nil {
 		t.Fatal("o stream não trouxe a linha de fecho")
 	}
-	if len(linhas) != 1 {
-		t.Fatalf("%d linhas para %q, quero 1: %v", len(linhas), sql, linhas)
+	if len(rows) != 1 {
+		t.Fatalf("%d linhas para %q, quero 1: %v", len(rows), sql, rows)
 	}
 	var l map[string]any
-	if err := json.Unmarshal([]byte(linhas[0]), &l); err != nil {
+	if err := json.Unmarshal([]byte(rows[0]), &l); err != nil {
 		t.Fatalf("linha ilegível: %v", err)
 	}
 	return l
@@ -31,8 +31,8 @@ func umaLinhaDaKafka(t *testing.T, srv *server.Servidor, dataset, sql string) ma
 // Kafka, e a tabela responde a LINHA DE RESUMO — nunca erro de tabela
 // desconhecida. "Não consome" é uma resposta.
 func TestMetaKafkaRespondeNoDatasetSemIngestao(t *testing.T) {
-	srv := servidorComDados(t, 4, blocoPadrao)
-	l := umaLinhaDaKafka(t, srv, "d",
+	srv := serverWithData(t, 4, blockPadrao)
+	l := oneRowOfKafka(t, srv, "d",
 		"SELECT id, enabled, state, partition, queueRecords, watchdogTrips FROM _meta.kafka")
 	if l["id"] != "source" {
 		t.Fatalf("id = %v, quero \"source\"", l["id"])
@@ -57,33 +57,33 @@ func TestMetaKafkaRespondeNoDatasetSemIngestao(t *testing.T) {
 // descreveria a mesma realidade com outra palavra no dia em que uma das duas
 // mudasse.
 func TestEstadoDaTabelaEhOMesmoDoHealth(t *testing.T) {
-	srv := servidorComDados(t, 4, blocoPadrao)
+	srv := serverWithData(t, 4, blockPadrao)
 
 	var stats protocol.Stats
-	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/stats")), &stats); err != nil {
+	if err := json.Unmarshal([]byte(fetch(t, srv, "/v1/stats")), &stats); err != nil {
 		t.Fatal(err)
 	}
-	var doStats string
+	var ofStats string
 	for _, d := range stats.Datasets {
 		if d.Name == "d" {
-			doStats = d.Ingestion.State
+			ofStats = d.Ingestion.State
 		}
 	}
-	if doStats == "" {
+	if ofStats == "" {
 		t.Fatal("dataset ausente do /v1/stats")
 	}
-	l := umaLinhaDaKafka(t, srv, "d", "SELECT state FROM _meta.kafka")
-	if l["state"] != doStats {
-		t.Fatalf("a tabela diz %v e o /v1/stats diz %q", l["state"], doStats)
+	l := oneRowOfKafka(t, srv, "d", "SELECT state FROM _meta.kafka")
+	if l["state"] != ofStats {
+		t.Fatalf("a tabela diz %v e o /v1/stats diz %q", l["state"], ofStats)
 	}
 }
 
 // TestMetaKafkaNaoExisteNaTabelaIrma: a ingestão da irmã é a do dataset base.
 // A recusa nomeia o que existe lá, e é erro do cliente — não falha interna.
 func TestMetaKafkaNaoExisteNaTabelaIrma(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
+	srv := serverWithHistory(t, specWithHistory)
 	// No dataset base a tabela responde.
-	if l := umaLinhaDaKafka(t, srv, "eventos", "SELECT id FROM _meta.kafka"); l["id"] != "source" {
+	if l := oneRowOfKafka(t, srv, "eventos", "SELECT id FROM _meta.kafka"); l["id"] != "source" {
 		t.Fatalf("o dataset base tinha de responder: %v", l)
 	}
 	resp := consulta(t, srv, `{"dataset":"eventos_history","sql":"SELECT id FROM _meta.kafka"}`)
@@ -91,7 +91,7 @@ func TestMetaKafkaNaoExisteNaTabelaIrma(t *testing.T) {
 	if resp.StatusCode == 200 {
 		t.Fatal("a irmã não tem fonte própria; a consulta tinha de ser recusada")
 	}
-	f := falhaDe(t, resp)
+	f := failOf(t, resp)
 	if !strings.Contains(f.Message, "fields") {
 		t.Fatalf("a recusa tem de nomear o que existe na irmã: %s", f.Message)
 	}
@@ -101,15 +101,15 @@ func TestMetaKafkaNaoExisteNaTabelaIrma(t *testing.T) {
 // desligado —, tópico, grupo e bootstrap saem. É o que permite conferir para
 // onde o dataset apontaria se fosse religado, sem abrir o YAML no servidor.
 func TestMetaKafkaTrazAIdentidadeDoYAML(t *testing.T) {
-	a := novoAmbienteCom(t, blocoPadrao)
-	a.escreveDataset("eventos", specComKafkaDesligado)
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	a := newEnvWith(t, blockPadrao)
+	a.writeDataset("eventos", specWithKafkaDesligado)
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 
-	l := umaLinhaDaKafka(t, srv, "eventos",
+	l := oneRowOfKafka(t, srv, "eventos",
 		"SELECT topic, groupId, bootstrap, enabled, state FROM _meta.kafka")
 	if l["topic"] != "service-view" || l["groupId"] != "piloto-7" {
 		t.Fatalf("identidade = %v", l)
@@ -123,7 +123,7 @@ func TestMetaKafkaTrazAIdentidadeDoYAML(t *testing.T) {
 	}
 }
 
-const specComKafkaDesligado = `version: 1
+const specWithKafkaDesligado = `version: 1
 name: eventos
 source:
   type: kafka

@@ -26,17 +26,17 @@ func TestGateDiscoCaiQuandoOKeySetEhAbandonado(t *testing.T) {
 	}
 	s := openStore(t, Options{
 		Dir: t.TempDir(), SegmentSize: 64 << 10,
-		TTLAtivo: true, DuracaoDeFundo: time.Hour,
-		CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+		ActiveTTL: true, FallbackDuration: time.Hour,
+		WriteInstantFieldName: "_writtenAt", TTLFieldName: "_expiresIn",
 	})
-	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	rel := &relogioOfTest{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 
 	recheio := make([]byte, 256)
 	for i := range recheio {
 		recheio[i] = 'x'
 	}
-	escreve := func(k string, seq int64) {
+	write := func(k string, seq int64) {
 		t.Helper()
 		p := payloadOrdenado(t, s, map[string]types.Value{
 			"id":         {Type: types.TypeString, Bytes: []byte(k)},
@@ -61,7 +61,7 @@ func TestGateDiscoCaiQuandoOKeySetEhAbandonado(t *testing.T) {
 	seq := int64(1)
 	for r := 0; r < 3; r++ {
 		for i := 0; i < entidades; i++ {
-			escreve("k"+string(rune('a'+i%26))+string(rune('a'+i/26)), seq)
+			write("k"+string(rune('a'+i%26))+string(rune('a'+i/26)), seq)
 			seq++
 		}
 	}
@@ -69,19 +69,19 @@ func TestGateDiscoCaiQuandoOKeySetEhAbandonado(t *testing.T) {
 		t.Fatal(err)
 	}
 	pico := s.Stats().StorageBytes
-	vivasAntes := contaVisiveis(t, s)
-	if pico <= 0 || vivasAntes == 0 {
-		t.Fatalf("cenário vazio: bytes=%d vivas=%d", pico, vivasAntes)
+	vivasBefore := countVisiveis(t, s)
+	if pico <= 0 || vivasBefore == 0 {
+		t.Fatalf("cenário vazio: bytes=%d vivas=%d", pico, vivasBefore)
 	}
 
 	// Todas abandonadas: ninguém escreve mais nada.
-	rel.avanca(2 * time.Hour)
+	rel.advance(2 * time.Hour)
 
 	// Regime: o coletor marca em passadas limitadas e a compaction recolhe.
 	// As duas rodam alternadas, como no processo real.
-	lim := LimitesDeExpiracao{MaxPorPassada: 100, TempoPorPassada: time.Minute}
+	lim := LimitesOfExpiration{MaxByPassada: 100, TimeByPassada: time.Minute}
 	for i := 0; i < 30; i++ {
-		if _, err := s.ExpiraUmaPassada(context.Background(), lim); err != nil {
+		if _, err := s.ExpiraOnePass(context.Background(), lim); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.CompactaUmaVez(context.Background(), 0.5); err != nil {
@@ -93,10 +93,10 @@ func TestGateDiscoCaiQuandoOKeySetEhAbandonado(t *testing.T) {
 	}
 
 	final := s.Stats().StorageBytes
-	vivasDepois := contaVisiveis(t, s)
+	vivasDepois := countVisiveis(t, s)
 
 	t.Logf("disco: %d B -> %d B (%.0f%%) | visíveis: %d -> %d",
-		pico, final, float64(final)/float64(pico)*100, vivasAntes, vivasDepois)
+		pico, final, float64(final)/float64(pico)*100, vivasBefore, vivasDepois)
 
 	if vivasDepois != 0 {
 		t.Errorf("ainda há %d entidades visíveis: o coletor não deu conta do key set abandonado", vivasDepois)
@@ -110,7 +110,7 @@ func TestGateDiscoCaiQuandoOKeySetEhAbandonado(t *testing.T) {
 	}
 }
 
-func contaVisiveis(t *testing.T, s *Store) int {
+func countVisiveis(t *testing.T, s *Store) int {
 	t.Helper()
 	it := s.ScanLive(s.presente())
 	defer func() { _ = it.Close() }()

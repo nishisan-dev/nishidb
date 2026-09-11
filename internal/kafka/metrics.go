@@ -58,9 +58,9 @@ type metricas struct {
 	// duas são lidas no scrape pela mesma razão da filaViva.
 	esteiraViva   func() int64
 	esteiraOciosa func() time.Duration
-	// temposDaFila é a integral de espera dos dois lados, lida no scrape pela
+	// temposOfFila é a integral de espera dos dois lados, lida no scrape pela
 	// mesma razão da profundidade.
-	temposDaFila   func() (time.Duration, time.Duration)
+	temposOfFila   func() (time.Duration, time.Duration)
 	partAtribuidas *metrics.GaugeSeries
 	partTotal      *metrics.GaugeSeries
 	// slotsEncolhidos e decodeWorkers são as duas séries da esteira de
@@ -91,55 +91,55 @@ type metricas struct {
 	// pergunta pela taxa de nishidb_ingest_events_total.
 	ultimoLote atomic.Int64
 
-	// marca é o fim do log por partição, como o broker respondeu, com o
+	// mark é o fim do log por partição, como o broker respondeu, com o
 	// instante da resposta. Só o scrape a escreve.
-	marca atomic.Pointer[marcaDagua]
+	mark atomic.Pointer[markDagua]
 
-	// aplicaSeg é a latência de um evento pelo Apply.
-	aplicaSeg *metrics.HistogramSeries
+	// aplicaSec é a latência de um evento pelo Apply.
+	aplicaSec *metrics.HistogramSeries
 
 	dataset string
 }
 
-// marcaDagua é um instantâneo do fim do log, com a hora em que ele foi colhido.
+// markDagua é um instantâneo do fim do log, com a hora em que ele foi colhido.
 //
 // O instante viaja junto porque um valor velho não pode ser publicado como se
 // fosse de agora: ele erraria para BAIXO, que é o lado que ESCONDE incidente.
-type marcaDagua struct {
-	fim map[int32]int64
-	em  time.Time
+type markDagua struct {
+	end map[int32]int64
+	in  time.Time
 }
 
-// limitesDoApply são os buckets do histograma do Apply.
+// limitsDoApply são os buckets do histograma do Apply.
 //
 // Próprios, e não os DefaultBuckets: aqueles começam em 50 µs, e a mediana
 // medida no piloto é da ordem de 8 µs — o primeiro bucket engoliria quase
 // tudo e o histograma não distinguiria nada abaixo dele. O topo em 1 s é o que
 // torna os stalls de segundos ATRIBUÍVEIS ao Apply, em vez de a "algo".
-var limitesDoApply = []float64{
+var limitsDoApply = []float64{
 	0.000005, 0.00001, 0.000025, 0.00005, 0.0001, 0.00025, 0.0005,
 	0.001, 0.005, 0.01, 0.05, 0.1, 1,
 }
 
-// validadeDaMarcaDagua é por quanto tempo a última resposta do broker ainda
+// validadeOfMarkDagua é por quanto tempo a última resposta do broker ainda
 // descreve o presente.
 //
 // Um minuto é mais que um intervalo de scrape típico e menos que qualquer
 // janela em que o operador consiga nomear o instante. Vencida sem leitura
 // nova, as séries que dependem do broker somem — ausência é resposta honesta,
 // número velho não é.
-const validadeDaMarcaDagua = time.Minute
+const validadeOfMarkDagua = time.Minute
 
-// registraMetricas instala as séries do dataset.
-func registraMetricas(r *metrics.Registry, dataset string) *metricas {
+// registerMetrics instala as séries do dataset.
+func registerMetrics(r *metrics.Registry, dataset string) *metricas {
 	if r == nil {
 		r = metrics.NewRegistry()
 	}
-	contador := func(nome, ajuda string) *metrics.CounterSeries {
-		return r.Counter(nome, ajuda, metrics.LabelDataset).With(dataset)
+	counter := func(name, ajuda string) *metrics.CounterSeries {
+		return r.Counter(name, ajuda, metrics.LabelDataset).With(dataset)
 	}
-	medidor := func(nome, ajuda string) *metrics.GaugeSeries {
-		return r.Gauge(nome, ajuda, metrics.LabelDataset).With(dataset)
+	medidor := func(name, ajuda string) *metrics.GaugeSeries {
+		return r.Gauge(name, ajuda, metrics.LabelDataset).With(dataset)
 	}
 	famInvalidos := r.Counter(metrics.MetIngestInvalidTotal,
 		"Eventos descartados por serem ruins (§101), por motivo (categoria §101; Task A5/issue #15).",
@@ -157,12 +157,12 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 		}
 	}
 	m := &metricas{
-		eventos:      contador(metrics.MetIngestEventsTotal, "Eventos oferecidos à ingestão."),
-		stale:        contador(metrics.MetIngestStaleTotal, "Eventos descartados por sequence (§25). Não é erro."),
+		eventos:      counter(metrics.MetIngestEventsTotal, "Eventos oferecidos à ingestão."),
+		stale:        counter(metrics.MetIngestStaleTotal, "Eventos descartados por sequence (§25). Não é erro."),
 		famInvalidos: famInvalidos,
-		falhas: contador(metrics.MetIngestFailedTotal,
+		falhas: counter(metrics.MetIngestFailedTotal,
 			"Eventos que NÃO entraram por falha que não é do evento. O §92 não prevê esta série, e sem ela a perda de dado seria invisível num daemon, onde não há exit code para carregá-la."),
-		errosKafka: contador(metrics.MetKafkaErrorsTotal,
+		errosKafka: counter(metrics.MetKafkaErrorsTotal,
 			"Erros de broker ou rede. Balde próprio: o §101 só cataloga erro de EVENTO, e contar erro de rede como perda de dado é diagnóstico errado."),
 
 		bloqueado: medidor(metrics.MetIngestBlocked,
@@ -171,14 +171,14 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 			"Partições atribuídas a esta instância. Comparar com o total é o que torna visível o assignment parcial."),
 		partTotal: medidor(metrics.MetKafkaPartitionsTotal, "Partições do tópico."),
 
-		slotsEncolhidos: contador(metrics.MetIngestDecodeSlotsShrunk,
+		slotsEncolhidos: counter(metrics.MetIngestDecodeSlotsShrunk,
 			"Slots da esteira de decodificação cujos buffers foram soltos por passarem do limiar de memória retida. Crescimento constante é churn de alocação; zero com arena_bytes alto é memória presa."),
 		decodeWorkers: medidor(metrics.MetIngestDecodeWorkers,
 			"Decodificadores configurados para este dataset (source.kafka.consumer.decodeWorkers). É o denominador de qualquer leitura de vazão."),
 
-		aplicaSeg: r.Histogram(metrics.MetIngestApplySeconds,
+		aplicaSec: r.Histogram(metrics.MetIngestApplySeconds,
 			"Latência de um evento pelo Apply: parse, estado, merge, Put e o Apenda do histórico. O checkpoint fica fora — ele tem histograma próprio.",
-			limitesDoApply, metrics.LabelDataset).With(dataset),
+			limitsDoApply, metrics.LabelDataset).With(dataset),
 		dataset: dataset,
 	}
 
@@ -186,9 +186,9 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 	// nasce: a fonte é instalada depois (OlhaAFila), e até lá o coletor não
 	// emite nada. Registrar cedo mantém a ordem de exposição estável entre
 	// um consumidor que subiu e um que não subiu.
-	r.Register(metrics.CollectorFunc(m.amostrasDaFila))
-	r.Register(metrics.CollectorFunc(m.amostrasDaEsteira))
-	r.Register(metrics.CollectorFunc(m.amostrasDaPosicao))
+	r.Register(metrics.CollectorFunc(m.samplesOfFila))
+	r.Register(metrics.CollectorFunc(m.samplesOfEsteira))
+	r.Register(metrics.CollectorFunc(m.samplesOfPosition))
 	return m
 }
 
@@ -197,15 +197,15 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 func (m *metricas) OlhaAFila(f func() (int, int64)) { m.filaViva = f }
 
 // OlhaOsTempos instala a fonte da integral de espera. Mesma vida da OlhaAFila.
-func (m *metricas) OlhaOsTempos(f func() (time.Duration, time.Duration)) { m.temposDaFila = f }
+func (m *metricas) OlhaOsTempos(f func() (time.Duration, time.Duration)) { m.temposOfFila = f }
 
 // OlhaAEsteira instala as fontes da esteira: a memória retida pelos slots e a
 // ociosidade do writer.
-func (m *metricas) OlhaAEsteira(bytes func() int64, ocioso func() time.Duration) {
-	m.esteiraViva, m.esteiraOciosa = bytes, ocioso
+func (m *metricas) OlhaAEsteira(bytes func() int64, idle func() time.Duration) {
+	m.esteiraViva, m.esteiraOciosa = bytes, idle
 }
 
-// amostrasDaEsteira lê a memória dos slots no instante do scrape.
+// samplesOfEsteira lê a memória dos slots no instante do scrape.
 //
 // Lida da estrutura VIVA, e não de um medidor escrito pelo writer, pela mesma
 // razão que a profundidade da fila: um medidor escrito pelo laço congela
@@ -214,7 +214,7 @@ func (m *metricas) OlhaAEsteira(bytes func() int64, ocioso func() time.Duration)
 //
 // Sem fonte instalada não emite nada: o dataset sem consumidor Kafka não tem
 // esteira, e zero ali afirmaria que existe uma e está vazia.
-func (m *metricas) amostrasDaEsteira() []metrics.Sample {
+func (m *metricas) samplesOfEsteira() []metrics.Sample {
 	if m.esteiraViva == nil {
 		return nil
 	}
@@ -227,7 +227,7 @@ func (m *metricas) amostrasDaEsteira() []metrics.Sample {
 			Labels: rotulo,
 		},
 		{
-			Family: metrics.MetKafkaWriterIdleSeconds, Name: metrics.MetKafkaWriterIdleSeconds, Type: metrics.TypeCounter,
+			Family: metrics.MetKafkaWriterIDleSeconds, Name: metrics.MetKafkaWriterIDleSeconds, Type: metrics.TypeCounter,
 			Value:  m.esteiraOciosa().Seconds(),
 			Help:   "Segundos que o writer passou esperando trabalho na esteira. rate() alto com lag alto significa que quem não entrega é o poller ou os decodificadores.",
 			Labels: rotulo,
@@ -235,13 +235,13 @@ func (m *metricas) amostrasDaEsteira() []metrics.Sample {
 	}
 }
 
-// amostrasDaFila lê a fila no instante do scrape.
+// samplesOfFila lê a fila no instante do scrape.
 //
 // Sem fonte instalada não emite nada, e isso é deliberado: o dataset sem
 // consumidor Kafka não tem fila, e publicar zero ali afirmaria que existe uma
 // e está vazia. É a mesma distinção entre "medi e deu zero" e "não há o que
 // medir" que o resto do produto faz.
-func (m *metricas) amostrasDaFila() []metrics.Sample {
+func (m *metricas) samplesOfFila() []metrics.Sample {
 	if m.filaViva == nil {
 		return nil
 	}
@@ -259,10 +259,10 @@ func (m *metricas) amostrasDaFila() []metrics.Sample {
 			Labels: rotulo,
 		},
 	}
-	if m.temposDaFila == nil {
+	if m.temposOfFila == nil {
 		return out
 	}
-	bloqueado, ocioso := m.temposDaFila()
+	bloqueado, idle := m.temposOfFila()
 	return append(out,
 		metrics.Sample{
 			Family: metrics.MetKafkaPollBlockedSeconds, Name: metrics.MetKafkaPollBlockedSeconds, Type: metrics.TypeCounter,
@@ -271,31 +271,31 @@ func (m *metricas) amostrasDaFila() []metrics.Sample {
 			Labels: rotulo,
 		},
 		metrics.Sample{
-			Family: metrics.MetKafkaDecodeIdleSeconds, Name: metrics.MetKafkaDecodeIdleSeconds, Type: metrics.TypeCounter,
-			Value:  ocioso.Seconds(),
+			Family: metrics.MetKafkaDecodeIDleSeconds, Name: metrics.MetKafkaDecodeIDleSeconds, Type: metrics.TypeCounter,
+			Value:  idle.Seconds(),
 			Help:   "Segundos SOMADOS que os decodificadores passaram esperando evento na fila. Divida por nishidb_ingest_decode_workers para ler como fração.",
 			Labels: rotulo,
 		},
 	)
 }
 
-// posicaoDe devolve o slot atômico da partição, criando-o se for a primeira
+// positionOf devolve o slot atômico da partição, criando-o se for a primeira
 // vez.
 //
 // O caminho quente é o ramo de cima: uma carga atômica e um lookup num mapa de
 // int32, sem alocar. A criação é rara — uma vez por partição por assignment —
 // e paga um mutex e a cópia do mapa, que é o preço de o leitor nunca precisar
 // de lock.
-func (m *metricas) posicaoDe(p int32) *atomic.Int64 {
+func (m *metricas) positionOf(p int32) *atomic.Int64 {
 	if mp := m.posicoes.Load(); mp != nil {
 		if s, ok := (*mp)[p]; ok {
 			return s
 		}
 	}
-	return m.registraParticao(p)
+	return m.registerPartition(p)
 }
 
-func (m *metricas) registraParticao(p int32) *atomic.Int64 {
+func (m *metricas) registerPartition(p int32) *atomic.Int64 {
 	m.novasPart.Lock()
 	defer m.novasPart.Unlock()
 	// Recheca sob o lock: duas goroutines podem ter falhado o ramo rápido.
@@ -304,24 +304,24 @@ func (m *metricas) registraParticao(p int32) *atomic.Int64 {
 			return s
 		}
 	}
-	novo := make(map[int32]*atomic.Int64)
+	nw := make(map[int32]*atomic.Int64)
 	if mp := m.posicoes.Load(); mp != nil {
 		for k, v := range *mp {
-			novo[k] = v
+			nw[k] = v
 		}
 	}
 	s := &atomic.Int64{}
-	novo[p] = s
-	m.posicoes.Store(&novo)
+	nw[p] = s
+	m.posicoes.Store(&nw)
 	return s
 }
 
-// publicaMarca guarda o instantâneo do broker, carimbado com o agora.
-func (m *metricas) publicaMarca(fim map[int32]int64, em time.Time) {
-	m.marca.Store(&marcaDagua{fim: fim, em: em})
+// publicaMark guarda o instantâneo do broker, carimbado com o agora.
+func (m *metricas) publicaMark(end map[int32]int64, in time.Time) {
+	m.mark.Store(&markDagua{end: end, in: in})
 }
 
-// amostrasDaPosicao emite offset, high watermark e lag DO MESMO INSTANTÂNEO.
+// samplesOfPosition emite offset, high watermark e lag DO MESMO INSTANTÂNEO.
 //
 // É o coletor que torna `lag == high_watermark - offset` um invariante dentro
 // de uma raspagem, e portanto testável.
@@ -343,8 +343,8 @@ func (m *metricas) publicaMarca(fim map[int32]int64, em time.Time) {
 // Sob falha do broker, as séries que dependem dele NÃO SAEM. Zero é medição;
 // ausência é ausência de medição, e `absent(nishidb_kafka_lag)` é um alerta
 // que o operador consegue escrever. É a mesma doutrina do coletor da fila.
-func (m *metricas) amostrasDaPosicao() []metrics.Sample {
-	ps, _ := m.posicoesDoInstante()
+func (m *metricas) samplesOfPosition() []metrics.Sample {
+	ps, _ := m.posicoesOfInstant()
 	if len(ps) == 0 {
 		return nil
 	}
@@ -352,19 +352,19 @@ func (m *metricas) amostrasDaPosicao() []metrics.Sample {
 	for _, p := range ps {
 		rot := []metrics.Label{
 			{Name: metrics.LabelDataset, Value: m.dataset},
-			{Name: metrics.LabelPartition, Value: strconv.Itoa(int(p.Particao))},
+			{Name: metrics.LabelPartition, Value: strconv.Itoa(int(p.Partition))},
 		}
 		out = append(out, metrics.Sample{
 			Family: metrics.MetKafkaOffset, Name: metrics.MetKafkaOffset, Type: metrics.TypeGauge, Value: float64(p.Aplicado),
 			Help:   "Próximo offset a consumir, por partição: a posição APLICADA pelo writer.",
 			Labels: rot,
 		})
-		if !p.TemFim {
+		if !p.TemEnd {
 			continue
 		}
 		out = append(out,
 			metrics.Sample{
-				Family: metrics.MetKafkaHighWatermark, Name: metrics.MetKafkaHighWatermark, Type: metrics.TypeGauge, Value: float64(p.FimDoLog),
+				Family: metrics.MetKafkaHighWatermark, Name: metrics.MetKafkaHighWatermark, Type: metrics.TypeGauge, Value: float64(p.EndDoLog),
 				Help:   "Fim do log por partição, como o broker respondeu no instante desta raspagem.",
 				Labels: rot,
 			},
@@ -378,32 +378,32 @@ func (m *metricas) amostrasDaPosicao() []metrics.Sample {
 	return out
 }
 
-// PosicaoDaParticao é a posição de UMA partição num instante: a APLICADA e —
+// PositionOfPartition é a posição de UMA partição num instante: a APLICADA e —
 // quando a marca d'água do broker ainda vale — o fim do log e o atraso.
 //
-// TemFim separa "o broker não respondeu por esta partição" de "o fim do log é
+// HasEnd separa "o broker não respondeu por esta partição" de "o fim do log é
 // zero". Sem ele, HWM e lag sairiam ZERADOS numa marca vencida, e zero é o
 // lado que ESCONDE incidente — é a mesma distinção que a validade da marca
 // existe para manter.
-type PosicaoDaParticao struct {
-	Particao int32
-	Aplicado int64
-	FimDoLog int64
-	Atraso   int64
-	TemFim   bool
+type PositionOfPartition struct {
+	Partition int32
+	Aplicado  int64
+	EndDoLog  int64
+	Atraso    int64
+	TemEnd    bool
 }
 
-// posicoesDoInstante colhe TODAS as partições de UMA leitura da marca d'água.
+// posicoesOfInstant colhe TODAS as partições de UMA leitura da marca d'água.
 //
-// É a fonte única do amostrasDaPosicao acima e do Instantaneo que a
+// É a fonte única do samplesOfPosition acima e do Instantaneo que a
 // `_meta.kafka` consome: a ordem estável, a validade da marca, a omissão da
 // partição que o broker não respondeu e o piso do lag em zero moram AQUI, e
 // não em dois lugares que divergem no dia em que um deles mudar. O godoc do
-// amostrasDaPosicao explica POR QUE cada uma dessas regras é o que é.
+// samplesOfPosition explica POR QUE cada uma dessas regras é o que é.
 //
 // marcaEm é o instante da leitura do broker, ou o zero quando não há marca
 // válida — é ele que carimba a idade das colunas que dependem do broker.
-func (m *metricas) posicoesDoInstante() (ps []PosicaoDaParticao, marcaEm time.Time) {
+func (m *metricas) posicoesOfInstant() (ps []PositionOfPartition, markIn time.Time) {
 	mp := m.posicoes.Load()
 	if mp == nil || len(*mp) == 0 {
 		return nil, time.Time{}
@@ -416,19 +416,19 @@ func (m *metricas) posicoesDoInstante() (ps []PosicaoDaParticao, marcaEm time.Ti
 	}
 	sort.Slice(parts, func(i, j int) bool { return parts[i] < parts[j] })
 
-	md := m.marca.Load()
-	valida := md != nil && time.Since(md.em) <= validadeDaMarcaDagua
-	if valida {
-		marcaEm = md.em
+	md := m.mark.Load()
+	validate := md != nil && time.Since(md.in) <= validadeOfMarkDagua
+	if validate {
+		markIn = md.in
 	}
 
-	ps = make([]PosicaoDaParticao, 0, len(parts))
+	ps = make([]PositionOfPartition, 0, len(parts))
 	for _, p := range parts {
-		pos := PosicaoDaParticao{Particao: p, Aplicado: (*mp)[p].Load()}
-		if valida {
-			if fim, ok := md.fim[p]; ok {
-				pos.FimDoLog, pos.TemFim = fim, true
-				if pos.Atraso = fim - pos.Aplicado; pos.Atraso < 0 {
+		pos := PositionOfPartition{Partition: p, Aplicado: (*mp)[p].Load()}
+		if validate {
+			if end, ok := md.end[p]; ok {
+				pos.EndDoLog, pos.TemEnd = end, true
+				if pos.Atraso = end - pos.Aplicado; pos.Atraso < 0 {
 					// O fim do log é anterior à posição aplicada: leitura do
 					// broker mais velha que o consumo. Não é lag negativo, é
 					// zero.
@@ -438,26 +438,26 @@ func (m *metricas) posicoesDoInstante() (ps []PosicaoDaParticao, marcaEm time.Ti
 		}
 		ps = append(ps, pos)
 	}
-	return ps, marcaEm
+	return ps, markIn
 }
 
-// marcaVencida diz se a última resposta do broker já não descreve o presente.
-// Usa a MESMA validadeDaMarcaDagua do coletor: um segundo prazo faria o
+// markVencida diz se a última resposta do broker já não descreve o presente.
+// Usa a MESMA validadeOfMarkDagua do coletor: um segundo prazo faria o
 // /metrics e a `_meta.kafka` discordarem sobre quando o número morre.
-func (m *metricas) marcaVencida() bool {
-	md := m.marca.Load()
-	return md == nil || time.Since(md.em) > validadeDaMarcaDagua
+func (m *metricas) markVencida() bool {
+	md := m.mark.Load()
+	return md == nil || time.Since(md.in) > validadeOfMarkDagua
 }
 
-// marcaLote registra o instante de um lote NÃO VAZIO entregue pelo poller, e
-// ultimoLoteEm o devolve (zero = nenhum lote desde a subida deste consumidor).
+// markLote registra o instante de um lote NÃO VAZIO entregue pelo poller, e
+// ultimoLoteIn o devolve (zero = nenhum lote desde a subida deste consumidor).
 //
 // Mora no poller e é escrito uma vez por LOTE: quem responde "o Kafka ainda
 // entrega?" é ele, e o custo é um relógio por PollRecords em vez de um por
 // registro. O que o writer fez com o lote já sai no Desfecho.
-func (m *metricas) marcaLote(t time.Time) { m.ultimoLote.Store(t.UnixNano()) }
+func (m *metricas) markLote(t time.Time) { m.ultimoLote.Store(t.UnixNano()) }
 
-func (m *metricas) ultimoLoteEm() time.Time {
+func (m *metricas) ultimoLoteIn() time.Time {
 	if n := m.ultimoLote.Load(); n != 0 {
 		return time.Unix(0, n)
 	}

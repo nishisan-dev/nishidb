@@ -266,7 +266,7 @@ internal/typeparse	func	TestParsersDeDataNaoAlocam	TestParsersDeDataNaoAlocam	ma
 internal/typeparse	local	TestParsersDeDataNaoAlocam.dt	dt	mantido: já em inglês (internal/typeparse/datetime_test.go:357:2)
 internal/typeparse	local	TestParsersDeDataNaoAlocam.tod	tod	mantido: já em inglês (internal/typeparse/datetime_test.go:358:2)
 internal/typeparse	local	TestParsersDeDataNaoAlocam.entrada	input	entrada do DateTime; glossário: entrada (de teste) → input; rf: mv TestParsersDeDataNaoAlocam.entrada TestParsersDeDataNaoAlocam.input
-internal/typeparse	local	TestParsersDeDataNaoAlocam.hora	timeInput	é a ENTRADA do TimeOfDay ("08:54:02 PM"), não uma hora; hour perderia o sentido e time sombrearia o pacote; rf: mv TestParsersDeDataNaoAlocam.hora TestParsersDeDataNaoAlocam.timeInput
+internal/typeparse	local	TestParsersDeDataNaoAlocam.hora	timeInput	"é a ENTRADA do TimeOfDay (""08:54:02 PM""), não uma hora; hour perderia o sentido e time sombrearia o pacote; rf: mv TestParsersDeDataNaoAlocam.hora TestParsersDeDataNaoAlocam.timeInput"
 internal/typeparse	local#ambiguo	TestParsersDeDataNaoAlocam.n	n	mantido: já em inglês (internal/typeparse/datetime_test.go:362:5)
 internal/typeparse	local#ambiguo	TestParsersDeDataNaoAlocam.err	err	mantido: já em inglês (internal/typeparse/datetime_test.go:363:9)
 internal/typeparse	local#ambiguo	TestParsersDeDataNaoAlocam.n	n	mantido: já em inglês (internal/typeparse/datetime_test.go:369:5)

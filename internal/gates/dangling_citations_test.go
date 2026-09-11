@@ -40,7 +40,7 @@ const (
 // (a folha do endereço) e o pacote/endereço que a mensagem de falha cita para
 // quem for consertar.
 type renamedIdent struct {
-	pkg, address, old, new string
+	pkg, address, old, nw string
 }
 
 // TestRenamedIdentifiersAreNotCitedByTheirOldNames é o gate de CITAÇÃO
@@ -140,7 +140,7 @@ func TestRenamedIdentifiersAreNotCitedByTheirOldNames(t *testing.T) {
 	for _, h := range hits {
 		t.Errorf("%s:%d: %s foi renomeado para %s (%s %s) e a citação ficou pendurada — texto que nomeia "+
 			"identificador inexistente é pior que texto nenhum: ele afirma o que ninguém pode conferir",
-			h.file, h.line, h.token, h.entry.new, h.entry.pkg, h.entry.address)
+			h.file, h.line, h.token, h.entry.nw, h.entry.pkg, h.entry.address)
 	}
 	t.Errorf("%d citações penduradas em %d nomes velhos; o que não for citação de identificador entra em %s/protegidos.txt",
 		len(hits), len(byOldName), identMappingDir)
@@ -258,19 +258,19 @@ func readIdentMappings(dir string) (renamed []renamedIdent, surviving map[string
 				if len(cols) < 5 {
 					continue
 				}
-				pkg, especie, address, novo := cols[0], strings.SplitN(cols[1], "#", 2)[0], cols[2], cols[3]
-				if novo == "" {
+				pkg, especie, address, nw := cols[0], strings.SplitN(cols[1], "#", 2)[0], cols[2], cols[3]
+				if nw == "" {
 					continue
 				}
-				surviving[novo] = true
+				surviving[nw] = true
 				switch especie {
 				case "param", "local", "label", "receiver":
 					// Prosa não cita local por endereço, e o nome de um parâmetro
 					// renomeado não é citação pendurada em lugar nenhum.
 					continue
 				}
-				if old := addressLeaf(address); old != novo {
-					renamed = append(renamed, renamedIdent{pkg: pkg, address: address, old: old, new: novo})
+				if old := addressLeaf(address); old != nw {
+					renamed = append(renamed, renamedIdent{pkg: pkg, address: address, old: old, nw: nw})
 				}
 			}
 		case identInterfaceHeader:
@@ -280,13 +280,13 @@ func readIdentMappings(dir string) (renamed []renamedIdent, surviving map[string
 				if len(cols) < 4 {
 					continue
 				}
-				pkg, iface, metodo, novo := cols[0], cols[1], cols[2], cols[3]
-				if novo == "" || metodo == "" {
+				pkg, iface, metodo, newName := cols[0], cols[1], cols[2], cols[3]
+				if newName == "" || metodo == "" {
 					continue
 				}
-				surviving[novo] = true
-				if metodo != novo {
-					renamed = append(renamed, renamedIdent{pkg: pkg, address: iface + "." + metodo, old: metodo, new: novo})
+				surviving[newName] = true
+				if metodo != newName {
+					renamed = append(renamed, renamedIdent{pkg: pkg, address: iface + "." + metodo, old: metodo, nw: newName})
 				}
 			}
 		default:
@@ -461,20 +461,20 @@ func goFenceRanges(s string) [][2]int {
 	var faixas [][2]int
 	abertura := -1
 	for i := 0; i < len(s); {
-		fim := strings.IndexByte(s[i:], '\n')
-		if fim < 0 {
-			fim = len(s) - i
+		end := strings.IndexByte(s[i:], '\n')
+		if end < 0 {
+			end = len(s) - i
 		}
-		linha := strings.TrimSpace(s[i : i+fim])
-		if strings.HasPrefix(linha, "```") {
+		row := strings.TrimSpace(s[i : i+end])
+		if strings.HasPrefix(row, "```") {
 			if abertura >= 0 {
 				faixas = append(faixas, [2]int{abertura, i})
 				abertura = -1
-			} else if strings.TrimSpace(strings.TrimPrefix(linha, "```")) == "go" {
-				abertura = i + fim + 1
+			} else if strings.TrimSpace(strings.TrimPrefix(row, "```")) == "go" {
+				abertura = i + end + 1
 			}
 		}
-		i += fim + 1
+		i += end + 1
 	}
 	if abertura >= 0 {
 		faixas = append(faixas, [2]int{abertura, len(s)})
@@ -532,12 +532,18 @@ var danglingCitationSkipPaths = map[string]bool{
 	"planning/identificadores-em-ingles":          true,
 	"planning/identificadores-em-ingles.md":       true,
 	"planning/identificadores-em-ingles-plano.md": true,
-	"scripts/renamecite":                          true,
-	"scripts/ifacerename":                         true,
-	"scripts/renametools":                         true,
-	"benchmark/baselines":                         true,
-	"docs/glossario.md":                           true,
-	"internal/gates/dangling_citations_test.go":   true,
+	// Os dois registros do fechamento à mão (11/09/2026) são tabelas De→Para
+	// como o plano, e o aceite do ciclo nomeia o que foi renomeado para
+	// registrar o rename: o nome velho ali é o DADO, não citação.
+	"planning/rename_pt_functions_plan.md":      true,
+	"planning/checkpoint_variaveis.md":          true,
+	"docs/aceite-identificadores-em-ingles.md":  true,
+	"scripts/renamecite":                        true,
+	"scripts/ifacerename":                       true,
+	"scripts/renametools":                       true,
+	"benchmark/baselines":                       true,
+	"docs/glossario.md":                         true,
+	"internal/gates/dangling_citations_test.go": true,
 }
 
 // danglingCitationChunks devolve tudo que o gate varre — os comentários e
@@ -606,8 +612,8 @@ func danglingCitationChunks(t *testing.T) ([]citationChunk, declarations) {
 // tratou como sobrevivente todo nome que só o fixture ainda tinha — cegando-se
 // justamente para as citações penduradas que o ciclo deixou.
 func underTestdata(rel string) bool {
-	for _, seg := range strings.Split(rel, "/") {
-		if seg == "testdata" {
+	for _, sec := range strings.Split(rel, "/") {
+		if sec == "testdata" {
 			return true
 		}
 	}
@@ -776,25 +782,25 @@ func TestInterfaceMethodRenamesAreChargedLikeAnyOtherLeaf(t *testing.T) {
 			"e as citações dos métodos renomeados pelo ifacerename ficam fora do gate (%d linhas lidas)", len(renamed))
 	}
 	casos := []struct {
-		nome   string
+		name   string
 		chunk  citationChunk
 		cobra  bool
 		porque string
 	}{
 		{
-			nome:   "folha com maiúscula interna em prosa nua",
+			name:   "folha com maiúscula interna em prosa nua",
 			chunk:  citationChunk{file: "internal/outro/o.go", pkg: "internal/outro", line: 7, kind: chunkGoComment, text: "// A leitura chama AbreSnapshot antes de varrer."},
 			cobra:  true,
 			porque: "AbreSnapshot não é palavra de prosa em nenhuma das duas línguas do repositório",
 		},
 		{
-			nome:   "folha de uma maiúscula em prosa nua",
+			name:   "folha de uma maiúscula em prosa nua",
 			chunk:  citationChunk{file: "internal/outro/o.go", pkg: "internal/outro", line: 3, kind: chunkGoComment, text: "// Estado corrente da entidade, mantido na escrita."},
 			cobra:  false,
 			porque: "Estado abre frase em PT-BR, e cobrá-la nua encheria o gate de prosa legítima",
 		},
 		{
-			nome:   "folha de uma maiúscula qualificada pelo dono",
+			name:   "folha de uma maiúscula qualificada pelo dono",
 			chunk:  citationChunk{file: "docs/debitos.md", line: 230, kind: chunkMarkup, text: "O materializador expõe Store.Estado para o executor."},
 			cobra:  true,
 			porque: "a forma qualificada diz de quem está falando",
@@ -804,7 +810,7 @@ func TestInterfaceMethodRenamesAreChargedLikeAnyOtherLeaf(t *testing.T) {
 	for _, c := range casos {
 		hits := danglingHits([]citationChunk{c.chunk}, vazio, byOldName, surviving)
 		if got := len(hits) > 0; got != c.cobra {
-			t.Errorf("%s: cobrada = %v, esperado %v (%s): %q", c.nome, got, c.cobra, c.porque, c.chunk.text)
+			t.Errorf("%s: cobrada = %v, esperado %v (%s): %q", c.name, got, c.cobra, c.porque, c.chunk.text)
 		}
 	}
 }
@@ -831,10 +837,10 @@ func TestTheLiveDeclarationOracleIgnoresTestdata(t *testing.T) {
 	if chunks := goCitationChunks(rel, path, dentro, !underTestdata(rel)); len(chunks) == 0 {
 		t.Fatalf("%s não rendeu pedaço nenhum: o arquivo não foi lido, e o resto do teste seria vácuo", rel)
 	}
-	for _, nome := range []string{"Escritor", "Fecha", "Apenda"} {
-		if dentro.module[nome] {
+	for _, name := range []string{"Escritor", "Fecha", "Apenda"} {
+		if dentro.module[name] {
 			t.Errorf("%s: a declaração de %s sob testdata entrou no oráculo de declaração viva — o go tool "+
-				"ignora essa árvore, e com ela o gate dá por vivo um nome que o ciclo matou", rel, nome)
+				"ignora essa árvore, e com ela o gate dá por vivo um nome que o ciclo matou", rel, name)
 		}
 	}
 	fora := declarations{module: map[string]bool{}, byPkg: map[string]map[string]bool{}}

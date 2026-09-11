@@ -10,26 +10,26 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
-// servidorComServicosAutenticado sobe o dataset com contadores atrás de
+// serverWithServicesAutenticado sobe o dataset com contadores atrás de
 // autenticação — as rotas de auditoria e reconstrução são ADMIN.
-func servidorComServicosAutenticado(t *testing.T, n int) *server.Servidor {
+func serverWithServicesAutenticado(t *testing.T, n int) *server.Server {
 	t.Helper()
-	t.Setenv(varLeitorAuth, senhaLeitorAuth)
-	t.Setenv(varChefeAuth, senhaChefeAuth)
-	a := novoAmbienteComStorage(t, blocoAutenticacao(""), "")
-	a.escreveDataset("servicos", fmt.Sprintf(specServicos, "servicos"))
-	semeiaServicos(t, a, "servicos", n)
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	t.Setenv(varReaderAuth, passwordReaderAuth)
+	t.Setenv(varChefeAuth, passwordChefeAuth)
+	a := newEnvWithStorage(t, blockAuth(""), "")
+	a.writeDataset("servicos", fmt.Sprintf(specServices, "servicos"))
+	seedServices(t, a, "servicos", n)
+	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	roda(t, srv)
+	run(t, srv)
 	return srv
 }
 
 func TestAuditoriaDeContadoresPelaRota(t *testing.T) {
-	srv := servidorComServicosAutenticado(t, 24)
-	resp := postComAuth(t, srv, "/v1/counters/audit", `{"dataset":"servicos"}`, "chefe", senhaChefeAuth)
+	srv := serverWithServicesAutenticado(t, 24)
+	resp := postWithAuth(t, srv, "/v1/counters/audit", `{"dataset":"servicos"}`, "chefe", passwordChefeAuth)
 	defer fecha(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
@@ -52,7 +52,7 @@ func TestAuditoriaDeContadoresPelaRota(t *testing.T) {
 	// A auditoria conclusiva aparece no /v1/stats e no scrape pela mesma
 	// leitura: timestamp diferente de zero, divergentes em zero.
 	var e protocol.Stats
-	if err := json.Unmarshal([]byte(pegaComAuthOK(t, srv, "/v1/stats")), &e); err != nil {
+	if err := json.Unmarshal([]byte(fetchWithAuthOK(t, srv, "/v1/stats")), &e); err != nil {
 		t.Fatal(err)
 	}
 	for _, ds := range e.Datasets {
@@ -68,8 +68,8 @@ func TestAuditoriaDeContadoresPelaRota(t *testing.T) {
 }
 
 func TestReconstrucaoDeContadoresPelaRota(t *testing.T) {
-	srv := servidorComServicosAutenticado(t, 24)
-	resp := postComAuth(t, srv, "/v1/counters/rebuild", "", "chefe", senhaChefeAuth)
+	srv := serverWithServicesAutenticado(t, 24)
+	resp := postWithAuth(t, srv, "/v1/counters/rebuild", "", "chefe", passwordChefeAuth)
 	defer fecha(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
@@ -89,7 +89,7 @@ func TestReconstrucaoDeContadoresPelaRota(t *testing.T) {
 		}
 	}
 	// Depois de reconstruir, a auditoria continua limpa.
-	resp2 := postComAuth(t, srv, "/v1/counters/audit", "", "chefe", senhaChefeAuth)
+	resp2 := postWithAuth(t, srv, "/v1/counters/audit", "", "chefe", passwordChefeAuth)
 	defer fecha(t, resp2)
 	var aud protocol.CountersAuditResponse
 	if err := json.NewDecoder(resp2.Body).Decode(&aud); err != nil {
@@ -103,18 +103,18 @@ func TestReconstrucaoDeContadoresPelaRota(t *testing.T) {
 }
 
 func TestRotasDeContadoresExigemAutenticacaoEPapelADMIN(t *testing.T) {
-	srv := servidorComServicosAutenticado(t, 1)
-	for _, caminho := range []string{"/v1/counters/audit", "/v1/counters/rebuild"} {
-		t.Run(caminho, func(t *testing.T) {
-			anon := postComAuth(t, srv, caminho, "", "", "")
+	srv := serverWithServicesAutenticado(t, 1)
+	for _, path := range []string{"/v1/counters/audit", "/v1/counters/rebuild"} {
+		t.Run(path, func(t *testing.T) {
+			anon := postWithAuth(t, srv, path, "", "", "")
 			status := anon.StatusCode
 			fecha(t, anon)
 			if status != http.StatusUnauthorized {
 				t.Errorf("anônimo: status = %d, quer 401", status)
 			}
-			leitor := postComAuth(t, srv, caminho, "", "leitor", senhaLeitorAuth)
-			status = leitor.StatusCode
-			if f := falhaDe(t, leitor); f.Code != protocol.CodeForbidden {
+			reader := postWithAuth(t, srv, path, "", "leitor", passwordReaderAuth)
+			status = reader.StatusCode
+			if f := failOf(t, reader); f.Code != protocol.CodeForbidden {
 				t.Errorf("leitor: código = %q, quer %q", f.Code, protocol.CodeForbidden)
 			}
 			if status != http.StatusForbidden {
@@ -125,12 +125,12 @@ func TestRotasDeContadoresExigemAutenticacaoEPapelADMIN(t *testing.T) {
 }
 
 func TestRotasDeContadoresRecusamMetodoErrado(t *testing.T) {
-	srv := servidorComServicosAutenticado(t, 1)
-	for _, caminho := range []string{"/v1/counters/audit", "/v1/counters/rebuild"} {
-		t.Run(caminho, func(t *testing.T) {
-			resp := pegaComAuth(t, srv, caminho, "chefe", senhaChefeAuth)
+	srv := serverWithServicesAutenticado(t, 1)
+	for _, path := range []string{"/v1/counters/audit", "/v1/counters/rebuild"} {
+		t.Run(path, func(t *testing.T) {
+			resp := fetchWithAuth(t, srv, path, "chefe", passwordChefeAuth)
 			status := resp.StatusCode
-			if f := falhaDe(t, resp); f.Code != protocol.CodeMethod {
+			if f := failOf(t, resp); f.Code != protocol.CodeMethod {
 				t.Errorf("código = %q, quer %q", f.Code, protocol.CodeMethod)
 			}
 			if status != http.StatusMethodNotAllowed {
@@ -141,8 +141,8 @@ func TestRotasDeContadoresRecusamMetodoErrado(t *testing.T) {
 }
 
 func TestAuditoriaDeDatasetSemContadoresEhListaVazia(t *testing.T) {
-	srv := servidorComAutenticacao(t, 1, "")
-	resp := postComAuth(t, srv, "/v1/counters/audit", `{"dataset":"d"}`, "chefe", senhaChefeAuth)
+	srv := serverWithAuth(t, 1, "")
+	resp := postWithAuth(t, srv, "/v1/counters/audit", `{"dataset":"d"}`, "chefe", passwordChefeAuth)
 	defer fecha(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
@@ -154,9 +154,9 @@ func TestAuditoriaDeDatasetSemContadoresEhListaVazia(t *testing.T) {
 	if len(out.Datasets) != 1 || out.Datasets[0].Counters == nil || len(out.Datasets[0].Counters) != 0 {
 		t.Fatalf("dataset sem contadores tem de responder lista vazia: %+v", out)
 	}
-	resp2 := postComAuth(t, srv, "/v1/counters/audit", `{"dataset":"nao_existe"}`, "chefe", senhaChefeAuth)
+	resp2 := postWithAuth(t, srv, "/v1/counters/audit", `{"dataset":"nao_existe"}`, "chefe", passwordChefeAuth)
 	status := resp2.StatusCode
-	if f := falhaDe(t, resp2); f.Code != protocol.CodeUnknownDataset {
+	if f := failOf(t, resp2); f.Code != protocol.CodeUnknownDataset {
 		t.Errorf("código = %q, quer %q", f.Code, protocol.CodeUnknownDataset)
 	}
 	if status != http.StatusNotFound {
@@ -164,13 +164,13 @@ func TestAuditoriaDeDatasetSemContadoresEhListaVazia(t *testing.T) {
 	}
 }
 
-// pegaComAuthOK faz o GET autenticado como chefe e devolve o corpo.
-func pegaComAuthOK(t *testing.T, srv *server.Servidor, caminho string) string {
+// fetchWithAuthOK faz o GET autenticado como chefe e devolve o corpo.
+func fetchWithAuthOK(t *testing.T, srv *server.Server, path string) string {
 	t.Helper()
-	resp := pegaComAuth(t, srv, caminho, "chefe", senhaChefeAuth)
+	resp := fetchWithAuth(t, srv, path, "chefe", passwordChefeAuth)
 	defer fecha(t, resp)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET %s: status %d", caminho, resp.StatusCode)
+		t.Fatalf("GET %s: status %d", path, resp.StatusCode)
 	}
 	var sb []byte
 	buf := make([]byte, 4096)

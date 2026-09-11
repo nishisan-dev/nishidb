@@ -84,10 +84,10 @@ import (
 // mesma proporção e mantém a razão. Essa é a jurisdição de benchmark/micro e
 // dos baselines em benchmark/baselines.
 const (
-	rodadasDaVazao   = 5
-	eventosPorRodada = 5_000
+	rodadasDaVazao  = 5
+	eventosByRodada = 5_000
 
-	fatorMaximoSobreOCaminhoDireto = 1.4
+	fatorMaximoAboutOPathDirect = 1.4
 
 	// A janela que o gate compara é a que o comando cronometra: aplicar os
 	// eventos e gravar o checkpoint final. Abrir o dataset e fechá-lo ficam
@@ -103,41 +103,41 @@ const (
 	// 1,23x a 1,41x acima da taxa de parede; num formato com rodadas menores
 	// chegou a 2,61x. O limite de 4,0 acusa um cronômetro quebrado — que
 	// desarmaria o gate em silêncio — sem reclamar de máquina carregada.
-	fatorMaximoDaJanelaReportada = 4.0
+	fatorMaximoOfWindowReportada = 4.0
 )
 
-var reTaxaDoResumo = regexp.MustCompile(`\(([0-9]+) ev/s\)`)
+var reTaxaOfSummary = regexp.MustCompile(`\(([0-9]+) ev/s\)`)
 
 func TestVazaoDaIngestaoPeloCLI(t *testing.T) {
 	if testing.Short() {
 		t.Skip("mede vazão de ingestão")
 	}
-	entrada := corpus(t, eventosPorRodada)
+	entry := corpus(t, eventosByRodada)
 
-	razoes := rodadasDeVazao(t, entrada, rodadasDaVazao)
-	if mediana(razoes) > fatorMaximoSobreOCaminhoDireto {
+	razoes := rodadasOfVazao(t, entry, rodadasDaVazao)
+	if mediana(razoes) > fatorMaximoAboutOPathDirect {
 		t.Logf("ETAPA2 mediana %.2f acima do fator; dobrando a evidência", mediana(razoes))
-		razoes = append(razoes, rodadasDeVazao(t, entrada, rodadasDaVazao)...)
+		razoes = append(razoes, rodadasOfVazao(t, entry, rodadasDaVazao)...)
 	}
 	m := mediana(razoes)
 	t.Logf("RAZOES %s MEDIANA %.2f", formata(razoes), m)
-	if m > fatorMaximoSobreOCaminhoDireto {
+	if m > fatorMaximoAboutOPathDirect {
 		t.Errorf("o laço de ingestão do comando custou %.2fx o do caminho direto sobre os MESMOS eventos "+
 			"(máximo %.1fx, mediana de %d rodadas pareadas: %s): o envelope do comando ganhou custo POR EVENTO",
-			m, fatorMaximoSobreOCaminhoDireto, len(razoes), formata(razoes))
+			m, fatorMaximoAboutOPathDirect, len(razoes), formata(razoes))
 	}
 }
 
-// rodadasDeVazao alterna as duas pernas em rodadas curtas e devolve a razão
+// rodadasOfVazao alterna as duas pernas em rodadas curtas e devolve a razão
 // PAREADA de cada rodada.
-func rodadasDeVazao(t *testing.T, entrada string, n int) []float64 {
+func rodadasOfVazao(t *testing.T, entry string, n int) []float64 {
 	t.Helper()
 	razoes := make([]float64, 0, n)
 	for i := 0; i < n; i++ {
-		taxaCLI, taxaDeParede := umaRodadaPeloCLI(t, entrada)
-		taxaDireta := umaRodadaDireta(t, entrada)
+		taxaCLI, taxaOfParede := oneRodadaPeloCLI(t, entry)
+		taxaDireta := oneRodadaDireta(t, entry)
 		t.Logf("rodada %d: CLI %.0f ev/s (parede %.0f, %.2fx), direto %.0f ev/s (%.2fx)",
-			i+1, taxaCLI, taxaDeParede, taxaCLI/taxaDeParede, taxaDireta, taxaDireta/taxaCLI)
+			i+1, taxaCLI, taxaOfParede, taxaCLI/taxaOfParede, taxaDireta, taxaDireta/taxaCLI)
 		razoes = append(razoes, taxaDireta/taxaCLI)
 	}
 	return razoes
@@ -163,20 +163,20 @@ func mediana(v []float64) float64 {
 	return (c[len(c)/2-1] + c[len(c)/2]) / 2
 }
 
-// umaRodadaPeloCLI ingere um lote pelo comando, num dataset novo em folha, e
+// oneRodadaPeloCLI ingere um lote pelo comando, num dataset novo em folha, e
 // devolve a taxa do LAÇO de ingestão que o próprio comando reporta.
-func umaRodadaPeloCLI(t *testing.T, entrada string) (float64, float64) {
+func oneRodadaPeloCLI(t *testing.T, entry string) (float64, float64) {
 	t.Helper()
-	a := novoAmbiente(t)
-	inicio := time.Now()
-	code := a.rodaComEntrada(entrada,
+	a := newEnv(t)
+	start := time.Now()
+	code := a.runWithEntry(entry,
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-")
-	parede := time.Since(inicio)
+	parede := time.Since(start)
 	if code != cli.ExitOK {
 		t.Fatalf("ingest = %d\n%s", code, a.stderr.String())
 	}
 	saida := a.stderr.String()
-	m := reTaxaDoResumo.FindStringSubmatch(saida)
+	m := reTaxaOfSummary.FindStringSubmatch(saida)
 	if m == nil {
 		t.Fatalf("o resumo do ingest não reporta a taxa em ev/s, e o gate mede por ela:\n%s", saida)
 	}
@@ -184,20 +184,20 @@ func umaRodadaPeloCLI(t *testing.T, entrada string) (float64, float64) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taxaDeParede := float64(eventosPorRodada) / parede.Seconds()
-	if taxa > fatorMaximoDaJanelaReportada*taxaDeParede {
+	taxaOfParede := float64(eventosByRodada) / parede.Seconds()
+	if taxa > fatorMaximoOfWindowReportada*taxaOfParede {
 		t.Fatalf("o resumo reporta %.0f ev/s contra %.0f ev/s de parede (%.1fx): "+
 			"a janela cronometrada pelo comando não fecha com o tempo real",
-			taxa, taxaDeParede, taxa/taxaDeParede)
+			taxa, taxaOfParede, taxa/taxaOfParede)
 	}
-	return taxa, taxaDeParede
+	return taxa, taxaOfParede
 }
 
-// umaRodadaDireta faz o MESMO trabalho pelo materializer sobre um Store real,
+// oneRodadaDireta faz o MESMO trabalho pelo materializer sobre um Store real,
 // sem nada do comando, e cronometra a MESMA janela que o comando reporta:
 // aplicar os eventos e gravar o checkpoint final. Abrir o dataset e fechá-lo
 // ficam fora dos dois lados.
-func umaRodadaDireta(t *testing.T, entrada string) float64 {
+func oneRodadaDireta(t *testing.T, entry string) float64 {
 	t.Helper()
 	spec, err := schema.Load("../../testdata/radius.materialization.yaml", schema.BuiltinDefaults)
 	if err != nil {
@@ -209,9 +209,9 @@ func umaRodadaDireta(t *testing.T, entrada string) float64 {
 	// função existe para impedir.
 	indexados := schema.IndexedFieldNames(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    t.TempDir(),
-		SegmentSize:            8 << 20,
-		CamposIndexadosPorNome: indexados,
+		Dir:                 t.TempDir(),
+		SegmentSize:         8 << 20,
+		IndexedFieldsByName: indexados,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -228,31 +228,31 @@ func umaRodadaDireta(t *testing.T, entrada string) float64 {
 
 	// A conversão para bytes fica FORA do cronômetro: o CLI lê de um
 	// strings.Reader e fatia o buffer do Scanner, sem copiar por linha.
-	dados := []byte(entrada)
+	data := []byte(entry)
 
-	inicio := time.Now()
+	start := time.Now()
 	n := 0
-	for i := 0; i < len(dados); {
-		fim := i
-		for fim < len(dados) && dados[fim] != '\n' {
-			fim++
+	for i := 0; i < len(data); {
+		end := i
+		for end < len(data) && data[end] != '\n' {
+			end++
 		}
-		if fim > i {
-			r := mat.Apply(dados[i:fim])
+		if end > i {
+			r := mat.Apply(data[i:end])
 			if r.Err != nil {
 				t.Fatalf("caminho direto: evento %d: %v", n, r.Err)
 			}
 			n++
 		}
-		i = fim + 1
+		i = end + 1
 	}
 	if err := st.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	dur := time.Since(inicio)
+	dur := time.Since(start)
 
-	if n != eventosPorRodada {
-		t.Fatalf("caminho direto aplicou %d eventos, esperado %d", n, eventosPorRodada)
+	if n != eventosByRodada {
+		t.Fatalf("caminho direto aplicou %d eventos, esperado %d", n, eventosByRodada)
 	}
 	return float64(n) / dur.Seconds()
 }

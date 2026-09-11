@@ -18,8 +18,8 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// statsDoSegmento devolve as stats do único segmento do manifest.
-func statsDoSegmento(t *testing.T, dir string) checkpoint.SegmentInfo {
+// statsOfSegment devolve as stats do único segmento do manifest.
+func statsOfSegment(t *testing.T, dir string) checkpoint.SegmentInfo {
 	t.Helper()
 	m, err := checkpoint.Load(audManifestPath(dir))
 	if err != nil {
@@ -54,10 +54,10 @@ func TestResiduoDeLivenessDoReplayNaoConverge(t *testing.T) {
 	// aqui e não cravada: o que o replay deveria ter produzido em cada fase.
 	// Assim o teste sobrevive a qualquer mudança no tamanho do record — o
 	// resíduo é expresso como "o real MAIS o record órfão", que é o que ele é.
-	certo := livenessSemCrash(t)
+	certo := livenessWithoutCrash(t)
 
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 
 	// 1. Row criada e CHECKPOINTADA: a partir daqui ela existe no ponto S, e
 	// o record dela é o que vai virar órfão.
@@ -66,11 +66,11 @@ func TestResiduoDeLivenessDoReplayNaoConverge(t *testing.T) {
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	emS := statsDoSegmento(t, dir)
-	if emS.TotalRecords != 1 || emS.LiveRecords != 1 {
-		t.Fatalf("estado inicial inesperado: %+v", emS)
+	inS := statsOfSegment(t, dir)
+	if inS.TotalRecords != 1 || inS.LiveRecords != 1 {
+		t.Fatalf("estado inicial inesperado: %+v", inS)
 	}
-	bytesDoOrfao := emS.LiveBytes
+	bytesOfOrfao := inS.LiveBytes
 
 	// 2. Update no tail e crash entre os passos 3 e 4 do §10.2: as locations
 	// ficam duráveis apontando para o record NOVO, o manifest não.
@@ -89,11 +89,11 @@ func TestResiduoDeLivenessDoReplayNaoConverge(t *testing.T) {
 	if rec := mustGetAud(t, s2, "lv"); rec.Sequence != 2 {
 		t.Fatalf("o estado do tail deveria estar visível: %+v", rec)
 	}
-	depoisDoReplay := statsDoSegmento(t, dir)
-	t.Logf("após o replay:                          %+v", depoisDoReplay)
+	depoisOfReplay := statsOfSegment(t, dir)
+	t.Logf("após o replay:                          %+v", depoisOfReplay)
 	t.Logf("  o certo seria:                        %+v (órfão de %d bytes)",
-		certo.doisRecords, bytesDoOrfao)
-	exigeAssimetriaSegura(t, "após o replay", depoisDoReplay, certo.doisRecords, bytesDoOrfao)
+		certo.doisRecords, bytesOfOrfao)
+	exigeAssimetriaSegura(t, "após o replay", depoisOfReplay, certo.doisRecords, bytesOfOrfao)
 
 	// 4. Um TERCEIRO update com checkpoint completo — o "próximo checkpoint
 	// que enxerga a row inteira". O contador do órfão continua lá: o que este
@@ -102,20 +102,20 @@ func TestResiduoDeLivenessDoReplayNaoConverge(t *testing.T) {
 	if err := s2.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	depoisDoTerceiro := statsDoSegmento(t, dir)
-	t.Logf("após o terceiro update + checkpoint:    %+v", depoisDoTerceiro)
+	depoisOfTerceiro := statsOfSegment(t, dir)
+	t.Logf("após o terceiro update + checkpoint:    %+v", depoisOfTerceiro)
 	t.Logf("  o certo seria:                        %+v", certo.tresRecords)
 	exigeAssimetriaSegura(t, "após o terceiro update + checkpoint",
-		depoisDoTerceiro, certo.tresRecords, bytesDoOrfao)
+		depoisOfTerceiro, certo.tresRecords, bytesOfOrfao)
 }
 
-// livenessSemCrash roda a mesma sequência de escritas sem crash nenhum e
+// livenessWithoutCrash roda a mesma sequência de escritas sem crash nenhum e
 // devolve as stats corretas de cada fase. É a contraprova de que o resíduo é
 // do REPLAY: o write path fecha a conta exata.
-func livenessSemCrash(t *testing.T) struct{ doisRecords, tresRecords checkpoint.SegmentInfo } {
+func livenessWithoutCrash(t *testing.T) struct{ doisRecords, tresRecords checkpoint.SegmentInfo } {
 	t.Helper()
 	dir := t.TempDir()
-	s := audOpen(t, Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}})
+	s := audOpen(t, Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}})
 	defer s.Close()
 
 	mustPut(t, s, "lv", 1, statusPayload(t, s, "lv", "Start", 1), nil)
@@ -124,13 +124,13 @@ func livenessSemCrash(t *testing.T) struct{ doisRecords, tresRecords checkpoint.
 		t.Fatal(err)
 	}
 	var certo struct{ doisRecords, tresRecords checkpoint.SegmentInfo }
-	certo.doisRecords = statsDoSegmento(t, dir)
+	certo.doisRecords = statsOfSegment(t, dir)
 
 	atualizaLv(t, s, 3, "Start")
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	certo.tresRecords = statsDoSegmento(t, dir)
+	certo.tresRecords = statsOfSegment(t, dir)
 
 	for _, c := range []checkpoint.SegmentInfo{certo.doisRecords, certo.tresRecords} {
 		if c.LiveRecords != 1 {
@@ -152,28 +152,28 @@ func livenessSemCrash(t *testing.T) struct{ doisRecords, tresRecords checkpoint.
 //   - a MEDIDA de hoje: o excesso é EXATAMENTE um record órfão, em contagem e
 //     em bytes. Se ela mudar, o teste falha de propósito, com a instrução do
 //     que fazer.
-func exigeAssimetriaSegura(t *testing.T, momento string, obtido, certo checkpoint.SegmentInfo, bytesDoOrfao uint64) {
+func exigeAssimetriaSegura(t *testing.T, moment string, obtido, certo checkpoint.SegmentInfo, bytesOfOrfao uint64) {
 	t.Helper()
 	if obtido.TotalRecords != certo.TotalRecords {
 		t.Fatalf("%s: TotalRecords = %d, esperado %d — o total não tem resíduo nenhum",
-			momento, obtido.TotalRecords, certo.TotalRecords)
+			moment, obtido.TotalRecords, certo.TotalRecords)
 	}
 	if obtido.LiveRecords < certo.LiveRecords || obtido.LiveBytes < certo.LiveBytes {
 		t.Fatalf("%s: liveness ABAIXO do real (obtido %+v, real %+v) — "+
 			"subestimar faz a compaction descartar dado vivo",
-			momento, obtido, certo)
+			moment, obtido, certo)
 	}
-	esperado := certo
-	esperado.LiveRecords += 1
-	esperado.LiveBytes += bytesDoOrfao
-	if obtido.LiveRecords != esperado.LiveRecords || obtido.LiveBytes != esperado.LiveBytes {
+	expected := certo
+	expected.LiveRecords++
+	expected.LiveBytes += bytesOfOrfao
+	if obtido.LiveRecords != expected.LiveRecords || obtido.LiveBytes != expected.LiveBytes {
 		t.Fatalf("%s: liveness = %d records / %d bytes; o resíduo medido do replay é de "+
 			"exatamente um record órfão sobre o real (%d records / %d bytes), o que dá "+
 			"%d / %d. Se a conta passou a fechar exato, a correção do M4 aconteceu: "+
 			"atualize esta expectativa, o comentário do replayRecord em "+
 			"store_recovery.go e o godoc de checkpoint.SegmentInfo, que é onde o "+
 			"contrato do limite superior está publicado para quem consome as stats",
-			momento, obtido.LiveRecords, obtido.LiveBytes,
-			certo.LiveRecords, certo.LiveBytes, esperado.LiveRecords, esperado.LiveBytes)
+			moment, obtido.LiveRecords, obtido.LiveBytes,
+			certo.LiveRecords, certo.LiveBytes, expected.LiveRecords, expected.LiveBytes)
 	}
 }

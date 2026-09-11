@@ -49,7 +49,7 @@ func TestNotLikeNega(t *testing.T) {
 // justamente as rows que o IS NOT NULL nega. Quem quer as linhas sem a coluna
 // escreve IS NULL.
 func TestNotLikeSobreCampoAusenteEhFalso(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	h.ingere(
 		`{"id":"COM","_SEQ":1,"User-Name":"joao"}`,
 		`{"id":"SEM","_SEQ":1,"Connect-Info":1}`,

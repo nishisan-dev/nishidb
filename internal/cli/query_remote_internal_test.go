@@ -32,21 +32,21 @@ func TestCodigoDoProtocoloTraduzATabelaInteira(t *testing.T) {
 		{protocol.CodeBind, ExitQuery, "coluna ou dataset que não casa com o schema é erro da query"},
 		{protocol.CodeBadParameter, ExitQuery, "parâmetro fora do contrato é erro de quem escreveu a consulta"},
 		{protocol.CodeUnsupportedClause, ExitQuery, "cláusula ausente da v1 se conserta reescrevendo o SQL, e não olhando o servidor: o default deste switch daria o conselho errado"},
-		{protocol.CodeMaxRows, ExitTruncado, "as linhas entregues são válidas; o que falta é o resto"},
-		{protocol.CodeTimeout, ExitInterromp, "a consulta foi cortada por prazo, e repetir mais tarde é a ação"},
+		{protocol.CodeMaxRows, ExitResultTruncated, "as linhas entregues são válidas; o que falta é o resto"},
+		{protocol.CodeTimeout, ExitInterrupted, "a consulta foi cortada por prazo, e repetir mais tarde é a ação"},
 		{protocol.CodeDatasetCorrupt, ExitDataset, "o problema é o dataset, não o comando: reabrir antes de insistir"},
-		{protocol.CodeBadRequest, ExitUso, "o vala-comum manda olhar o comando ou o servidor"},
-		{protocol.CodeUnknownDataset, ExitUso, "dataset que não existe neste servidor é erro de linha de comando"},
-		{protocol.CodeTooManyQueries, ExitUso, "o teto de concorrência é do servidor, e a ação é tentar de novo"},
-		{protocol.CodeInternal, ExitUso, "falha interna não tem código próprio no contrato do §96"},
-		{protocol.CodeUnauthenticated, ExitUso, "credencial recusada (§74-77) é erro de quem chamou o comando, não do servidor"},
-		{protocol.CodeForbidden, ExitUso, "papel insuficiente (§74-77) é erro de quem chamou o comando, não do servidor"},
+		{protocol.CodeBadRequest, ExitUsageError, "o vala-comum manda olhar o comando ou o servidor"},
+		{protocol.CodeUnknownDataset, ExitUsageError, "dataset que não existe neste servidor é erro de linha de comando"},
+		{protocol.CodeTooManyQueries, ExitUsageError, "o teto de concorrência é do servidor, e a ação é tentar de novo"},
+		{protocol.CodeInternal, ExitUsageError, "falha interna não tem código próprio no contrato do §96"},
+		{protocol.CodeUnauthenticated, ExitUsageError, "credencial recusada (§74-77) é erro de quem chamou o comando, não do servidor"},
+		{protocol.CodeForbidden, ExitUsageError, "papel insuficiente (§74-77) é erro de quem chamou o comando, não do servidor"},
 		{protocol.CodeWriterFailed, ExitWriter, "o writer está em modo falho sticky (Fase 11, B5): o MESMO 4 do caminho local"},
-		{protocol.CodeCompactionBusy, ExitUso, "passada em voo (Fase 11, B5) é retentável, mas cai no MESMO vala-comum de TOO_MANY_QUERIES"},
-		{"CODIGO_QUE_NAO_EXISTE", ExitUso, "código desconhecido cai no vala-comum, nunca em zero"},
+		{protocol.CodeCompactionBusy, ExitUsageError, "passada em voo (Fase 11, B5) é retentável, mas cai no MESMO vala-comum de TOO_MANY_QUERIES"},
+		{"CODIGO_QUE_NAO_EXISTE", ExitUsageError, "código desconhecido cai no vala-comum, nunca em zero"},
 	}
 	for _, c := range casos {
-		if got := codigoDoProtocolo(c.codigo); got != c.quer {
+		if got := codigoOfProtocolo(c.codigo); got != c.quer {
 			t.Errorf("%s → exit %d, queria %d: %s", c.codigo, got, c.quer, c.porque)
 		}
 	}

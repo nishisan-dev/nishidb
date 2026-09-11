@@ -374,7 +374,7 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 				return err
 			}
 			if p.cur.Type == lexer.TokenDot {
-				return p.errAt(p.cur.Pos, "nome na projeção tem no máximo dois níveis (campo.caminho)")
+				return p.errAt(p.cur.Pos, "nome na projeção tem no máximo dois níveis (field.caminho)")
 			}
 		}
 		st.Projection = append(st.Projection, ref)
@@ -523,7 +523,7 @@ func (p *parser) parsePredicate() (Expr, error) {
 			return nil, err
 		}
 		if p.cur.Type == lexer.TokenDot {
-			return nil, p.errAt(p.cur.Pos, "nome no filtro tem no máximo dois níveis (campo.caminho)")
+			return nil, p.errAt(p.cur.Pos, "nome no filtro tem no máximo dois níveis (field.caminho)")
 		}
 	}
 

@@ -62,7 +62,7 @@ const (
 	//	rate(poll_blocked)≈0, rate(writer_idle)≈1  → o tópico está calado
 	//	                       ... com lag subindo → o poller não entrega
 	MetKafkaPollBlockedSeconds = "nishidb_kafka_poll_blocked_seconds_total"
-	MetKafkaWriterIdleSeconds  = "nishidb_kafka_writer_idle_seconds_total"
+	MetKafkaWriterIDleSeconds  = "nishidb_kafka_writer_idle_seconds_total"
 
 	// MetIngestApplySeconds é a latência de UM evento pelo Apply: parse,
 	// leitura do estado, merge, Put e o Apenda do histórico.
@@ -237,7 +237,7 @@ const (
 	// que o produto reconhecesse — não havia o que medir.
 	//
 	// MetQueryLongestRunningSeconds é a idade da consulta em voo há mais tempo.
-	// É MEDIDOR e é lida no scrape (ver emVoo.maisAntiga), nunca atualizada na
+	// É MEDIDOR e é lida no scrape (ver inVoo.maisAntiga), nunca atualizada na
 	// admissão: o número que interessa CRESCE SOZINHO enquanto nada acontece, e
 	// um medidor escrito só quando uma consulta começa ou termina ficaria
 	// congelado exatamente no estado que ele existe para denunciar — o servidor
@@ -369,7 +369,7 @@ const (
 	// para de vez na primeira falha, e sem esta série isso é indistinguível de
 	// "não há o que reconstruir".
 	//
-	// Ela sobe ANTES da goroutine (§92): quem chamou IniciaReconstrucao tem
+	// Ela sobe ANTES da goroutine (§92): quem chamou StartRebuild tem
 	// direito de ver o estado que acabou de instalar, e uma leitura entre a
 	// chamada e o primeiro escalonamento não pode responder que nada subiu. Por
 	// isso ela NASCE EM 1 num dataset com campo indexado — o valor verdadeiro na
@@ -378,7 +378,7 @@ const (
 	// MetIndexCRCFailuresTotal conta os .sidx reprovados no crc32c, e é DEGRAU —
 	// não taxa.
 	//
-	// Ela sobe uma vez por ABERTURA do arquivo, e o garanteSelado publica no cache
+	// Ela sobe uma vez por ABERTURA do arquivo, e o garanteSealed publica no cache
 	// o mapeamento reprovado, de modo que a abertura acontece uma vez por segmento
 	// por processo. Um alerta escrito com rate() sobre ela dá um pico e se
 	// auto-resolve em minutos, enquanto o segmento segue enumerando
@@ -527,7 +527,7 @@ const (
 	// operador não tem de ir ao YAML para descobrir isso.
 	MetIngestDecodeWorkers = "nishidb_ingest_decode_workers"
 
-	// MetKafkaDecodeIdleSeconds é a espera SOMADA dos decodificadores pela
+	// MetKafkaDecodeIDleSeconds é a espera SOMADA dos decodificadores pela
 	// fila, e ela existe porque a ociosidade do WRITER mudou de dono.
 	//
 	// Até a Fase 4 o writer consumia a fila, e a espera dele era a da fila. Com
@@ -539,7 +539,7 @@ const (
 	// e esta série guarda o outro lado — dividida por
 	// nishidb_ingest_decode_workers, ela é a fração de tempo em que os
 	// decodificadores não tinham o que fazer.
-	MetKafkaDecodeIdleSeconds = "nishidb_kafka_decode_idle_seconds_total"
+	MetKafkaDecodeIDleSeconds = "nishidb_kafka_decode_idle_seconds_total"
 
 	// MetKafkaPartitionsAssigned contra MetKafkaPartitionsTotal é o que
 	// torna visível o assignment parcial — duas instâncias no mesmo group

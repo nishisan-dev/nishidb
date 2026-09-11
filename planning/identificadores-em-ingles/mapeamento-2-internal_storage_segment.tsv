@@ -321,7 +321,7 @@ internal/storage/segment	local	TestScanFromPercorreEDevolveFimValido.end	end	man
 internal/storage/segment	local#ambiguo	TestScanFromPercorreEDevolveFimValido.off	off	mantido: já em inglês (internal/storage/segment/segment_test.go:486:45)
 internal/storage/segment	local	TestScanFromPercorreEDevolveFimValido.rec	rec	mantido: já em inglês (internal/storage/segment/segment_test.go:486:57)
 internal/storage/segment	local	TestScanFromPercorreEDevolveFimValido.n	n	mantido: já em inglês (internal/storage/segment/segment_test.go:502:6)
-internal/storage/segment	local	TestScanFromPercorreEDevolveFimValido.end2	end2	mantido: já em inglês: ordinal da cena de teste (o fim válido do SEGUNDO ScanFrom, o parcial; o primeiro é `end`, segment_test.go:486:2), não desempate de tradução do termo "fim → end" (internal/storage/segment/segment_test.go:503:2)
+internal/storage/segment	local	TestScanFromPercorreEDevolveFimValido.end2	end2	"mantido: já em inglês: ordinal da cena de teste (o fim válido do SEGUNDO ScanFrom, o parcial; o primeiro é `end`, segment_test.go:486:2), não desempate de tradução do termo ""fim → end"" (internal/storage/segment/segment_test.go:503:2)"
 internal/storage/segment	local	TestScanFromPercorreEDevolveFimValido.sentinel	sentinel	mantido: já em inglês (internal/storage/segment/segment_test.go:509:2)
 internal/storage/segment	local	TestAppendReadRoundTrip.recs	recs	mantido: já em inglês (internal/storage/segment/segment_test.go:50:2)
 internal/storage/segment	local#ambiguo	TestScanFromPercorreEDevolveFimValido.err	err	mantido: já em inglês (internal/storage/segment/segment_test.go:510:8)
@@ -367,7 +367,7 @@ internal/storage/segment	local#ambiguo	TestAppendReadRoundTrip.rec	rec	mantido: 
 internal/storage/segment	type	failingReaderAt	failingReaderAt	mantido: já em inglês (internal/storage/segment/segment_test.go:582:6)
 internal/storage/segment	field	failingReaderAt.data	data	mantido: já em inglês (internal/storage/segment/segment_test.go:583:2)
 internal/storage/segment	field	failingReaderAt.failFrom	failFrom	mantido: já em inglês (internal/storage/segment/segment_test.go:584:2)
-internal/storage/segment	var	errFakeIO	errFakeIO	mantido: já em inglês: sentinela errXxx com "dublê → fake" do glossário e a inicial IO em caixa alta (internal/storage/segment/segment_test.go:587:5)
+internal/storage/segment	var	errFakeIO	errFakeIO	"mantido: já em inglês: sentinela errXxx com ""dublê → fake"" do glossário e a inicial IO em caixa alta (internal/storage/segment/segment_test.go:587:5)"
 internal/storage/segment	method	failingReaderAt.ReadAt	ReadAt	mantido: já em inglês (internal/storage/segment/segment_test.go:589:27)
 internal/storage/segment	param	failingReaderAt.ReadAt.p	p	mantido: já em inglês (internal/storage/segment/segment_test.go:589:34)
 internal/storage/segment	param	failingReaderAt.ReadAt.off	off	mantido: já em inglês (internal/storage/segment/segment_test.go:589:44)

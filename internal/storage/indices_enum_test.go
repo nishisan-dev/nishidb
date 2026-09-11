@@ -16,23 +16,23 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// abreHistoricoIndexadoEm abre — ou REABRE — o dataset histórico em dir.
+// openHistoryIndexedIn abre — ou REABRE — o dataset histórico em dir.
 //
-// Difere do abreStoreHistoricoIndexado por receber o diretório e o dataset de
+// Difere do openStoreHistoryIndexed por receber o diretório e o dataset de
 // base, e as duas coisas são o que permite fechar e reabrir o MESMO dataset
 // dentro de um teste: o histórico não tem dicionário próprio por desenho, então
 // reabri-lo com um base novo daria outro mapeamento nome→id e as postings
 // gravadas na primeira abertura passariam a responder por outro campo.
-func abreHistoricoIndexadoEm(t *testing.T, base *Store, dir string, campos []string, segSize int64) *Store {
+func openHistoryIndexedIn(t *testing.T, base *Store, dir string, fields []string, secSize int64) *Store {
 	t.Helper()
 	return openStore(t, Options{
-		Dir:                    dir,
-		Dataset:                "events_history",
-		SegmentSize:            segSize,
-		Modo:                   ModoHistorico,
-		DictCompartilhado:      base.FieldDict(),
-		CampoDeEscrita:         "_writtenAt",
-		CamposIndexadosPorNome: campos,
+		Dir:                   dir,
+		Dataset:               "events_history",
+		SegmentSize:           secSize,
+		Mode:                  HistoryMode,
+		SharedDictionary:      base.FieldDict(),
+		WriteInstantFieldName: "_writtenAt",
+		IndexedFieldsByName:   fields,
 	})
 }
 
@@ -42,11 +42,11 @@ func abreHistoricoIndexadoEm(t *testing.T, base *Store, dir string, campos []str
 // resultado revalidado é igual nos dois casos — é justamente a tese da tarefa —,
 // e só o conjunto cru distingue "a seção respondeu zero linhas" de "o segmento
 // inteiro virou candidato".
-func candidatosCrus(t *testing.T, s *Store, campo types.FieldID, v types.Value) []types.RowID {
+func candidatosCrus(t *testing.T, s *Store, field types.FieldID, v types.Value) []types.RowID {
 	t.Helper()
-	it, err := s.Lookup(campo, v)
+	it, err := s.Lookup(field, v)
 	if err != nil {
-		t.Fatalf("Lookup(%d): %v", campo, err)
+		t.Fatalf("Lookup(%d): %v", field, err)
 	}
 	return collectRows(t, it)
 }
@@ -54,16 +54,16 @@ func candidatosCrus(t *testing.T, s *Store, campo types.FieldID, v types.Value) 
 // lookupRevalidado drena o Lookup e aplica o MESMO filtro que o executor
 // aplicaria (§44): liveness pelo GetByRowID e o predicado inteiro sobre o
 // payload. É o que o produto realmente devolve.
-func lookupRevalidado(t *testing.T, s *Store, campo types.FieldID, v types.Value) []types.RowID {
+func lookupRevalidado(t *testing.T, s *Store, field types.FieldID, v types.Value) []types.RowID {
 	t.Helper()
 	var out []types.RowID
 	var buf []byte
-	for _, id := range candidatosCrus(t, s, campo, v) {
+	for _, id := range candidatosCrus(t, s, field, v) {
 		if len(out) > 0 && out[len(out)-1] >= id {
 			t.Fatalf("o Lookup devolveu %d depois de %d: a ordem tem de ser estritamente crescente",
 				id, out[len(out)-1])
 		}
-		ok, b := linhaCasa(t, s, id, campo, v, buf)
+		ok, b := rowCasa(t, s, id, field, v, buf)
 		buf = b
 		if ok {
 			out = append(out, id)
@@ -75,14 +75,14 @@ func lookupRevalidado(t *testing.T, s *Store, campo types.FieldID, v types.Value
 // fullScanFiltrado é a resposta de referência: a varredura que o planner faria
 // sem índice nenhum. Ela é o oráculo desta tarefa inteira — o Lookup revalidado
 // tem de coincidir com ela, com índice ou sem.
-func fullScanFiltrado(t *testing.T, s *Store, campo types.FieldID, v types.Value) []types.RowID {
+func fullScanFiltrado(t *testing.T, s *Store, field types.FieldID, v types.Value) []types.RowID {
 	t.Helper()
 	var out []types.RowID
 	var buf []byte
 	it := s.ScanLive(s.presente())
 	defer func() { _ = it.Close() }()
 	for it.Next() {
-		ok, b := linhaCasa(t, s, it.RowID(), campo, v, buf)
+		ok, b := rowCasa(t, s, it.RowID(), field, v, buf)
 		buf = b
 		if ok {
 			out = append(out, it.RowID())
@@ -94,8 +94,8 @@ func fullScanFiltrado(t *testing.T, s *Store, campo types.FieldID, v types.Value
 	return out
 }
 
-// linhaCasa devolve se a row está viva e tem o campo com o valor.
-func linhaCasa(t *testing.T, s *Store, id types.RowID, campo types.FieldID, v types.Value, buf []byte) (bool, []byte) {
+// rowCasa devolve se a row está viva e tem o campo com o valor.
+func rowCasa(t *testing.T, s *Store, id types.RowID, field types.FieldID, v types.Value, buf []byte) (bool, []byte) {
 	t.Helper()
 	rec, out, ok, err := s.GetByRowID(s.presente(), id, buf)
 	if err != nil {
@@ -114,7 +114,7 @@ func linhaCasa(t *testing.T, s *Store, id types.RowID, campo types.FieldID, v ty
 			}
 			return false, out
 		}
-		if fid == campo && valueEqual(val, v) {
+		if fid == field && valueEqual(val, v) {
 			return true, out
 		}
 	}
@@ -128,28 +128,28 @@ func linhaCasa(t *testing.T, s *Store, id types.RowID, campo types.FieldID, v ty
 func TestSegmentoSemIndiceRespondePorEnumeracao(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
-	poeLinhas(t, s, 30)
-	campo := campoDoDicionario(t, s, "node")
+	s := openHistoryIndexedIn(t, base, dir, []string{"node"}, 8<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
+	poeRows(t, s, 30)
+	field := fieldOfDicionario(t, s, "node")
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	// Simula o dataset antigo: o segmento existe, o índice não.
-	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
+	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), target)); err != nil {
 		t.Fatal(err)
 	}
-	s2 := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
+	s2 := openHistoryIndexedIn(t, base, dir, []string{"node"}, 8<<10)
 
-	esperado := fullScanFiltrado(t, s2, campo, strVal("n1"))
-	if len(esperado) == 0 {
+	expected := fullScanFiltrado(t, s2, field, strVal("n1"))
+	if len(expected) == 0 {
 		t.Fatal("pré-condição: o corpus não tem nenhuma linha com node=n1, o teste não exercita nada")
 	}
-	rows := lookupRevalidado(t, s2, campo, strVal("n1"))
-	if !slices.Equal(rows, esperado) {
-		t.Errorf("Lookup por enumeração = %v, quero o mesmo que o full scan filtrado = %v", rows, esperado)
+	rows := lookupRevalidado(t, s2, field, strVal("n1"))
+	if !slices.Equal(rows, expected) {
+		t.Errorf("Lookup por enumeração = %v, quero o mesmo que o full scan filtrado = %v", rows, expected)
 	}
 }
 
@@ -165,35 +165,35 @@ func TestSegmentoSemIndiceRespondePorEnumeracao(t *testing.T) {
 func TestSecaoAusenteNoSeladoEnumeraOSegmento(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
-	campoNode := campoDoDicionario(t, s, "node")
-	campoType := campoDoDicionario(t, s, "type")
+	s := openHistoryIndexedIn(t, base, dir, []string{"node"}, 8<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
+	fieldNode := fieldOfDicionario(t, s, "node")
+	fieldType := fieldOfDicionario(t, s, "type")
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	// Troca o .sidx do segmento por um que só tem seção de `type`: é o arquivo
 	// que a reconstrução teria produzido antes de `node` entrar no schema.
-	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
-	if err := os.Remove(caminho); err != nil {
+	path := segindex.SealedPath(filepath.Join(dir, "data"), target)
+	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	e := segindex.NewWriter()
-	e.Add(campoType, hashIndexado(t, types.Value{Type: types.TypeInt64, I64: 0}), 0)
-	if err := e.WriteSealed(caminho, alvo); err != nil {
+	e.Add(fieldType, hashIndexed(t, types.Value{Type: types.TypeInt64, I64: 0}), 0)
+	if err := e.WriteSealed(path, target); err != nil {
 		t.Fatal(err)
 	}
 
-	s2 := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
-	esperado := fullScanFiltrado(t, s2, campoNode, strVal("n1"))
-	if len(esperado) == 0 {
+	s2 := openHistoryIndexedIn(t, base, dir, []string{"node"}, 8<<10)
+	expected := fullScanFiltrado(t, s2, fieldNode, strVal("n1"))
+	if len(expected) == 0 {
 		t.Fatal("pré-condição: o corpus não tem nenhuma linha com node=n1")
 	}
-	rows := lookupRevalidado(t, s2, campoNode, strVal("n1"))
-	if !slices.Equal(rows, esperado) {
-		t.Errorf("com a seção de node ausente o Lookup deu %v, quero o full scan filtrado %v", rows, esperado)
+	rows := lookupRevalidado(t, s2, fieldNode, strVal("n1"))
+	if !slices.Equal(rows, expected) {
+		t.Errorf("com a seção de node ausente o Lookup deu %v, quero o full scan filtrado %v", rows, expected)
 	}
 }
 
@@ -207,15 +207,15 @@ func TestSecaoAusenteNoSeladoEnumeraOSegmento(t *testing.T) {
 func TestValorAusenteNaSecaoNaoEnumeraOSegmento(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
-	campo := campoDoDicionario(t, s, "node")
-	if _, err := os.Stat(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
-		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
+	s := openHistoryIndexedIn(t, base, dir, []string{"node"}, 8<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
+	field := fieldOfDicionario(t, s, "node")
+	if _, err := os.Stat(segindex.SealedPath(filepath.Join(dir, "data"), target)); err != nil {
+		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", target, err)
 	}
 
-	if crus := candidatosCrus(t, s, campo, strVal("nunca-visto")); len(crus) != 0 {
+	if crus := candidatosCrus(t, s, field, strVal("nunca-visto")); len(crus) != 0 {
 		t.Errorf("valor ausente devolveu %d candidatos: a seção existe e respondeu, ninguém devia enumerar", len(crus))
 	}
 }
@@ -223,7 +223,7 @@ func TestValorAusenteNaSecaoNaoEnumeraOSegmento(t *testing.T) {
 // TestAEnumeracaoDoHistoricoUsaAFaixaDeRowIds: no histórico os appends são
 // serializados pelo mutex do writer e o rowId é monotônico, então os segmentos
 // particionam o espaço de rowId em faixas contíguas. A fonte de enumeração
-// explora exatamente isso — a mesma propriedade que o primeiroRowIDDoSeguinte
+// explora exatamente isso — a mesma propriedade que o primeiroRowIDOfSeguinte
 // da retenção já usa —, e por isso ela não lê record nenhum.
 //
 // O oráculo isola a fonte perguntando por um valor que NÃO existe: os segmentos
@@ -232,38 +232,38 @@ func TestValorAusenteNaSecaoNaoEnumeraOSegmento(t *testing.T) {
 func TestAEnumeracaoDoHistoricoUsaAFaixaDeRowIds(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
-	poeLinhas(t, s, 30)
-	campo := campoDoDicionario(t, s, "node")
-	esperado := rowsDoSegmento(t, s, alvo)
+	s := openHistoryIndexedIn(t, base, dir, []string{"node"}, 8<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
+	poeRows(t, s, 30)
+	field := fieldOfDicionario(t, s, "node")
+	expected := rowsOfSegment(t, s, target)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
+	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), target)); err != nil {
 		t.Fatal(err)
 	}
-	s2 := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
+	s2 := openHistoryIndexedIn(t, base, dir, []string{"node"}, 8<<10)
 
-	crus := candidatosCrus(t, s2, campo, strVal("valor-que-nunca-existiu"))
-	if !slices.Equal(crus, esperado) {
-		t.Errorf("a enumeração do histórico deu %v, quero a faixa do segmento %v", crus, esperado)
+	crus := candidatosCrus(t, s2, field, strVal("valor-que-nunca-existiu"))
+	if !slices.Equal(crus, expected) {
+		t.Errorf("a enumeração do histórico deu %v, quero a faixa do segmento %v", crus, expected)
 	}
 }
 
-// rowsDoSegmento lê os rowIds que moram no segmento pelos PRÓPRIOS records. É
+// rowsOfSegment lê os rowIds que moram no segmento pelos PRÓPRIOS records. É
 // o oráculo caro que a fonte de enumeração existe para não pagar: se a faixa
 // derivada divergir disto, a premissa de contiguidade do histórico é falsa.
-func rowsDoSegmento(t *testing.T, s *Store, seg uint32) []types.RowID {
+func rowsOfSegment(t *testing.T, s *Store, sec uint32) []types.RowID {
 	t.Helper()
 	var out []types.RowID
-	if _, err := s.segR.ScanFrom(seg, int64(segment.HeaderSize), func(_ uint32, rec types.Record) error {
+	if _, err := s.secR.ScanFrom(sec, int64(segment.HeaderSize), func(_ uint32, rec types.Record) error {
 		out = append(out, rec.RowID)
 		return nil
 	}); err != nil {
-		t.Fatalf("ScanFrom(%d): %v", seg, err)
+		t.Fatalf("ScanFrom(%d): %v", sec, err)
 	}
 	return out
 }
@@ -282,9 +282,9 @@ func rowsDoSegmento(t *testing.T, s *Store, seg uint32) []types.RowID {
 // candidatos de um full scan —, e não só as do segmento sem índice.
 func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
 	// Os updates espalham rowIds antigos pelo segmento novo: é essa mistura que
 	// torna a faixa contígua do histórico inválida aqui.
 	for i := range 40 {
@@ -293,49 +293,49 @@ func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testi
 		if err != nil || !ok {
 			t.Fatalf("GetByKey(%s): %v (ok=%v)", key, err, ok)
 		}
-		mustPut(t, s, key, int64(1000+i), linhaIndexada(t, s, key, "atualizado", int64(i%3)), &prev)
+		mustPut(t, s, key, int64(1000+i), rowIndexada(t, s, key, "atualizado", int64(i%3)), &prev)
 	}
-	campo := campoDoDicionario(t, s, "node")
+	field := fieldOfDicionario(t, s, "node")
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
+	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), target)); err != nil {
 		t.Fatal(err)
 	}
-	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
+	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})
 
-	noAlvo := rowsComLocationNoSegmento(t, s2, alvo)
-	if len(noAlvo) == 0 {
+	noTarget := rowsWithLocationInSegment(t, s2, target)
+	if len(noTarget) == 0 {
 		t.Fatal("pré-condição: nenhuma location aponta para o segmento sem índice")
 	}
-	esperado := todasAsRowsComLocation(t, s2)
+	expected := todasAsRowsWithLocation(t, s2)
 	refs, err := s2.listaSegmentos()
 	if err != nil {
 		t.Fatalf("listaSegmentos: %v", err)
 	}
-	antesEnum, antesIdx := s2.segPorEnumeracao.Load(), s2.segPorIndice.Load()
-	crus := candidatosCrus(t, s2, campo, strVal("valor-que-nunca-existiu"))
-	if !slices.Equal(crus, esperado) {
+	beforeEnum, beforeIDx := s2.segByEnumeracao.Load(), s2.segByIndice.Load()
+	crus := candidatosCrus(t, s2, field, strVal("valor-que-nunca-existiu"))
+	if !slices.Equal(crus, expected) {
 		t.Errorf("a enumeração colapsada deu %d candidatos, quero as %d rows com location publicada",
-			len(crus), len(esperado))
+			len(crus), len(expected))
 	}
 	// A métrica do colapso: TODOS os segmentos contam como enumerados — é a
 	// única visão da degradação, e contar os que "teriam" respondido por
 	// índice a esconderia. Sem esta asserção, trocar o Add(len(refs)) por
 	// Add(1) (ou por nada) passava pela suíte inteira.
-	if got := s2.segPorEnumeracao.Load() - antesEnum; got != int64(len(refs)) {
-		t.Errorf("segPorEnumeracao subiu %d no colapso, quero %d (todos os segmentos)", got, len(refs))
+	if got := s2.segByEnumeracao.Load() - beforeEnum; got != int64(len(refs)) {
+		t.Errorf("secByEnumeration subiu %d no colapso, quero %d (todos os segmentos)", got, len(refs))
 	}
-	if got := s2.segPorIndice.Load() - antesIdx; got != 0 {
-		t.Errorf("segPorIndice subiu %d no colapso, quero 0", got)
+	if got := s2.segByIndice.Load() - beforeIDx; got != 0 {
+		t.Errorf("secByIndex subiu %d no colapso, quero 0", got)
 	}
 }
 
-// rowsComLocationNoSegmento diz quais rowIds moram no segmento — só serve à
+// rowsWithLocationInSegment diz quais rowIds moram no segmento — só serve à
 // PRÉ-CONDIÇÃO dos testes (o segmento sem índice tem linha a perder); a fonte
 // do produto não filtra por segmento desde o colapso.
-func rowsComLocationNoSegmento(t *testing.T, s *Store, seg uint32) []types.RowID {
+func rowsWithLocationInSegment(t *testing.T, s *Store, sec uint32) []types.RowID {
 	t.Helper()
 	var out []types.RowID
 	for id := s.RowIDBase(); id < types.RowID(s.nextRowID.Load()); id++ {
@@ -343,17 +343,17 @@ func rowsComLocationNoSegmento(t *testing.T, s *Store, seg uint32) []types.RowID
 		if !ok {
 			continue
 		}
-		if dono, _, _ := rowindex.Unpack(packed); dono == seg {
+		if dono, _, _ := rowindex.Unpack(packed); dono == sec {
 			out = append(out, id)
 		}
 	}
 	return out
 }
 
-// todasAsRowsComLocation é o conjunto de referência da enumeração colapsada:
+// todasAsRowsWithLocation é o conjunto de referência da enumeração colapsada:
 // todo rowId com location publicada, em ordem crescente, lido pela MESMA
 // estrutura que a fonte caminha.
-func todasAsRowsComLocation(t *testing.T, s *Store) []types.RowID {
+func todasAsRowsWithLocation(t *testing.T, s *Store) []types.RowID {
 	t.Helper()
 	var out []types.RowID
 	for id := s.RowIDBase(); id < types.RowID(s.nextRowID.Load()); id++ {
@@ -369,28 +369,28 @@ func todasAsRowsComLocation(t *testing.T, s *Store) []types.RowID {
 // MESMO conjunto, indexado ou enumerado. A diferença é só de custo.
 func TestOResultadoNaoMudaComOSegmentoIndexadoOuNao(t *testing.T) {
 	for _, caso := range []struct {
-		nome      string
-		historico bool
+		name    string
+		history bool
 	}{{"materializado", false}, {"historico", true}} {
-		t.Run(caso.nome, func(t *testing.T) {
+		t.Run(caso.name, func(t *testing.T) {
 			base := openStore(t, Options{})
 			dir := t.TempDir()
-			abre := func() *Store {
-				if caso.historico {
-					return abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
+			open := func() *Store {
+				if caso.history {
+					return openHistoryIndexedIn(t, base, dir, []string{"node"}, 8<<10)
 				}
-				return openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
+				return openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})
 			}
-			s := abre()
-			poeLinhasAteRotacionar(t, s, s.curSegID.Load())
-			poeLinhasAteRotacionar(t, s, s.curSegID.Load())
-			poeLinhas(t, s, 30)
-			campo := campoDoDicionario(t, s, "node")
+			s := open()
+			poeRowsUntilRotacionar(t, s, s.curSecID.Load())
+			poeRowsUntilRotacionar(t, s, s.curSecID.Load())
+			poeRows(t, s, 30)
+			field := fieldOfDicionario(t, s, "node")
 
-			valores := []string{"n0", "n1", "n2", "n3", "nunca-visto"}
-			comIndice := make([][]types.RowID, len(valores))
-			for i, v := range valores {
-				comIndice[i] = lookupRevalidado(t, s, campo, strVal(v))
+			values := []string{"n0", "n1", "n2", "n3", "nunca-visto"}
+			withIndex := make([][]types.RowID, len(values))
+			for i, v := range values {
+				withIndex[i] = lookupRevalidado(t, s, field, strVal(v))
 			}
 			if err := s.Close(); err != nil {
 				t.Fatalf("Close: %v", err)
@@ -398,18 +398,18 @@ func TestOResultadoNaoMudaComOSegmentoIndexadoOuNao(t *testing.T) {
 
 			// Apaga TODOS os índices selados: é o dataset gravado pelo binário
 			// anterior, que a migração precisa responder sem recriar nada.
-			apagaTodosOsSelados(t, filepath.Join(dir, "data"))
-			s2 := abre()
-			for i, v := range valores {
-				semIndice := lookupRevalidado(t, s2, campo, strVal(v))
-				if !slices.Equal(semIndice, comIndice[i]) {
-					t.Errorf("node=%s: sem índice deu %v, com índice deu %v", v, semIndice, comIndice[i])
+			deleteTodosOsSelados(t, filepath.Join(dir, "data"))
+			s2 := open()
+			for i, v := range values {
+				withoutIndice := lookupRevalidado(t, s2, field, strVal(v))
+				if !slices.Equal(withoutIndice, withIndex[i]) {
+					t.Errorf("node=%s: sem índice deu %v, com índice deu %v", v, withoutIndice, withIndex[i])
 				}
 			}
 			// E o corpus tem de exercitar alguma coisa: um dataset em que toda
 			// consulta devolve vazio passaria neste teste sem provar nada.
 			var total int
-			for _, r := range comIndice {
+			for _, r := range withIndex {
 				total += len(r)
 			}
 			if total == 0 {
@@ -419,8 +419,8 @@ func TestOResultadoNaoMudaComOSegmentoIndexadoOuNao(t *testing.T) {
 	}
 }
 
-// apagaTodosOsSelados remove todo .sidx do diretório de dados.
-func apagaTodosOsSelados(t *testing.T, dir string) {
+// deleteTodosOsSelados remove todo .sidx do diretório de dados.
+func deleteTodosOsSelados(t *testing.T, dir string) {
 	t.Helper()
 	entradas, err := os.ReadDir(dir)
 	if err != nil {
@@ -459,14 +459,14 @@ func apagaTodosOsSelados(t *testing.T, dir string) {
 // medir a coincidência.
 func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node", "type"}})
-	campoNode := campoDoDicionario(t, s, "node")
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node", "type"}})
+	fieldNode := fieldOfDicionario(t, s, "node")
 
-	row, _ := mustPut(t, s, "viajante", 1, linhaIndexada(t, s, "viajante", "estavel", 1), nil)
-	origem := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, origem)
-	destino := s.curSegID.Load()
-	if destino == origem {
+	row, _ := mustPut(t, s, "viajante", 1, rowIndexada(t, s, "viajante", "estavel", 1), nil)
+	source := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, source)
+	destination := s.curSecID.Load()
+	if destination == source {
 		t.Fatal("pré-condição: o segmento não rotacionou, o update não cruza fronteira nenhuma")
 	}
 
@@ -475,23 +475,23 @@ func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: %v (ok=%v)", err, ok)
 	}
-	novo, criado := mustPut(t, s, "viajante", 2, linhaIndexada(t, s, "viajante", "estavel", 9), &prev)
-	if criado || novo != row {
-		t.Fatalf("o update criou row nova (%d → %d, criado=%v)", row, novo, criado)
+	nw, criado := mustPut(t, s, "viajante", 2, rowIndexada(t, s, "viajante", "estavel", 9), &prev)
+	if criado || nw != row {
+		t.Fatalf("o update criou row nova (%d → %d, criado=%v)", row, nw, criado)
 	}
-	if s.curSegID.Load() != destino {
-		t.Fatalf("o update rotacionou de novo (%d), o teste perdeu o alvo", s.curSegID.Load())
+	if s.curSecID.Load() != destination {
+		t.Fatalf("o update rotacionou de novo (%d), o teste perdeu o alvo", s.curSecID.Load())
 	}
 
 	// O WIP do segmento de destino tem de conhecer a row pelo campo que NÃO
 	// mudou. É aqui que o defeito apareceria.
-	postings := s.wips[campoNode].Lookup(hashIndexado(t, strVal("estavel")))
+	postings := s.wips[fieldNode].Lookup(hashIndexed(t, strVal("estavel")))
 	if !slices.Contains(postings, row) {
 		t.Errorf("o índice do segmento de destino %d não tem a row %d por node=estavel: %v — a posting do campo inalterado não migrou com o record",
-			destino, row, postings)
+			destination, row, postings)
 	}
 	// E de ponta a ponta, que é o que o produto devolve.
-	if rows := lookupRevalidado(t, s, campoNode, strVal("estavel")); !slices.Contains(rows, row) {
+	if rows := lookupRevalidado(t, s, fieldNode, strVal("estavel")); !slices.Contains(rows, row) {
 		t.Errorf("WHERE node='estavel' não devolveu a row %d: %v", row, rows)
 	}
 }
@@ -501,60 +501,60 @@ func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 // ler o WIP em memória e passa a ler o .sidx em disco.
 //
 // A distinção importa porque as duas formas do índice são alimentadas por
-// caminhos diferentes — o WIP pelo aplicaIndiceSets da ingestão, o selado pelo
+// caminhos diferentes — o WIP pelo aplicaIndexSets da ingestão, o selado pelo
 // Escritor da selagem —, e um defeito que existisse só na travessia WIP→selado
 // seria invisível ao teste anterior.
 func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node", "type"}})
-	campoNode := campoDoDicionario(t, s, "node")
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node", "type"}})
+	fieldNode := fieldOfDicionario(t, s, "node")
 
-	row, _ := mustPut(t, s, "viajante", 1, linhaIndexada(t, s, "viajante", "estavel", 1), nil)
-	origem := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, origem)
-	destino := s.curSegID.Load()
+	row, _ := mustPut(t, s, "viajante", 1, rowIndexada(t, s, "viajante", "estavel", 1), nil)
+	origem := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, origem)
+	destination := s.curSecID.Load()
 
 	prev, _, ok, err := s.GetByKey(s.presente(), []byte("viajante"), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: %v (ok=%v)", err, ok)
 	}
-	mustPut(t, s, "viajante", 2, linhaIndexada(t, s, "viajante", "estavel", 9), &prev)
-	if s.curSegID.Load() != destino {
-		t.Fatalf("o update rotacionou de novo (%d), o teste perdeu o alvo", s.curSegID.Load())
+	mustPut(t, s, "viajante", 2, rowIndexada(t, s, "viajante", "estavel", 9), &prev)
+	if s.curSecID.Load() != destination {
+		t.Fatalf("o update rotacionou de novo (%d), o teste perdeu o alvo", s.curSecID.Load())
 	}
 
 	// Rotaciona de novo: agora o segmento de destino está SELADO.
-	poeLinhasAteRotacionar(t, s, destino)
+	poeRowsUntilRotacionar(t, s, destination)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	sel, err := segindex.OpenSealed(segindex.SealedPath(filepath.Join(dir, "data"), destino))
+	sel, err := segindex.OpenSealed(segindex.SealedPath(filepath.Join(dir, "data"), destination))
 	if err != nil {
-		t.Fatalf("o segmento de destino %d não ficou selado: %v", destino, err)
+		t.Fatalf("o segmento de destino %d não ficou selado: %v", destination, err)
 	}
 	defer func() { _ = sel.Close() }()
-	fonte, respondeu := sel.Lookup(campoNode, hashIndexado(t, strVal("estavel")))
+	source, respondeu := sel.Lookup(fieldNode, hashIndexed(t, strVal("estavel")))
 	if !respondeu {
-		t.Fatalf("o .sidx do segmento %d não responde por node: %v", destino, sel.IntegrityErr())
+		t.Fatalf("o .sidx do segmento %d não responde por node: %v", destination, sel.IntegrityErr())
 	}
 	var achou bool
-	for fonte.Next() {
-		if fonte.RowID() == row {
+	for source.Next() {
+		if source.RowID() == row {
 			achou = true
 		}
 	}
-	if err := fonte.Err(); err != nil {
+	if err := source.Err(); err != nil {
 		t.Fatal(err)
 	}
 	if !achou {
 		t.Errorf("o .sidx do segmento de destino %d não tem a row %d por node=estavel: a posting do campo inalterado não sobreviveu à selagem",
-			destino, row)
+			destination, row)
 	}
 
 	// E o dataset reaberto continua devolvendo a linha.
-	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node", "type"}})
-	if rows := lookupRevalidado(t, s2, campoNode, strVal("estavel")); !slices.Contains(rows, row) {
+	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node", "type"}})
+	if rows := lookupRevalidado(t, s2, fieldNode, strVal("estavel")); !slices.Contains(rows, row) {
 		t.Errorf("depois do restart, WHERE node='estavel' não devolveu a row %d: %v", row, rows)
 	}
 }
@@ -566,7 +566,7 @@ func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 // O cenário é o do piloto que motivou o subsistema: retenção de fundo passando
 // enquanto uma consulta longa varre. A Fonte selada lê o mmap a CADA avanço, e a
 // aposentadoria não passa pelo quiesce do Store — ela roda na goroutine de
-// retenção. Sem a contagem de vidas do Selado, o Next seguinte ao munmap não
+// retenção. Sem a contagem de vidas do Sealed, o Next seguinte ao munmap não
 // devolve resultado errado: mata o processo com SIGSEGV, que é sinal
 // incapturável e não aponta para a linha que errou.
 //
@@ -576,16 +576,16 @@ func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 func TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
-	poeLinhasAteRotacionar(t, s, s.curSegID.Load())
-	campo := campoDoDicionario(t, s, "node")
-	if _, err := os.Stat(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
-		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
+	s := openHistoryIndexedIn(t, base, dir, []string{"node"}, 8<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
+	poeRowsUntilRotacionar(t, s, s.curSecID.Load())
+	field := fieldOfDicionario(t, s, "node")
+	if _, err := os.Stat(segindex.SealedPath(filepath.Join(dir, "data"), target)); err != nil {
+		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", target, err)
 	}
 
-	it, err := s.Lookup(campo, strVal("n1"))
+	it, err := s.Lookup(field, strVal("n1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,11 +600,11 @@ func TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo(t *testing.T) {
 
 	// A retenção aposenta o segmento mais antigo — e com ele o .sidx que a
 	// varredura está lendo.
-	if _, err := s.RetencaoUmaPassada(context.Background(), LimitesDeRetencao{MaxBytes: 1}); err != nil {
+	if _, err := s.RetentionOnePass(context.Background(), LimitesOfRetention{MaxBytes: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); !os.IsNotExist(err) {
-		t.Fatalf("pré-condição: o índice do segmento %d deveria ter saído: %v", alvo, err)
+	if _, err := os.Stat(segindex.SealedPath(filepath.Join(dir, "data"), target)); !os.IsNotExist(err) {
+		t.Fatalf("pré-condição: o índice do segmento %d deveria ter saído: %v", target, err)
 	}
 
 	// Daqui para baixo, cada Next lê um mapeamento que a aposentadoria já
@@ -626,7 +626,7 @@ func TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo(t *testing.T) {
 }
 
 // TestSegmentoAposentadoEntreAListagemEOPreadViraFonteVazia cobre a corrida que
-// o godoc do fonteDaFaixa descreve: a lista de segmentos é capturada UMA vez,
+// o godoc do sourceOfFaixa descreve: a lista de segmentos é capturada UMA vez,
 // fora do aposMu, e os preads acontecem depois. Uma passada de retenção no meio
 // deixa a consulta com o nome de um arquivo que já saiu.
 //
@@ -638,9 +638,9 @@ func TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo(t *testing.T) {
 func TestSegmentoAposentadoEntreAListagemEOPreadViraFonteVazia(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
-	poeLinhasAteRotacionar(t, s, s.curSegID.Load())
-	poeLinhasAteRotacionar(t, s, s.curSegID.Load())
+	s := openHistoryIndexedIn(t, base, dir, []string{"node"}, 8<<10)
+	poeRowsUntilRotacionar(t, s, s.curSecID.Load())
+	poeRowsUntilRotacionar(t, s, s.curSecID.Load())
 
 	refs, err := s.listaSegmentos()
 	if err != nil {
@@ -654,16 +654,16 @@ func TestSegmentoAposentadoEntreAListagemEOPreadViraFonteVazia(t *testing.T) {
 	// então remover o arquivo. Só o unlink não basta — o descritor aberto mantém
 	// o inode vivo e o pread continua funcionando, que é justamente por que os
 	// blocos não voltam ao dispositivo sem o CloseSegment.
-	if err := s.segR.CloseSegment(refs[0].ID); err != nil {
+	if err := s.secR.CloseSegment(refs[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(dir, "data", fmt.Sprintf("segment-%08d.dat", refs[0].ID))); err != nil {
 		t.Fatal(err)
 	}
 
-	f, err := s.fonteDaFaixa(refs, 0)
+	f, err := s.sourceOfFaixa(refs, 0)
 	if err != nil {
-		t.Fatalf("fonteDaFaixa sobre segmento aposentado devolveu erro: %v — deveria ser fonte vazia", err)
+		t.Fatalf("sourceOfFaixa sobre segmento aposentado devolveu erro: %v — deveria ser fonte vazia", err)
 	}
 	defer func() { _ = f.Close() }()
 	if f.MinRowID() <= f.MaxRowID() {
@@ -682,37 +682,37 @@ func TestSegmentoAposentadoEntreAListagemEOPreadViraFonteVazia(t *testing.T) {
 // RLock seguintes, então uma varredura de centenas de MB debaixo dele faria a
 // primeira consulta a um .sidx grande e frio serializar consulta contra
 // ingestão: o defeito que este ciclo inteiro existe para eliminar. O Lookup roda
-// sob esse lock; o garanteSelado, não.
+// sob esse lock; o garanteSealed, não.
 //
 // O oráculo separa os dois momentos, que é a única forma de distingui-los de
-// fora: chama o garanteSelado SOZINHO, corrompe o arquivo e só então pergunta.
-// Como o mapeamento é MAP_SHARED, o Selado passa a enxergar os bytes podres —
+// fora: chama o garanteSealed SOZINHO, corrompe o arquivo e só então pergunta.
+// Como o mapeamento é MAP_SHARED, o Sealed passa a enxergar os bytes podres —
 // então um crc ainda não conferido reprovaria agora. Ele não reprova, e é isso
 // que prova que a conta já foi paga fora do lock.
 //
-// Uma consulta comum NÃO serve de oráculo aqui: ela chama o garanteSelado e o
+// Uma consulta comum NÃO serve de oráculo aqui: ela chama o garanteSealed e o
 // Lookup em sequência, e o sync.Once fica cumprido nos dois desenhos.
 func TestOCrcEhConferidoAntesDeOSeladoEntrarNoCache(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
-	poeLinhasAteRotacionar(t, s, s.curSegID.Load())
-	campo := campoDoDicionario(t, s, "node")
+	s := openHistoryIndexedIn(t, base, dir, []string{"node"}, 8<<10)
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
+	poeRowsUntilRotacionar(t, s, s.curSecID.Load())
+	field := fieldOfDicionario(t, s, "node")
 
-	s.garanteSelado(alvo)
+	s.garanteSealed(target)
 	s.selMu.RLock()
-	sel := s.selados[alvo]
+	sel := s.selados[target]
 	s.selMu.RUnlock()
 	if sel == nil {
-		t.Fatalf("pré-condição: o segmento %d não entrou no cache de selados", alvo)
+		t.Fatalf("pré-condição: o segmento %d não entrou no cache de selados", target)
 	}
 
-	// Corrompe o corpo do .sidx em disco. MAP_SHARED: o Selado já aberto passa
+	// Corrompe o corpo do .sidx em disco. MAP_SHARED: o Sealed já aberto passa
 	// a ver estes bytes.
-	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
-	f, err := os.OpenFile(caminho, os.O_WRONLY, 0o644)
+	path := segindex.SealedPath(filepath.Join(dir, "data"), target)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -724,56 +724,56 @@ func TestOCrcEhConferidoAntesDeOSeladoEntrarNoCache(t *testing.T) {
 	}
 
 	if err := sel.IntegrityErr(); err != nil {
-		t.Fatalf("o crc reprovou DEPOIS da corrupção (%v): ele não foi conferido no garanteSelado, "+
+		t.Fatalf("o crc reprovou DEPOIS da corrupção (%v): ele não foi conferido no garanteSealed, "+
 			"e portanto seria pago no Lookup — que roda sob o selMu, o mesmo lock da rotação", err)
 	}
 	// E o efeito observável: o segmento continua respondendo pelo índice em vez
 	// de degradar para enumeração.
-	if crus := candidatosCrus(t, s, campo, strVal("nunca-visto")); len(crus) != 0 {
+	if crus := candidatosCrus(t, s, field, strVal("nunca-visto")); len(crus) != 0 {
 		t.Errorf("o segmento passou a enumerar (%d candidatos) depois da corrupção", len(crus))
 	}
 }
 
 // TestSnapshotVelhoDoCorrenteNaoRespondePeloWIPDoSegmentoNovo fecha a corrida
-// da rotação contra a consulta em voo. fontesDoCampo tira UM snapshot do
-// curSegID no início; se a rotação inteira (Swap → fechaWIPs → Sela →
-// abreWIPsDoCorrente) completar antes de o laço alcançar o segmento antigo, os
-// WIPs publicados já são do segmento NOVO. Sem a identidade wipsSeg, o
-// fonteDoWIP respondia ok=true com as postings do segmento errado, o .sidx
+// da rotação contra a consulta em voo. fontesOfField tira UM snapshot do
+// curSecID no início; se a rotação inteira (Swap → closeWIPs → Sela →
+// openWIPsOfCurrent) completar antes de o laço alcançar o segmento antigo, os
+// WIPs publicados já são do segmento NOVO. Sem a identidade wipsSec, o
+// sourceOfWIP respondia ok=true com as postings do segmento errado, o .sidx
 // recém-selado nunca era consultado e nenhuma fonte de enumeração cobria o
 // segmento: as linhas dele sumiam dos candidatos — falso negativo, que a
 // revalidação do §44 não conserta.
 //
 // O teste injeta o entrelaçamento em vez de correr atrás dele: chama
-// fonteIndexada com `corrente` FORJADO no valor velho, depois de a rotação já
+// sourceIndexada com `corrente` FORJADO no valor velho, depois de a rotação já
 // ter acontecido — que é exatamente o estado que uma consulta em voo carrega.
 func TestSnapshotVelhoDoCorrenteNaoRespondePeloWIPDoSegmentoNovo(t *testing.T) {
-	s, _ := abreStoreIndexadoComSegmentoPequeno(t, []string{"node"}, 16<<10)
-	campo := campoDoDicionario(t, s, "node")
-	seg1 := s.curSegID.Load()
+	s, _ := openStoreIndexedWithSegmentSmall(t, []string{"node"}, 16<<10)
+	field := fieldOfDicionario(t, s, "node")
+	seg1 := s.curSecID.Load()
 
 	// Linhas com node="alvo" enquanto o seg1 é o corrente.
 	var esperadas []types.RowID
 	for i := range 8 {
-		payload := linhaIndexada(t, s, "alvo"+strconv.Itoa(i), "alvo", int64(i%3))
+		payload := rowIndexada(t, s, "alvo"+strconv.Itoa(i), "alvo", int64(i%3))
 		row, _ := mustPut(t, s, "alvo"+strconv.Itoa(i), int64(i+1), payload, nil)
 		esperadas = append(esperadas, row)
 	}
-	if got := s.curSegID.Load(); got != seg1 {
+	if got := s.curSecID.Load(); got != seg1 {
 		t.Fatalf("as linhas do alvo já rotacionaram o segmento (%d → %d); aumente o SegmentSize do teste", seg1, got)
 	}
 	// Enchimento com OUTRO valor até rotacionar: o seg1 sela, e os WIPs
 	// publicados passam a ser do segmento novo.
-	poeLinhasAteRotacionar(t, s, seg1)
-	if s.wipsSeg == seg1 {
-		t.Fatalf("a rotação não republicou os WIPs: wipsSeg ainda é %d", seg1)
+	poeRowsUntilRotacionar(t, s, seg1)
+	if s.wipsSec == seg1 {
+		t.Fatalf("a rotação não republicou os WIPs: wipsSec ainda é %d", seg1)
 	}
 
-	h := hashIndexado(t, strVal("alvo"))
+	h := hashIndexed(t, strVal("alvo"))
 	// O entrelaçamento: a consulta acredita que o seg1 AINDA é o corrente.
-	f, ok := s.fonteIndexada(seg1, seg1, campo, h)
+	f, ok := s.sourceIndexada(seg1, seg1, field, h)
 	if !ok {
-		t.Fatalf("fonteIndexada(seg1 com snapshot velho) = ok=false: o segmento recém-selado devia responder pelo .sidx")
+		t.Fatalf("sourceIndexada(seg1 com snapshot velho) = ok=false: o segmento recém-selado devia responder pelo .sidx")
 	}
 	got := collectRows(t, f)
 	for _, want := range esperadas {
@@ -795,12 +795,12 @@ func TestSnapshotVelhoDoCorrenteNaoRespondePeloWIPDoSegmentoNovo(t *testing.T) {
 // por onde quer que more.
 func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, CamposIndexadosPorNome: []string{"node"}})
-	campo := campoDoDicionario(t, s, "node")
-	seg1 := s.curSegID.Load()
-	payload := linhaIndexada(t, s, "movel", "alvo", 1)
+	s := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, IndexedFieldsByName: []string{"node"}})
+	field := fieldOfDicionario(t, s, "node")
+	seg1 := s.curSecID.Load()
+	payload := rowIndexada(t, s, "movel", "alvo", 1)
 	rowMovel, _ := mustPut(t, s, "movel", 1, payload, nil)
-	poeLinhasAteRotacionar(t, s, seg1)
+	poeRowsUntilRotacionar(t, s, seg1)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -809,10 +809,10 @@ func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
 	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), seg1)); err != nil {
 		t.Fatal(err)
 	}
-	s2 := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, CamposIndexadosPorNome: []string{"node"}})
+	s2 := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, IndexedFieldsByName: []string{"node"}})
 
 	// A consulta constrói as fontes AGORA (o snapshot do WIP é deste instante)...
-	it, err := s2.Lookup(campo, strVal("alvo"))
+	it, err := s2.Lookup(field, strVal("alvo"))
 	if err != nil {
 		t.Fatalf("Lookup: %v", err)
 	}
@@ -821,7 +821,7 @@ func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetByKey(movel): %v (ok=%v)", err, ok)
 	}
-	mustPut(t, s2, "movel", 2, linhaIndexada(t, s2, "movel", "alvo", 2), &prev)
+	mustPut(t, s2, "movel", 2, rowIndexada(t, s2, "movel", "alvo", 2), &prev)
 
 	crus := collectRows(t, it)
 	if !slices.Contains(crus, rowMovel) {
@@ -831,48 +831,48 @@ func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
 }
 
 // TestAConsultaNaJanelaDaExpulsaoNaoPublicaMapeamentoDeArquivoRemovido fecha a
-// terceira aresta da geração pelo lado que faltava. O selGeracao protege a
+// terceira aresta da geração pelo lado que faltava. O selGeneration protege a
 // consulta que abriu o arquivo ANTES da evição; a consulta que LÊ a geração
 // depois do bump e ABRE o arquivo antes do unlink passava pelas duas guardas do
-// publicaSelado e instalava o mapeamento de um arquivo já removido — sem
+// publicaSealed e instalava o mapeamento de um arquivo já removido — sem
 // ninguém para evictá-lo até a próxima evição deste segmento: inode preso e o
 // segmento respondendo por um índice que a expulsão mandou embora. A correção é
-// de ORDEM (unlink antes do esquecimento, removeSidxDoDisco), e o hook põe a
+// de ORDEM (unlink antes do esquecimento, removeSidxOfDisk), e o hook põe a
 // consulta exatamente na janela entre os dois passos.
 func TestAConsultaNaJanelaDaExpulsaoNaoPublicaMapeamentoDeArquivoRemovido(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, CamposIndexadosPorNome: []string{"node"}})
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
+	s := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, IndexedFieldsByName: []string{"node"}})
+	target := s.curSecID.Load()
+	poeRowsUntilRotacionar(t, s, target)
 
 	// A consulta entra NA JANELA: entre a operação de arquivo e o esquecimento.
 	// Na ordem corrigida o arquivo já saiu do disco e a abertura falha; na ordem
 	// antiga (esquecer primeiro) este mesmo instante tinha o arquivo AINDA em
 	// disco e a geração JÁ bumpada — a publicação era aceita e ficava.
-	s.entreRemoverEEsquecerHook = func(seg uint32) {
-		if seg != alvo {
+	s.entreRemoverEEsquecerHook = func(sec uint32) {
+		if sec != target {
 			return
 		}
 		s.selMu.RLock()
-		geracao := s.selGeracao
+		generation := s.selGeneration
 		s.selMu.RUnlock()
-		sel, err := segindex.OpenSealed(segindex.SealedPath(s.dirDeDados(), alvo))
+		sel, err := segindex.OpenSealed(segindex.SealedPath(s.dirOfData(), target))
 		if err != nil {
 			return // ordem corrigida: o arquivo já não existe, não há o que publicar
 		}
-		s.publicaSelado(alvo, sel, geracao)
+		s.publicaSealed(target, sel, generation)
 	}
 	defer func() { s.entreRemoverEEsquecerHook = nil }()
 
-	if _, err := s.removeSidxDoDisco(alvo); err != nil {
-		t.Fatalf("removeSidxDoDisco: %v", err)
+	if _, err := s.removeSidxOfDisk(target); err != nil {
+		t.Fatalf("removeSidxOfDisk: %v", err)
 	}
 
 	s.selMu.RLock()
-	sobrou := s.selados[alvo]
+	sobrou := s.selados[target]
 	s.selMu.RUnlock()
 	if sobrou != nil {
 		t.Fatalf("o cache ficou com o mapeamento de um .sidx removido: o segmento responderia por um índice "+
-			"que a expulsão mandou embora, com o inode preso até a próxima evição (selados[%d] != nil)", alvo)
+			"que a expulsão mandou embora, com o inode preso até a próxima evição (selados[%d] != nil)", target)
 	}
 }

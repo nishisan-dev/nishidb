@@ -85,7 +85,7 @@ note right
   encerramento limpo que ninguém tentaria de novo.
 end note
 
-:o poll acorda e o Roda devolve ErrSemProgresso;
+:o poll acorda e o Roda devolve ErrWithoutProgresso;
 
 if (tentativas consecutivas esgotadas?) then (sim)
   :ingestao.desistiu, watchdog_desistiu = 1;
@@ -97,7 +97,7 @@ if (tentativas consecutivas esgotadas?) then (sim)
   stop
 endif
 
-:watchdog_trips++ e recria pelo MESMO kafka.Abre da subida;
+:watchdog_trips++ e recria pelo MESMO kafka.Open da subida;
 note right
   O §49 põe o checkpoint local como autoritativo e
   lista quatro situações que RECUSAM subir a ingestão.

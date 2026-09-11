@@ -14,44 +14,44 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// avaliadorPorID é o `where authenticated = true` sem binder: o Store só
+// avaliadorByID é o `where authenticated = true` sem binder: o Store só
 // conhece a interface, e o teste de integração não precisa de um schema
 // compilado para exercitar o caminho inteiro.
-type avaliadorPorID struct {
-	campo types.FieldID
+type avaliadorByID struct {
+	field types.FieldID
 	fr    encoding.FieldReader
 }
 
-func (a *avaliadorPorID) Evaluate(payload []byte) (bool, error) {
+func (a *avaliadorByID) Evaluate(payload []byte) (bool, error) {
 	a.fr.Reset(payload)
 	for {
 		id, v, ok := a.fr.Next()
 		if !ok {
 			return false, a.fr.Err()
 		}
-		if id == a.campo {
+		if id == a.field {
 			return v.Type == types.TypeBool && v.I64 == 1, nil
 		}
 	}
 }
 
-// contadorDeTeste descreve um contador para o callback de abertura montar.
-type contadorDeTeste struct {
-	nome     string
-	groupBy  []string
-	where    bool // "authenticated = true"
-	teto     uint32
-	retencao time.Duration
+// counterOfTest descreve um contador para o callback de abertura montar.
+type counterOfTest struct {
+	name      string
+	groupBy   []string
+	where     bool // "authenticated = true"
+	ceiling   uint32
+	retention time.Duration
 }
 
-// callbackDeContadores é o CompilaContadores dos testes: resolve os nomes pelo
+// callbackOfCounters é o CompilaContadores dos testes: resolve os nomes pelo
 // dicionário que o Open entrega — como o compilador de verdade faz — e devolve
 // as definições.
-func callbackDeContadores(cs ...contadorDeTeste) func(*fielddict.Dict) ([]counter.Definition, error) {
+func callbackOfCounters(cs ...counterOfTest) func(*fielddict.Dict) ([]counter.Definition, error) {
 	return func(dict *fielddict.Dict) ([]counter.Definition, error) {
 		out := make([]counter.Definition, 0, len(cs))
 		for _, c := range cs {
-			def := counter.Definition{Name: c.nome, MaxGroups: c.teto, RetainEmptyGroups: c.retencao}
+			def := counter.Definition{Name: c.name, MaxGroups: c.ceiling, RetainEmptyGroups: c.retention}
 			if def.MaxGroups == 0 {
 				def.MaxGroups = 100
 			}
@@ -74,7 +74,7 @@ func callbackDeContadores(cs ...contadorDeTeste) func(*fielddict.Dict) ([]counte
 					return nil, err
 				}
 				def.Where = "authenticated = true"
-				def.NewEvaluator = func() counter.Evaluator { return &avaliadorPorID{campo: auth} }
+				def.NewEvaluator = func() counter.Evaluator { return &avaliadorByID{field: auth} }
 			}
 			out = append(out, def)
 		}
@@ -82,45 +82,45 @@ func callbackDeContadores(cs ...contadorDeTeste) func(*fielddict.Dict) ([]counte
 	}
 }
 
-func porOLT(nome string, where bool) contadorDeTeste {
-	return contadorDeTeste{nome: nome, groupBy: []string{"olt"}, where: where}
+func byOLT(name string, where bool) counterOfTest {
+	return counterOfTest{name: name, groupBy: []string{"olt"}, where: where}
 }
 
 // payloadServico é o estado de um serviço como o materializer o produziria:
 // com o instante de escrita quando o dataset tem expiração.
-func payloadServico(t *testing.T, s *Store, key, olt string, auth bool, escrita time.Time) []byte {
+func payloadServico(t *testing.T, s *Store, key, olt string, auth bool, write time.Time) []byte {
 	t.Helper()
-	campos := map[string]types.Value{
+	fields := map[string]types.Value{
 		"id":            {Type: types.TypeString, Bytes: []byte(key)},
 		"authenticated": {Type: types.TypeBool},
 	}
 	if auth {
-		campos["authenticated"] = types.Value{Type: types.TypeBool, I64: 1}
+		fields["authenticated"] = types.Value{Type: types.TypeBool, I64: 1}
 	}
 	if olt != "" {
-		campos["olt"] = types.Value{Type: types.TypeString, Bytes: []byte(olt)}
+		fields["olt"] = types.Value{Type: types.TypeString, Bytes: []byte(olt)}
 	}
-	if !escrita.IsZero() {
-		campos["_writtenAt"] = types.Value{Type: types.TypeTimestamp, I64: escrita.UnixMilli()}
+	if !write.IsZero() {
+		fields["_writtenAt"] = types.Value{Type: types.TypeTimestamp, I64: write.UnixMilli()}
 	}
-	return payloadOrdenado(t, s, campos)
+	return payloadOrdenado(t, s, fields)
 }
 
-func contadorChamado(t *testing.T, s *Store, nome string) *counter.Counter {
+func counterChamado(t *testing.T, s *Store, name string) *counter.Counter {
 	t.Helper()
-	for _, c := range s.Contadores() {
-		if c.Def().Name == nome {
+	for _, c := range s.Counters() {
+		if c.Def().Name == name {
 			return c
 		}
 	}
-	t.Fatalf("contador %q não está aberto", nome)
+	t.Fatalf("contador %q não está aberto", name)
 	return nil
 }
 
-// totalDoContador devolve total e refs da OLT no contador nomeado.
-func totalDoContador(t *testing.T, s *Store, nome, olt string) (total, refs int64) {
+// totalOfCounter devolve total e refs da OLT no contador nomeado.
+func totalOfCounter(t *testing.T, s *Store, name, olt string) (total, refs int64) {
 	t.Helper()
-	c := contadorChamado(t, s, nome)
+	c := counterChamado(t, s, name)
 	id, ok := c.ByText([]byte(olt))
 	if !ok {
 		return 0, 0
@@ -129,35 +129,35 @@ func totalDoContador(t *testing.T, s *Store, nome, olt string) (total, refs int6
 	return total, refs
 }
 
-func exigeTotal(t *testing.T, s *Store, nome, olt string, total, refs int64) {
+func exigeTotal(t *testing.T, s *Store, name, olt string, total, refs int64) {
 	t.Helper()
-	if gt, gr := totalDoContador(t, s, nome, olt); gt != total || gr != refs {
-		t.Fatalf("%s[%s]: total %d refs %d, quer %d e %d", nome, olt, gt, gr, total, refs)
+	if gt, gr := totalOfCounter(t, s, name, olt); gt != total || gr != refs {
+		t.Fatalf("%s[%s]: total %d refs %d, quer %d e %d", name, olt, gt, gr, total, refs)
 	}
 }
 
-func opcoesComContadores(dir string, cs ...contadorDeTeste) Options {
+func optionsWithCounters(dir string, cs ...counterOfTest) Options {
 	return Options{
-		Dir:               dir,
-		SegmentSize:       1 << 20,
-		TTLAtivo:          true,
-		DuracaoDeFundo:    time.Hour,
-		CampoDeEscrita:    "_writtenAt",
-		CampoDePrazo:      "_expiresIn",
-		CompilaContadores: callbackDeContadores(cs...),
+		Dir:                             dir,
+		SegmentSize:                     1 << 20,
+		ActiveTTL:                       true,
+		FallbackDuration:                time.Hour,
+		WriteInstantFieldName:           "_writtenAt",
+		TTLFieldName:                    "_expiresIn",
+		CompileCountersCallbackFunction: callbackOfCounters(cs...),
 	}
 }
 
-func storeComContadores(t *testing.T, dir string, cs ...contadorDeTeste) (*Store, *relogioDeTeste) {
+func storeWithCounters(t *testing.T, dir string, cs ...counterOfTest) (*Store, *relogioOfTest) {
 	t.Helper()
-	s := openStore(t, opcoesComContadores(dir, cs...))
-	rel := &relogioDeTeste{t: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
+	s := openStore(t, optionsWithCounters(dir, cs...))
+	rel := &relogioOfTest{t: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 	return s, rel
 }
 
 func TestContadorAcompanhaPutLapideECopyForward(t *testing.T) {
-	s, rel := storeComContadores(t, t.TempDir(), porOLT("aut", true), porOLT("serv", false))
+	s, rel := storeWithCounters(t, t.TempDir(), byOLT("aut", true), byOLT("serv", false))
 	const key = "cliente-1"
 	rowID, _ := mustPut(t, s, key, 1, payloadServico(t, s, key, "A", true, rel.agora()), nil)
 	exigeTotal(t, s, "aut", "A", 1, 1)
@@ -176,13 +176,13 @@ func TestContadorAcompanhaPutLapideECopyForward(t *testing.T) {
 	exigeTotal(t, s, "aut", "A", 1, 1)
 
 	// A lápide da expiração passa pelo applyRecord e desconta; o grupo fica.
-	rel.avanca(2 * time.Hour)
+	rel.advance(2 * time.Hour)
 	if expirou, err := s.Expira(rowID); err != nil || !expirou {
 		t.Fatalf("Expira: %v, %v", expirou, err)
 	}
 	exigeTotal(t, s, "aut", "A", 0, 0)
 	exigeTotal(t, s, "serv", "A", 0, 0)
-	c := contadorChamado(t, s, "aut")
+	c := counterChamado(t, s, "aut")
 	if id, ok := c.ByText([]byte("A")); !ok {
 		t.Fatal("o grupo que esvaziou continua vivo")
 	} else if _, _, _, _, vivo := c.Group(id); !vivo {
@@ -198,26 +198,26 @@ func TestContadorAcompanhaPutLapideECopyForward(t *testing.T) {
 // TestCopyForwardNaoMexeNoContador: a compaction reapenda o record VIVO com o
 // mesmo payload — transição G → G, delta zero.
 func TestCopyForwardNaoMexeNoContador(t *testing.T) {
-	opts := opcoesComContadores(t.TempDir(), porOLT("aut", true))
+	opts := optionsWithCounters(t.TempDir(), byOLT("aut", true))
 	opts.SegmentSize = 400
 	s := openStore(t, opts)
-	rel := &relogioDeTeste{t: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
+	rel := &relogioOfTest{t: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 	const key = "cf-alvo"
 	rowID, _ := mustPut(t, s, key, 1, payloadServico(t, s, key, "A", true, rel.agora()), nil)
-	origSeg, origOff := localizacaoDaRow(t, s, rowID)
-	for i := 0; s.Stats().CurrentSegmentID == origSeg && i < 200; i++ {
+	origSec, origOff := localizacaoOfRow(t, s, rowID)
+	for i := 0; s.Stats().CurrentSegmentID == origSec && i < 200; i++ {
 		k := "enche-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 		mustPut(t, s, k, int64(i), payloadServico(t, s, k, "B", false, rel.agora()), nil)
 	}
 	exigeTotal(t, s, "aut", "A", 1, 1)
-	rec := recordEm(t, s, origSeg, origOff)
-	copiado, _, err := s.reapendaSeVivo(origSeg, origOff, rec)
+	rec := recordIn(t, s, origSec, origOff)
+	copiado, _, err := s.reapendaSeVivo(origSec, origOff, rec)
 	if err != nil || !copiado {
 		t.Fatalf("reapendaSeVivo: %v, %v", copiado, err)
 	}
 	exigeTotal(t, s, "aut", "A", 1, 1)
-	if got := contadorChamado(t, s, "aut").Transitions(); got == 0 {
+	if got := counterChamado(t, s, "aut").Transitions(); got == 0 {
 		t.Fatal("as escritas anteriores tinham de ter transicionado")
 	}
 }
@@ -226,26 +226,26 @@ func TestCopyForwardNaoMexeNoContador(t *testing.T) {
 // linha vencida grava a lápide DIRETO no destino — e ela passa pelo
 // applyRecord como qualquer outra.
 func TestExpiracaoOportunistaDescontaDoContador(t *testing.T) {
-	opts := opcoesComContadores(t.TempDir(), porOLT("aut", true))
+	opts := optionsWithCounters(t.TempDir(), byOLT("aut", true))
 	opts.SegmentSize = 400
 	s := openStore(t, opts)
-	rel := &relogioDeTeste{t: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
+	rel := &relogioOfTest{t: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 	const key = "vencida"
 	rowID, _ := mustPut(t, s, key, 1, payloadServico(t, s, key, "A", true, rel.agora()), nil)
-	origSeg, origOff := localizacaoDaRow(t, s, rowID)
-	for i := 0; s.Stats().CurrentSegmentID == origSeg && i < 200; i++ {
+	origSec, origOff := localizacaoOfRow(t, s, rowID)
+	for i := 0; s.Stats().CurrentSegmentID == origSec && i < 200; i++ {
 		k := "enche-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 		mustPut(t, s, k, int64(i), payloadServico(t, s, k, "B", false, rel.agora()), nil)
 	}
 	exigeTotal(t, s, "aut", "A", 1, 1)
-	rel.avanca(2 * time.Hour)
-	rec := recordEm(t, s, origSeg, origOff)
-	copiado, _, err := s.reapendaSeVivo(origSeg, origOff, rec)
+	rel.advance(2 * time.Hour)
+	rec := recordIn(t, s, origSec, origOff)
+	copiado, _, err := s.reapendaSeVivo(origSec, origOff, rec)
 	if err != nil || !copiado {
 		t.Fatalf("reapendaSeVivo: %v, %v", copiado, err)
 	}
-	if flagsDaLocation(t, s, rowID)&types.FlagTombstone == 0 {
+	if flagsOfLocation(t, s, rowID)&types.FlagTombstone == 0 {
 		t.Fatal("a montagem tinha de expirar a linha oportunisticamente")
 	}
 	exigeTotal(t, s, "aut", "A", 0, 0)
@@ -253,7 +253,7 @@ func TestExpiracaoOportunistaDescontaDoContador(t *testing.T) {
 
 func TestContadorSobreviveAoCheckpointEReabertura(t *testing.T) {
 	dir := t.TempDir()
-	s, rel := storeComContadores(t, dir, porOLT("aut", true))
+	s, rel := storeWithCounters(t, dir, byOLT("aut", true))
 	for i := 0; i < 100; i++ {
 		k := "c-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 		olt := "A"
@@ -270,8 +270,8 @@ func TestContadorSobreviveAoCheckpointEReabertura(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s2 := openStore(t, opcoesComContadores(dir, porOLT("aut", true)))
-	if s2.ContadoresConstruidosForTest() != 0 {
+	s2 := openStore(t, optionsWithCounters(dir, byOLT("aut", true)))
+	if s2.CountersConstruidosForTest() != 0 {
 		t.Fatal("reabertura com os mesmos parâmetros tem de ADOTAR, não reconstruir")
 	}
 	exigeTotal(t, s2, "aut", "A", 33, 66)
@@ -283,54 +283,54 @@ func TestContadorSobreviveAoCheckpointEReabertura(t *testing.T) {
 // uma instância que nunca caiu.
 func TestContadorRecuperaDoTailSemCheckpoint(t *testing.T) {
 	for _, variante := range []struct {
-		nome    string
+		name    string
 		parcial bool
 	}{
 		{"sem checkpoint depois do tail", false},
 		{"checkpoint interrompido antes do manifest", true},
 	} {
-		t.Run(variante.nome, func(t *testing.T) {
+		t.Run(variante.name, func(t *testing.T) {
 			dir := t.TempDir()
-			s, rel := storeComContadores(t, dir, porOLT("aut", true))
-			chaves := make([]string, 100)
-			for i := range chaves {
-				chaves[i] = "c-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-				mustPut(t, s, chaves[i], 1, payloadServico(t, s, chaves[i], "A", true, rel.agora()), nil)
+			s, rel := storeWithCounters(t, dir, byOLT("aut", true))
+			keys := make([]string, 100)
+			for i := range keys {
+				keys[i] = "c-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+				mustPut(t, s, keys[i], 1, payloadServico(t, s, keys[i], "A", true, rel.agora()), nil)
 			}
 			if err := s.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
 			// A ponta: migrações de grupo, condições que caem, e lápides.
 			for i := 0; i < 50; i++ {
-				prev, _, _, _ := s.GetByKey(s.presente(), []byte(chaves[i]), nil)
+				prev, _, _, _ := s.GetByKey(s.presente(), []byte(keys[i]), nil)
 				switch i % 3 {
 				case 0:
-					mustPut(t, s, chaves[i], 2, payloadServico(t, s, chaves[i], "B", true, rel.agora()), &prev)
+					mustPut(t, s, keys[i], 2, payloadServico(t, s, keys[i], "B", true, rel.agora()), &prev)
 				case 1:
-					mustPut(t, s, chaves[i], 2, payloadServico(t, s, chaves[i], "A", false, rel.agora()), &prev)
+					mustPut(t, s, keys[i], 2, payloadServico(t, s, keys[i], "A", false, rel.agora()), &prev)
 				case 2:
-					if _, _, err := s.Put([]byte(chaves[i]), 2, types.FlagTombstone, payloadServico(t, s, chaves[i], "", false, rel.agora()), &prev); err != nil {
+					if _, _, err := s.Put([]byte(keys[i]), 2, types.FlagTombstone, payloadServico(t, s, keys[i], "", false, rel.agora()), &prev); err != nil {
 						t.Fatal(err)
 					}
 				}
 			}
 			// Referência: os totais da instância que nunca caiu.
-			totA, refsA := totalDoContador(t, s, "aut", "A")
-			totB, refsB := totalDoContador(t, s, "aut", "B")
+			totA, refsA := totalOfCounter(t, s, "aut", "A")
+			totB, refsB := totalOfCounter(t, s, "aut", "B")
 			// 100 em A; 17 migram para B, 17 perdem a condição, 16 viram lápide.
 			if totA != 50 || refsA != 67 || totB != 17 || refsB != 17 {
 				t.Fatalf("referência inesperada: A=%d/%d B=%d/%d", totA, refsA, totB, refsB)
 			}
 			if variante.parcial {
-				if err := s.PartialCheckpointComContadoresForTest(); err != nil {
+				if err := s.PartialCheckpointWithCountersForTest(); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
-			s2 := openStore(t, opcoesComContadores(dir, porOLT("aut", true)))
-			if s2.ContadoresConstruidosForTest() != 0 {
+			s2 := openStore(t, optionsWithCounters(dir, byOLT("aut", true)))
+			if s2.CountersConstruidosForTest() != 0 {
 				t.Fatal("a recovery tem de chegar lá por dobra + replay, sem reconstrução")
 			}
 			exigeTotal(t, s2, "aut", "A", totA, refsA)
@@ -341,27 +341,27 @@ func TestContadorRecuperaDoTailSemCheckpoint(t *testing.T) {
 
 func TestContadorNovoEhConstruidoNaAbertura(t *testing.T) {
 	dir := t.TempDir()
-	s, rel := storeComContadores(t, dir)
+	s, rel := storeWithCounters(t, dir)
 	for i := 0; i < 100; i++ {
 		k := "c-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 		mustPut(t, s, k, 1, payloadServico(t, s, k, "A", i%2 == 0, rel.agora()), nil)
 	}
-	if len(s.Contadores()) != 0 {
+	if len(s.Counters()) != 0 {
 		t.Fatal("dataset sem contador declarado não abre contador nenhum")
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s2 := openStore(t, opcoesComContadores(dir, porOLT("aut", true)))
-	if s2.ContadoresConstruidosForTest() != 1 {
-		t.Fatalf("contador novo num dataset com linhas tem de ser construído; construídos = %d", s2.ContadoresConstruidosForTest())
+	s2 := openStore(t, optionsWithCounters(dir, byOLT("aut", true)))
+	if s2.CountersConstruidosForTest() != 1 {
+		t.Fatalf("contador novo num dataset com linhas tem de ser construído; construídos = %d", s2.CountersConstruidosForTest())
 	}
 	exigeTotal(t, s2, "aut", "A", 50, 100)
 }
 
 func TestContadorComWhereDiferenteEhReconstruido(t *testing.T) {
 	dir := t.TempDir()
-	s, rel := storeComContadores(t, dir, porOLT("x", true))
+	s, rel := storeWithCounters(t, dir, byOLT("x", true))
 	for i := 0; i < 10; i++ {
 		k := "c-" + string(rune('a'+i))
 		mustPut(t, s, k, 1, payloadServico(t, s, k, "A", i%2 == 0, rel.agora()), nil)
@@ -371,8 +371,8 @@ func TestContadorComWhereDiferenteEhReconstruido(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Mesmo nome, sem where: outro contador.
-	s2 := openStore(t, opcoesComContadores(dir, porOLT("x", false)))
-	if s2.ContadoresConstruidosForTest() != 1 {
+	s2 := openStore(t, optionsWithCounters(dir, byOLT("x", false)))
+	if s2.CountersConstruidosForTest() != 1 {
 		t.Fatal("where diferente tem de reconstruir")
 	}
 	exigeTotal(t, s2, "x", "A", 10, 10)
@@ -390,13 +390,13 @@ func TestContadorComWhereDiferenteEhReconstruido(t *testing.T) {
 
 func TestContadorRemovidoDoYamlEhApagado(t *testing.T) {
 	dir := t.TempDir()
-	s, rel := storeComContadores(t, dir, porOLT("aut", true))
+	s, rel := storeWithCounters(t, dir, byOLT("aut", true))
 	mustPut(t, s, "k", 1, payloadServico(t, s, "k", "A", true, rel.agora()), nil)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s2 := openStore(t, opcoesComContadores(dir))
-	if len(s2.Contadores()) != 0 {
+	s2 := openStore(t, optionsWithCounters(dir))
+	if len(s2.Counters()) != 0 {
 		t.Fatal("contador removido do YAML não pode continuar aberto")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "indexes", "contadores", "aut")); !errors.Is(err, os.ErrNotExist) {
@@ -413,13 +413,13 @@ func TestContadorRemovidoDoYamlEhApagado(t *testing.T) {
 
 func TestAberturaSemCallbackRecusaDatasetComContadores(t *testing.T) {
 	dir := t.TempDir()
-	s, rel := storeComContadores(t, dir, porOLT("aut", true))
+	s, rel := storeWithCounters(t, dir, byOLT("aut", true))
 	mustPut(t, s, "k", 1, payloadServico(t, s, "k", "A", true, rel.agora()), nil)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	opts := opcoesComContadores(dir)
-	opts.CompilaContadores = nil
+	opts := optionsWithCounters(dir)
+	opts.CompileCountersCallbackFunction = nil
 	_, err := Open(opts)
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("abrir sem as definições um dataset com contadores tem de ser recusado com ErrInvalidArgument, veio %v", err)
@@ -432,10 +432,10 @@ func TestAberturaSemCallbackRecusaDatasetComContadores(t *testing.T) {
 func TestContadorEhRecusadoNoHistorico(t *testing.T) {
 	base := openStore(t, Options{})
 	opts := Options{
-		Dir:               t.TempDir(),
-		Modo:              ModoHistorico,
-		DictCompartilhado: base.FieldDict(),
-		CompilaContadores: callbackDeContadores(porOLT("aut", true)),
+		Dir:                             t.TempDir(),
+		Mode:                            HistoryMode,
+		SharedDictionary:                base.FieldDict(),
+		CompileCountersCallbackFunction: callbackOfCounters(byOLT("aut", true)),
 	}
 	if _, err := Open(opts); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("histórico com contador tem de ser recusado com ErrInvalidArgument, veio %v", err)
@@ -444,19 +444,19 @@ func TestContadorEhRecusadoNoHistorico(t *testing.T) {
 
 func TestMudarMaxGroupsNaoReconstroi(t *testing.T) {
 	dir := t.TempDir()
-	c := porOLT("aut", true)
-	c.teto = 10
-	s, rel := storeComContadores(t, dir, c)
+	c := byOLT("aut", true)
+	c.ceiling = 10
+	s, rel := storeWithCounters(t, dir, c)
 	mustPut(t, s, "k", 1, payloadServico(t, s, "k", "A", true, rel.agora()), nil)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	c.teto = 20
-	s2 := openStore(t, opcoesComContadores(dir, c))
-	if s2.ContadoresConstruidosForTest() != 0 {
+	c.ceiling = 20
+	s2 := openStore(t, optionsWithCounters(dir, c))
+	if s2.CountersConstruidosForTest() != 0 {
 		t.Fatal("mudar o teto não muda o conteúdo: não reconstrói")
 	}
-	if contadorChamado(t, s2, "aut").Stats().Ceiling != 20 {
+	if counterChamado(t, s2, "aut").Stats().Ceiling != 20 {
 		t.Fatal("o teto novo tem de valer")
 	}
 	exigeTotal(t, s2, "aut", "A", 1, 1)
@@ -464,17 +464,17 @@ func TestMudarMaxGroupsNaoReconstroi(t *testing.T) {
 
 func TestMaxGroupsMenorQueOsGruposEmUsoEhRecusado(t *testing.T) {
 	dir := t.TempDir()
-	c := porOLT("aut", true)
-	c.teto = 10
-	s, rel := storeComContadores(t, dir, c)
+	c := byOLT("aut", true)
+	c.ceiling = 10
+	s, rel := storeWithCounters(t, dir, c)
 	for _, olt := range []string{"A", "B", "C"} {
 		mustPut(t, s, "k-"+olt, 1, payloadServico(t, s, "k-"+olt, olt, true, rel.agora()), nil)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	c.teto = 2
-	_, err := Open(opcoesComContadores(dir, c))
+	c.ceiling = 2
+	_, err := Open(optionsWithCounters(dir, c))
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("teto abaixo dos grupos em uso tem de ser recusado, veio %v", err)
 	}

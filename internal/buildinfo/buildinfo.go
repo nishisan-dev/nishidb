@@ -24,12 +24,12 @@ var (
 	Date    string
 )
 
-// noVersionInfo ocupa o slot de VERSÃO quando os ldflags não vieram — o
+// inVersionInfo ocupa o slot de VERSÃO quando os ldflags não vieram — o
 // carimbo do VCS informa commit e data, nunca a versão, então é ele que
 // responde por `go install` direto. Quando nem o carimbo existe, vira a
 // resposta inteira: o caso do binário de teste, que em geral não carrega
 // vcs.revision.
-const noVersionInfo = "dev"
+const inVersionInfo = "dev"
 
 // readBuildInfo é indireção sobre debug.ReadBuildInfo. Existe só para o teste poder
 // simular a ausência (ou a presença) do carimbo VCS sem depender de como o
@@ -49,7 +49,7 @@ func String() string {
 		commit, date = fromVCS()
 	}
 	if version == "" {
-		version = noVersionInfo
+		version = inVersionInfo
 	}
 	if commit == "" && date == "" {
 		return version

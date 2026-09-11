@@ -18,12 +18,12 @@ type listaIter struct {
 	ids     []types.RowID
 	pos     int
 	err     error
-	erroEm  int // devolve err ao chegar neste índice (0 = nunca)
+	errEm   int // devolve err ao chegar neste índice (0 = nunca)
 	fechado int
 }
 
 func (l *listaIter) Next() bool {
-	if l.erroEm > 0 && l.pos >= l.erroEm {
+	if l.errEm > 0 && l.pos >= l.errEm {
 		l.err = errors.New("iterador falhou")
 		return false
 	}
@@ -54,7 +54,7 @@ func lista(ids ...types.RowID) *listaIter { return &listaIter{ids: ids} }
 
 func TestIntersecaoKWay(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		its  []types.RowIDIterator
 		want []types.RowID
 	}{
@@ -71,7 +71,7 @@ func TestIntersecaoKWay(t *testing.T) {
 			[]types.RowID{1000}},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			it := &intersectIter{its: tc.its, cur: make([]types.RowID, len(tc.its))}
 			if got := drena(t, it); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("interseção = %v, want %v", got, tc.want)
@@ -82,7 +82,7 @@ func TestIntersecaoKWay(t *testing.T) {
 
 func TestUniaoComDedupKWay(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		its  []types.RowIDIterator
 		want []types.RowID
 	}{
@@ -99,7 +99,7 @@ func TestUniaoComDedupKWay(t *testing.T) {
 			[]types.RowID{1, 2}},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			it := &unionIter{its: tc.its, cur: make([]types.RowID, len(tc.its)),
 				vivo: make([]bool, len(tc.its))}
 			if got := drena(t, it); !reflect.DeepEqual(got, tc.want) {
@@ -112,9 +112,9 @@ func TestUniaoComDedupKWay(t *testing.T) {
 // Erro no meio de uma fonte não pode virar resultado silenciosamente
 // incompleto: ele sobe pelo Err().
 func TestErroDeFonteSobeNaUniaoEInterseccao(t *testing.T) {
-	falha := func() *listaIter { return &listaIter{ids: []types.RowID{1, 2, 3}, erroEm: 2} }
+	fail := func() *listaIter { return &listaIter{ids: []types.RowID{1, 2, 3}, errEm: 2} }
 
-	u := &unionIter{its: []types.RowIDIterator{falha(), lista(9)},
+	u := &unionIter{its: []types.RowIDIterator{fail(), lista(9)},
 		cur: make([]types.RowID, 2), vivo: make([]bool, 2)}
 	for u.Next() {
 	}
@@ -122,7 +122,7 @@ func TestErroDeFonteSobeNaUniaoEInterseccao(t *testing.T) {
 		t.Error("união engoliu o erro da fonte")
 	}
 
-	i := &intersectIter{its: []types.RowIDIterator{falha(), lista(1, 2, 3)},
+	i := &intersectIter{its: []types.RowIDIterator{fail(), lista(1, 2, 3)},
 		cur: make([]types.RowID, 2)}
 	for i.Next() {
 	}
@@ -142,27 +142,27 @@ func TestFechamentoFechaTodosOsIteradores(t *testing.T) {
 	}
 }
 
-// storeFalhaNoSegundo abre o primeiro índice e falha no segundo.
-type storeFalhaNoSegundo struct {
+// storeFailInSegundo abre o primeiro índice e falha no segundo.
+type storeFailInSegundo struct {
 	abertos []*listaIter
 	n       int
 }
 
-func (s *storeFalhaNoSegundo) GetByRowID(types.Snapshot, types.RowID, []byte) (types.Record, []byte, bool, error) {
+func (s *storeFailInSegundo) GetByRowID(types.Snapshot, types.RowID, []byte) (types.Record, []byte, bool, error) {
 	return types.Record{}, nil, false, nil
 }
 
-func (s *storeFalhaNoSegundo) GetByKey(types.Snapshot, []byte, []byte) (types.Record, []byte, bool, error) {
+func (s *storeFailInSegundo) GetByKey(types.Snapshot, []byte, []byte) (types.Record, []byte, bool, error) {
 	return types.Record{}, nil, false, nil
 }
 
-func (s *storeFalhaNoSegundo) ScanLive(types.Snapshot) types.RowIDIterator { return lista() }
+func (s *storeFailInSegundo) ScanLive(types.Snapshot) types.RowIDIterator { return lista() }
 
-func (s *storeFalhaNoSegundo) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
+func (s *storeFailInSegundo) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
 
-func (s *storeFalhaNoSegundo) CloseSnapshot(types.Snapshot) {}
+func (s *storeFailInSegundo) CloseSnapshot(types.Snapshot) {}
 
-func (s *storeFalhaNoSegundo) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
+func (s *storeFailInSegundo) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	s.n++
 	if s.n >= 2 {
 		return nil, errors.New("índice indisponível")
@@ -176,12 +176,12 @@ func (s *storeFalhaNoSegundo) Lookup(types.FieldID, types.Value) (types.RowIDIte
 // num caminho de erro é o tipo de coisa que só aparece em produção, como
 // descritor esgotado depois de horas.
 func TestAbreTermosFechaOsJaAbertosNoErro(t *testing.T) {
-	st := &storeFalhaNoSegundo{}
-	campo := &schema.CompiledField{ID: 1, Name: "x", Indexed: true}
-	termos := []planner.IndexTerm{{Field: campo}, {Field: campo}}
+	st := &storeFailInSegundo{}
+	field := &schema.CompiledField{ID: 1, Name: "x", Indexed: true}
+	termos := []planner.IndexTerm{{Field: field}, {Field: field}}
 
-	if _, err := abreTermos(termos, st); err == nil {
-		t.Fatal("abreTermos não propagou o erro")
+	if _, err := openTermos(termos, st); err == nil {
+		t.Fatal("openTermos não propagou o erro")
 	}
 	if len(st.abertos) != 1 {
 		t.Fatalf("%d iteradores abertos, want 1", len(st.abertos))
@@ -192,7 +192,7 @@ func TestAbreTermosFechaOsJaAbertosNoErro(t *testing.T) {
 }
 
 // TestAbreTermosSemCapabilityDeHash saiu daqui: ele cobria o ramo
-// `hash == nil` do abreTermos, e esse ramo era a capability OPCIONAL
+// `hash == nil` do openTermos, e esse ramo era a capability OPCIONAL
 // HashLookuper — detectada por type assertion e ausente do recorte Store. Com o
 // Lookup dentro da interface, um store que não o implementa não compila, e o
 // erro que o teste afirmava não tem mais como ser produzido em runtime.

@@ -18,19 +18,19 @@ import (
 //
 // O gate nasce COM a estrutura, e não depois. Foi a ausência de um gate
 // equivalente sobre o writer Kafka que deixou a alocação por evento do
-// `avanca` — uma string nova por partição por evento — passar despercebida até
+// `advance` — uma string nova por partição por evento — passar despercebida até
 // alguém ir procurar com profile na mão.
 //
 // O limiar de encolhimento entra generoso de propósito: encolher SOLTA memória
 // e o próximo decode realoca, então medir com um limiar apertado mediria o
 // churn do trim, não o caminho quente.
 func TestEsteiraNaoAlocaNoCaminhoQuente(t *testing.T) {
-	e := novaEsteira(64)
+	e := newPipeline(64)
 	ctx := context.Background()
 	rec := &kgo.Record{Partition: 0, Offset: 0, Value: []byte(`{"id":"A"}`)}
 	seq := int64(0)
 
-	volta := func() {
+	back := func() {
 		if d := e.reserva(seq); d == nil {
 			t.Fatal("reserva devolveu nil")
 		}
@@ -40,14 +40,14 @@ func TestEsteiraNaoAlocaNoCaminhoQuente(t *testing.T) {
 			t.Fatal("consome não devolveu o slot recém-publicado")
 		}
 		_ = s
-		e.avanca(1 << 30)
+		e.advance(1 << 30)
 		seq++
 	}
 	// Aquece: a primeira volta paga o que as seguintes reusam.
 	for i := 0; i < 3; i++ {
-		volta()
+		back()
 	}
-	if n := testing.AllocsPerRun(500, volta); n != 0 {
+	if n := testing.AllocsPerRun(500, back); n != 0 {
 		t.Errorf("allocs/evento na esteira = %.1f, quer 0", n)
 	}
 }

@@ -17,7 +17,7 @@ números e as mutações está em [`docs/aceite-contadores.md`](../docs/aceite-c
 |---|---|---|
 | **A1** `Dense32` e atômicos de 32 bits | **feito** (`ff55597`) | o `denseFile` recusa a abertura com o outro tamanho de entrada; gate de alocação com contraparte sob `-race` |
 | **A2** chave composta no `valuekey` | **feito** (`6820e25`) | golden de bytes; `ab\|c` ≠ `a\|bc` |
-| **A3** `AvaliadorDePayload` e `CompilaCondicao` | **feito** (`b03a21a`) | as regras de TTL passaram a compilar pelo mesmo caminho sem editar um teste; gate de alocação |
+| **A3** `AvaliadorOfPayload` e `CompileCondition` | **feito** (`b03a21a`) | as regras de TTL passaram a compilar pelo mesmo caminho sem editar um teste; gate de alocação |
 | **B1** dicionário de grupos | **feito** (`3782d22`) | mutação do fsync: vermelha, revertida, verde |
 | **B2** vetor, dobra e transição | **feito** (`9eb4422`) | três mutações do plano mais a do early-return (aplicada no aceite: quatro testes vermelhos, contra o "verde" que o plano previa) |
 | **B3** seção do manifest | **feito** (`4ea5fdb`) | tag **`0x0001`, ignorável** — a tabela "Decisões" venceu o mapa de arquivos, que ainda diz `0x8005`; dataset sem contadores gera os mesmos bytes |
@@ -140,7 +140,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
   bloquear o rollback do piloto (`nishidb-update.sh`). A tag é IGNORÁVEL
   (`< 0x8000`): o binário anterior abre o dataset, ignora a seção, e o binário
   novo reconstrói ao voltar.
-- **Confirmado: `schema.Compile` chamado entre `resolveCamposIndexados` e o
+- **Confirmado: `schema.Compile` chamado entre `resolveFieldsIndexados` e o
   ramo de recovery produz os mesmos FieldIDs de hoje** — o dicionário está no
   estado exato em que o `Open` o devolve; nada entre esses pontos toca nomes.
 
@@ -148,7 +148,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 
 | Item | Decisão |
 |---|---|
-| 11.3 backfill | **Reconstruir na abertura.** Contador novo, ou com `groupBy`/`where`/`maxGroups` diferentes do manifest, ou cujo vetor nasceu/não cobre as linhas, é reconstruído varrendo as linhas vivas, com log `contador.construido` nomeando motivo e duração. Contador removido do YAML tem os arquivos apagados com log `contador.removido`. |
+| 11.3 backfill | **Reconstruir na abertura.** Contador novo, ou com `groupBy`/`where`/`maxGroups` diferentes do manifest, ou cujo vetor nasceu/não cobre as linhas, é reconstruído varrendo as linhas vivas, com log `counter.construido` nomeando motivo e duração. Contador removido do YAML tem os arquivos apagados com log `counter.removido`. |
 | 11.6 auditoria | **Rota ADMIN síncrona sob snapshot.** `POST /v1/counters/audit` congela os totais e abre o snapshot no mesmo instante (sob `wmu` por microssegundos), varre sem `wmu`, compara. `POST /v1/counters/rebuild` reconstrói (segura `wmu` pela varredura — documentado). CLI `nishidb counters` com `--server` (rotas) ou `--config` (offline, flock). |
 | 6.5 ciclo de vida | **Entregue neste ciclo (bloco C5).** Grupo com `refs == 0` há mais de `retainEmptyGroups` é APOSENTADO: registro no dicionário (fsync), id nunca reemitido, some do `_counters`. Coletor próprio por varredura linear dos grupos, a cada minuto. |
 | 11.2 defaults | `maxGroups: 65536` (declarável até 2^31−1), `retainEmptyGroups: 7d` (aceita `never`). Teto atingido em runtime: a linha entra, o contador a trata como "sem grupo", `nishidb_counter_groups_refused_total` sobe e um WARN sai uma vez por contador por subida. |
@@ -168,11 +168,11 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 - Repositório inteiro em PT-BR: identificadores, godoc, testes, logs, commits.
 - Zero alocação por evento no caminho quente: buffers do writer com `buf[:0]` e
   reatribuição do retorno; `m[string(b)]` para lookup em mapa sem alocar.
-- Ordem de locks `recPassadaMu → retPassadaMu → vida → wmu → aposMu`; `snapMu`,
+- Ordem de locks `recPassMu → retPassMu → vida → wmu → aposMu`; `snapMu`,
   `selMu` e o lock do dicionário de grupos são FOLHA. Nada tomado sob folha toma
   `wmu`.
 - Métricas: nomes só por constantes de `internal/metrics/names.go`; `Family` e
-  `Nome` por constante; label nunca vem de entrada do cliente; série que alarma
+  `Name` por constante; label nunca vem de entrada do cliente; série que alarma
   nasce com zero.
 - Gates que continuam verdes sem edição: `TestCitacoesDeSecaoResolvem`,
   `TestAmostrasDeMetricaTemFamiliaENome`, `TestQuickstartDoREADMEExecuta`
@@ -193,8 +193,8 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | `internal/storage/mmap/region.go` | `AtomicLoad32`/`AtomicStore32` (único pacote com unsafe) |
 | `internal/storage/rowindex/rowindex.go` | `denseFile` com tamanho de entrada parametrizado; `Dense32` exportado |
 | `internal/index/valuekey/valuekey.go` | `AppendComposite`/`DecodeComposite` + golden |
-| `internal/predicate/evaluator.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Evaluate(payload)` |
-| `internal/predicate/rule.go` | `CompilaCondicao` extraída de `CompilaRegras` |
+| `internal/predicate/evaluator.go` (novo) | `AvaliadorOfPayload`: programa + slots + reader, `Evaluate(payload)` |
+| `internal/predicate/rule.go` | `CompileCondition` extraída de `CompileRegras` |
 | `internal/storage/counter/` (novo) | `dict.go`, `counter.go`, `textkey.go`, `audit.go`, `retirement.go` + testes |
 | `internal/storage/checkpoint/manifest.go` | tag 0x8005, `CounterInfo`, `Manifest.Counters` |
 | `internal/storage/store.go` | `Options.CompilaContadores`, abertura, passo 7c do `applyRecord`, Close |
@@ -203,7 +203,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | `internal/schema/counter.go` (novo) | `CounterSpec`, parse do bloco `counters:`, validação |
 | `internal/schema/spec.go` | `rawSpec.Counters`, `DatasetSpec.Counters`, mensagem do prefixo `_` |
 | `internal/counters/` (novo) | `compile.go` (spec → `counter.Definition`), `table.go` (schema sintético + fonte virtual), `open.go` (callback) |
-| `internal/query/engine.go` | `RegistraVirtual` + roteamento por namespace |
+| `internal/query/engine.go` | `RegisterVirtual` + roteamento por namespace |
 | `internal/query/meta/meta.go` | mensagem de namespace desconhecido lista os existentes |
 | `internal/server/server.go`, `history.go` | wiring do callback e do registro das tabelas |
 | `internal/server/counters.go` (novo) | rotas `/v1/counters/audit` e `/v1/counters/rebuild` |
@@ -331,29 +331,29 @@ func DecodeComposite(chave []byte, dst []types.Value) ([]types.Value, error)
 
 - [ ] **Passo 3: commit** — `valuekey: chave composta com prefixo de tamanho por componente, golden de disco`.
 
-### Tarefa A3: `AvaliadorDePayload` no `predicado`
+### Tarefa A3: `AvaliadorOfPayload` no `predicado`
 
 **Arquivos:**
 - Criar: `internal/predicate/evaluator.go`, `evaluator_test.go`
-- Modificar: `internal/predicate/rule.go:77-120` (extrair `CompilaCondicao`)
+- Modificar: `internal/predicate/rule.go:77-120` (extrair `CompileCondition`)
 
 **Interfaces produzidas:**
 ```go
-// CompilaCondicao resolve uma condição solta pelo MESMO caminho do WHERE e das
+// CompileCondition resolve uma condição solta pelo MESMO caminho do WHERE e das
 // regras de TTL: parse, bind contra o schema, recusa de campo de sistema, programa.
-func CompilaCondicao(rotulo, condicao string, sc *schema.Compiled) (*Programa, binder.Slots, error)
+func CompileCondition(rotulo, condicao string, sc *schema.Compiled) (*Programa, binder.Slots, error)
 
-// AvaliadorDePayload avalia um programa direto sobre um payload. Tem scratch
+// AvaliadorOfPayload avalia um programa direto sobre um payload. Tem scratch
 // próprio (slots + reader) e por isso é de UM dono: o writer usa o seu, a
 // auditoria instancia outro.
-type AvaliadorDePayload struct{ prog *Programa; slots []Slot; fr encoding.FieldReader }
-func NovoAvaliadorDePayload(prog *Programa, ids []types.FieldID) *AvaliadorDePayload
-func (a *AvaliadorDePayload) Evaluate(payload []byte) (bool, error)
+type AvaliadorOfPayload struct{ prog *Programa; slots []Slot; fr encoding.FieldReader }
+func NewAvaliadorOfPayload(prog *Programa, ids []types.FieldID) *AvaliadorOfPayload
+func (a *AvaliadorOfPayload) Evaluate(payload []byte) (bool, error)
 ```
 
-- [ ] **Passo 1: teste** — compila `authenticated = true AND slot > 0` contra um `schema.Compiled` de teste (o pacote já tem helper para regras; reusar), monta payload com `encoding.AppendField`, afirma true/false, e afirma que campo ausente compara false. `TestCompilaCondicaoRecusaCampoDeSistema` (`_writtenAt`), reaproveitando o caso que `CompilaRegras` já cobre.
+- [ ] **Passo 1: teste** — compila `authenticated = true AND slot > 0` contra um `schema.Compiled` de teste (o pacote já tem helper para regras; reusar), monta payload com `encoding.AppendField`, afirma true/false, e afirma que campo ausente compara false. `TestCompilaCondicaoRecusaCampoDeSistema` (`_writtenAt`), reaproveitando o caso que `CompileRegras` já cobre.
 
-- [ ] **Passo 2: vermelho → implementar → verde.** `CompilaRegras` passa a chamar `CompilaCondicao(fmt.Sprintf("ttl[%d]", i), r.When, sc)` — os testes de regra continuam verdes sem edição.
+- [ ] **Passo 2: vermelho → implementar → verde.** `CompileRegras` passa a chamar `CompileCondition(fmt.Sprintf("ttl[%d]", i), r.When, sc)` — os testes de regra continuam verdes sem edição.
 
 - [ ] **Passo 3: gate** — `TestAvaliadorDePayloadNaoAloca` (`AllocsPerRun`, teto 0, `!race`).
 
@@ -452,7 +452,7 @@ func (c *Counter) Fold() error
 // Transition é o único ponto de escrita: antiga := vetor[rowID] (overlay, senão
 // mmap); nova := Derive(payload). lapide=true força nova = WithoutGroup. Writer-only.
 // Zero alocação com grupo existente. Incrementa o grupo novo ANTES de decrementar
-// o antigo (um leitor somando nunca subestima). Roda nos dois modos do
+// o antigo (um leitor somando nunca subestima). Run nos dois modos do
 // applyRecord — write e replay.
 func (c *Counter) Transition(rowID types.RowID, payload []byte, lapide bool) error
 // Derive é a função pura (grupo, condição) → entrada; exposta para a auditoria,
@@ -600,30 +600,30 @@ todas as críticas).
 CompilaContadores func(dict *fielddict.Dict) ([]counter.Definition, error)
 
 // Store
-func (s *Store) Contadores() []*counter.Counter
-func (s *Store) EstatisticasDeContadores() []counter.Stats
+func (s *Store) Counters() []*counter.Counter
+func (s *Store) EstatisticasOfCounters() []counter.Stats
 ```
 
 - [ ] **Passo 1: testes de integração no Store** (`counters_test.go`, usando o helper de abertura de dataset de teste do pacote e um `Definition` montado à mão com FieldIDs do dicionário):
   - `TestContadorAcompanhaPutLapideECopyForward`: Put A(cond) → total 1; Put A(¬cond) → 0; Put A(cond) → 1; `Expira` → 0 e refs 0; `Compact` (copy-forward) → inalterado.
   - `TestContadorSobreviveAoCheckpointEReabertura`: 100 linhas, Checkpoint, Close, Open → totais iguais (adoção, sem log de construção).
   - `TestContadorRecuperaDoTailSemCheckpoint`: 100 linhas, Checkpoint, +50 escritas (algumas mudando de grupo, algumas lápides), fecha SEM checkpoint (simula crash via o seam que o pacote já usa nos testes de recovery), reabre → totais iguais aos de uma instância de referência que nunca caiu. **Duas variantes, e as duas têm de convergir**: (a) crash sem nenhum checkpoint depois das 50 escritas — o mmap do vetor está em S, o replay aplica tudo; (b) checkpoint INTERROMPIDO depois de `applyOverlayContadores`+`msyncContadores` e antes do manifest (seam `writeTrace`/`traceStep`) — o mmap está à frente de S com records duráveis, o replay reaplica e vê `antiga == nova`. É a prova do argumento "dobra antes do replay".
-  - `TestContadorNovoEhConstruidoNaAbertura`: dataset com 100 linhas SEM contador; reabre com contador → totais certos, log `contador.construido` com motivo "o dataset não tinha este contador".
+  - `TestContadorNovoEhConstruidoNaAbertura`: dataset com 100 linhas SEM contador; reabre com contador → totais certos, log `counter.construido` com motivo "o dataset não tinha este contador".
   - `TestContadorComWhereDiferenteEhReconstruido`: mesmo com `where` mudado → motivo "os parâmetros mudaram", dicionário e vetor recriados (os `*.old` ficam até o fim do Open e são apagados depois do checkpoint).
   - `TestMudarMaxGroupsNaoReconstroi` e `TestMaxGroupsMenorQueOsGruposEmUsoEhRecusado` (`ErrInvalidArgument` nomeando o contador, os grupos em uso e o teto).
-  - `TestContadorRemovidoDoYamlEhApagado`: reabre sem o contador → diretório some, log `contador.removido`, manifest sem a seção.
+  - `TestContadorRemovidoDoYamlEhApagado`: reabre sem o contador → diretório some, log `counter.removido`, manifest sem a seção.
   - `TestAberturaSemCallbackRecusaDatasetComContadores` (`ErrDatasetCorrupt` com mensagem nomeando os contadores).
   - `TestContadorEhRecusadoNoHistorico`.
-  - `TestOrdemDeLocks…`: a auditoria e o `_counters` nunca tomam `wmu` a partir do lock do dicionário — coberto estruturalmente (o lock do dicionário só existe dentro de `contador`, que não conhece o Store).
+  - `TestOrdemDeLocks…`: a auditoria e o `_counters` nunca tomam `wmu` a partir do lock do dicionário — coberto estruturalmente (o lock do dicionário só existe dentro de `counter`, que não conhece o Store).
   - **Mutações obrigatórias (as três de proposta §10)**: (1) `Expira` deixa de chamar `applyRecord` para o contador (comentar o passo 7c no ramo de lápide) → `TestContadorAcompanhaPutLapideECopyForward` vermelho; (2) a expiração oportunista da compaction grava a lápide sem `applyRecord` → teste próprio `TestExpiracaoOportunistaDescontaDoContador` vermelho; (3) `Fold` chamada DEPOIS do replay → `TestContadorRecuperaDoTailSemCheckpoint` (variante msyncada) vermelho.
 
 - [ ] **Passo 2: implementar `Open`** na ordem (validada contra `store_recovery.go` e `store_checkpoint.go`):
-  1. depois de `resolveCamposIndexados` (linha 1190) e antes do `switch` (1195): `defs, err := s.compilaContadores(opts, m)` — chama o callback (se `opts.CompilaContadores == nil` e `m != nil && len(m.Counters) > 0` ⇒ `ErrDatasetCorrupt` nomeando os contadores); recusa `ModoHistorico` com defs (molde `validaOpcoesDoModo`, store.go:2629).
-  2. **Decidir a reconstrução ANTES da recovery**, por contador: `recria = m == nil || seção ausente || colunas/where diferem de m.Counters[nome]`; `counter.Open(dir, def, minRows, recria)`. Se `!recria` e (`Born()` com `m.NextRowID > 0` ou `!Covers(m.NextRowID)`) ⇒ marcar `recria` também (o vetor não descreve as linhas) — nesse caso o `Abre` já aconteceu; chamar `Clear()`. Guardar `s.contadores` e `s.contadoresARecriar`. Contadores no manifest que não estão nas defs ⇒ `os.RemoveAll` do diretório + log `contador.removido`.
+  1. depois de `resolveFieldsIndexados` (linha 1190) e antes do `switch` (1195): `defs, err := s.compilaContadores(opts, m)` — chama o callback (se `opts.CompilaContadores == nil` e `m != nil && len(m.Counters) > 0` ⇒ `ErrDatasetCorrupt` nomeando os contadores); recusa `ModoHistorico` com defs (molde `validateModeOptions`, store.go:2629).
+  2. **Decidir a reconstrução ANTES da recovery**, por contador: `recria = m == nil || seção ausente || colunas/where diferem de m.Counters[nome]`; `counter.Open(dir, def, minRows, recria)`. Se `!recria` e (`Born()` com `m.NextRowID > 0` ou `!Covers(m.NextRowID)`) ⇒ marcar `recria` também (o vetor não descreve as linhas) — nesse caso o `Abre` já aconteceu; chamar `Clear()`. Guardar `s.contadores` e `s.countersARecriar`. Contadores no manifest que não estão nas defs ⇒ `os.RemoveAll` do diretório + log `counter.removido`.
   3. **Dobra** (`c.Fold()`, pelo tamanho do arquivo) para cada contador SEM reconstrução pendente.
   4. o ramo de recovery roda como hoje — o replay passa pelo passo 7c (os dois modos).
-  5. logo depois do ramo e ANTES de `abreIndicesDeSegmento`: para cada contador em `contadoresARecriar`, `s.reconstroiContador(c)` — varredura de `[0, nextRowID)` por `locs.Get`, pula ausente e lápide, `segR.ReadRecord`, `Transition` (idempotente com o que o replay já aplicou: o delta é contra a entrada corrente); log `contador.construido` (motivo, linhas, grupos, duração), molde de `schedule.go:62-87`.
-  6. `abreIndicesDeSegmento`, `adotaOuConstroiAgenda`, `carregaOffsets`, `Checkpoint()` — como hoje; o checkpoint grava a seção nova e aplica o overlay.
+  5. logo depois do ramo e ANTES de `openIndicesOfSegment`: para cada contador em `countersARecriar`, `s.reconstroiContador(c)` — varredura de `[0, nextRowID)` por `locs.Get`, pula ausente e lápide, `secR.ReadRecord`, `Transition` (idempotente com o que o replay já aplicou: o delta é contra a entrada corrente); log `counter.construido` (motivo, linhas, grupos, duração), molde de `schedule.go:62-87`.
+  6. `openIndicesOfSegment`, `adotaOuConstroiAgenda`, `loadOffsets`, `Checkpoint()` — como hoje; o checkpoint grava a seção nova e aplica o overlay.
 
 - [ ] **Passo 3: `applyRecord` passo 7c** — logo depois do bloco da agenda (1919-1923):
 
@@ -639,7 +639,7 @@ func (s *Store) EstatisticasDeContadores() []counter.Stats
 	}
 ```
 
-- [ ] **Passo 4: checkpoint** — dois passos novos: `traceStep("applyOverlayContadores", …)` logo DEPOIS de `applyOverlay` das locations (isto é, depois do `segSync`: é o que garante que o mmap do vetor só recebe transições de records duráveis), e `traceStep("msyncContadores", …)` entre `msyncVencimentos` e `msyncSequences`, erro NÃO sticky (godoc igual ao da agenda). Depois do msync, ainda sob `wmu`: `c.RecordCoveredTouches(c.Transitions())`. `Manifest.Counters` montado de `c.Def()` a cada checkpoint. **Close**: parar o laço de aposentadoria (C4) ao lado de `ParaExpiracao`; `Close()` dos contadores ao lado da agenda; sem msync no Close (o que não foi checkpointado volta pelo replay, como hoje).
+- [ ] **Passo 4: checkpoint** — dois passos novos: `traceStep("applyOverlayContadores", …)` logo DEPOIS de `applyOverlay` das locations (isto é, depois do `segSync`: é o que garante que o mmap do vetor só recebe transições de records duráveis), e `traceStep("msyncContadores", …)` entre `msyncVencimentos` e `msyncSequences`, erro NÃO sticky (godoc igual ao da agenda). Depois do msync, ainda sob `wmu`: `c.RecordCoveredTouches(c.Transitions())`. `Manifest.Counters` montado de `c.Def()` a cada checkpoint. **Close**: parar o laço de aposentadoria (C4) ao lado de `ForExpiration`; `Close()` dos contadores ao lado da agenda; sem msync no Close (o que não foi checkpointado volta pelo replay, como hoje).
 
 - [ ] **Passo 5: verde na suíte do storage** (`go test ./internal/storage/... -count=1`), depois `make test` e `make test-race`.
 
@@ -659,7 +659,7 @@ func (s *Store) EstatisticasDeContadores() []counter.Stats
 ### Tarefa C3: auditoria sob snapshot e reconstrução em operação
 
 **Arquivos:**
-- Criar: `internal/storage/counter/audit.go` (tipos + comparação), `internal/storage/counters.go` (`AuditaContadores`, `ReconstroiContadores`), testes
+- Criar: `internal/storage/counter/audit.go` (tipos + comparação), `internal/storage/counters.go` (`AuditaCounters`, `ReconstroiCounters`), testes
 
 **Interfaces produzidas:**
 ```go
@@ -670,28 +670,28 @@ type Report struct {
 	Maintained, Recomputed int64      // soma dos totais
 	DivergentGroups int                 // grupos com total OU refs diferentes
 	Sample []Divergence           // as primeiras 20
-	RowsScanned uint64; Duracao time.Duration
+	RowsScanned uint64; Duration time.Duration
 }
 // Store
-func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error)
-func (s *Store) ReconstroiContadores(ctx context.Context) ([]counter.Stats, error)
+func (s *Store) AuditaCounters(ctx context.Context) ([]counter.Report, error)
+func (s *Store) ReconstroiCounters(ctx context.Context) ([]counter.Stats, error)
 ```
 
-Mecânica de `AuditaContadores`: `entra()`; `wmu.Lock()`; `snap := s.OpenSnapshot()`
+Mecânica de `AuditaCounters`: `entra()`; `wmu.Lock()`; `snap := s.OpenSnapshot()`
 (dentro do `wmu` de propósito: fecha a corrida entre ler a época e registrar o
 leitor, `snapshot.go:176-181`); `c.AuditSnapshot()` de cada contador; `wmu.Unlock()`.
 Depois, sem `wmu`, **enumerador próprio** — NÃO `ScanLive`/`GetByRowID`, que
 leem a location corrente e filtram por prazo vencido: para `id` em
 `[snap.BaseRowID, snap.LimitRowID)`: `packed := s.vers.At(id, snap.Epoch)`,
 senão `s.locs.Get(id)`; pula só ausente ou bit de lápide; sob `aposMu.RLock`,
-`segR.ReadRecord(seg, off, buf)` e confere `rec.RowID == id`; rederiva com
+`secR.ReadRecord(seg, off, buf)` e confere `rec.RowID == id`; rederiva com
 `c.Derive(payload, avaliadorDaAuditoria, scratch, keyBuf)`; acumula em slices
 por id (do tamanho do limite congelado; id ausente do dicionário ⇒ divergência
 própria "grupo não internado"). Ao fim compara com a cópia e monta o relatório;
 `CloseSnapshot`. `ErrSnapshotExpirado` ⇒ a auditoria é INCONCLUSIVA: devolve o
 erro, nunca um relatório (o CLI já o traduz para exit 5). Godoc nomeia a
 definição: "viva = com location e sem lápide", e por que a visibilidade da
-consulta (prazo vencido) não serve de oráculo. `ReconstroiContadores` = sob
+consulta (prazo vencido) não serve de oráculo. `ReconstroiCounters` = sob
 `wmu`: `Clear()` + varredura como na abertura; documentar que segura o writer
 pela varredura inteira.
 
@@ -714,7 +714,7 @@ pela varredura inteira.
 ```go
 // contador
 func (c *Counter) RetireEmptyGroups(agora time.Time) (aposentados int, err error) // writer-only
-// Store: goroutine própria (como rodaExpiracao), cadência 1 min, sob wmu por passada.
+// Store: goroutine própria (como runExpiration), cadência 1 min, sob wmu por passada.
 ```
 Regra: `emptySince[g]` é definido quando `refs[g]` chega a 0 (`esvaziou`) e limpado
 quando sobe (`tocou`); na abertura, todo grupo vivo com `refs == 0` recebe
@@ -745,7 +745,7 @@ aposentado, e a dobra da reabertura a contaria como órfã. Aposentar =
 
 **Arquivos:**
 - Criar: `internal/schema/counter.go`, `counter_test.go`
-- Modificar: `internal/schema/spec.go` (`rawSpec` +`Counters yaml.Node`; `DatasetSpec` +`Contadores []CounterSpec`; chamada em `validate` depois do bloco de `schema.fields` e da key; mensagem do prefixo `_` em 669-673 passa a "os espaços de nome do produto (`_meta`, `_counters`)")
+- Modificar: `internal/schema/spec.go` (`rawSpec` +`Counters yaml.Node`; `DatasetSpec` +`Counters []CounterSpec`; chamada em `validate` depois do bloco de `schema.fields` e da key; mensagem do prefixo `_` em 669-673 passa a "os espaços de nome do produto (`_meta`, `_counters`)")
 
 **Interfaces produzidas:**
 ```go
@@ -789,19 +789,19 @@ do schema compilado — D2), mesma nota de `validateTTLRules`.
 
 **Interfaces produzidas:**
 ```go
-// Compila resolve as specs contra o schema compilado: nomes → FieldID, tipos
-// efetivos, `where` pelo CompilaCondicao (recusa campo de sistema), e recusa
+// Compile resolve as specs contra o schema compilado: nomes → FieldID, tipos
+// efetivos, `where` pelo CompileCondition (recusa campo de sistema), e recusa
 // `where` ou groupBy sobre coluna com merge: sum (Accumulates) — a idempotência do
 // contador depende de o estado ser função do último evento.
-func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definition, error)
+func Compile(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definition, error)
 
-// Compilador prepara o callback de abertura do storage. Dentro do callback o
+// Compiler prepara o callback de abertura do storage. Dentro do callback o
 // schema é compilado (spec.Compile(dict)) — no MESMO ponto em que hoje é compilado
 // depois do Open, só que antes do replay. Compilado() devolve o resultado.
-type Compilador struct{ … }
-func NovoCompilador(spec *schema.DatasetSpec) *Compilador
-func (c *Compilador) Callback() func(*fielddict.Dict) ([]counter.Definition, error)
-func (c *Compilador) Compilado() *schema.Compiled
+type Compiler struct{ … }
+func NewCompiler(spec *schema.DatasetSpec) *Compiler
+func (c *Compiler) Callback() func(*fielddict.Dict) ([]counter.Definition, error)
+func (c *Compiler) Compilado() *schema.Compiled
 ```
 `Definition.Where` é o texto do YAML com espaços colapsados (`strings.Join(strings.Fields(w), " ")`)
 — é o que vai ao manifest e decide reconstrução.
@@ -817,15 +817,15 @@ func (c *Compilador) Compilado() *schema.Compiled
 ### Tarefa E1: registro genérico de tabelas virtuais no motor
 
 **Arquivos:**
-- Modificar: `internal/query/engine.go` (`registro` +`virtuais map[string]map[string]*registro`; `RegistraVirtual`; `Execute` 91-98), `internal/query/meta/meta.go:66-72`, `engine_test.go`
+- Modificar: `internal/query/engine.go` (`record` +`virtuais map[string]map[string]*registro`; `RegisterVirtual`; `Execute` 91-98), `internal/query/meta/meta.go:66-72`, `engine_test.go`
 
 **Interfaces produzidas:**
 ```go
-// RegistraVirtual associa `namespace.tabela`, sob o dataset, a um schema e um
+// RegisterVirtual associa `namespace.tabela`, sob o dataset, a um schema e um
 // store — o mesmo pipeline (binder → planner → executor, com métricas, top-N e
 // orçamento) que um dataset de verdade usa. `_meta` continua fora do registro:
 // ele descreve o dataset alvo por consulta e não tem store fixo.
-func (e *Engine) RegistraVirtual(dataset, namespace, tabela string, sch *schema.Compiled, st Store) error
+func (e *Engine) RegisterVirtual(dataset, namespace, tabela string, sch *schema.Compiled, st Store) error
 ```
 `Execute`: `if strings.HasPrefix(stmt.Namespace, "_")`: `_meta` ⇒ como hoje;
 senão procura `reg.virtuais[stmt.Namespace][stmt.Dataset]`; ausente ⇒ erro
@@ -833,7 +833,7 @@ senão procura `reg.virtuais[stmt.Namespace][stmt.Dataset]`; ausente ⇒ erro
 `_counters não tem tabela %q neste dataset; existem: …` (tabela desconhecida,
 lista ordenada). O binder confere `stmt.Dataset == sc.Name` de graça porque o
 schema sintético tem `name: <tabela>`. Erro do binder é renomeado para
-`_counters.<tabela>` como o `meta.renomeia` faz (extrair helper compartilhado).
+`_counters.<tabela>` como o `meta.rename` faz (extrair helper compartilhado).
 
 - [ ] **Passo 1: testes** — `TestExecuteRoteiaTabelaVirtualRegistrada` (com um `fakestorage`), `TestNamespaceDesconhecidoListaOsExistentes`, `TestTabelaVirtualDesconhecidaListaAsDoDataset`, `TestMetaContinuaRespondendo`. Ajustar `TestNamespaceDesconhecidoERecusado` (meta) à mensagem nova.
 
@@ -846,24 +846,24 @@ schema sintético tem `name: <tabela>`. Erro do binder é renomeado para
 
 **Interfaces produzidas:**
 ```go
-// Leitor é o que a tabela precisa do contador (satisfeito por *counter.Counter).
-type Leitor interface {
+// Reader é o que a tabela precisa do contador (satisfeito por *counter.Counter).
+type Reader interface {
 	Limit() uint32
 	Grupo(id uint32) (chave, texto []byte, total, refs int64, vivo bool)
 	ByText(texto []byte) (uint32, bool)
 }
-func Tabela(def counter.Definition, l Leitor) (*schema.Compiled, query.Store, error)
-// Registra liga todos os contadores do Store no motor, sob o dataset.
-func Registra(eng *query.Engine, dataset string, st *storage.Store) error
+func Table(def counter.Definition, l Reader) (*schema.Compiled, query.Store, error)
+// Retain liga todos os contadores do Store no motor, sob o dataset.
+func Retain(eng *query.Engine, dataset string, st *storage.Store) error
 ```
-Schema sintético (string YAML como `especDaTabela` do meta): `name: <nome>`,
+Schema sintético (string YAML como `especOfTable` do meta): `name: <nome>`,
 `key.field: groupKey`, `schema.include: [groupKey, <colunas…>, total]`, tipos das
 colunas de `def.Types` (`boolean` para `TypeBool`). Cache: um `*schema.Compiled`
-por contador, construído em `Tabela` (não há `sync.Once` global).
+por contador, construído em `Table` (não há `sync.Once` global).
 
 Fonte (`query.Store`): `OpenSnapshot()` devolve `types.Snapshot{LimitRowID: l.Limit()}`
 (congela o conjunto de grupos por consulta; `Epoch`/`Instant`/`BaseRowID`
-ficam zero e são ignorados pela fonte — godoc no molde do `meta.fonte.OpenSnapshot`);
+ficam zero e são ignorados pela fonte — godoc no molde do `meta.source.OpenSnapshot`);
 `ScanLive(snap)` itera `1..LimitRowID-1`, pulando `vivo == false`;
 `GetByRowID(snap, id, buf)` codifica: `groupKey` (texto), as colunas (por
 `valuekey.DecodeComposite` da chave, zero-copy), `total`. **Zero alocação por
@@ -872,7 +872,7 @@ montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 `GetByKey(snap, key, buf)` ⇒ `ByText(key)` ⇒ mesmo `record`. `Indexed` false;
 `Lookup` erro de rede de segurança (como o meta). RowID = id do grupo (crescente).
 
-- [ ] **Passo 1: testes ponta a ponta no pacote** (harness igual ao `meta_test.linhas`, mas via `query.Engine` com `RegistraVirtual`): as consultas da proposta §5.2/§5.3:
+- [ ] **Passo 1: testes ponta a ponta no pacote** (harness igual ao `meta_test.linhas`, mas via `query.Engine` com `RegisterVirtual`): as consultas da proposta §5.2/§5.3:
   - `SELECT olt, total FROM _counters.autenticados_por_olt ORDER BY total ASC LIMIT 5`
   - `SELECT olt, total FROM _counters.autenticados_por_olt WHERE olt = 'PRCTA_G1M10'`
   - `SELECT groupKey, total FROM _counters.autenticados_por_olt WHERE groupKey = 'PRCTA_G1M10'` (point lookup — afirmar pelo plano/métrica que foi `PointLookupPlan`)
@@ -885,13 +885,13 @@ montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 ### Tarefa E3: wiring no servidor e no CLI
 
 **Arquivos:**
-- Modificar: `internal/server/server.go:336-426` (`abreDataset`: `NovoCompilador` → `Options.CompilaContadores` → `compilado := comp.Compilado()` no lugar de `spec.Compile(st.FieldDict())`; depois de `eng.Register`: `contadores.Registra(s.eng, spec.Name, st)`; log `contadores.declarados` com nome/groupBy/where/teto por contador, como `ttl.regras`)
-- Modificar: `internal/cli/cli.go:248-279` (`abreDataset` idem) e `cli.go:302` (segunda abertura), `internal/cli/query.go:107` (`contadores.Registra` depois do `Register`), `internal/cli/offsets.go:85` (callback nas `Options`), `benchmark/ingest-bench/harness.go:1592` (idem). **Todo chamador de `storage.Open` de um dataset base passa o callback** — a guarda do C1 ("manifest com contadores sem callback ⇒ recusa") é o que pega o chamador esquecido; `history.go:84` (irmã) NÃO passa, e a irmã nunca tem a seção.
+- Modificar: `internal/server/server.go:336-426` (`openDataset`: `NewCompiler` → `Options.CompilaContadores` → `compilado := comp.Compilado()` no lugar de `spec.Compile(st.FieldDict())`; depois de `eng.Register`: `contadores.Retain(s.eng, spec.Name, st)`; log `contadores.declarados` com nome/groupBy/where/teto por contador, como `ttl.regras`)
+- Modificar: `internal/cli/cli.go:248-279` (`openDataset` idem) e `cli.go:302` (segunda abertura), `internal/cli/query.go:107` (`contadores.Retain` depois do `Register`), `internal/cli/offsets.go:85` (callback nas `Options`), `benchmark/ingest-bench/harness.go:1592` (idem). **Todo chamador de `storage.Open` de um dataset base passa o callback** — a guarda do C1 ("manifest com contadores sem callback ⇒ recusa") é o que pega o chamador esquecido; `history.go:84` (irmã) NÃO passa, e a irmã nunca tem a seção.
 - Testar: `internal/server/query_test.go` (`TestCountersRespondePelaRotaDeQuery`, no molde de `TestMetaFieldsRespondePelaRotaDeQuery:916`), `internal/cli/query_test.go` (consulta local a `_counters`)
 
 - [ ] **Passo 1: testes** — HTTP: sobe servidor de teste com YAML contendo `counters`, ingere via o caminho de teste existente, consulta `_counters.x` e afirma linhas + moldura de fim; JDBC/Python NÃO mudam (é SQL). CLI: `nishidb query --config … "SELECT … FROM _counters.x"` devolve NDJSON.
 
-- [ ] **Passo 2: vermelho → implementar → verde.** Conferir que `abreHistorico` (irmã) NÃO recebe callback e que a irmã sobe (`TestHistorico…` existentes verdes).
+- [ ] **Passo 2: vermelho → implementar → verde.** Conferir que `openHistory` (irmã) NÃO recebe callback e que a irmã sobe (`TestHistorico…` existentes verdes).
 
 - [ ] **Passo 3: `make test`, `make test-race`, `make lint` → commit** — `server, cli: contadores compilados na abertura e _counters registrado no motor`.
 
@@ -902,7 +902,7 @@ montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 ### Tarefa F1: métricas e `/v1/stats`
 
 **Arquivos:**
-- Modificar: `internal/metrics/names.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metrics_dataset.go` (`amostrasDeContadores(d) []metrics.Sample` lendo `d.st.EstatisticasDeContadores()` UMA vez), `internal/protocol/documents.go` (`DatasetStats.Counters []CounterStats`), `internal/server/documents.go` (mesma chamada)
+- Modificar: `internal/metrics/names.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metrics_dataset.go` (`samplesOfCounters(d) []metrics.Sample` lendo `d.st.EstatisticasOfCounters()` UMA vez), `internal/protocol/documents.go` (`DatasetStats.Counters []CounterStats`), `internal/server/documents.go` (mesma chamada)
 - Testar: `internal/server/metrics_dataset_test.go`, `internal/gates` continua verde
 
 Séries (todas por `dataset`,`counter`, nascem com zero na subida via coletor que
@@ -921,7 +921,7 @@ emite sempre): `nishidb_counter_groups` (medidor, vivos), `nishidb_counter_group
 
 **Arquivos:**
 - Criar: `internal/server/counters.go`, `counters_test.go`; `internal/protocol/counters.go`
-- Modificar: `internal/server/auth.go:138-148` (`rt.registra("/v1/counters/audit", config.RoleAdmin, s.handleAuditoriaDeContadores)`, idem `rebuild`)
+- Modificar: `internal/server/auth.go:138-148` (`rt.registra("/v1/counters/audit", config.RoleAdmin, s.handleAuditOfCounters)`, idem `rebuild`)
 
 **Wire (sem código de erro novo):**
 ```go
@@ -940,8 +940,8 @@ type RebuildDataset struct{ Name string; Counters []RebuildContador }
 type RespostaRebuildDeContadores struct{ Datasets []RebuildDataset }
 ```
 Handlers no molde de `handleCheckpoint` (`mutations.go:161-198`): método POST,
-`leRequisicaoDataset`, `datasetsAlvo`, `processaDatasets`, `ctxDeMutacao(r)` (a
-varredura é longa e tem de honrar SIGTERM), `erroDeMutacao` (+ `ErrSnapshotExpirado`
+`readRequisicaoDataset`, `datasetsTarget`, `processaDatasets`, `ctxOfMutacao(r)` (a
+varredura é longa e tem de honrar SIGTERM), `mutationError` (+ `ErrSnapshotExpirado`
 ⇒ 409 `SNAPSHOT_TOO_OLD`, código já existente). Dataset sem contadores ⇒ lista
 vazia, não erro. Log `contadores.auditoria` com divergentes por contador.
 
@@ -956,15 +956,15 @@ vazia, não erro. Log `contadores.auditoria` com divergentes por contador.
 - Modificar: `internal/cli/cli.go` (case `"counters"`; bloco `COUNTERS` no texto `uso` e linha na sinopse)
 
 Sintaxe: `nishidb counters (--config F | --server ADDR [--user --password-file --tls-ca]) --dataset D [--audit | --rebuild]`.
-Sem ação: tabela `contador  grupos  teto  aposentados  recusados` (local: `EstatisticasDeContadores`;
+Sem ação: tabela `contador  grupos  teto  aposentados  recusados` (local: `EstatisticasOfCounters`;
 remoto: `/v1/stats`). `--audit`: a tabela da proposta §5.6 (`contador grupos mantido
 recalculado divergência`), com a amostra de divergências abaixo quando houver, e
 exit 3 (`ErrDatasetCorrupt`) quando `DivergentGroups > 0` — divergência é corrupção
 de índice derivado, e o exit code é o que um script de operação lê. `--rebuild`:
 tabela `contador grupos duração`. `--config` com servidor no ar ⇒ exit 3 + dica
-`dicaDeServidor` (já existe). Saída via `escreveSaida` (tabwriter, uma escrita).
+`serverHint` (já existe). Saída via `writeOutputWithContext` (tabwriter, uma escrita).
 
-- [ ] **Passo 1: testes** — `TestOUsoAnunciaCounters`; `TestCountersLocalListaEAudita` (dataset de teste); `TestCountersAuditaComDivergenciaSaiComExitDataset` (deriva injetada pelo seam); `TestCountersRemotoChamaARota` (httptest, como os testes de `postaMutacao`); `TestCountersComServidorNoArSaiComExit3`.
+- [ ] **Passo 1: testes** — `TestOUsoAnunciaCounters`; `TestCountersLocalListaEAudita` (dataset de teste); `TestCountersAuditaComDivergenciaSaiComExitDataset` (deriva injetada pelo seam); `TestCountersRemotoChamaARota` (httptest, como os testes de `postMutation`); `TestCountersComServidorNoArSaiComExit3`.
 
 - [ ] **Passo 2: vermelho → implementar → verde → `make test` + `make test-race` + `make lint` → commit** — `cli: subcomando counters (lista, auditoria, reconstrução) local e remoto`.
 
@@ -1053,6 +1053,6 @@ um dataset com a amostra `samples/` ingerida por `nishidb ingest`; (2)
 `nishidb query --config … "SELECT olt, total FROM _counters.autenticados_por_olt ORDER BY total ASC LIMIT 5"`;
 (3) subir o servidor, repetir com `--server`, e `nishidb counters --server … --audit`
 com zero divergência; (4) parar com SIGTERM no meio de uma auditoria e ver o
-processo encerrar; (5) reiniciar e ver `contador` adotado sem reconstrução;
-(6) mudar o `where` no YAML, reiniciar, ver `contador.construido` no log e a
+processo encerrar; (5) reiniciar e ver `counter` adotado sem reconstrução;
+(6) mudar o `where` no YAML, reiniciar, ver `counter.construido` no log e a
 auditoria zerada; (7) `/metrics` com as séries dos dois contadores.

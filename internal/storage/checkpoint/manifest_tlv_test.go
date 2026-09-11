@@ -96,7 +96,7 @@ func TestManifestV1ContinuaSendoLido(t *testing.T) {
 func TestTodoManifestSaiNaV3(t *testing.T) {
 	cases := map[string]func(*Manifest){
 		"sem seção nenhuma": func(*Manifest) {},
-		"com histórico":     func(m *Manifest) { m.Mode, m.RowIDBase = 1, 500 },
+		"com histórico":     func(m *Manifest) { m.StoreMode, m.RowIDBase = 1, 500 },
 		"com agenda": func(m *Manifest) {
 			m.Schedule = &ScheduleInfo{FallbackDurationMs: 60_000, BlockShift: 6, Levels: 4}
 		},
@@ -319,7 +319,7 @@ func TestACaudaNuncaEhVaziaEAReservaAcompanha(t *testing.T) {
 // arquivo sem que o conteúdo mudasse.
 func TestCaudaSaiEmOrdemCrescenteDeTagComAgenda(t *testing.T) {
 	m := sampleManifest()
-	m.Mode, m.RowIDBase = 1, 500
+	m.StoreMode, m.RowIDBase = 1, 500
 	m.Schedule = &ScheduleInfo{FallbackDurationMs: 60_000, BlockShift: 6, Levels: 4}
 	raw := m.encode()
 	tlvTail := raw[len(raw)-4-TLVTailSize(&m) : len(raw)-4]

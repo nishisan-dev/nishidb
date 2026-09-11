@@ -105,7 +105,7 @@ tabelas". A regra: **um dicionário, dois `Compiled`.**
 - **Colunas descobertas em runtime são espelhadas.** `ResolveUnknown` e
   `ResolveNested` (`compile.go:1044` e `:815`) ganham um callback
   `AoDescobrirCampo`, no mesmo molde de `OnFieldDiscarded` /
-  `OnIncompatibleValue` que `server.abreDataset` já instala. Sem isso, uma
+  `OnIncompatibleValue` que `server.openDataset` já instala. Sem isso, uma
   chave promovida a coluna depois da subida seria consultável em `events` e
   invisível em `events_history` até o restart — exatamente a divergência que a
   feature existe para não ter. O mesmo callback propaga `FixAutoType`.
@@ -126,7 +126,7 @@ antes do stale check** (`internal/materializer/materializer.go:364-390`):
 Parse(event)          ← já produz entries ORDENADAS por FieldID, sem duplicatas,
                         com as derivadas (patch.go:224), as congeladas (:231)
                         e _writtenAt injetado (:241)
-  └─ historico.Apenda(encodePatchHistorico(entries, filtro))   ← NOVO
+  └─ historico.Apenda(encodePatchHistory(entries, filtro))   ← NOVO
 stale check
 emitePrazo
 merge / encodePatch
@@ -142,7 +142,7 @@ Três razões para o ponto ser esse:
 3. `_expiresIn` ainda não foi emitido, então ele não entra no payload sem
    filtro nenhum.
 
-`encodePatchHistorico` é `encodePatch` (`internal/materializer/merge.go:177`)
+`encodePatchHistory` é `encodePatch` (`internal/materializer/merge.go:177`)
 com um filtro que pula entry cujo `CompiledField.FrozenFrom != ""`. A ordem por
 FieldID e a ausência de duplicatas se preservam sob filtro, então
 `ValidatePayload` continua satisfeito.
@@ -163,8 +163,8 @@ histórico ganha duplicatas, nunca buracos. O mesmo adaptador vale para o
 
 ### 5. O modo de storage
 
-`storage.Options` ganha `Modo storage.Modo` (`ModoMaterializado` default,
-`ModoHistorico`), fiado nos **dois** call sites que abrem dataset:
+`storage.Options` ganha `Mode storage.StoreMode` (`ModoMaterializado` default,
+`HistoryMode`), fiado nos **dois** call sites que abrem dataset:
 `internal/server/server.go:322` e `internal/cli/cli.go:237`.
 
 O modo é gravado no manifest numa **tag TLV crítica** (`tag >= 0x8000`,
@@ -181,21 +181,21 @@ padrão condicional que o TTL já estabeleceu (`if s.escritas != nil`):
 | `sequences.idx` | **não abre** — não há estado a sobrescrever |
 | `expiry.idx` / `prazos.idx` | **não abrem** — o prazo é do dataset, não da linha |
 | `locations.idx` | abre; continua o commit point de visibilidade |
-| `fields.dict` | **não cria** — usa o `DictCompartilhado` do base |
+| `fields.dict` | **não cria** — usa o `SharedDictionary` do base |
 | Compaction | **desligada** — sem update não há garbage; o disco volta por descarte de segmento |
 | Coletor de expiração | **desligado** — substituído pelo motor de retenção (§6) |
 | Consumer Kafka | **nenhum** — a escrita vem do materializer do base |
 
 `Put` é substituído por `Apenda(payload []byte) (types.RowID, error)`: sem
 lookup de key, sem `prev`, `rowID = nextRowID.Add(1)`, `BuildRecord` com key
-vazia e sequence 0, `segW.Append`, `applyRecord` com `hadPrevious = false`, sem
+vazia e sequence 0, `secW.Append`, `applyRecord` com `hadPrevious = false`, sem
 `prim.Insert` e **sem a fase de CLEAR** dos secundários (`store.go:1763`,
 `:1865`) — nada sai de um índice numa tabela que não atualiza linha.
 
 ### 6. Retenção — tempo e tamanho
 
-Goroutine por dataset histórico, no molde de `IniciaCompaction` /
-`IniciaExpiracao`: `Inicia`/`Para` com `WaitGroup`, medidor atômico observável,
+Goroutine por dataset histórico, no molde de `StartCompaction` /
+`StartExpiration`: `Inicia`/`Para` com `WaitGroup`, medidor atômico observável,
 cancelamento por contexto, e `Close` que cancela e **aguarda antes** do quiesce.
 Arquivo novo: `internal/storage/retention.go`.
 
@@ -222,10 +222,10 @@ aposenta o segmento selado mais antigo. As três fontes de tamanho já existem
 (`ListSegments().SizeBytes`, o mapa `s.segSize`, o espelho atômico
 `diskBytesAll`).
 
-**A retirada reusa `aposentaSegmento` (`compaction.go:492`) inteiro**, sem o
-`compactaSegmento` antes: checkpoint → rename para `.retired` → fsync do
+**A retirada reusa `aposentaSegment` (`compaction.go:492`) inteiro**, sem o
+`compactaSegment` antes: checkpoint → rename para `.retired` → fsync do
 diretório → poda dos mapas → checkpoint → fecha descritor e unlink → fsync. As
-duas janelas de crash já são reparadas por `reparaAposentados`
+duas janelas de crash já são reparadas por `repairAposentados`
 (`store_recovery.go:237`), que não sabe nem precisa saber por que o segmento
 foi aposentado. O segmento **corrente nunca** é candidato (D6).
 
@@ -288,7 +288,7 @@ com a marca de que truncou.
 
 `/v1/stats` do dataset base ganha o bloco `history`, e `/metrics` as séries
 correspondentes — as duas saídas da **mesma** leitura de snapshot, como
-`materializacaoStats` e `amostrasDeMaterializacao` já fazem
+`materializationStats` e `samplesOfMaterializacao` já fazem
 (`internal/server/materialization.go`):
 
 | Série | Responde |
@@ -326,16 +326,16 @@ de colisão de nome na subida. Testes no molde de `ttl_rule_test.go` e
 `storage.Options.DictCompartilhado`; `Open` deixa de criar `fields.dict` no
 modo histórico. Callback `AoDescobrirCampo` em `Compiled`, disparado por
 `ResolveUnknown`/`ResolveNested`/`FixAutoType`, instalado em
-`server.abreDataset`. Teste de paridade: descobrir campo em runtime e consultar
+`server.openDataset`. Teste de paridade: descobrir campo em runtime e consultar
 a coluna nas **duas** tabelas sem restart.
 
 **Fase C — modo histórico no storage**
-`Options.Modo`, tag TLV crítica no manifest, ramos condicionais em
+`Options.Mode`, tag TLV crítica no manifest, ramos condicionais em
 `Open`/`applyRecord`, método `Apenda`. Testes de recovery pelo tail e de recusa
 do modo errado, no molde de `store_recovery_test.go`.
 
 **Fase D — escrita**
-`encodePatchHistorico` com filtro de congeladas; enxerto em `Apply`; coluna
+`encodePatchHistory` com filtro de congeladas; enxerto em `Apply`; coluna
 `_raw` e a linha de evento ruim; degradação sticky; adaptador de `Checkpoint`
 para o writer Kafka e para o `ingest`. Teste que prova que um `Apenda` que
 falha **não** muda o `ApplyResult`.
@@ -343,7 +343,7 @@ falha **não** muda o `ApplyResult`.
 **Fase E — retenção**
 `internal/storage/retention.go`: `rowIDBase` persistido, busca binária da
 marca-d'água, purga por tempo, purga por tamanho, `PUNCH_HOLE`, reuso de
-`aposentaSegmento`. Testes de janela de crash usando o seam `apTrace`, no molde
+`aposentaSegment`. Testes de janela de crash usando o seam `apTrace`, no molde
 de `compaction_crash_test.go`; teste com relógio injetado (`UsaRelogio`).
 
 **Fase F — consulta e índices**

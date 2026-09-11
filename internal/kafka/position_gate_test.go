@@ -22,15 +22,15 @@ import (
 // piloto, são 450 allocs/s de pressão de GC permanente para publicar um
 // inteiro que já estava em memória.
 //
-// O gate mede posicaoDe+Store, que é tudo o que avanca faz além do mapa de
+// O gate mede positionOf+Store, que é tudo o que avanca faz além do mapa de
 // offsets. Medir avanca inteiro contaria a escrita no mapa, que é do writer e
 // não da métrica.
 func TestPublicarPosicaoNaoAloca(t *testing.T) {
-	m := registraMetricas(nil, "eventos")
+	m := registerMetrics(nil, "eventos")
 	// Warm-up: a criação do slot é uma vez por partição, não por evento, e é
 	// ela que aloca de propósito.
 	for p := int32(0); p < 4; p++ {
-		m.posicaoDe(p).Store(0)
+		m.positionOf(p).Store(0)
 	}
 	recs := []*kgo.Record{
 		{Partition: 0, Offset: 10}, {Partition: 1, Offset: 11},
@@ -38,7 +38,7 @@ func TestPublicarPosicaoNaoAloca(t *testing.T) {
 	}
 	if n := testing.AllocsPerRun(200, func() {
 		for _, r := range recs {
-			m.posicaoDe(r.Partition).Store(r.Offset + 1)
+			m.positionOf(r.Partition).Store(r.Offset + 1)
 		}
 	}); n != 0 {
 		t.Fatalf("publicar a posição alocou %v vezes por evento; quer 0 — "+

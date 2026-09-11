@@ -17,7 +17,7 @@ import (
 var _ types.RowIDIterator = (*liveIterator)(nil)
 
 func TestScanLiveELookupDevolvemAInterfaceCompartilhada(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	mustPut(t, s, "it", 1, statusPayload(t, s, "it", "Start", 1), nil)
 
 	// A atribuição a types.RowIDIterator é o que o teste verifica: se as
@@ -43,7 +43,7 @@ func TestErrWriterFailedDistingueWriterMortoDeEventoRuim(t *testing.T) {
 	// C4: sem o sentinela, a política de log-and-skip por evento (§101) não
 	// consegue separar "pule este evento" de "pare a ingestão" e vira um
 	// skip infinito com o writer morto.
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	mustPut(t, s, "w", 1, statusPayload(t, s, "w", "Start", 1), nil)
 
 	// Evento ruim: erro de argumento, writer segue vivo.
@@ -106,15 +106,15 @@ func TestSentinelasSaoOsMesmosValoresDeTypes(t *testing.T) {
 func TestIndexadoEhCapabilityCheck(t *testing.T) {
 	// G1: sem isto o planner escolhe caminho indexado e a query falha em
 	// runtime em vez de degradar para full scan.
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	if !s.Indexed(fldStatus) {
 		t.Fatal("campo declarado deveria ser indexado")
 	}
 	if s.Indexed(fldCounter) {
 		t.Fatal("campo não declarado não pode reportar índice")
 	}
-	if got := s.CamposIndexados(); len(got) != 1 || got[0] != fldStatus {
-		t.Fatalf("CamposIndexados: %v", got)
+	if got := s.FieldsIndexados(); len(got) != 1 || got[0] != fldStatus {
+		t.Fatalf("FieldsIndexados: %v", got)
 	}
 	// A resposta bate com o comportamento real do Lookup.
 	if _, err := s.Lookup(fldCounter, strVal("x")); err == nil {
@@ -124,11 +124,11 @@ func TestIndexadoEhCapabilityCheck(t *testing.T) {
 		t.Fatalf("Lookup de campo indexado: %v", err)
 	}
 
-	semIndice := openStore(t, Options{})
-	if semIndice.Indexed(fldStatus) {
+	withoutIndice := openStore(t, Options{})
+	if withoutIndice.Indexed(fldStatus) {
 		t.Fatal("store sem campos indexados não pode reportar capability")
 	}
-	if got := semIndice.CamposIndexados(); len(got) != 0 {
-		t.Fatalf("CamposIndexados sem índices: %v", got)
+	if got := withoutIndice.FieldsIndexados(); len(got) != 0 {
+		t.Fatalf("FieldsIndexados sem índices: %v", got)
 	}
 }

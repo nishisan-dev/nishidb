@@ -13,29 +13,29 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/kafka"
 )
 
-// cadenciaSemCommit não deixa o checkpoint disparar dentro do teste, e é o
+// cadenciaWithoutCommit não deixa o checkpoint disparar dentro do teste, e é o
 // coração desta bancada: o commit no group só sai DEPOIS do checkpoint durável
 // (§48), então sem checkpoint não há commit — que é exatamente o estado em que
 // o piloto passa 30 segundos de cada 30.
-var cadenciaSemCommit = kafka.Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}
+var cadenciaWithoutCommit = kafka.Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}
 
 // serie extrai o valor de uma série com labels do texto do /metrics.
-func serie(t *testing.T, texto, nome string, part int32) (float64, bool) {
+func serie(t *testing.T, text, name string, part int32) (float64, bool) {
 	t.Helper()
-	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(nome) +
+	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) +
 		`\{dataset="[^"]*",partition="` + strconv.Itoa(int(part)) + `"\} (\S+)$`)
-	m := re.FindStringSubmatch(texto)
+	m := re.FindStringSubmatch(text)
 	if m == nil {
 		return 0, false
 	}
 	v, err := strconv.ParseFloat(m[1], 64)
 	if err != nil {
-		t.Fatalf("valor não numérico em %s: %q", nome, m[1])
+		t.Fatalf("valor não numérico em %s: %q", name, m[1])
 	}
 	return v, true
 }
 
-func raspa(t *testing.T, b *bancada) string {
+func raspa(t *testing.T, b *bench) string {
 	t.Helper()
 	var sb strings.Builder
 	if _, err := b.reg.WriteTo(&sb); err != nil {
@@ -62,27 +62,27 @@ func raspa(t *testing.T, b *bancada) string {
 // é zero, porque a pergunta passou a ser "quanto falta para o fim do log".
 func TestLagNaoDependeDoCommitNoGroup(t *testing.T) {
 	const n = 25
-	b := novaBancada(t, 1)
-	defer b.fecha()
+	b := newBench(t, 1)
+	defer b.close()
 
 	recs := make([]*kgo.Record, 0, n)
 	for i := 0; i < n; i++ {
-		recs = append(recs, evento("E"+strconv.Itoa(i), 1, "start"))
+		recs = append(recs, event("E"+strconv.Itoa(i), 1, "start"))
 	}
 	b.produz(recs...)
 
-	ctx, cancela := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancela()
-	cons, err := kafka.Abre(ctx, b.cfg, kafka.Opcoes{
-		Store: b.st, Mat: b.mat, Metrics: b.reg, Cadencia: cadenciaSemCommit,
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cons, err := kafka.Abre(ctx, b.cfg, kafka.Options{
+		Store: b.st, Mat: b.mat, Metrics: b.reg, Cadencia: cadenciaWithoutCommit,
 	})
 	if err != nil {
 		t.Fatalf("abre: %v", err)
 	}
-	defer cons.Fecha()
+	defer cons.Close()
 
-	fim := make(chan error, 1)
-	go func() { fim <- cons.Roda(ctx) }()
+	end := make(chan error, 1)
+	go func() { end <- cons.Run(ctx) }()
 
 	// Espera o consumo terminar por CONDIÇÃO, não por sleep.
 	prazo := time.After(10 * time.Second)
@@ -91,19 +91,19 @@ func TestLagNaoDependeDoCommitNoGroup(t *testing.T) {
 	for cons.Desfecho().Eventos < n {
 		select {
 		case <-tique.C:
-		case err := <-fim:
+		case err := <-end:
 			t.Fatalf("consumidor parou cedo com %d eventos: %v", cons.Desfecho().Eventos, err)
 		case <-prazo:
 			t.Fatalf("consumiu %d de %d eventos no prazo", cons.Desfecho().Eventos, n)
 		}
 	}
 
-	cons.AtualizaMarcaDagua(ctx)
-	texto := raspa(t, b)
+	cons.AtualizaMarkDagua(ctx)
+	text := raspa(t, b)
 
-	lag, ok := serie(t, texto, "nishidb_kafka_lag", 0)
+	lag, ok := serie(t, text, "nishidb_kafka_lag", 0)
 	if !ok {
-		t.Fatalf("nishidb_kafka_lag não foi emitida:\n%s", texto)
+		t.Fatalf("nishidb_kafka_lag não foi emitida:\n%s", text)
 	}
 	if lag != 0 {
 		t.Fatalf("lag %v com os %d eventos aplicados e nenhum commit; "+
@@ -111,10 +111,10 @@ func TestLagNaoDependeDoCommitNoGroup(t *testing.T) {
 	}
 
 	// A invariante que só um coletor único consegue sustentar.
-	off, ok1 := serie(t, texto, "nishidb_kafka_offset", 0)
-	hwm, ok2 := serie(t, texto, "nishidb_kafka_high_watermark", 0)
+	off, ok1 := serie(t, text, "nishidb_kafka_offset", 0)
+	hwm, ok2 := serie(t, text, "nishidb_kafka_high_watermark", 0)
 	if !ok1 || !ok2 {
-		t.Fatalf("offset ou high watermark ausentes:\n%s", texto)
+		t.Fatalf("offset ou high watermark ausentes:\n%s", text)
 	}
 	if hwm-off != lag {
 		t.Fatalf("lag=%v mas high_watermark-offset=%v: as três séries deixaram de "+
@@ -123,8 +123,8 @@ func TestLagNaoDependeDoCommitNoGroup(t *testing.T) {
 	if off != float64(n) {
 		t.Fatalf("offset aplicado %v, quer %d", off, n)
 	}
-	cancela()
-	<-fim
+	cancel()
+	<-end
 }
 
 // Sem marca d'água do broker, as séries que dependem dele NÃO SAEM.
@@ -137,47 +137,47 @@ func TestLagNaoDependeDoCommitNoGroup(t *testing.T) {
 // ele esconderia o progresso do consumidor justamente quando o broker está
 // fora do ar.
 func TestSemRespostaDoBrokerOLagNaoEEmitido(t *testing.T) {
-	b := novaBancada(t, 1)
-	defer b.fecha()
-	b.produz(evento("E0", 1, "start"))
+	b := newBench(t, 1)
+	defer b.close()
+	b.produz(event("E0", 1, "start"))
 
-	ctx, cancela := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancela()
-	cons, err := kafka.Abre(ctx, b.cfg, kafka.Opcoes{
-		Store: b.st, Mat: b.mat, Metrics: b.reg, Cadencia: cadenciaSemCommit,
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cons, err := kafka.Abre(ctx, b.cfg, kafka.Options{
+		Store: b.st, Mat: b.mat, Metrics: b.reg, Cadencia: cadenciaWithoutCommit,
 	})
 	if err != nil {
 		t.Fatalf("abre: %v", err)
 	}
-	defer cons.Fecha()
+	defer cons.Close()
 
-	fim := make(chan error, 1)
-	go func() { fim <- cons.Roda(ctx) }()
+	end := make(chan error, 1)
+	go func() { end <- cons.Run(ctx) }()
 	prazo := time.After(10 * time.Second)
 	tique := time.NewTicker(5 * time.Millisecond)
 	defer tique.Stop()
 	for cons.Desfecho().Eventos < 1 {
 		select {
 		case <-tique.C:
-		case <-fim:
+		case <-end:
 			t.Fatal("consumidor parou antes de aplicar o evento")
 		case <-prazo:
 			t.Fatal("evento não foi aplicado no prazo")
 		}
 	}
 
-	// NUNCA chama AtualizaMarcaDagua: é o estado de "o broker não respondeu".
-	texto := raspa(t, b)
-	if _, ok := serie(t, texto, "nishidb_kafka_lag", 0); ok {
+	// NUNCA chama AtualizaMarkDagua: é o estado de "o broker não respondeu".
+	text := raspa(t, b)
+	if _, ok := serie(t, text, "nishidb_kafka_lag", 0); ok {
 		t.Fatal("lag foi emitido sem nenhuma leitura do broker; " +
 			"série publicada sem medição é pior que série ausente")
 	}
-	if _, ok := serie(t, texto, "nishidb_kafka_high_watermark", 0); ok {
+	if _, ok := serie(t, text, "nishidb_kafka_high_watermark", 0); ok {
 		t.Fatal("high watermark foi emitido sem leitura do broker")
 	}
-	if _, ok := serie(t, texto, "nishidb_kafka_offset", 0); !ok {
-		t.Fatalf("o offset aplicado sumiu junto: ele não depende do broker\n%s", texto)
+	if _, ok := serie(t, text, "nishidb_kafka_offset", 0); !ok {
+		t.Fatalf("o offset aplicado sumiu junto: ele não depende do broker\n%s", text)
 	}
-	cancela()
-	<-fim
+	cancel()
+	<-end
 }

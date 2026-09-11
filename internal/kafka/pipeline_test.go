@@ -21,7 +21,7 @@ import (
 // A publicação é feita de trás para frente de propósito: é o pior caso, e o que
 // um anel quebrado entregaria invertido.
 func TestAEsteiraEntregaEmOrdemDeSeq(t *testing.T) {
-	e := novaEsteira(8)
+	e := newPipeline(8)
 	ctx := context.Background()
 
 	const n = 8
@@ -40,7 +40,7 @@ func TestAEsteiraEntregaEmOrdemDeSeq(t *testing.T) {
 		if s.rec.Offset != quero {
 			t.Fatalf("consome devolveu offset %d, quero %d", s.rec.Offset, quero)
 		}
-		e.avanca(0)
+		e.advance(0)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestAEsteiraEntregaEmOrdemDeSeq(t *testing.T) {
 // o slot de um evento ainda não aplicado, e o writer aplicaria o evento errado
 // sem que nada acusasse.
 func TestAJanelaSeguraQuemSeAdianta(t *testing.T) {
-	e := novaEsteira(2) // janela 2: seq 2 só cabe depois de o writer passar do 0
+	e := newPipeline(2) // janela 2: seq 2 só cabe depois de o writer passar do 0
 
 	for seq := int64(0); seq < 2; seq++ {
 		e.reserva(seq)
@@ -74,7 +74,7 @@ func TestAJanelaSeguraQuemSeAdianta(t *testing.T) {
 		t.Fatal("consome não devolveu o slot 0")
 	}
 	_ = s
-	e.avanca(0)
+	e.advance(0)
 
 	select {
 	case <-entrou:
@@ -91,7 +91,7 @@ func TestAJanelaSeguraQuemSeAdianta(t *testing.T) {
 // pegam seq fora de ordem de propósito e dormem tempos diferentes.
 func TestEsteiraComKDecodificadoresPreservaAOrdem(t *testing.T) {
 	const n = 512
-	e := novaEsteira(64)
+	e := newPipeline(64)
 	ctx := context.Background()
 
 	vistos := make([]int64, 0, n)
@@ -104,20 +104,20 @@ func TestEsteiraComKDecodificadoresPreservaAOrdem(t *testing.T) {
 				return
 			}
 			vistos = append(vistos, s.rec.Offset)
-			e.avanca(0)
+			e.advance(0)
 		}
 	}()
 
 	// Um "poller" único distribui os seq em ordem para K workers, que é
 	// exatamente o que a FIFO faz: o conjunto em voo é sempre contíguo.
 	const k = 8
-	entrada := make(chan int64)
+	entry := make(chan int64)
 	var wg sync.WaitGroup
 	for w := 0; w < k; w++ {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			for seq := range entrada {
+			for seq := range entry {
 				if d := e.reserva(seq); d == nil {
 					return
 				}
@@ -129,9 +129,9 @@ func TestEsteiraComKDecodificadoresPreservaAOrdem(t *testing.T) {
 		}(w)
 	}
 	for seq := int64(0); seq < n; seq++ {
-		entrada <- seq
+		entry <- seq
 	}
-	close(entrada)
+	close(entry)
 	wg.Wait()
 
 	select {
@@ -156,14 +156,14 @@ func TestEsteiraComKDecodificadoresPreservaAOrdem(t *testing.T) {
 // indistinguível de um decode em curso —, e quem espera vaga precisa ser
 // destravado quando o writer vai embora, ou o encerramento nunca termina.
 func TestEncerramentoDrenaTudoENaoTrava(t *testing.T) {
-	e := novaEsteira(16)
+	e := newPipeline(16)
 	ctx := context.Background()
 
 	for seq := int64(0); seq < 8; seq++ {
 		e.reserva(seq)
 		e.publica(seq, &kgo.Record{Offset: seq}, nil)
 	}
-	e.semMaisEventos()
+	e.withoutMaisEventos()
 
 	var vistos int
 	for {
@@ -172,14 +172,14 @@ func TestEncerramentoDrenaTudoENaoTrava(t *testing.T) {
 			break
 		}
 		vistos++
-		e.avanca(0)
+		e.advance(0)
 	}
 	if vistos != 8 {
 		t.Fatalf("drenou %d de 8 eventos publicados antes do encerramento", vistos)
 	}
 
 	// E o outro lado: quem espera vaga com o writer já fora.
-	e2 := novaEsteira(1)
+	e2 := newPipeline(1)
 	e2.reserva(0)
 	e2.publica(0, &kgo.Record{}, nil)
 	saiu := make(chan bool, 1)
@@ -210,26 +210,26 @@ func TestEncerramentoDrenaTudoENaoTrava(t *testing.T) {
 // docs/operacao-kafka.md compara `rate()` com 1. Pior: a espera do writer, que é
 // a metade que decide se ele é o gargalo, deixaria de ser medida.
 func TestAOciosidadeDoWriterSaiDaEsteiraENaoDaFila(t *testing.T) {
-	e := novaEsteira(4)
-	f := NovaFila(4, 1<<20)
+	e := newPipeline(4)
+	f := NewQueue(4, 1<<20)
 
-	if d := e.Ocioso(); d != 0 {
+	if d := e.IDle(); d != 0 {
 		t.Fatalf("esteira nasceu com %v de ociosidade", d)
 	}
 
 	// O writer espera na esteira, sem nada publicado.
-	ctx, cancela := context.WithTimeout(context.Background(), 40*time.Millisecond)
-	defer cancela()
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
 	if _, ok, _ := e.consome(ctx, nil); ok {
 		t.Fatal("consome devolveu slot de uma esteira vazia")
 	}
-	if d := e.Ocioso(); d <= 0 {
+	if d := e.IDle(); d <= 0 {
 		t.Fatal("a esteira não contou a espera do writer")
 	}
 
 	// E a fila, que ninguém consumiu, não contou ociosidade nenhuma: com a
 	// contabilidade no lugar errado, ela é que teria o número.
-	if _, ocioso := f.Tempos(); ocioso != 0 {
-		t.Fatalf("a fila contou %v de ociosidade sem ninguém a consumir", ocioso)
+	if _, idle := f.Tempos(); idle != 0 {
+		t.Fatalf("a fila contou %v de ociosidade sem ninguém a consumir", idle)
 	}
 }

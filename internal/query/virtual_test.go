@@ -14,13 +14,13 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// tabelaVirtualDeTeste monta um Store virtual com o formato de um contador
+// tableVirtualOfTest monta um Store virtual com o formato de um contador
 // (groupKey, olt, total) sobre o dublê, e o registra no motor sob o namespace
 // dado. O dublê serve porque o motor só precisa de um query.Store.
-func tabelaVirtualDeTeste(t *testing.T, eng *query.Engine, namespace, tabela string) {
+func tableVirtualOfTest(t *testing.T, eng *query.Engine, namespace, table string) {
 	t.Helper()
 	spec, err := schema.Parse([]byte(`version: 1
-name: `+tabela+`
+name: `+table+`
 materialization:
   key:
     field: groupKey
@@ -45,16 +45,16 @@ schema:
 	for i, olt := range []string{"BR_SPOMO_OLT14", "PRCTA_G1M10"} {
 		var p []byte
 		for _, col := range []struct {
-			nome string
+			name string
 			v    types.Value
 		}{
 			{"groupKey", types.Value{Type: types.TypeString, Bytes: []byte(olt)}},
 			{"olt", types.Value{Type: types.TypeString, Bytes: []byte(olt)}},
 			{"total", types.Value{Type: types.TypeInt64, I64: int64(i * 2802)}},
 		} {
-			f, ok := sc.FieldByName([]byte(col.nome))
+			f, ok := sc.FieldByName([]byte(col.name))
 			if !ok {
-				t.Fatal(col.nome)
+				t.Fatal(col.name)
 			}
 			if p, err = encoding.AppendField(p, f.ID, col.v); err != nil {
 				t.Fatal(err)
@@ -64,14 +64,14 @@ schema:
 			t.Fatal(err)
 		}
 	}
-	if err := eng.RegistraVirtual(dataset, namespace, tabela, sc, st); err != nil {
+	if err := eng.RegisterVirtual(dataset, namespace, table, sc, st); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestExecuteRoteiaTabelaVirtualRegistrada(t *testing.T) {
-	h := novoHarness(t)
-	tabelaVirtualDeTeste(t, h.engine, "_counters", "autenticados_por_olt")
+	h := newHarness(t)
+	tableVirtualOfTest(t, h.engine, "_counters", "autenticados_por_olt")
 	rows := h.consultaOK("SELECT olt, total FROM _counters.autenticados_por_olt ORDER BY total ASC LIMIT 5")
 	if got := chaves(rows, "olt"); strings.Join(got, ",") != "BR_SPOMO_OLT14,PRCTA_G1M10" {
 		t.Fatalf("olts = %v", got)
@@ -93,7 +93,7 @@ func TestExecuteRoteiaTabelaVirtualRegistrada(t *testing.T) {
 }
 
 func TestNamespaceDesconhecidoListaOsExistentes(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	// A costura declara o namespace mesmo num dataset sem contador: ele existe
 	// como conceito do produto, e a recusa tem de nomeá-lo.
 	if err := h.engine.DeclaraNamespace(dataset, "_counters"); err != nil {
@@ -109,8 +109,8 @@ func TestNamespaceDesconhecidoListaOsExistentes(t *testing.T) {
 }
 
 func TestTabelaVirtualDesconhecidaListaAsDoDataset(t *testing.T) {
-	h := novoHarness(t)
-	tabelaVirtualDeTeste(t, h.engine, "_counters", "servicos_por_olt")
+	h := newHarness(t)
+	tableVirtualOfTest(t, h.engine, "_counters", "servicos_por_olt")
 	_, err := h.consulta("SELECT a FROM _counters.nao_existe")
 	if err == nil || !strings.Contains(err.Error(), "servicos_por_olt") {
 		t.Fatalf("tabela desconhecida tem de listar as que existem no dataset: %v", err)
@@ -130,24 +130,24 @@ func TestTabelaVirtualDesconhecidaListaAsDoDataset(t *testing.T) {
 }
 
 func TestRegistraVirtualRecusaDuplicataEDatasetDesconhecido(t *testing.T) {
-	h := novoHarness(t)
-	tabelaVirtualDeTeste(t, h.engine, "_counters", "x")
+	h := newHarness(t)
+	tableVirtualOfTest(t, h.engine, "_counters", "x")
 	spec, _ := schema.Parse([]byte("version: 1\nname: x\nmaterialization:\n  key:\n    field: k\nschema:\n  fields:\n    k:\n      type: string\n"), schema.BuiltinDefaults)
 	sc, _ := spec.Compile(fakestorage.NewDict())
-	if err := h.engine.RegistraVirtual(dataset, "_counters", "x", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
+	if err := h.engine.RegisterVirtual(dataset, "_counters", "x", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
 		t.Fatal("tabela virtual repetida tem de ser recusada")
 	}
-	if err := h.engine.RegistraVirtual("nao_registrado", "_counters", "y", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
+	if err := h.engine.RegisterVirtual("nao_registrado", "_counters", "y", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
 		t.Fatal("dataset não registrado tem de ser recusado")
 	}
-	if err := h.engine.RegistraVirtual(dataset, "semprefixo", "y", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
+	if err := h.engine.RegisterVirtual(dataset, "semprefixo", "y", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
 		t.Fatal("namespace sem o prefixo reservado tem de ser recusado")
 	}
 }
 
 func TestMetaContinuaRespondendoComORegistroVirtual(t *testing.T) {
-	h := novoHarness(t)
-	tabelaVirtualDeTeste(t, h.engine, "_counters", "x")
+	h := newHarness(t)
+	tableVirtualOfTest(t, h.engine, "_counters", "x")
 	rows := h.consultaOK("SELECT name FROM _meta.fields WHERE name = 'Acct-Status-Type'")
 	if len(rows) != 1 {
 		t.Fatalf("_meta.fields = %v", rows)
@@ -163,13 +163,13 @@ func TestMetaContinuaRespondendoComORegistroVirtual(t *testing.T) {
 // em 05/09/2026 com `SELECT a FROM _meta.nada` (issue #35). A posição aponta o
 // nome DEPOIS do ponto, que é o token ofensor.
 func TestRecusaDeRoteamentoVirtualEhErroDeBind(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	if err := h.engine.DeclaraNamespace(dataset, "_counters"); err != nil {
 		t.Fatal(err)
 	}
 
 	casos := []struct {
-		nome    string
+		name    string
 		sql     string
 		ofensor string // o texto que a posição tem de apontar
 		naMsg   string
@@ -179,7 +179,7 @@ func TestRecusaDeRoteamentoVirtualEhErroDeBind(t *testing.T) {
 		{"tabela inexistente no _meta", "SELECT a FROM _meta.nada", "nada", `_meta não tem tabela "nada"`},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			_, err := h.consulta(c.sql)
 			if err == nil {
 				t.Fatal("a recusa tem de acontecer")

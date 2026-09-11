@@ -49,8 +49,8 @@ type Metrics struct {
 	TopNDegradado atomic.Int64
 }
 
-// contadores é o acumulador local de uma execução. Um flush por query.
-type contadores struct {
+// counters é o acumulador local de uma execução. Um flush por query.
+type counters struct {
 	candidates   int64
 	deadSkipped  int64
 	rejected     int64
@@ -61,7 +61,7 @@ type contadores struct {
 	topNDegradado int64
 }
 
-func (c *contadores) flush(m *Metrics) {
+func (c *counters) flush(m *Metrics) {
 	if m == nil {
 		return
 	}
@@ -71,5 +71,5 @@ func (c *contadores) flush(m *Metrics) {
 	m.TypeMismatch.Add(c.typeMismatch)
 	m.Emitted.Add(c.emitted)
 	m.TopNDegradado.Add(c.topNDegradado)
-	*c = contadores{}
+	*c = counters{}
 }

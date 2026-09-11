@@ -11,13 +11,13 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// specComHash declara uma coluna indexada — o caso do piloto, em que a
+// specWithHash declara uma coluna indexada — o caso do piloto, em que a
 // dimensão de consulta mais valiosa (`node`) precisa de índice. A grafia
 // mudou com a D5 (`index: true`, não mais `index: hash`), e a função que ele
 // exercita virou uma só — schema.IndexedFieldNames, no lugar do par
 // CamposComBitmap/CamposComHash —, mas o nome do fixture e o caminho continuam
 // os mesmos.
-const specComHash = `version: 1
+const specWithHash = `version: 1
 name: d
 materialization:
   key:
@@ -49,16 +49,16 @@ schema:
 // É a metade do modo de falha cruzado servidor↔CLI que schema.IndexedFieldNames
 // existe para impedir; a outra metade é o mesmo erro visto do lado do CLI.
 func TestServidorAbreODatasetComOsCamposDeHashDeclarados(t *testing.T) {
-	a := novoAmbiente(t)
-	a.escreveDataset("d", specComHash)
+	a := newEnv(t)
+	a.writeDataset("d", specWithHash)
 
-	cfg := a.carrega()
-	srv, err := server.Novo(cfg, server.Opcoes{})
+	cfg := a.load()
+	srv, err := server.Novo(cfg, server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
-	if err := srv.Fecha(); err != nil {
-		t.Fatalf("Fecha: %v", err)
+	if err := srv.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 
 	dir := cfg.DatasetRootDir("d")
@@ -73,15 +73,15 @@ func TestServidorAbreODatasetComOsCamposDeHashDeclarados(t *testing.T) {
 		t.Fatalf("SegmentsWithWIP: %v", err)
 	}
 	var deixados []types.FieldID
-	for _, seg := range segs {
-		campos, err := segindex.ListWIP(dataDir, seg)
+	for _, sec := range segs {
+		fields, err := segindex.ListWIP(dataDir, sec)
 		if err != nil {
-			t.Fatalf("ListWIP(%d): %v", seg, err)
+			t.Fatalf("ListWIP(%d): %v", sec, err)
 		}
-		deixados = append(deixados, campos...)
+		deixados = append(deixados, fields...)
 	}
 
-	st, err := storage.Open(storage.Options{Dir: dir, CamposIndexadosPorNome: []string{"node"}})
+	st, err := storage.Open(storage.Options{Dir: dir, IndexedFieldsByName: []string{"node"}})
 	if err != nil {
 		t.Fatalf("reabrir declarando o campo: %v", err)
 	}

@@ -71,8 +71,8 @@ func TestEncodeEDeterministico(t *testing.T) {
 
 func TestOffsetsAusenteEhErrNoOffsets(t *testing.T) {
 	_, err := LoadOffsets(filepath.Join(t.TempDir(), OffsetsFileName))
-	if !errors.Is(err, ErrNoOffsets) {
-		t.Errorf("erro = %v, quer ErrNoOffsets", err)
+	if !errors.Is(err, ErrInOffsets) {
+		t.Errorf("erro = %v, quer ErrInOffsets", err)
 	}
 }
 

@@ -45,7 +45,7 @@ schema:
           type: string
 `
 
-func carrega(t *testing.T, yaml string) (*schema.DatasetSpec, *schema.Compiled) {
+func load(t *testing.T, yaml string) (*schema.DatasetSpec, *schema.Compiled) {
 	t.Helper()
 	spec, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
@@ -58,17 +58,17 @@ func carrega(t *testing.T, yaml string) (*schema.DatasetSpec, *schema.Compiled) 
 	return spec, sc
 }
 
-func idDe(t *testing.T, sc *schema.Compiled, nome string) types.FieldID {
+func idOf(t *testing.T, sc *schema.Compiled, name string) types.FieldID {
 	t.Helper()
-	f, ok := sc.FieldByName([]byte(nome))
+	f, ok := sc.FieldByName([]byte(name))
 	if !ok {
-		t.Fatalf("campo %q não existe", nome)
+		t.Fatalf("campo %q não existe", name)
 	}
 	return f.ID
 }
 
 func TestCompilaProduzDefinicoesComIDsETipos(t *testing.T) {
-	spec, sc := carrega(t, yamlBase+`
+	spec, sc := load(t, yamlBase+`
 counters:
   - name: servicos_por_olt
     groupBy: [olt]
@@ -78,7 +78,7 @@ counters:
     maxGroups: 1000
     retainEmptyGroups: never
 `)
-	defs, err := counters.Compila(spec, sc)
+	defs, err := counters.Compile(spec, sc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,14 +86,14 @@ counters:
 		t.Fatalf("%d definições, quero 2", len(defs))
 	}
 	a := defs[0]
-	if a.Name != "servicos_por_olt" || len(a.Columns) != 1 || a.Columns[0] != idDe(t, sc, "olt") ||
+	if a.Name != "servicos_por_olt" || len(a.Columns) != 1 || a.Columns[0] != idOf(t, sc, "olt") ||
 		a.Types[0] != types.TypeString || a.Names[0] != "olt" || a.Where != "" || a.NewEvaluator != nil ||
 		a.MaxGroups != schema.DefaultMaxGroups || a.RetainEmptyGroups != schema.DefaultRetainEmptyGroups {
 		t.Fatalf("servicos_por_olt = %+v", a)
 	}
 	b := defs[1]
 	if b.Name != "autenticados_por_pon" || len(b.Columns) != 3 ||
-		b.Columns[0] != idDe(t, sc, "olt") || b.Columns[1] != idDe(t, sc, "slot") || b.Columns[2] != idDe(t, sc, "port") ||
+		b.Columns[0] != idOf(t, sc, "olt") || b.Columns[1] != idOf(t, sc, "slot") || b.Columns[2] != idOf(t, sc, "port") ||
 		b.Types[1] != types.TypeInt64 || b.Where != "authenticated = true" || b.NewEvaluator == nil ||
 		b.MaxGroups != 1000 || b.RetainEmptyGroups != time.Duration(0) {
 		t.Fatalf("autenticados_por_pon = %+v", b)
@@ -105,73 +105,73 @@ counters:
 		t.Fatal("NewEvaluator tem de instanciar um avaliador por chamada")
 	}
 	var p []byte
-	p, _ = encoding.AppendField(p, idDe(t, sc, "authenticated"), types.Value{Type: types.TypeBool, I64: 1})
+	p, _ = encoding.AppendField(p, idOf(t, sc, "authenticated"), types.Value{Type: types.TypeBool, I64: 1})
 	if ok, err := av1.Evaluate(p); err != nil || !ok {
 		t.Fatalf("avaliador: %v, %v", ok, err)
 	}
 }
 
 func TestCompilaResolveColunaExtraida(t *testing.T) {
-	spec, sc := carrega(t, yamlBase+`
+	spec, sc := load(t, yamlBase+`
 counters:
   - name: por_pon
     groupBy: [pon]
 `)
-	defs, err := counters.Compila(spec, sc)
+	defs, err := counters.Compile(spec, sc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defs[0].Columns[0] != idDe(t, sc, "pon") || defs[0].Types[0] != types.TypeString {
+	if defs[0].Columns[0] != idOf(t, sc, "pon") || defs[0].Types[0] != types.TypeString {
 		t.Fatalf("%+v", defs[0])
 	}
 }
 
 func TestCompilaRecusaWhereSobreCampoSomado(t *testing.T) {
-	spec, sc := carrega(t, yamlBase+`
+	spec, sc := load(t, yamlBase+`
 counters:
   - name: x
     groupBy: [olt]
     where: octets > 0
 `)
-	_, err := counters.Compila(spec, sc)
+	_, err := counters.Compile(spec, sc)
 	if err == nil || !strings.Contains(err.Error(), "merge: sum") {
 		t.Fatalf("where sobre campo somado tem de ser recusado nomeando merge: sum, veio %v", err)
 	}
 }
 
 func TestCompilaRecusaGroupBySobreCampoSomado(t *testing.T) {
-	spec, sc := carrega(t, yamlBase+`
+	spec, sc := load(t, yamlBase+`
 counters:
   - name: x
     groupBy: [octets]
 `)
-	_, err := counters.Compila(spec, sc)
+	_, err := counters.Compile(spec, sc)
 	if err == nil || !strings.Contains(err.Error(), "merge: sum") {
 		t.Fatalf("groupBy sobre campo somado tem de ser recusado nomeando merge: sum, veio %v", err)
 	}
 }
 
 func TestCompilaRecusaWhereComCampoDeSistema(t *testing.T) {
-	spec, sc := carrega(t, yamlBase+`
+	spec, sc := load(t, yamlBase+`
 counters:
   - name: x
     groupBy: [olt]
     where: _writtenAt > 0
 `)
-	_, err := counters.Compila(spec, sc)
+	_, err := counters.Compile(spec, sc)
 	if err == nil || !strings.Contains(err.Error(), "campo de sistema") || !strings.Contains(err.Error(), "counters[0].where") {
 		t.Fatalf("where sobre campo de sistema tem de ser recusado nomeando o contador, veio %v", err)
 	}
 }
 
 func TestCompilaRecusaWhereQueNaoCompila(t *testing.T) {
-	spec, sc := carrega(t, yamlBase+`
+	spec, sc := load(t, yamlBase+`
 counters:
   - name: x
     groupBy: [olt]
     where: naoExiste = 1
 `)
-	if _, err := counters.Compila(spec, sc); err == nil {
+	if _, err := counters.Compile(spec, sc); err == nil {
 		t.Fatal("coluna inexistente no where tem de ser recusada")
 	}
 }
@@ -191,19 +191,19 @@ counters:
 		t.Fatal(err)
 	}
 	defer func() { _ = dict.Close() }()
-	comp := counters.NovoCompilador(spec)
-	if comp.Compilado() != nil {
+	comp := counters.NewCompiler(spec)
+	if comp.Compiled() != nil {
 		t.Fatal("antes do callback não há schema compilado")
 	}
 	defs, err := comp.Callback()(dict)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sc := comp.Compilado()
+	sc := comp.Compiled()
 	if sc == nil {
 		t.Fatal("o callback tem de deixar o schema compilado disponível")
 	}
-	if len(defs) != 1 || defs[0].Columns[0] != idDe(t, sc, "olt") {
+	if len(defs) != 1 || defs[0].Columns[0] != idOf(t, sc, "olt") {
 		t.Fatalf("as definições têm de vir do MESMO schema: %+v", defs)
 	}
 	// Os ids saíram do dicionário real, na ordem do Compile.
@@ -222,12 +222,12 @@ func TestCompiladorSemCountersDevolveNada(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = dict.Close() }()
-	comp := counters.NovoCompilador(spec)
+	comp := counters.NewCompiler(spec)
 	defs, err := comp.Callback()(dict)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(defs) != 0 || comp.Compilado() == nil {
-		t.Fatalf("sem counters: nenhuma definição, mas o schema compilado: %d, %v", len(defs), comp.Compilado())
+	if len(defs) != 0 || comp.Compiled() == nil {
+		t.Fatalf("sem counters: nenhuma definição, mas o schema compilado: %d, %v", len(defs), comp.Compiled())
 	}
 }

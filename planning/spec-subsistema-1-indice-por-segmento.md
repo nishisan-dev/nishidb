@@ -185,7 +185,7 @@ postings (array append-only)                           16 B por posting:
 `ultimo` e `anterior` são índices 1-based; `0` é "não há". `hash == 0` marca
 slot vazio, e isso é seguro porque `primary.HashKey` nunca devolve 0 nem 1.
 
-**`contagem` e `ultimo` moram na MESMA palavra de 64 bits, e isso é a
+**`count` e `ultimo` moram na MESMA palavra de 64 bits, e isso é a
 linearização.** Publicá-los em duas escritas deixaria um leitor ver a cabeça
 nova com a contagem velha — ele dimensionaria a fatia com um elemento a menos
 que a caminhada produz. Uma escrita atômica de `estado`, depois de a posting
@@ -222,7 +222,7 @@ forma selada, e isso só existe **para um segmento por vez**: 224 mil linhas sã
 
 O `Lookup` sobre a forma WIP percorre a cadeia de `ultimo` para trás, o que
 devolve as postings em ordem **decrescente** de inserção; materializa
-`contagem` elementos e preenche de trás para frente, produzindo ordem crescente
+`count` elementos e preenche de trás para frente, produzindo ordem crescente
 com uma alocação de tamanho exato. É a mesma alocação que o `Lookup` de hoje já
 admite carregar ([hash/index.go:428](../internal/index/hash/index.go:428)), e
 agora ela existe para **um** segmento em vez de para o dataset inteiro.
@@ -542,7 +542,7 @@ Em ordem crescente de segmento:
 | Estado do segmento | Fonte | Alocação |
 |---|---|---|
 | Selado, **com** seção do campo | fatia contígua do array de postings | **zero** |
-| Corrente (WIP) | caminhada da cadeia, materializada em `contagem` elementos | uma, de tamanho exato |
+| Corrente (WIP) | caminhada da cadeia, materializada em `count` elementos | uma, de tamanho exato |
 | Sem índice — histórico | a faixa `[primeiro, primeiroDoSeguinte)` | zero |
 | Sem índice — materializado | **colapsa a consulta**: ver abaixo | zero |
 
@@ -582,7 +582,7 @@ enumeração conhecem os seus por construção.
   cabeças iguais. É o caso do materializado, sempre: ~9 comparações por linha
   com 500 segmentos.
 
-A escolha vem dos **headers**, não de `EhHistorico()`. A diferença importa: um
+A escolha vem dos **headers**, não de `IsHistory()`. A diferença importa: um
 predicado que se apoia no modo transforma uma premissa quebrada em resultado
 silenciosamente errado; um que se apoia no dado degrada para o caminho mais
 lento e continua certo.
@@ -644,7 +644,7 @@ a política forte, que engole o prazo declarado. É a mesma forma de
 entendeu uma entende a outra sem ler documentação nova.
 
 O teto governa bytes de **índice**, e não bytes de dado indexado, pela razão que
-o próprio comentário de `bytesDosSegmentos` dá: *"um teto que a purga não
+o próprio comentário de `bytesOfSegmentos` dá: *"um teto que a purga não
 consegue perseguir seria um teto que mente"*. O que a expulsão da janela devolve
 é `.sidx`.
 
@@ -664,7 +664,7 @@ por campo, e uma janela por campo multiplicaria os estados de segmento por N.
 ### 4.2 Onde a janela é aplicada
 
 Na passada de retenção, que já roda a cada minuto, já é exclusiva do histórico
-(`IniciaRetencao` retorna cedo fora dele) e já tem em mãos a lista de segmentos
+(`StartRetention` retorna cedo fora dele) e já tem em mãos a lista de segmentos
 e os tamanhos. Um laço de fundo a menos.
 
 A **reconstrução** é goroutine própria porque vale para os dois modos.
@@ -680,7 +680,7 @@ manter o índice. É a assimetria espelhada da retenção, que aposenta só quan
 segmento está **inteiramente** coberto ([retention.go:341](../internal/storage/retention.go:341)).
 
 E não custa metadado novo: o record mais novo do segmento N é imediatamente
-anterior ao primeiro do segmento N+1, que `primeiroRowIDDoSeguinte` já lê com um
+anterior ao primeiro do segmento N+1, que `primeiroRowIDOfSeguinte` já lê com um
 `pread` ([retention.go:380](../internal/storage/retention.go:380)).
 
 Pelos bytes: soma os `.sidx` do mais novo para o mais antigo e expulsa a partir
@@ -753,7 +753,7 @@ observá-la já existe.
 - O `.sidx` é `fsync`ado antes do `rename`, e o diretório depois — a mesma
   sequência da selagem e da reconstrução.
 - **O filesystem é a verdade** sobre quais segmentos têm índice. Nada no
-  manifest lista isso, seguindo a doutrina que `primeiroRowIDDoSeguinte` já
+  manifest lista isso, seguindo a doutrina que `primeiroRowIDOfSeguinte` já
   escreve: *"um metadado a menos é uma janela de crash a menos"*. O conjunto
   desejado vem da config; o conjunto real vem da tabela de seções de cada
   `.sidx`; a diferença entre os dois é a fila de reconstrução.

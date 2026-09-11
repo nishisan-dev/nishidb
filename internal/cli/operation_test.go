@@ -31,13 +31,13 @@ import (
 // /v1/stats e do /v1/metadata, e o que precisa ser provado é que ele mostra o
 // que o servidor disse, não que ele imprime algo plausível.
 
-// campoDaSaida devolve o valor da linha rotulada, no formato de duas colunas
+// fieldOfSaida devolve o valor da line rotulada, no formato de duas colunas
 // que os comandos usam.
 //
 // A separação é por DOIS espaços porque é o que o padding do tabwriter
 // garante: rótulo com espaço simples dentro ("carga do primário") continua
 // inteiro, e o corte cai onde a coluna de fato começa.
-func campoDaSaida(t *testing.T, saida, rotulo string) string {
+func fieldOfSaida(t *testing.T, saida, rotulo string) string {
 	t.Helper()
 	for _, l := range strings.Split(saida, "\n") {
 		l = strings.TrimSpace(l)
@@ -53,20 +53,20 @@ func campoDaSaida(t *testing.T, saida, rotulo string) string {
 	return ""
 }
 
-// celulasDaLinha corta a linha nas colunas em que o tabwriter a escreveu.
+// celulasOfRow corta a line nas colunas em que o tabwriter a escreveu.
 //
 // O corte é pelos DOIS espaços do padding, e não por espaço simples, porque a
 // CÉLULA é a unidade de quem confere valor posicional: `strings.Contains` na
-// linha inteira não distingue "30s" na coluna certa de "30s" em qualquer outra,
+// line inteira não distingue "30s" na coluna certa de "30s" em qualquer outra,
 // e é cego para duas colunas trocadas de lugar.
 //
 // O argumento está escrito aqui desde a primeira rodada do §96, e valia só para
-// a ÚLTIMA coluna de cada tabela — o resto da conferência era Contains na linha
+// a ÚLTIMA coluna de cada tabela — o resto da conferência era Contains na line
 // inteira. O buraco tinha tamanho: dois mutantes de troca de coluna
 // (COLUNAS↔MAXROWS no `datasets`, ALIAS↔TIPO no `inspect`) atravessavam a suíte
 // inteira sem acender nada. Agora o corte alimenta a tabela toda, pelo
-// tabelaDaSaida.
-func celulasDaLinha(l string) []string {
+// tableOfSaida.
+func celulasOfRow(l string) []string {
 	var out []string
 	for _, c := range strings.Split(strings.TrimSpace(l), "  ") {
 		if c = strings.TrimSpace(c); c != "" {
@@ -76,7 +76,7 @@ func celulasDaLinha(l string) []string {
 	return out
 }
 
-// tabelaDaSaida devolve o CABEÇALHO e as linhas de dados da tabela que começa
+// tableOfSaida devolve o CABEÇALHO e as linhas de dados da tabela que começa
 // no rótulo dado, já cortados em células.
 //
 // O cabeçalho volta junto porque é dele que sai a POSIÇÃO de cada rótulo, e é
@@ -86,14 +86,14 @@ func celulasDaLinha(l string) []string {
 // defeito. O oráculo destes comandos é "o número está sob o rótulo dele", que é
 // exatamente a pergunta que a suíte não sabia fazer.
 //
-// A tabela termina na primeira linha em branco ou no fim da saída. Nos dois
+// A tabela termina na primeira line em branco ou no fim da saída. Nos dois
 // comandos ela é hoje o último bloco; parar no branco é o que impede que uma
 // seção acrescentada depois escorra para dentro das linhas e passe por dado.
-func tabelaDaSaida(t *testing.T, saida, primeiroRotulo string) (cabecalho []string, linhas [][]string) {
+func tableOfSaida(t *testing.T, saida, primeiroRotulo string) (cabecalho []string, rows [][]string) {
 	t.Helper()
 	todas := strings.Split(saida, "\n")
 	for i, l := range todas {
-		c := celulasDaLinha(l)
+		c := celulasOfRow(l)
 		if len(c) == 0 || c[0] != primeiroRotulo {
 			continue
 		}
@@ -101,50 +101,50 @@ func tabelaDaSaida(t *testing.T, saida, primeiroRotulo string) (cabecalho []stri
 			if strings.TrimSpace(resto) == "" {
 				break
 			}
-			linhas = append(linhas, celulasDaLinha(resto))
+			rows = append(rows, celulasOfRow(resto))
 		}
-		return c, linhas
+		return c, rows
 	}
 	t.Fatalf("a saída não tem a tabela que começa em %q:\n%s", primeiroRotulo, saida)
 	return nil, nil
 }
 
-// linhaDaTabela devolve a linha cuja PRIMEIRA célula é a chave pedida — é como
+// rowOfTable devolve a line cuja PRIMEIRA célula é a chave pedida — é como
 // se lê uma tabela de colunas, no `datasets` e no `inspect`.
 //
-// Morrer aqui é a forma que o SUMIÇO de uma linha tem de aparecer. Um comando
-// que escrevesse o nome do primeiro dataset em toda linha duplicaria o primeiro
-// e faria os demais desaparecerem, e é procurando a linha de CADA dataset que o
+// Morrer aqui é a forma que o SUMIÇO de uma line tem de aparecer. Um comando
+// que escrevesse o nome do primeiro dataset em toda line duplicaria o primeiro
+// e faria os demais desaparecerem, e é procurando a line de CADA dataset que o
 // teste descobre isso: contar as linhas, sozinho, não descobriria.
-func linhaDaTabela(t *testing.T, linhas [][]string, chave string) []string {
+func rowOfTable(t *testing.T, rows [][]string, key string) []string {
 	t.Helper()
-	for _, l := range linhas {
-		if len(l) > 0 && l[0] == chave {
+	for _, l := range rows {
+		if len(l) > 0 && l[0] == key {
 			return l
 		}
 	}
-	t.Fatalf("a tabela não tem a linha de %q:\n%v", chave, linhas)
+	t.Fatalf("a tabela não tem a linha de %q:\n%v", key, rows)
 	return nil
 }
 
-// celulaSobORotulo devolve a célula que a linha escreveu sob o rótulo do
+// celulaSobORotulo devolve a célula que a line escreveu sob o rótulo do
 // cabeçalho.
-func celulaSobORotulo(t *testing.T, cabecalho, linha []string, rotulo string) string {
+func celulaSobORotulo(t *testing.T, cabecalho, row []string, rotulo string) string {
 	t.Helper()
 	for i, r := range cabecalho {
 		if r != rotulo {
 			continue
 		}
-		if i >= len(linha) {
-			t.Fatalf("a linha %v não tem célula sob %q (cabeçalho %v)", linha, rotulo, cabecalho)
+		if i >= len(row) {
+			t.Fatalf("a linha %v não tem célula sob %q (cabeçalho %v)", row, rotulo, cabecalho)
 		}
-		return linha[i]
+		return row[i]
 	}
 	t.Fatalf("o cabeçalho %v não tem a coluna %q", cabecalho, rotulo)
 	return ""
 }
 
-// conferePorCelula compara a linha da tabela com o oráculo CÉLULA A CÉLULA, na
+// confereByCelula compara a line da tabela com o oráculo CÉLULA A CÉLULA, na
 // ordem em que o comando escreveu o cabeçalho.
 //
 // Todo rótulo do cabeçalho tem de ter oráculo: coluna sem conferência nenhuma é
@@ -153,48 +153,48 @@ func celulaSobORotulo(t *testing.T, cabecalho, linha []string, rotulo string) st
 // nova nascesse.
 //
 // `aparte` nomeia as colunas cujo oráculo NÃO é igualdade de texto — hoje só a
-// do prazo, que se confere de ida e volta (ver prazoDaSaida). Declarar a
+// do prazo, que se confere de ida e volta (ver prazoOfSaida). Declarar a
 // exceção pelo nome é o que a distingue do esquecimento.
-func conferePorCelula(t *testing.T, contexto string, cabecalho, linha []string, esperado map[string]string, aparte ...string) {
+func confereByCelula(t *testing.T, contexto string, cabecalho, row []string, expected map[string]string, aparte ...string) {
 	t.Helper()
-	if len(linha) != len(cabecalho) {
+	if len(row) != len(cabecalho) {
 		t.Fatalf("%s: a linha saiu com %d células e o cabeçalho %v tem %d: %v",
-			contexto, len(linha), cabecalho, len(cabecalho), linha)
+			contexto, len(row), cabecalho, len(cabecalho), row)
 	}
-	if len(esperado)+len(aparte) != len(cabecalho) {
+	if len(expected)+len(aparte) != len(cabecalho) {
 		t.Fatalf("%s: o cabeçalho %v tem %d colunas e o oráculo cobre %d (%d à parte): ou uma coluna "+
 			"nasceu sem conferência, ou o oráculo confere uma que já não existe",
-			contexto, cabecalho, len(cabecalho), len(esperado), len(aparte))
+			contexto, cabecalho, len(cabecalho), len(expected), len(aparte))
 	}
 	for i, rotulo := range cabecalho {
 		if slices.Contains(aparte, rotulo) {
 			continue
 		}
-		quer, ok := esperado[rotulo]
+		quer, ok := expected[rotulo]
 		if !ok {
 			t.Fatalf("%s: a coluna %q não tem oráculo; o cabeçalho é %v", contexto, rotulo, cabecalho)
 		}
-		if linha[i] != quer {
+		if row[i] != quer {
 			t.Errorf("%s: sob %s a saída traz %q e o servidor respondeu %q (linha inteira: %v)",
-				contexto, rotulo, linha[i], quer, linha)
+				contexto, rotulo, row[i], quer, row)
 		}
 	}
 }
 
-// exigeColunasDistinguiveis é a guarda `vistos` dos seis contadores do bloco
+// exigeColumnsDistinguiveis é a guarda `vistos` dos seis contadores do bloco
 // `processo`, aplicada à TABELA.
 //
 // O argumento é o mesmo, com um grau a mais: lá, dois contadores com o MESMO
 // valor tornam os dois rótulos indistinguíveis e o teste passa a aprovar um
-// comando que lê o campo do vizinho; aqui basta que UMA linha separe duas
+// comando que lê o field do vizinho; aqui basta que UMA line separe duas
 // colunas para que trocá-las apareça, então o que se exige é que, para cada par
-// de colunas, exista pelo menos uma linha em que elas difiram. Se o fixture
+// de colunas, exista pelo menos uma line em que elas difiram. Se o fixture
 // deixar de separá-las, é o FIXTURE que precisa mudar — não o oráculo.
 //
 // As colunas de `aparte` ficam de fora porque o oráculo delas não é texto. Não
 // é buraco: trocar a coluna do prazo com uma vizinha aparece do outro lado da
 // troca, na coluna que recebeu um prazo onde deveria haver um número.
-func exigeColunasDistinguiveis(t *testing.T, cabecalho []string, esperado []map[string]string, aparte ...string) {
+func exigeColumnsDistinguiveis(t *testing.T, cabecalho []string, expected []map[string]string, aparte ...string) {
 	t.Helper()
 	var rotulos []string
 	for _, r := range cabecalho {
@@ -205,8 +205,8 @@ func exigeColunasDistinguiveis(t *testing.T, cabecalho []string, esperado []map[
 	for i := 0; i < len(rotulos); i++ {
 		for j := i + 1; j < len(rotulos); j++ {
 			separou := false
-			for _, linha := range esperado {
-				if linha[rotulos[i]] != linha[rotulos[j]] {
+			for _, row := range expected {
+				if row[rotulos[i]] != row[rotulos[j]] {
 					separou = true
 					break
 				}
@@ -214,46 +214,46 @@ func exigeColunasDistinguiveis(t *testing.T, cabecalho []string, esperado []map[
 			if !separou {
 				t.Fatalf("as colunas %q e %q valem o mesmo em TODA linha do fixture (%d linhas): trocar as "+
 					"duas fontes não mudaria uma vírgula da saída, e o teste aprovaria o comando trocado",
-					rotulos[i], rotulos[j], len(esperado))
+					rotulos[i], rotulos[j], len(expected))
 			}
 		}
 	}
 }
 
-// rotuloDoPrazo é a coluna do `datasets` cujo oráculo é de ida e volta, e não
-// de igualdade de texto — ver prazoDaSaida.
-const rotuloDoPrazo = "TIMEOUT"
+// rotuloOfPrazo é a coluna do `datasets` cujo oráculo é de ida e volta, e não
+// de igualdade de texto — ver prazoOfSaida.
+const rotuloOfPrazo = "TIMEOUT"
 
-// prazoDaSaida devolve a duração que o comando escreveu, RECUPERADA do texto.
+// prazoOfSaida devolve a duração que o comando escreveu, RECUPERADA do texto.
 //
 // A conferência é de ida e volta de propósito: o oráculo não é "o comando
 // imprimiu a mesma string que eu formataria", que só afirmaria que dois
 // trechos de código chamam o mesmo Sprintf, e sim que do texto para humano se
 // recupera o MESMO prazo que a rota respondeu em milissegundos. É o argumento
-// do bytesLegiveis aplicado ao tempo: número humanizado do qual não se recupera
+// do bytesToReadableString aplicado ao tempo: número humanizado do qual não se recupera
 // o valor esconde a diferença que o operador veio medir.
-func prazoDaSaida(t *testing.T, texto string) time.Duration {
+func prazoOfSaida(t *testing.T, text string) time.Duration {
 	t.Helper()
-	d, err := time.ParseDuration(texto)
+	d, err := time.ParseDuration(text)
 	if err != nil {
-		t.Fatalf("o comando escreveu %q, que não é uma duração: %v", texto, err)
+		t.Fatalf("o comando escreveu %q, que não é uma duração: %v", text, err)
 	}
 	return d
 }
 
 // estatisticas lê o /v1/stats pela porta, para servir de oráculo ao comando.
-func estatisticas(t *testing.T, a *ambienteRemoto) protocol.Stats {
+func estatisticas(t *testing.T, a *envRemote) protocol.Stats {
 	t.Helper()
 	var e protocol.Stats
-	leJSONDaPorta(t, a, "/v1/stats", &e)
+	readJSONOfPorta(t, a, "/v1/stats", &e)
 	return e
 }
 
-// esperaConsultasDrenarem bloqueia até o servidor não reportar mais nenhuma
+// waitConsultasDrenarem bloqueia até o servidor não reportar mais nenhuma
 // consulta ativa, para que uma medição feita depois seja comparável com outra.
-func esperaConsultasDrenarem(t *testing.T, a *ambienteRemoto) {
+func waitConsultasDrenarem(t *testing.T, a *envRemote) {
 	t.Helper()
-	limite := time.Now().Add(5 * time.Second)
+	limit := time.Now().Add(5 * time.Second)
 	for {
 		e := estatisticas(t, a)
 		ativas := int64(0)
@@ -263,62 +263,62 @@ func esperaConsultasDrenarem(t *testing.T, a *ambienteRemoto) {
 		if ativas == 0 {
 			return
 		}
-		if time.Now().After(limite) {
+		if time.Now().After(limit) {
 			t.Fatalf("%d consulta(s) continuam ativas depois de 5s: o servidor não está drenando", ativas)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 }
 
-func metadados(t *testing.T, a *ambienteRemoto, consulta string) protocol.Metadata {
+func metadados(t *testing.T, a *envRemote, consulta string) protocol.Metadata {
 	t.Helper()
 	var m protocol.Metadata
-	leJSONDaPorta(t, a, "/v1/metadata"+consulta, &m)
+	readJSONOfPorta(t, a, "/v1/metadata"+consulta, &m)
 	return m
 }
 
-func leJSONDaPorta(t *testing.T, a *ambienteRemoto, caminho string, destino any) {
+func readJSONOfPorta(t *testing.T, a *envRemote, path string, destination any) {
 	t.Helper()
-	resp, err := http.Get("http://" + a.endereco() + caminho)
+	resp, err := http.Get("http://" + a.endereco() + path)
 	if err != nil {
-		t.Fatalf("GET %s: %v", caminho, err)
+		t.Fatalf("GET %s: %v", path, err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			t.Errorf("fechar o corpo de %s: %v", caminho, err)
+			t.Errorf("fechar o corpo de %s: %v", path, err)
 		}
 	}()
 	corpo, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("lendo %s: %v", caminho, err)
+		t.Fatalf("lendo %s: %v", path, err)
 	}
-	if err := json.Unmarshal(corpo, destino); err != nil {
-		t.Fatalf("decodificando %s: %v\n%s", caminho, err, corpo)
+	if err := json.Unmarshal(corpo, destination); err != nil {
+		t.Fatalf("decodificando %s: %v\n%s", path, err, corpo)
 	}
 }
 
-// servidorComDadosNoAr monta o ambiente remoto, ingere e sobe o servidor. A
+// serverWithDataInAr monta o ambiente remoto, ingere e sobe o servidor. A
 // ingestão acontece ANTES da subida porque o flock é exclusivo: é a mesma
 // ordem que o operador segue.
-func servidorComDadosNoAr(t *testing.T, eventos int) *ambienteRemoto {
+func serverWithDataInAr(t *testing.T, eventos int) *envRemote {
 	t.Helper()
-	return sobeComEntrada(t, novoAmbienteRemoto(t, 100000), corpus(t, eventos))
+	return risesWithEntry(t, newEnvRemote(t, 100000), corpus(t, eventos))
 }
 
-// sobeComEntrada é o de baixo: ingere a entrada que o teste montou e sobe o
+// risesWithEntry é o de baixo: ingere a entrada que o teste montou e sobe o
 // servidor sobre ela.
 //
 // A separação existe porque o corpus do §12 não produz sozinho três fixtures de
 // que esta suíte precisa — um teto de linhas baixo o bastante para truncar, uma
 // coluna AUTO, e chaves em número suficiente para a carga do primário sair de
-// zero. Cada um deles é uma linha de entrada diferente, não um segundo helper.
-func sobeComEntrada(t *testing.T, a *ambienteRemoto, entrada string) *ambienteRemoto {
+// zero. Cada um deles é uma line de entrada diferente, não um segundo helper.
+func risesWithEntry(t *testing.T, a *envRemote, entry string) *envRemote {
 	t.Helper()
-	if code := a.rodaComEntrada(entrada, "ingest",
+	if code := a.runWithEntry(entry, "ingest",
 		"--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != 0 {
 		t.Fatalf("ingest saiu com %d: %s", code, a.stderr.String())
 	}
-	a.sobeServidor(t)
+	a.risesServer(t)
 	return a
 }
 
@@ -330,32 +330,32 @@ func sobeComEntrada(t *testing.T, a *ambienteRemoto, entrada string) *ambienteRe
 // que o de lá mudasse. Se o ponto de inserção sumir, o teste morre dizendo
 // isso — que é melhor do que subir com uma configuração diferente da que o
 // teste afirma ter escrito.
-func acrescentaAoStorage(t *testing.T, a *ambienteRemoto, trecho string) {
+func acrescentaAoStorage(t *testing.T, a *envRemote, trecho string) {
 	t.Helper()
 	yml, err := os.ReadFile(a.config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const alvo = "storage:\n"
-	if !strings.Contains(string(yml), alvo) {
-		t.Fatalf("o template do ambiente remoto não tem mais o bloco %q:\n%s", alvo, yml)
+	const target = "storage:\n"
+	if !strings.Contains(string(yml), target) {
+		t.Fatalf("o template do ambiente remoto não tem mais o bloco %q:\n%s", target, yml)
 	}
-	novo := strings.Replace(string(yml), alvo, alvo+trecho, 1)
-	if err := os.WriteFile(a.config, []byte(novo), 0o644); err != nil {
+	nw := strings.Replace(string(yml), target, target+trecho, 1)
+	if err := os.WriteFile(a.config, []byte(nw), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// desligaACompaction acrescenta `storage.compaction.enabled: false` ao YAML do
+// turnoffACompaction acrescenta `storage.compaction.enabled: false` ao YAML do
 // ambiente. Subir com a compaction ligada e afirmar o contrário seria o teste
 // mentindo sobre o próprio fixture, e é por isso que o acrescentaAoStorage
 // morre quando não encontra onde inserir.
-func desligaACompaction(t *testing.T, a *ambienteRemoto) {
+func turnoffACompaction(t *testing.T, a *envRemote) {
 	t.Helper()
 	acrescentaAoStorage(t, a, "  compaction:\n    enabled: false\n")
 }
 
-// afinaOStorageParaCompactar deixa o ambiente com segmento PEQUENO e a política
+// afinaOStorageForCompactar deixa o ambiente com segmento PEQUENO e a política
 // do §53 declarada, antes de o servidor subir.
 //
 // O segmentSize é o que faz a ingestão SELAR arquivos: com o padrão de 512 MiB
@@ -368,7 +368,7 @@ func desligaACompaction(t *testing.T, a *ambienteRemoto) {
 // hoje exatamente este valor. O que este fixture precisa é que a eleição
 // alcance os segmentos que o corpus deixa com pouca liveness, e um default
 // alterado noutra tarefa mudaria calado o que o teste mede.
-func afinaOStorageParaCompactar(t *testing.T, a *ambienteRemoto) {
+func afinaOStorageForCompactar(t *testing.T, a *envRemote) {
 	t.Helper()
 	acrescentaAoStorage(t, a, "  segmentSize: 64KiB\n  compaction:\n    minimumLiveRatio: 0.5\n")
 }
@@ -386,7 +386,7 @@ func chavesDistintas(n int) string {
 	return sb.String()
 }
 
-// updatesSobreChavesQuentesEFrias monta a entrada que dá à compaction o que
+// updatesAboutChavesQuentesEFrias monta a entrada que dá à compaction o que
 // devolver — e o que COPIAR.
 //
 // As duas famílias de chave têm papéis diferentes, e sem qualquer uma delas o
@@ -409,7 +409,7 @@ func chavesDistintas(n int) string {
 //
 // A sequência das frias é sempre 1 porque elas nunca são reescritas; a das
 // quentes é a rodada, que o `strategy: greater` do §12 aceita como update.
-func updatesSobreChavesQuentesEFrias(quentes, rodadas, friasPorRodada int) string {
+func updatesAboutChavesQuentesEFrias(quentes, rodadas, friasByRodada int) string {
 	var sb strings.Builder
 	fria := 0
 	for r := 1; r <= rodadas; r++ {
@@ -417,7 +417,7 @@ func updatesSobreChavesQuentesEFrias(quentes, rodadas, friasPorRodada int) strin
 			fmt.Fprintf(&sb, `{"id":"Q%04d","_SEQ":%d,"Acct-Status-Type":"Stop","User-Name":"u%04d","NAS-Identifier":"nas-%d"}`+"\n",
 				k, r, k, r%7)
 		}
-		for i := 0; i < friasPorRodada; i++ {
+		for i := 0; i < friasByRodada; i++ {
 			fmt.Fprintf(&sb, `{"id":"F%06d","_SEQ":1,"Acct-Status-Type":"Start","User-Name":"f%06d","NAS-Identifier":"nas-fria"}`+"\n",
 				fria, fria)
 			fria++
@@ -426,27 +426,27 @@ func updatesSobreChavesQuentesEFrias(quentes, rodadas, friasPorRodada int) strin
 	return sb.String()
 }
 
-// nomeDoSegundoDataset e specDoSegundoDataset são o outro dataset do servidor,
+// nameOfSegundoDataset e specOfSegundoDataset são o outro dataset do servidor,
 // e existem por causa do `datasets`.
 //
 // O comando cuja única razão de existir é listar O QUE ESTE SERVIDOR SERVE
 // estava sendo exercitado contra um servidor de UM dataset, e um servidor de um
 // dataset não distingue "lista todos" de "imprime o primeiro N vezes": com uma
-// linha só, escrever o nome de m.Datasets[0] em todas elas é indistinguível de
+// line só, escrever o nome de m.Datasets[0] em todas elas é indistinguível de
 // escrever o nome de cada uma. É a mesma família da guarda `vistos` dos seis
 // contadores do bloco `processo` — dois valores iguais tornam dois rótulos
 // indistinguíveis —, agora na dimensão da LINHA.
 //
 // Ele diverge do fixture do §12 em TODAS as colunas da tabela (nome, chave,
 // número de colunas, teto de linhas e prazo), e isso não é enfeite: é o que o
-// exigeColunasDistinguiveis cobra para que trocar duas colunas de lugar apareça.
+// exigeColumnsDistinguiveis cobra para que trocar duas colunas de lugar apareça.
 //
 // Não declara `source`, então nenhum consumer sobe para ele (§12 + D15) e o
 // dataset nasce vazio — o que basta, porque o `datasets` descreve SCHEMA e
 // limites, não conteúdo.
-const nomeDoSegundoDataset = "auditoria_acessos"
+const nameOfSegundoDataset = "auditoria_acessos"
 
-const specDoSegundoDataset = `version: 1
+const specOfSegundoDataset = `version: 1
 name: auditoria_acessos
 materialization:
   key:
@@ -479,13 +479,13 @@ query:
 // divergência), então a conferência acontece aqui: uma constante editada pela
 // metade falharia na subida do servidor, com uma mensagem sobre YAML, e não
 // sobre o fixture.
-func acrescentaOSegundoDataset(t *testing.T, a *ambienteRemoto) {
+func acrescentaOSegundoDataset(t *testing.T, a *envRemote) {
 	t.Helper()
-	if !strings.Contains(specDoSegundoDataset, "name: "+nomeDoSegundoDataset+"\n") {
-		t.Fatalf("a spec do segundo dataset não declara name: %s", nomeDoSegundoDataset)
+	if !strings.Contains(specOfSegundoDataset, "name: "+nameOfSegundoDataset+"\n") {
+		t.Fatalf("a spec do segundo dataset não declara name: %s", nameOfSegundoDataset)
 	}
-	caminho := filepath.Join(a.dir, "datasets", nomeDoSegundoDataset+".yaml")
-	if err := os.WriteFile(caminho, []byte(specDoSegundoDataset), 0o644); err != nil {
+	path := filepath.Join(a.dir, "datasets", nameOfSegundoDataset+".yaml")
+	if err := os.WriteFile(path, []byte(specOfSegundoDataset), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -498,14 +498,14 @@ func acrescentaOSegundoDataset(t *testing.T, a *ambienteRemoto) {
 // o comando inventasse um segundo caminho para chegar neles, a divergência
 // apareceria aqui — que é a mesma doutrina do /metrics contra o JSON.
 func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
-	a := servidorComDadosNoAr(t, 50)
+	a := serverWithDataInAr(t, 50)
 
 	// Tráfego ANTES do status, para que os três números da linha de consultas
 	// deixem de ser zero. Enquanto eram, trocar Total por Errors era invisível
 	// — o oráculo comparava "0 (0 ativas, 0 com erro)" consigo mesmo, e a
 	// asserção parecia existir sem exercer nada.
 	for i := 0; i < 2; i++ {
-		if code := a.roda("query", "--server", a.endereco(),
+		if code := a.run("query", "--server", a.endereco(),
 			"--dataset", "radius_sessions",
 			"SELECT id FROM radius_sessions WHERE id = 'chave que nao existe'"); code != 0 {
 			t.Fatalf("consulta de aquecimento saiu %d: %s", code, a.stderr.String())
@@ -526,9 +526,9 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 	// Não é hipótese: foi assim que este teste falhou no CI (job "test
 	// (./...)" da run 32676650648), passando em toda execução local e no
 	// próprio -race da mesma run. Uma máquina mais lenta alarga a janela.
-	esperaConsultasDrenarem(t, a)
+	waitConsultasDrenarem(t, a)
 
-	if code := a.roda("status", "--server", a.endereco()); code != 0 {
+	if code := a.run("status", "--server", a.endereco()); code != 0 {
 		t.Fatalf("exit = %d, queria 0: %s", code, a.stderr.String())
 	}
 	saida := a.stdout.String()
@@ -555,7 +555,7 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 		{"overlay", strconv.Itoa(ds.Storage.Overlay)},
 	}
 	for _, c := range casos {
-		if got := campoDaSaida(t, saida, c.rotulo); got != c.quer {
+		if got := fieldOfSaida(t, saida, c.rotulo); got != c.quer {
 			t.Errorf("%s = %q na saída e %q no /v1/stats", c.rotulo, got, c.quer)
 		}
 	}
@@ -563,17 +563,17 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 	// O disco é o que este milestone existe para tornar visível (§86): o
 	// comando tem de trazer o número EXATO da rota, e não uma aproximação
 	// humanizada da qual não se recupera o valor.
-	if got := campoDaSaida(t, saida, "disco"); !strings.HasPrefix(got, strconv.FormatInt(ds.Storage.Bytes, 10)+" B") {
+	if got := fieldOfSaida(t, saida, "disco"); !strings.HasPrefix(got, strconv.FormatInt(ds.Storage.Bytes, 10)+" B") {
 		t.Errorf("disco = %q, queria começar com %d B", got, ds.Storage.Bytes)
 	}
-	if got := campoDaSaida(t, saida, "garbage (>=)"); !strings.HasPrefix(got, strconv.FormatUint(ds.Storage.GarbageBytes, 10)+" B") {
+	if got := fieldOfSaida(t, saida, "garbage (>=)"); !strings.HasPrefix(got, strconv.FormatUint(ds.Storage.GarbageBytes, 10)+" B") {
 		t.Errorf("garbage = %q, queria começar com %d B", got, ds.Storage.GarbageBytes)
 	}
 
 	// A ingestão do §96 sai pelo vocabulário do §94, o mesmo do /v1/health:
 	// duas palavras diferentes para o mesmo estado obrigariam o operador a
 	// aprender as duas.
-	if got := campoDaSaida(t, saida, "ingestão"); !strings.HasPrefix(got, ds.Ingestion.State) {
+	if got := fieldOfSaida(t, saida, "ingestão"); !strings.HasPrefix(got, ds.Ingestion.State) {
 		t.Errorf("ingestão = %q, queria começar com %q", got, ds.Ingestion.State)
 	}
 
@@ -583,7 +583,7 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 	// de enxergar — a saída continua plausível.
 	querConsultas := fmt.Sprintf("%d (%d ativas, %d com erro)",
 		ds.Query.Total, ds.Query.Active, ds.Query.Errors)
-	if got := campoDaSaida(t, saida, "consultas"); got != querConsultas {
+	if got := fieldOfSaida(t, saida, "consultas"); got != querConsultas {
 		t.Errorf("consultas = %q, queria %q", got, querConsultas)
 	}
 }
@@ -597,10 +597,10 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 // — é que ela acompanha o que a rota respondeu, e não um literal escolhido
 // pelo comando.
 func TestStatusMostraOEstadoDaCompaction(t *testing.T) {
-	a := servidorComDadosNoAr(t, 20)
-	esperaCompactionNoAr(t, a)
+	a := serverWithDataInAr(t, 20)
+	waitCompactionInAr(t, a)
 
-	if code := a.roda("status", "--server", a.endereco()); code != 0 {
+	if code := a.run("status", "--server", a.endereco()); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}
 	saida := a.stdout.String()
@@ -609,21 +609,21 @@ func TestStatusMostraOEstadoDaCompaction(t *testing.T) {
 	if !ds.Storage.Compaction.Running {
 		t.Fatal("o /v1/stats reporta a compaction parada logo depois de ela subir")
 	}
-	if got := campoDaSaida(t, saida, "compaction"); got != "ligada" {
+	if got := fieldOfSaida(t, saida, "compaction"); got != "ligada" {
 		t.Errorf("compaction = %q, queria dizer que o laço está de pé", got)
 	}
-	if got := campoDaSaida(t, saida, "bytes lidos"); !strings.HasPrefix(got, strconv.FormatInt(ds.Storage.Compaction.BytesRead, 10)+" B") {
+	if got := fieldOfSaida(t, saida, "bytes lidos"); !strings.HasPrefix(got, strconv.FormatInt(ds.Storage.Compaction.BytesRead, 10)+" B") {
 		t.Errorf("bytes lidos = %q, queria %d B", got, ds.Storage.Compaction.BytesRead)
 	}
-	if got := campoDaSaida(t, saida, "bytes escritos"); !strings.HasPrefix(got, strconv.FormatInt(ds.Storage.Compaction.BytesWritten, 10)+" B") {
+	if got := fieldOfSaida(t, saida, "bytes escritos"); !strings.HasPrefix(got, strconv.FormatInt(ds.Storage.Compaction.BytesWritten, 10)+" B") {
 		t.Errorf("bytes escritos = %q, queria %d B", got, ds.Storage.Compaction.BytesWritten)
 	}
 }
 
 // TestStatusMostraACompactionDesligada é a outra metade do par acima, e sem
 // ela o teste de cima não prova a palavra: `return "ligada"` no corpo do
-// estadoDaCompaction passa por todo oráculo que só sobe com a chave no
-// default, e o `esperaCompactionNoAr` está lá justamente para garantir que o
+// compactionStatus passa por todo oráculo que só sobe com a chave no
+// default, e o `waitCompactionInAr` está lá justamente para garantir que o
 // laço esteja de pé quando a saída for lida.
 //
 // O ramo que falta é o que o godoc da função nomeia como o único que importa:
@@ -633,11 +633,11 @@ func TestStatusMostraOEstadoDaCompaction(t *testing.T) {
 // produz o MESMO estado observável — laço parado, servidor no ar — e é o que
 // separa a palavra de um literal.
 func TestStatusMostraACompactionDesligada(t *testing.T) {
-	a := novoAmbienteRemoto(t, 100000)
-	desligaACompaction(t, a)
-	sobeComEntrada(t, a, corpus(t, 20))
+	a := newEnvRemote(t, 100000)
+	turnoffACompaction(t, a)
+	risesWithEntry(t, a, corpus(t, 20))
 
-	if code := a.roda("status", "--server", a.endereco()); code != 0 {
+	if code := a.run("status", "--server", a.endereco()); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}
 	saida := a.stdout.String()
@@ -649,19 +649,19 @@ func TestStatusMostraACompactionDesligada(t *testing.T) {
 	if ds.Storage.Compaction.Running {
 		t.Fatal("o /v1/stats reporta o laço de pé com storage.compaction.enabled: false")
 	}
-	if got := campoDaSaida(t, saida, "compaction"); got != "desligada" {
+	if got := fieldOfSaida(t, saida, "compaction"); got != "desligada" {
 		t.Errorf("compaction = %q com a chave em false; queria \"desligada\", que é a palavra "+
 			"que o operador procura quando o disco cresce com o processo de pé (§14.14)", got)
 	}
 }
 
-// esperaCompactionNoAr bloqueia até o /v1/stats reportar o laço de pé.
+// waitCompactionInAr bloqueia até o /v1/stats reportar o laço de pé.
 //
 // A subida põe o HTTP no ar ANTES de ligar a compaction (§51), então há uma
 // janela em que o /v1/health já responde e o laço ainda não subiu. Esperar pela
 // CONDIÇÃO fecha a janela sem dormir — dormir esconderia tanto a lentidão
 // quanto a ausência de progresso.
-func esperaCompactionNoAr(t *testing.T, a *ambienteRemoto) {
+func waitCompactionInAr(t *testing.T, a *envRemote) {
 	t.Helper()
 	prazo := time.Now().Add(15 * time.Second)
 	for time.Now().Before(prazo) {
@@ -696,16 +696,16 @@ func esperaCompactionNoAr(t *testing.T, a *ambienteRemoto) {
 // 64 KiB para haver PILHA de selados, chaves quentes para produzir o garbage que
 // elege, e chaves frias espalhadas para haver dado VIVO dentro do que se elegeu.
 func TestStatusSeparaOsSegmentosDoCorrenteEOsBytesDaCompaction(t *testing.T) {
-	a := novoAmbienteRemoto(t, 100000)
-	afinaOStorageParaCompactar(t, a)
-	sobeComEntrada(t, a, updatesSobreChavesQuentesEFrias(50, 200, 5))
+	a := newEnvRemote(t, 100000)
+	afinaOStorageForCompactar(t, a)
+	risesWithEntry(t, a, updatesAboutChavesQuentesEFrias(50, 200, 5))
 
-	saida, st := statusComOsCamposDeDiscoSeparados(t, a)
-	for _, c := range camposDeDiscoDoStatus(st) {
-		quer := strconv.FormatInt(c.valor, 10)
-		got := campoDaSaida(t, saida, c.rotulo)
-		if c.emBytes {
-			// O byte EXATO vem primeiro no bytesLegiveis, e é ele que se
+	saida, st := statusWithOsFieldsOfDiskSeparados(t, a)
+	for _, c := range fieldsOfDiskOfStatus(st) {
+		quer := strconv.FormatInt(c.value, 10)
+		got := fieldOfSaida(t, saida, c.rotulo)
+		if c.inBytes {
+			// O byte EXATO vem primeiro no bytesToReadableString, e é ele que se
 			// confere: quem compara duas medições — antes e depois de uma
 			// passada — precisa do número, não da grandeza arredondada.
 			if !strings.HasPrefix(got, quer+" B") {
@@ -719,20 +719,20 @@ func TestStatusSeparaOsSegmentosDoCorrenteEOsBytesDaCompaction(t *testing.T) {
 	}
 }
 
-// campoDeDisco é um dos números que o §96 publica sob rótulo próprio no bloco
-// do dataset. `emBytes` marca os que saem pelo bytesLegiveis, cuja célula
+// fieldOfDisk é um dos números que o §96 publica sob rótulo próprio no bloco
+// do dataset. `inBytes` marca os que saem pelo bytesToReadableString, cuja célula
 // começa pelo valor exato e continua com a grandeza para humano.
-type campoDeDisco struct {
+type fieldOfDisk struct {
 	rotulo  string
-	valor   int64
-	emBytes bool
+	value   int64
+	inBytes bool
 }
 
-// camposDeDiscoDoStatus é a lista que a espera e a conferência compartilham —
+// fieldsOfDiskOfStatus é a lista que a espera e a conferência compartilham —
 // as duas precisam falar dos MESMOS quatro números, senão o teste espera por uma
 // condição e afirma outra.
-func camposDeDiscoDoStatus(st protocol.StorageStats) []campoDeDisco {
-	return []campoDeDisco{
+func fieldsOfDiskOfStatus(st protocol.StorageStats) []fieldOfDisk {
+	return []fieldOfDisk{
 		{"segmentos", int64(st.Segments), false},
 		{"corrente", int64(st.CurrentSegment), false},
 		{"bytes lidos", st.Compaction.BytesRead, true},
@@ -740,13 +740,13 @@ func camposDeDiscoDoStatus(st protocol.StorageStats) []campoDeDisco {
 	}
 }
 
-// colisaoEntreOsCamposDeDisco descreve a primeira razão pela qual os quatro
+// colisaoEntreOsFieldsOfDisk descreve a primeira razão pela qual os quatro
 // números ainda não distinguem os quatro rótulos, ou devolve "" quando
 // distinguem.
 //
 // É a guarda `vistos` dos seis contadores do bloco `processo`, na forma de
 // predicado: dois números iguais tornam os dois rótulos indistinguíveis, e o
-// teste passaria a aprovar um comando que lê o campo do vizinho. Ela é
+// teste passaria a aprovar um comando que lê o field do vizinho. Ela é
 // predicado, e não asserção imediata, porque aqui o fixture leva algumas
 // centenas de milissegundos para separá-los — a compaction precisa aposentar o
 // primeiro segmento —, e afirmar antes disso seria reprovar o comando certo.
@@ -754,25 +754,25 @@ func camposDeDiscoDoStatus(st protocol.StorageStats) []campoDeDisco {
 // Os dois contadores de bytes ainda são exigidos NÃO-ZERO à parte. Zero é o
 // estado em que a suíte anterior os lia, e zero não é só igual ao vizinho: é
 // igual a tudo o que ainda não aconteceu.
-func colisaoEntreOsCamposDeDisco(st protocol.StorageStats) string {
-	campos := camposDeDiscoDoStatus(st)
-	for _, c := range campos {
-		if c.emBytes && c.valor == 0 {
+func colisaoEntreOsFieldsOfDisk(st protocol.StorageStats) string {
+	fields := fieldsOfDiskOfStatus(st)
+	for _, c := range fields {
+		if c.inBytes && c.value == 0 {
 			return fmt.Sprintf("%q ainda vale 0: nenhuma passada de compaction concluiu", c.rotulo)
 		}
 	}
 	vistos := map[int64]string{}
-	for _, c := range campos {
-		if outro, ok := vistos[c.valor]; ok {
+	for _, c := range fields {
+		if outro, ok := vistos[c.value]; ok {
 			return fmt.Sprintf("%q e %q valem %d: com dois números iguais o teste não distingue os rótulos",
-				outro, c.rotulo, c.valor)
+				outro, c.rotulo, c.value)
 		}
-		vistos[c.valor] = c.rotulo
+		vistos[c.value] = c.rotulo
 	}
 	return ""
 }
 
-// statusComOsCamposDeDiscoSeparados roda o `status` ENTRE duas leituras do
+// statusWithOsFieldsOfDiskSeparados roda o `status` ENTRE duas leituras do
 // /v1/stats e devolve a saída junto da amostra em que as duas coincidiram.
 //
 // A sanduíche existe porque este é o único teste da suíte em que a compaction
@@ -783,27 +783,27 @@ func colisaoEntreOsCamposDeDisco(st protocol.StorageStats) string {
 // sejam IDÊNTICAS fixa o instante sem parar a compaction, que é justamente o que
 // o fixture existe para deixar acontecer.
 //
-// Esperar pela CONDIÇÃO, e não por tempo, é a mesma regra do esperaCompactionNoAr:
+// Esperar pela CONDIÇÃO, e não por tempo, é a mesma regra do waitCompactionInAr:
 // dormir um prazo fixo esconderia tanto a lentidão quanto a ausência de
 // progresso. E o prazo que expira morre dizendo QUAL par ainda colide, porque a
 // resposta certa a ele é mexer no fixture, não no oráculo.
-func statusComOsCamposDeDiscoSeparados(t *testing.T, a *ambienteRemoto) (string, protocol.StorageStats) {
+func statusWithOsFieldsOfDiskSeparados(t *testing.T, a *envRemote) (string, protocol.StorageStats) {
 	t.Helper()
 	motivo := "o /v1/stats não chegou a ser lido"
 	prazo := time.Now().Add(30 * time.Second)
 	for time.Now().Before(prazo) {
-		antes := storageDoDataset(t, a)
-		if m := colisaoEntreOsCamposDeDisco(antes); m != "" {
+		before := storageOfDataset(t, a)
+		if m := colisaoEntreOsFieldsOfDisk(before); m != "" {
 			motivo = m
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
-		if code := a.roda("status", "--server", a.endereco()); code != 0 {
+		if code := a.run("status", "--server", a.endereco()); code != 0 {
 			t.Fatalf("status: exit = %d: %s", code, a.stderr.String())
 		}
 		saida := a.stdout.String()
-		if storageDoDataset(t, a) == antes {
-			return saida, antes
+		if storageOfDataset(t, a) == before {
+			return saida, before
 		}
 		motivo = "a compaction moveu os números DURANTE o comando"
 	}
@@ -811,11 +811,11 @@ func statusComOsCamposDeDiscoSeparados(t *testing.T, a *ambienteRemoto) (string,
 	return "", protocol.StorageStats{}
 }
 
-// storageDoDataset é o bloco de storage do dataset único do ambiente, lido pela
+// storageOfDataset é o bloco de storage do dataset único do ambiente, lido pela
 // porta. Morre quando o servidor traz outro número de datasets: um oráculo que
 // pegasse o primeiro de vários estaria conferindo a saída de um contra os
 // números de outro.
-func storageDoDataset(t *testing.T, a *ambienteRemoto) protocol.StorageStats {
+func storageOfDataset(t *testing.T, a *envRemote) protocol.StorageStats {
 	t.Helper()
 	e := estatisticas(t, a)
 	if len(e.Datasets) != 1 {
@@ -844,12 +844,12 @@ func storageDoDataset(t *testing.T, a *ambienteRemoto) protocol.StorageStats {
 // fixture seja a da consulta sem WHERE — que estoura o teto de 5 linhas do
 // dataset e produz o truncamento.
 func TestStatusPublicaOsContadoresDoMotorDoProcesso(t *testing.T) {
-	a := sobeComEntrada(t, novoAmbienteRemoto(t, 5), corpus(t, 50))
+	a := risesWithEntry(t, newEnvRemote(t, 5), corpus(t, 50))
 
 	consulta := func(vezes int, quer int, sql string) {
 		t.Helper()
 		for i := 0; i < vezes; i++ {
-			if code := a.roda("query", "--server", a.endereco(),
+			if code := a.run("query", "--server", a.endereco(),
 				"--dataset", "radius_sessions", sql); code != quer {
 				t.Fatalf("exit = %d, quer %d para %q: %s", code, quer, sql, a.stderr.String())
 			}
@@ -863,15 +863,15 @@ func TestStatusPublicaOsContadoresDoMotorDoProcesso(t *testing.T) {
 	consulta(4, 0, "SELECT id FROM radius_sessions WHERE status = 'Fantasma'")
 	consulta(6, 0, "SELECT id FROM radius_sessions WHERE status = 'Fantasma' OR status = 'Outro'")
 
-	if code := a.roda("status", "--server", a.endereco()); code != 0 {
+	if code := a.run("status", "--server", a.endereco()); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}
 	saida := a.stdout.String()
 
 	q := estatisticas(t, a).Process.Query
-	campos := []struct {
+	fields := []struct {
 		rotulo string
-		valor  int64
+		value  int64
 	}{
 		{"full scans", q.FullScans},
 		{"point lookups", q.PointLookups},
@@ -886,17 +886,17 @@ func TestStatusPublicaOsContadoresDoMotorDoProcesso(t *testing.T) {
 	// comando que lê o campo errado. Se o fixture deixar de separá-los, é o
 	// fixture que precisa mudar — não o oráculo.
 	vistos := map[int64]string{}
-	for _, c := range campos {
-		if outro, ok := vistos[c.valor]; ok {
+	for _, c := range fields {
+		if outro, ok := vistos[c.value]; ok {
 			t.Fatalf("%q e %q valem %d: com dois contadores iguais o teste não distingue os rótulos",
-				outro, c.rotulo, c.valor)
+				outro, c.rotulo, c.value)
 		}
-		vistos[c.valor] = c.rotulo
+		vistos[c.value] = c.rotulo
 	}
 
-	for _, c := range campos {
-		if got := campoDaSaida(t, saida, c.rotulo); got != strconv.FormatInt(c.valor, 10) {
-			t.Errorf("%s = %q na saída e %d no /v1/stats", c.rotulo, got, c.valor)
+	for _, c := range fields {
+		if got := fieldOfSaida(t, saida, c.rotulo); got != strconv.FormatInt(c.value, 10) {
+			t.Errorf("%s = %q na saída e %d no /v1/stats", c.rotulo, got, c.value)
 		}
 	}
 }
@@ -912,9 +912,9 @@ func TestStatusPublicaOsContadoresDoMotorDoProcesso(t *testing.T) {
 // fixture pequeno. Se um dia o piso mudar e este fixture voltar a imprimir
 // zero, o teste falha dizendo isso em vez de aprovar a constante.
 func TestStatusPublicaACargaDoPrimario(t *testing.T) {
-	a := sobeComEntrada(t, novoAmbienteRemoto(t, 100000), chavesDistintas(12000))
+	a := risesWithEntry(t, newEnvRemote(t, 100000), chavesDistintas(12000))
 
-	if code := a.roda("status", "--server", a.endereco()); code != 0 {
+	if code := a.run("status", "--server", a.endereco()); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}
 	saida := a.stdout.String()
@@ -925,7 +925,7 @@ func TestStatusPublicaACargaDoPrimario(t *testing.T) {
 		t.Fatalf("a carga saiu 0.00 com %d rows (fator %v): neste fixture o campo já não se "+
 			"distingue de uma constante", ds.Storage.Rows, ds.Storage.PrimaryLoadFactor)
 	}
-	if got := campoDaSaida(t, saida, "carga do primário"); got != quer {
+	if got := fieldOfSaida(t, saida, "carga do primário"); got != quer {
 		t.Errorf("carga do primário = %q na saída e %q no /v1/stats", got, quer)
 	}
 }
@@ -947,11 +947,11 @@ func TestStatusPublicaACargaDoPrimario(t *testing.T) {
 // escreva o número de colunas sob MAXROWS e o teto de linhas sob COLUNAS. Quem
 // ancora a posição é o cabeçalho que o próprio comando escreveu.
 func TestDatasetsListaOQueOServidorServe(t *testing.T) {
-	a := novoAmbienteRemoto(t, 100000)
+	a := newEnvRemote(t, 100000)
 	acrescentaOSegundoDataset(t, a)
-	sobeComEntrada(t, a, corpus(t, 10))
+	risesWithEntry(t, a, corpus(t, 10))
 
-	if code := a.roda("datasets", "--server", a.endereco()); code != 0 {
+	if code := a.run("datasets", "--server", a.endereco()); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}
 	saida := a.stdout.String()
@@ -962,9 +962,9 @@ func TestDatasetsListaOQueOServidorServe(t *testing.T) {
 			"naquilo que ele existe para fazer", len(m.Datasets))
 	}
 
-	cabecalho, linhas := tabelaDaSaida(t, saida, "DATASET")
-	if len(linhas) != len(m.Datasets) {
-		t.Fatalf("a tabela saiu com %d linhas para %d datasets servidos:\n%s", len(linhas), len(m.Datasets), saida)
+	cabecalho, rows := tableOfSaida(t, saida, "DATASET")
+	if len(rows) != len(m.Datasets) {
+		t.Fatalf("a tabela saiu com %d linhas para %d datasets servidos:\n%s", len(rows), len(m.Datasets), saida)
 	}
 
 	oraculos := make([]map[string]string, 0, len(m.Datasets))
@@ -979,19 +979,19 @@ func TestDatasetsListaOQueOServidorServe(t *testing.T) {
 			"MAXROWS": strconv.Itoa(d.MaxRows),
 		})
 	}
-	exigeColunasDistinguiveis(t, cabecalho, oraculos, rotuloDoPrazo)
+	exigeColumnsDistinguiveis(t, cabecalho, oraculos, rotuloOfPrazo)
 
 	for i, d := range m.Datasets {
-		linha := linhaDaTabela(t, linhas, d.Name)
-		conferePorCelula(t, "dataset "+d.Name, cabecalho, linha, oraculos[i], rotuloDoPrazo)
+		row := rowOfTable(t, rows, d.Name)
+		confereByCelula(t, "dataset "+d.Name, cabecalho, row, oraculos[i], rotuloOfPrazo)
 
 		// A coluna TIMEOUT é o prazo EFETIVO da consulta escrito para humano, e
 		// é por ele que o operador decide se a query que ele vai mandar cabe no
-		// dataset. O oráculo dela é de IDA E VOLTA (ver prazoDaSaida), mas a
+		// dataset. O oráculo dela é de IDA E VOLTA (ver prazoOfSaida), mas a
 		// célula continua sendo a da coluna: um "0s" fixo — ou o prazo na
 		// coluna errada — diria ao operador que toda consulta morre na largada.
-		celula := celulaSobORotulo(t, cabecalho, linha, rotuloDoPrazo)
-		if got := prazoDaSaida(t, celula); got != time.Duration(d.TimeoutMs)*time.Millisecond {
+		celula := celulaSobORotulo(t, cabecalho, row, rotuloOfPrazo)
+		if got := prazoOfSaida(t, celula); got != time.Duration(d.TimeoutMs)*time.Millisecond {
 			t.Errorf("%s: TIMEOUT = %q (%v) na saída e %d ms no /v1/metadata", d.Name, celula, got, d.TimeoutMs)
 		}
 	}
@@ -1007,10 +1007,10 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 	// seria um traço fixo que nada distingue. O evento a mais fixa isso: campo
 	// que o YAML não declara, com `unknownFields: include`, é coluna auto por
 	// construção.
-	a := sobeComEntrada(t, novoAmbienteRemoto(t, 100000),
+	a := risesWithEntry(t, newEnvRemote(t, 100000),
 		corpus(t, 10)+`{"id":"S-auto","_SEQ":1,"Campo-Fora-Do-Schema":"presente"}`+"\n")
 
-	if code := a.roda("inspect", "--server", a.endereco(), "radius_sessions"); code != 0 {
+	if code := a.run("inspect", "--server", a.endereco(), "radius_sessions"); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}
 	saida := a.stdout.String()
@@ -1020,19 +1020,19 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 		t.Fatalf("o /v1/metadata filtrado trouxe %d datasets", len(m.Datasets))
 	}
 	d := m.Datasets[0]
-	if campoDaSaida(t, saida, "key") != d.Key {
-		t.Errorf("key = %q, queria %q", campoDaSaida(t, saida, "key"), d.Key)
+	if fieldOfSaida(t, saida, "key") != d.Key {
+		t.Errorf("key = %q, queria %q", fieldOfSaida(t, saida, "key"), d.Key)
 	}
 	// O contador de colunas era o único campo do bloco sem oráculo, e o
 	// inspect publica esse número DUAS vezes — aqui e como número de linhas da
 	// tabela. Alimentá-lo com d.MaxRows deixava a suíte verde: é a mesma
 	// família que o resto deste arquivo fecha, valor sob o rótulo do vizinho.
-	if got, quer := campoDaSaida(t, saida, "colunas"), strconv.Itoa(len(d.Columns)); got != quer {
+	if got, quer := fieldOfSaida(t, saida, "colunas"), strconv.Itoa(len(d.Columns)); got != quer {
 		t.Errorf("colunas = %q, queria %q (o dataset tem %d colunas e maxRows %d)",
 			got, quer, len(d.Columns), d.MaxRows)
 	}
-	if campoDaSaida(t, saida, "maxRows") != strconv.Itoa(d.MaxRows) {
-		t.Errorf("maxRows = %q, queria %d", campoDaSaida(t, saida, "maxRows"), d.MaxRows)
+	if fieldOfSaida(t, saida, "maxRows") != strconv.Itoa(d.MaxRows) {
+		t.Errorf("maxRows = %q, queria %d", fieldOfSaida(t, saida, "maxRows"), d.MaxRows)
 	}
 	// O timeout é o outro limite EFETIVO, e sai pelo mesmo argumento do
 	// maxRows: quem consulta precisa do prazo que VAI VALER. Escrito para
@@ -1040,7 +1040,7 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 	if d.TimeoutMs == 0 {
 		t.Fatal("o /v1/metadata respondeu timeout 0: contra ele um \"0s\" fixo passaria")
 	}
-	if got := prazoDaSaida(t, campoDaSaida(t, saida, "timeout")); got != time.Duration(d.TimeoutMs)*time.Millisecond {
+	if got := prazoOfSaida(t, fieldOfSaida(t, saida, "timeout")); got != time.Duration(d.TimeoutMs)*time.Millisecond {
 		t.Errorf("timeout = %v na saída e %d ms no /v1/metadata", got, d.TimeoutMs)
 	}
 
@@ -1054,9 +1054,9 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 	if len(d.Columns) < 10 {
 		t.Fatalf("o fixture tem %d colunas: poucas para distinguir tabela de amostra", len(d.Columns))
 	}
-	cabecalho, linhas := tabelaDaSaida(t, saida, "COLUNA")
-	if len(linhas) != len(d.Columns) {
-		t.Fatalf("a tabela saiu com %d linhas para %d colunas do /v1/metadata:\n%s", len(linhas), len(d.Columns), saida)
+	cabecalho, rows := tableOfSaida(t, saida, "COLUNA")
+	if len(rows) != len(d.Columns) {
+		t.Fatalf("a tabela saiu com %d linhas para %d colunas do /v1/metadata:\n%s", len(rows), len(d.Columns), saida)
 	}
 
 	// A coluna AUTO diz se o TIPO daquela coluna foi declarado no YAML ou fixado
@@ -1073,9 +1073,9 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 		if c.Alias != nil {
 			alias = *c.Alias
 		}
-		marca := "-"
+		mark := "-"
 		if c.Auto {
-			marca, auto = "sim", auto+1
+			mark, auto = "sim", auto+1
 		}
 		oraculos = append(oraculos, map[string]string{
 			"COLUNA": c.Name,
@@ -1083,16 +1083,16 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 			"TIPO":   c.Type,
 			"JDBC":   c.JDBC,
 			"ÍNDICE": c.Index,
-			"AUTO":   marca,
+			"AUTO":   mark,
 		})
 	}
 	if auto == 0 {
 		t.Fatal("nenhuma coluna auto no fixture: a coluna AUTO seria um traço fixo e o teste não provaria nada")
 	}
-	exigeColunasDistinguiveis(t, cabecalho, oraculos)
+	exigeColumnsDistinguiveis(t, cabecalho, oraculos)
 
 	for i, c := range d.Columns {
-		conferePorCelula(t, "coluna "+c.Name, cabecalho, linhaDaTabela(t, linhas, c.Name), oraculos[i])
+		confereByCelula(t, "coluna "+c.Name, cabecalho, rowOfTable(t, rows, c.Name), oraculos[i])
 	}
 
 	// Os dois campos indexados do fixture do §12, conferidos na CÉLULA do
@@ -1105,9 +1105,9 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 	// única grafia e o campo compilado carrega um bool — era o IndexKind, hoje
 	// schema.CompiledField.Indexed; "bitmap" e "none" continuam sendo as duas
 	// palavras que o wire publica, ver o godoc do IndexName.
-	for coluna, quer := range map[string]string{"Acct-Status-Type": "bitmap", "NAS-IP-Address": "bitmap"} {
-		if got := celulaSobORotulo(t, cabecalho, linhaDaTabela(t, linhas, coluna), "ÍNDICE"); got != quer {
-			t.Errorf("o índice de %s saiu %q, queria %q", coluna, got, quer)
+	for column, quer := range map[string]string{"Acct-Status-Type": "bitmap", "NAS-IP-Address": "bitmap"} {
+		if got := celulaSobORotulo(t, cabecalho, rowOfTable(t, rows, column), "ÍNDICE"); got != quer {
+			t.Errorf("o índice de %s saiu %q, queria %q", column, got, quer)
 		}
 	}
 }
@@ -1124,14 +1124,14 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 // pediu, sob o nome que ele pediu.
 func TestInspectRecusaMetadataQueNaoTrazExatamenteUmDataset(t *testing.T) {
 	casos := []struct {
-		nome     string
+		name     string
 		datasets []protocol.DatasetMeta
 	}{
 		{"nenhum", nil},
 		{"dois", []protocol.DatasetMeta{{Name: "radius_sessions"}, {Name: "outro"}}},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 				if err := json.NewEncoder(w).Encode(protocol.Metadata{Datasets: c.datasets}); err != nil {
@@ -1140,8 +1140,8 @@ func TestInspectRecusaMetadataQueNaoTrazExatamenteUmDataset(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			a := novoAmbiente(t)
-			if code := a.roda("inspect", "--server", srv.URL, "radius_sessions"); code != 3 {
+			a := newEnv(t)
+			if code := a.run("inspect", "--server", srv.URL, "radius_sessions"); code != 3 {
 				t.Fatalf("exit = %d, quer 3 (dataset): %s", code, a.stderr.String())
 			}
 			if a.stdout.Len() != 0 {
@@ -1158,10 +1158,10 @@ func TestInspectRecusaMetadataQueNaoTrazExatamenteUmDataset(t *testing.T) {
 // um script que consulta o status e decide pelo $? não pode precisar de uma
 // segunda tabela.
 func TestOsComandosDeLeituraTraduzemARecusaDoServidor(t *testing.T) {
-	a := servidorComDadosNoAr(t, 5)
+	a := serverWithDataInAr(t, 5)
 
 	t.Run("dataset desconhecido", func(t *testing.T) {
-		code := a.roda("inspect", "--server", a.endereco(), "fantasma")
+		code := a.run("inspect", "--server", a.endereco(), "fantasma")
 		if code != 1 {
 			t.Fatalf("exit = %d, quer 1", code)
 		}
@@ -1174,7 +1174,7 @@ func TestOsComandosDeLeituraTraduzemARecusaDoServidor(t *testing.T) {
 	})
 
 	t.Run("servidor inalcançável", func(t *testing.T) {
-		code := a.roda("status", "--server", "127.0.0.1:1")
+		code := a.run("status", "--server", "127.0.0.1:1")
 		if code != 1 {
 			t.Fatalf("exit = %d, quer 1", code)
 		}
@@ -1188,14 +1188,14 @@ func TestOsComandosDeLeituraTraduzemARecusaDoServidor(t *testing.T) {
 // decisão (§96 + débito 54), e o erro precisa dizer isso em vez de deixar o
 // operador procurando um --config que não existe.
 func TestOsComandosDeLeituraExigemOServidor(t *testing.T) {
-	a := novoAmbienteRemoto(t, 100000)
+	a := newEnvRemote(t, 100000)
 
 	for _, args := range [][]string{
 		{"status"},
 		{"datasets"},
 		{"inspect", "radius_sessions"},
 	} {
-		if code := a.roda(args...); code != 1 {
+		if code := a.run(args...); code != 1 {
 			t.Errorf("%v: exit = %d, quer 1", args, code)
 		}
 		if !strings.Contains(a.stderr.String(), "--server") {
@@ -1205,13 +1205,13 @@ func TestOsComandosDeLeituraExigemOServidor(t *testing.T) {
 
 	// `inspect` sem dataset não tem o que inspecionar, e adivinhar qual seria
 	// um comando diferente.
-	if code := a.roda("inspect", "--server", a.endereco()); code != 1 {
+	if code := a.run("inspect", "--server", a.endereco()); code != 1 {
 		t.Errorf("inspect sem dataset: exit = %d, quer 1", code)
 	}
 }
 
 // Revisão da B6, Important 2: a paridade byte a byte "sem --user, sem
-// Authorization" era só argumento estrutural (credencialRemota{} vazio) e
+// Authorization" era só argumento estrutural (remoteCredential{} vazio) e
 // unit de caixa branca (TestAplicaCredencialSoDefineBasicComUsuario,
 // credential_internal_test.go). Aqui o oráculo é o HEADER que chega pela
 // rede de verdade: um servidor de mentira captura o request de um `status
@@ -1229,8 +1229,8 @@ func TestStatusSemUserNuncaEnviaHeaderAuthorization(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := novoAmbiente(t)
-	if code := a.roda("status", "--server", srv.URL); code != 0 {
+	a := newEnv(t)
+	if code := a.run("status", "--server", srv.URL); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}
 	if !recebida {
@@ -1245,8 +1245,8 @@ func TestStatusSemUserNuncaEnviaHeaderAuthorization(t *testing.T) {
 // existem. Ele já esqueceu o `--server` do `query` uma vez; aqui a omissão
 // custaria os três comandos desta tarefa.
 func TestOUsoAnunciaOsTresComandosDeLeitura(t *testing.T) {
-	a := novoAmbiente(t)
-	if code := a.roda("--help"); code != 0 {
+	a := newEnv(t)
+	if code := a.run("--help"); code != 0 {
 		t.Fatalf("--help saiu com %d", code)
 	}
 	for _, cmd := range []string{"nishidb status", "nishidb datasets", "nishidb inspect"} {

@@ -33,34 +33,34 @@ import (
 type oraculo map[string]map[string]any
 
 // aplica reproduz o merge do materializer sobre o evento JSON.
-func (o oraculo) aplica(t *testing.T, evento []byte) {
+func (o oraculo) aplica(t *testing.T, event []byte) {
 	t.Helper()
 	var m map[string]any
-	if err := json.Unmarshal(evento, &m); err != nil {
+	if err := json.Unmarshal(event, &m); err != nil {
 		t.Fatalf("evento inválido: %v", err)
 	}
 	key, _ := m["id"].(string)
 	if key == "" {
 		return // sem key o materializer descarta; o oráculo também
 	}
-	estado, existe := o[key]
-	if !existe {
-		estado = map[string]any{}
-		o[key] = estado
+	state, exists := o[key]
+	if !exists {
+		state = map[string]any{}
+		o[key] = state
 	}
 	// Sequence: evento mais velho é descartado inteiro (strategy greater).
-	if seqNovo, ok := numero(m["_SEQ"]); ok {
-		if seqAtual, ok := numero(estado["_SEQ"]); ok && seqNovo <= seqAtual {
+	if seqNew, ok := numero(m["_SEQ"]); ok {
+		if seqCurrent, ok := numero(state["_SEQ"]); ok && seqNew <= seqCurrent {
 			return
 		}
 	}
-	for campo, valor := range m {
-		if valor == nil {
+	for field, value := range m {
+		if value == nil {
 			// D2: null REMOVE o campo — não grava "nulo".
-			delete(estado, campo)
+			delete(state, field)
 			continue
 		}
-		estado[campo] = desembrulha(valor)
+		state[field] = desembrulha(value)
 	}
 }
 
@@ -91,14 +91,14 @@ func numero(v any) (float64, bool) {
 	return 0, false
 }
 
-// texto devolve o valor de um campo como string, para comparar com o que a
+// text devolve o valor de um campo como string, para comparar com o que a
 // query devolve.
-func (o oraculo) texto(key, campo string) (string, bool) {
-	estado, ok := o[key]
+func (o oraculo) text(key, field string) (string, bool) {
+	state, ok := o[key]
 	if !ok {
 		return "", false
 	}
-	v, ok := estado[campo]
+	v, ok := state[field]
 	if !ok {
 		return "", false
 	}
@@ -108,10 +108,10 @@ func (o oraculo) texto(key, campo string) (string, bool) {
 
 // keysOnde devolve, em ordem, as keys cujo estado corrente satisfaz o
 // predicado — o conjunto que a query TEM de devolver.
-func (o oraculo) keysOnde(pred func(estado map[string]any) bool) []string {
+func (o oraculo) keysOnde(pred func(state map[string]any) bool) []string {
 	var out []string
-	for k, estado := range o {
-		if pred(estado) {
+	for k, state := range o {
+		if pred(state) {
 			out = append(out, k)
 		}
 	}
@@ -130,19 +130,19 @@ type integracao struct {
 
 // Os campos indexados do YAML de produção. Eram duas listas — a do bitmap e a
 // do hash — enquanto as duas grafias existiam no YAML; com um motor só, é uma.
-var camposIndexados = []string{"Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
+var fieldsIndexados = []string{"Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
 	"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
 	"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address"}
 
-// abre (ou reabre) o dataset e recompila o schema contra o dicionário DO
+// open (ou reabre) o dataset e recompila o schema contra o dicionário DO
 // STORE — é ele que atribui os FieldIDs duráveis, e usar outro dicionário faria
 // os IDs do schema não baterem com os do payload gravado.
-func (ig *integracao) abre() {
+func (ig *integracao) open() {
 	ig.t.Helper()
 	st, err := storage.Open(storage.Options{
-		Dir:                    ig.dir,
-		CamposIndexadosPorNome: camposIndexados,
-		EstimatedRows:          10_000,
+		Dir:                 ig.dir,
+		IndexedFieldsByName: fieldsIndexados,
+		EstimatedRows:       10_000,
 	})
 	if err != nil {
 		ig.t.Fatal(err)
@@ -162,14 +162,14 @@ func (ig *integracao) abre() {
 	ig.store, ig.sch, ig.engine = st, sch, eng
 }
 
-func (ig *integracao) fecha() {
+func (ig *integracao) close() {
 	ig.t.Helper()
 	if err := ig.store.Close(); err != nil {
 		ig.t.Fatalf("Close: %v", err)
 	}
 }
 
-func (ig *integracao) consulta(sql string, params ...types.Value) []linha {
+func (ig *integracao) consulta(sql string, params ...types.Value) []row {
 	ig.t.Helper()
 	it, err := ig.engine.Execute(context.Background(), dataset, sql, params)
 	if err != nil {
@@ -177,9 +177,9 @@ func (ig *integracao) consulta(sql string, params ...types.Value) []linha {
 	}
 	defer it.Close()
 
-	var out []linha
+	var out []row
 	for it.Next() {
-		l := make(linha, it.Row().Len())
+		l := make(row, it.Row().Len())
 		for _, c := range it.Row().Cols() {
 			l[c.Name] = render(c)
 		}
@@ -202,7 +202,7 @@ func (ig *integracao) ids(sql string, params ...types.Value) []string {
 
 func TestIntegracaoFimAFim(t *testing.T) {
 	ig := &integracao{t: t, dir: filepath.Join(t.TempDir(), "radius"), oracle: oraculo{}}
-	ig.abre()
+	ig.open()
 
 	// 1. Corpus determinístico com patches, Extended JSON, campos
 	// desconhecidos e nulls — o workload de accounting real.
@@ -244,8 +244,8 @@ func TestIntegracaoFimAFim(t *testing.T) {
 	// 3. FECHAR e REABRIR: o recovery entra no caminho, e os FieldIDs têm de
 	// sobreviver — é o que prova que o dicionário durável e o schema
 	// recompilado continuam falando a mesma língua.
-	ig.fecha()
-	ig.abre()
+	ig.close()
+	ig.open()
 
 	if got, want := ig.store.Stats().RowCount, uint64(len(ig.oracle)); got != want {
 		t.Fatalf("após reabrir: RowCount = %d, want %d entidades do oráculo", got, want)
@@ -263,14 +263,14 @@ func TestIntegracaoFimAFim(t *testing.T) {
 	})
 
 	t.Run("bitmap scan", func(t *testing.T) {
-		want := ig.oracle.keysOnde(func(e map[string]any) bool { return campoIgual(e, "Acct-Status-Type", "Stop") })
+		want := ig.oracle.keysOnde(func(e map[string]any) bool { return fieldIgual(e, "Acct-Status-Type", "Stop") })
 		got := ig.ids(`SELECT id FROM radius_sessions WHERE status = 'Stop'`)
 		comparaConjuntos(t, "status='Stop'", got, want)
 	})
 
 	t.Run("intersecao de bitmaps", func(t *testing.T) {
 		want := ig.oracle.keysOnde(func(e map[string]any) bool {
-			return campoIgual(e, "Acct-Status-Type", "Stop") && campoIgual(e, "Framed-Protocol", "PPPoE")
+			return fieldIgual(e, "Acct-Status-Type", "Stop") && fieldIgual(e, "Framed-Protocol", "PPPoE")
 		})
 		got := ig.ids(`SELECT id FROM radius_sessions WHERE status = 'Stop' AND protocol = 'PPPoE'`)
 		comparaConjuntos(t, "interseção", got, want)
@@ -278,7 +278,7 @@ func TestIntegracaoFimAFim(t *testing.T) {
 
 	t.Run("uniao de bitmaps", func(t *testing.T) {
 		want := ig.oracle.keysOnde(func(e map[string]any) bool {
-			return campoIgual(e, "Acct-Status-Type", "Stop") || campoIgual(e, "Acct-Status-Type", "Start")
+			return fieldIgual(e, "Acct-Status-Type", "Stop") || fieldIgual(e, "Acct-Status-Type", "Start")
 		})
 		got := ig.ids(`SELECT id FROM radius_sessions WHERE status = 'Stop' OR status = 'Start'`)
 		comparaConjuntos(t, "união", got, want)
@@ -299,23 +299,23 @@ func TestIntegracaoFimAFim(t *testing.T) {
 	// revalidação e A MENOS seria defeito do índice — as duas direções seguem
 	// conferidas pelo comparaConjuntos.
 	t.Run("indice escolhe o plano e acerta o conjunto", func(t *testing.T) {
-		alvo := algumValor(t, ig.oracle, "NAS-Identifier")
-		want := ig.oracle.keysOnde(func(e map[string]any) bool { return campoIgual(e, "NAS-Identifier", alvo) })
-		antes := ig.engine.PlanMetrics().IndexScan.Load()
-		fullAntes := ig.engine.PlanMetrics().FullScan.Load()
+		target := algumValue(t, ig.oracle, "NAS-Identifier")
+		want := ig.oracle.keysOnde(func(e map[string]any) bool { return fieldIgual(e, "NAS-Identifier", target) })
+		before := ig.engine.PlanMetrics().IndexScan.Load()
+		fullBefore := ig.engine.PlanMetrics().FullScan.Load()
 
 		got := ig.ids(`SELECT id FROM radius_sessions WHERE nas = ?`,
-			types.Value{Type: types.TypeString, Bytes: []byte(alvo)})
+			types.Value{Type: types.TypeString, Bytes: []byte(target)})
 		comparaConjuntos(t, "index scan", got, want)
 
 		// A métrica do planner é o observável do PLANO escolhido, e conferi-la
 		// é o que separa "o resultado está certo" de "o índice foi usado": um
 		// FullScan devolveria exatamente o mesmo conjunto, varrendo tudo.
-		if depois := ig.engine.PlanMetrics().IndexScan.Load(); depois != antes+1 {
-			t.Errorf("o contador de index scan não contou o plano: %d → %d", antes, depois)
+		if depois := ig.engine.PlanMetrics().IndexScan.Load(); depois != before+1 {
+			t.Errorf("o contador de index scan não contou o plano: %d → %d", before, depois)
 		}
-		if depois := ig.engine.PlanMetrics().FullScan.Load(); depois != fullAntes {
-			t.Errorf("a query degradou para FullScan (%d → %d) com o campo indexado", fullAntes, depois)
+		if depois := ig.engine.PlanMetrics().FullScan.Load(); depois != fullBefore {
+			t.Errorf("a query degradou para FullScan (%d → %d) com o campo indexado", fullBefore, depois)
 		}
 	})
 
@@ -327,21 +327,21 @@ func TestIntegracaoFimAFim(t *testing.T) {
 	// dos dois campos era `index: hash` — e o comportamento que ele prova
 	// (união correta entre dois termos indexados quaisquer) não mudou.
 	t.Run("uniao mistura hash e bitmap", func(t *testing.T) {
-		alvo := algumValor(t, ig.oracle, "NAS-Identifier")
+		target := algumValue(t, ig.oracle, "NAS-Identifier")
 		want := ig.oracle.keysOnde(func(e map[string]any) bool {
-			return campoIgual(e, "NAS-Identifier", alvo) || campoIgual(e, "Acct-Status-Type", "Stop")
+			return fieldIgual(e, "NAS-Identifier", target) || fieldIgual(e, "Acct-Status-Type", "Stop")
 		})
 		got := ig.ids(`SELECT id FROM radius_sessions WHERE nas = ? OR status = 'Stop'`,
-			types.Value{Type: types.TypeString, Bytes: []byte(alvo)})
+			types.Value{Type: types.TypeString, Bytes: []byte(target)})
 		comparaConjuntos(t, "união hash+bitmap", got, want)
 	})
 
 	t.Run("full scan com campo nao indexado", func(t *testing.T) {
 		// Um username que exista de verdade no corpus.
-		alvo := algumValor(t, ig.oracle, "User-Name")
-		want := ig.oracle.keysOnde(func(e map[string]any) bool { return campoIgual(e, "User-Name", alvo) })
+		target := algumValue(t, ig.oracle, "User-Name")
+		want := ig.oracle.keysOnde(func(e map[string]any) bool { return fieldIgual(e, "User-Name", target) })
 		got := ig.ids(`SELECT id FROM radius_sessions WHERE username = ?`,
-			types.Value{Type: types.TypeString, Bytes: []byte(alvo)})
+			types.Value{Type: types.TypeString, Bytes: []byte(target)})
 		comparaConjuntos(t, "full scan", got, want)
 		if n := ig.engine.PlanMetrics().FullScan.Load(); n == 0 {
 			t.Error("query.full_scan não contou o full scan")
@@ -356,8 +356,8 @@ func TestIntegracaoFimAFim(t *testing.T) {
 				len(nulos), len(naoNulos), len(nulos)+len(naoNulos), len(ig.oracle))
 		}
 		want := ig.oracle.keysOnde(func(e map[string]any) bool {
-			_, tem := e["Acct-Terminate-Cause"]
-			return !tem
+			_, has := e["Acct-Terminate-Cause"]
+			return !has
 		})
 		comparaConjuntos(t, "IS NULL", nulos, want)
 	})
@@ -376,7 +376,7 @@ func TestIntegracaoFimAFim(t *testing.T) {
 		if len(explicita) != 1 || len(explicita[0]) != 2 {
 			t.Fatalf("projeção explícita = %v", explicita)
 		}
-		if want, ok := ig.oracle.texto(key, "Acct-Status-Type"); ok && explicita[0]["status"] != want {
+		if want, ok := ig.oracle.text(key, "Acct-Status-Type"); ok && explicita[0]["status"] != want {
 			t.Errorf("status = %q, want %q", explicita[0]["status"], want)
 		}
 		estrela := ig.consulta(`SELECT * FROM radius_sessions WHERE id = ?`, p)
@@ -396,12 +396,12 @@ func TestIntegracaoFimAFim(t *testing.T) {
 
 		var buf bytes.Buffer
 		w := executor.NewStreamWriter(&buf, 512, budget.NewGlobal(0).Query(0)) // pequeno de propósito: força flushes
-		linhas := 0
+		rows := 0
 		for it.Next() {
 			if err := w.WriteRow(it.Row()); err != nil {
 				t.Fatal(err)
 			}
-			linhas++
+			rows++
 		}
 		if err := it.Err(); err != nil {
 			t.Fatal(err)
@@ -409,13 +409,13 @@ func TestIntegracaoFimAFim(t *testing.T) {
 		if err := w.Flush(); err != nil {
 			t.Fatal(err)
 		}
-		if linhas == 0 {
+		if rows == 0 {
 			t.Fatal("nenhuma linha para serializar")
 		}
 
 		saida := buf.Bytes()
-		if n := bytes.Count(saida, []byte{'\n'}); n != linhas {
-			t.Fatalf("%d quebras de linha para %d rows", n, linhas)
+		if n := bytes.Count(saida, []byte{'\n'}); n != rows {
+			t.Fatalf("%d quebras de linha para %d rows", n, rows)
 		}
 		for i, l := range bytes.Split(bytes.TrimSuffix(saida, []byte{'\n'}), []byte{'\n'}) {
 			var m map[string]json.RawMessage
@@ -426,7 +426,7 @@ func TestIntegracaoFimAFim(t *testing.T) {
 				t.Errorf("linha %d sem colunas", i)
 			}
 		}
-		t.Logf("%d linhas NDJSON, %d bytes, todas válidas", linhas, len(saida))
+		t.Logf("%d linhas NDJSON, %d bytes, todas válidas", rows, len(saida))
 	})
 }
 
@@ -439,34 +439,34 @@ func algumaKey(t *testing.T, o oraculo) string {
 	return keys[len(keys)/2]
 }
 
-func algumValor(t *testing.T, o oraculo, campo string) string {
+func algumValue(t *testing.T, o oraculo, field string) string {
 	t.Helper()
-	keys := o.keysOnde(func(e map[string]any) bool { _, tem := e[campo]; return tem })
+	keys := o.keysOnde(func(e map[string]any) bool { _, has := e[field]; return has })
 	if len(keys) == 0 {
-		t.Fatalf("nenhuma entidade tem %q", campo)
+		t.Fatalf("nenhuma entidade tem %q", field)
 	}
-	v, _ := o.texto(keys[len(keys)/2], campo)
+	v, _ := o.text(keys[len(keys)/2], field)
 	return v
 }
 
-func campoIgual(estado map[string]any, campo, valor string) bool {
-	s, ok := desembrulha(estado[campo]).(string)
-	return ok && s == valor
+func fieldIgual(state map[string]any, field, value string) bool {
+	s, ok := desembrulha(state[field]).(string)
+	return ok && s == value
 }
 
-func comparaConjuntos(t *testing.T, nome string, got, want []string) {
+func comparaConjuntos(t *testing.T, name string, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
-		t.Errorf("%s: %d linhas, oráculo diz %d", nome, len(got), len(want))
+		t.Errorf("%s: %d linhas, oráculo diz %d", name, len(got), len(want))
 	}
-	falta := diferenca(want, got)
-	sobra := diferenca(got, want)
-	if len(falta) > 0 {
+	miss := diferenca(want, got)
+	leftover := diferenca(got, want)
+	if len(miss) > 0 {
 		t.Errorf("%s: FALTAM no resultado (falso negativo — o pior modo de falha): %v",
-			nome, primeiros(falta))
+			name, primeiros(miss))
 	}
-	if len(sobra) > 0 {
-		t.Errorf("%s: SOBRAM no resultado: %v", nome, primeiros(sobra))
+	if len(leftover) > 0 {
+		t.Errorf("%s: SOBRAM no resultado: %v", name, primeiros(leftover))
 	}
 }
 

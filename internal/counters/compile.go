@@ -18,14 +18,14 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// Compila resolve as specs dos contadores contra o schema compilado.
+// Compile resolve as specs dos contadores contra o schema compilado.
 //
 // Aqui entram as recusas que a validação do YAML não pode fazer sem o schema:
-// o `where` pelo CompilaCondicao (parse, bind, campo de sistema), e a recusa de
+// o `where` pelo CompileCondition (parse, bind, campo de sistema), e a recusa de
 // `where` ou groupBy sobre coluna com `merge: sum` — com a soma, o estado deixa
 // de ser função pura do último evento e a idempotência do contador evapora
 // (planning §10). É recusa na subida, não documentação.
-func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definition, error) {
+func Compile(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definition, error) {
 	if spec == nil || sc == nil {
 		return nil, fmt.Errorf("contadores: spec ou schema ausentes")
 	}
@@ -53,7 +53,7 @@ func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definitio
 			def.Types = append(def.Types, f.Type)
 		}
 		if cs.Where != "" {
-			prog, slots, err := predicate.CompilaCondicao(rotulo+".where", cs.Where, sc)
+			prog, slots, err := predicate.CompileCondition(rotulo+".where", cs.Where, sc)
 			if err != nil {
 				return nil, err
 			}
@@ -64,7 +64,7 @@ func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definitio
 			}
 			ids := slots.IDs
 			def.NewEvaluator = func() counter.Evaluator {
-				return predicate.NovoAvaliadorDePayload(prog, ids)
+				return predicate.NewAvaliadorOfPayload(prog, ids)
 			}
 		}
 		out = append(out, def)

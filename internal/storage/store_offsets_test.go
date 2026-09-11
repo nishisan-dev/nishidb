@@ -11,7 +11,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 )
 
-func origemDeTeste() checkpoint.Source {
+func sourceOfTest() checkpoint.Source {
 	return checkpoint.Source{
 		Topic:     "radius-accounting",
 		GroupID:   "nishidb-radius",
@@ -19,9 +19,9 @@ func origemDeTeste() checkpoint.Source {
 	}
 }
 
-func offsetsDeTeste(o0, o1 int64) checkpoint.SourceOffsets {
+func offsetsOfTest(o0, o1 int64) checkpoint.SourceOffsets {
 	return checkpoint.SourceOffsets{
-		Source:  origemDeTeste(),
+		Source:  sourceOfTest(),
 		Offsets: map[int32]int64{0: o0, 1: o1},
 	}
 }
@@ -56,7 +56,7 @@ func TestOffsetsSobrevivemAoCheckpointEAoReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	quer := offsetsDeTeste(42, 918273)
+	quer := offsetsOfTest(42, 918273)
 	if err := st.SetSourceOffsets(quer); err != nil {
 		t.Fatal(err)
 	}
@@ -76,12 +76,12 @@ func TestOffsetsSobrevivemAoCheckpointEAoReopen(t *testing.T) {
 	}
 	defer st2.Close()
 
-	tem, ok, err := st2.SourceOffsets()
+	has, ok, err := st2.SourceOffsets()
 	if err != nil || !ok {
 		t.Fatalf("SourceOffsets após reopen = (_, %v, %v)", ok, err)
 	}
-	if !reflect.DeepEqual(tem, quer) {
-		t.Errorf("offsets após reopen:\n tem: %+v\nquer: %+v", tem, quer)
+	if !reflect.DeepEqual(has, quer) {
+		t.Errorf("offsets após reopen:\n tem: %+v\nquer: %+v", has, quer)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestOffsetsSaoGravadosDEPOISDoManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if err := st.SetSourceOffsets(offsetsDeTeste(1, 2)); err != nil {
+	if err := st.SetSourceOffsets(offsetsOfTest(1, 2)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,7 +134,7 @@ func TestCrashEntreManifestEOffsetsDeixaAPosicaoAtras(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	antigo := offsetsDeTeste(10, 10)
+	antigo := offsetsOfTest(10, 10)
 	if err := st.SetSourceOffsets(antigo); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestCrashEntreManifestEOffsetsDeixaAPosicaoAtras(t *testing.T) {
 	// Simula o avanço do consumo seguido de crash: o writer publica a posição
 	// nova, mas o processo morre depois do rename do manifest e antes do
 	// rename dos offsets. O arquivo em disco continua sendo o antigo.
-	if err := st.SetSourceOffsets(offsetsDeTeste(200, 200)); err != nil {
+	if err := st.SetSourceOffsets(offsetsOfTest(200, 200)); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {
@@ -157,11 +157,11 @@ func TestCrashEntreManifestEOffsetsDeixaAPosicaoAtras(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st2.Close()
-	tem, ok, err := st2.SourceOffsets()
+	has, ok, err := st2.SourceOffsets()
 	if err != nil || !ok {
 		t.Fatalf("SourceOffsets = (_, %v, %v)", ok, err)
 	}
-	for p, off := range tem.Offsets {
+	for p, off := range has.Offsets {
 		if off > antigo.Offsets[p] {
 			t.Errorf("partição %d retomou em %d, adiante do último ponto durável %d", p, off, antigo.Offsets[p])
 		}
@@ -177,7 +177,7 @@ func TestOffsetsCorrompidosNaoImpedemAAberturaMasSaoReportados(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetSourceOffsets(offsetsDeTeste(7, 7)); err != nil {
+	if err := st.SetSourceOffsets(offsetsOfTest(7, 7)); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Checkpoint(); err != nil {
@@ -226,17 +226,17 @@ func TestSetSourceOffsetsCopiaOMapa(t *testing.T) {
 	}
 	defer st.Close()
 
-	vivo := offsetsDeTeste(5, 5)
+	vivo := offsetsOfTest(5, 5)
 	if err := st.SetSourceOffsets(vivo); err != nil {
 		t.Fatal(err)
 	}
 	vivo.Offsets[0] = 999 // o consumer segue avançando
 
-	tem, _, err := st.SourceOffsets()
+	has, _, err := st.SourceOffsets()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tem.Offsets[0] != 5 {
-		t.Errorf("offset da partição 0 = %d, quer 5: o Store compartilhou o mapa com o chamador", tem.Offsets[0])
+	if has.Offsets[0] != 5 {
+		t.Errorf("offset da partição 0 = %d, quer 5: o Store compartilhou o mapa com o chamador", has.Offsets[0])
 	}
 }

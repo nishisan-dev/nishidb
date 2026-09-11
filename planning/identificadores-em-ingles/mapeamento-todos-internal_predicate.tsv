@@ -1,0 +1,24 @@
+pacote	especie	endereco	novo	motivo
+internal/predicate	param	CompilaCondicao.condicao	condition	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	func	CompilaCondicao	CompileCondition	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	type	AvaliadorDePayload	AvaliadorOfPayload	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	func	NovoAvaliadorDePayload	NewAvaliadorOfPayload	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	const	dsContadorYAML	dsCounterYAML	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	param	payloadDe.campos	fields	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	func	payloadDe	payloadOf	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	local	payloadDe.par	pair	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	local	payloadDe.nome	name	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	local	TestAvaliadorDePayloadAvaliaOEstadoInteiro.semSlot	withoutSlot	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	func	resumo	summary	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	local	TestProvaPrecedenciaEAgrupamento.nome	name	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	local	TestProvaProgramaIgualArvoreEmArvoresGeradas.monta	build	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	func	avalia	evaluate	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	func	campoInt	fieldInt	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	func	estados	states	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	param	confere.nome	name	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	func	Compila	Compile	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	method	Programa.Avalia	Evaluate	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	field	RegraCompilada.Duracao	Duration	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	func	CompilaRegras	CompileRegras	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	func	compila	compile	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/predicate	local	TestCompilaRegrasRecusaWhenSobreCampoDeSistema.campo	field	tradução abrangente de funções/tipos/métodos via script automatizado

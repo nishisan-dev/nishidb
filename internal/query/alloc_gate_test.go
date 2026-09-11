@@ -18,18 +18,18 @@ import (
 // Se este teste falhar com números próximos mas diferentes, procure alocação
 // por ROW (crescimento de buffer, string(), boxing em interface); se falhar com
 // números muito diferentes, alguém materializou o resultado.
-// tetoPorQuery é o valor MEDIDO do custo fixo de uma query (Open: slots,
+// ceilingByQuery é o valor MEDIDO do custo fixo de uma query (Open: slots,
 // colunas, programa do predicado, fonte). Colado, sem folga, pela convenção do
 // projeto: um teto folgado não acusa nem uma duplicação do custo.
-const tetoPorQuery = 38
+const ceilingByQuery = 38
 
 func TestScanAllocsIndependenteDoNumeroDeRows(t *testing.T) {
 	const sql = `SELECT id, nome, n FROM linhas WHERE nome = 'linha' AND n >= 0`
 
 	varre := func(rows int) func() {
-		h := novoStubHarness(t, rows, 1_000_000, "30s")
+		h := newStubHarness(t, rows, 1_000_000, "30s")
 		return func() {
-			it := h.abre(context.Background(), sql)
+			it := h.open(context.Background(), sql)
 			for it.Next() {
 			}
 			if err := it.Err(); err != nil {
@@ -46,8 +46,8 @@ func TestScanAllocsIndependenteDoNumeroDeRows(t *testing.T) {
 	// fixo por query não cresceu. Sem ele, +71 allocs constantes passariam
 	// despercebidas — a igualdade continuaria valendo, porque elas são
 	// constantes.
-	if mil > tetoPorQuery {
-		t.Errorf("allocs/query = %.0f, teto %d: o custo fixo do Open cresceu", mil, tetoPorQuery)
+	if mil > ceilingByQuery {
+		t.Errorf("allocs/query = %.0f, teto %d: o custo fixo do Open cresceu", mil, ceilingByQuery)
 	}
 	if mil != oitoMil {
 		t.Errorf("allocs/query = %.0f com 1.000 rows e %.0f com 8.000: "+
@@ -70,9 +70,9 @@ func TestLikeAllocsIndependenteDoNumeroDeRows(t *testing.T) {
 		`SELECT id, nome FROM linhas WHERE nome LIKE 'l_n%a'`,
 	} {
 		varre := func(rows int) func() {
-			h := novoStubHarness(t, rows, 1_000_000, "30s")
+			h := newStubHarness(t, rows, 1_000_000, "30s")
 			return func() {
-				it := h.abre(context.Background(), sql)
+				it := h.open(context.Background(), sql)
 				for it.Next() {
 				}
 				if err := it.Err(); err != nil {
@@ -99,9 +99,9 @@ func TestLimitAllocsIndependenteDoNumeroDeRows(t *testing.T) {
 	const sql = `SELECT id FROM linhas LIMIT 10`
 
 	varre := func(rows int) func() {
-		h := novoStubHarness(t, rows, 1_000_000, "30s")
+		h := newStubHarness(t, rows, 1_000_000, "30s")
 		return func() {
-			it := h.abre(context.Background(), sql)
+			it := h.open(context.Background(), sql)
 			for it.Next() {
 			}
 			it.Close()

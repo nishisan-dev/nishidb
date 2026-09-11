@@ -540,8 +540,8 @@ Onde vão os 902 µs, por profile de 45 s em produção:
 
 | Componente | % do CPU |
 |---|---:|
-| `buscaCaminho` — a extração declarada, varrendo o documento uma vez por path | **21,6%** |
-| `ExpiraUmaPassada` — varredura de TTL, em background | **18,8%** |
+| `buscaPath` — a extração declarada, varrendo o documento uma vez por path | **21,6%** |
+| `ExpiraOnePass` — varredura de TTL, em background | **18,8%** |
 | `Store.Put` — tabela base | 16,0% |
 | `Apenda` — tabela histórica | **11,4%** |
 | parse do evento em si | 1,8% |
@@ -616,7 +616,7 @@ Profile de CPU de 45 s (38,65 s de amostras), versionado em
 | └─ `mmap.(*Region).AtomicLoad64` | 77,67% |
 | &nbsp;&nbsp;&nbsp;└─ `sync/atomic.(*Int32).Add` (plano) | **50,66%** |
 | `jsonp.(*Parser).Next` — o parse | 2,46% |
-| `PatchBuffer.buscaCaminho` — a segunda passada | 2,25% |
+| `PatchBuffer.buscaPath` — a segunda passada | 2,25% |
 
 Metade do CPU do processo é **um `atomic.Add` de 32 bits**, e ele vem do
 `RLock`/`RUnlock` que `mmap.Region.AtomicLoad64` toma **a cada leitura de 64
@@ -696,14 +696,14 @@ não acompanhou por um instante.
 
 | Cadeia | % cumulativo |
 |---|---:|
-| `decodificadores.roda` → `Decodifica` → `PatchBuffer.Parse` | **33,2%** |
+| `decodificadores.run` → `Decode` → `PatchBuffer.Parse` | **33,2%** |
 | `Writer.aplica` → `Materializer.Aplica` | **33,8%** |
 
 Meio a meio. É a medida do teto que o godoc de `decodeWorkers` afirmava por
 teoria: tirar 33% do caminho do writer vale ~1,5×, e não mais.
 
 **O diagnóstico original estava certo — para um dataset NOVO.** O mesmo profile
-traz `PatchBuffer.Parse` em 33,20% e `buscaCaminho` em 19,65%, quase idênticos
+traz `PatchBuffer.Parse` em 33,20% e `buscaPath` em 19,65%, quase idênticos
 aos 32,55% e 21,55% de 26/08. E `hash.Index.Set` caiu de 82,66% para 10,94%.
 O gargalo não é "o parse" nem "o índice hash": é o índice hash **conforme o
 dataset cresce**.
@@ -980,7 +980,7 @@ em 1,80 GB/h. A purga disparou sozinha e passou a devolver **um segmento
 
 ```json
 {"event":"retencao.passada","porTempo":0,"porTamanho":1,
- "indicesExpulsos":0,"bytes":268435279,"marcaDagua":118351}
+ "indicesExpulsos":0,"bytes":268435279,"markDagua":118351}
 ```
 
 Em ~1 h e 20 segmentos purgados, o dado ficou **ancorado no teto**, oscilando

@@ -16,12 +16,12 @@ import (
 // evento é estável durante todo o Parse, enquanto o arena pode ser
 // reapontado a cada conversão.
 type paiVisto struct {
-	campo *schema.CompiledField
-	valor []byte
+	field *schema.CompiledField
+	value []byte
 	kind  jsonp.Kind
 }
 
-// extraiDerivadas roda a segunda passada sobre os campos json que declaram
+// extractDerived roda a segunda passada sobre os campos json que declaram
 // `extract`, acrescentando uma entry por coluna derivada encontrada.
 //
 // REGRA DURA: esta passada NUNCA propaga erro de DADO. O pai pode legitimamente
@@ -39,7 +39,7 @@ type paiVisto struct {
 // ausente sem erro, sem log e sem métrica, e a política `stop` do
 // `schema.onMaxCols` era silenciosamente rebaixada a `ignore` neste caminho
 // enquanto o de topo a honrava. Bug e infra nunca entram no balde de dado ruim.
-func (b *PatchBuffer) extraiDerivadas() error {
+func (b *PatchBuffer) extractDerived() error {
 	if len(b.pais) == 0 {
 		return nil
 	}
@@ -49,32 +49,32 @@ func (b *PatchBuffer) extraiDerivadas() error {
 	b.paisFeitos = b.paisFeitos[:0]
 	for i := len(b.pais) - 1; i >= 0; i-- {
 		p := b.pais[i]
-		if b.jaResolvido(p.campo.ID) {
+		if b.jaResolvido(p.field.ID) {
 			continue
 		}
-		b.paisFeitos = append(b.paisFeitos, p.campo.ID)
+		b.paisFeitos = append(b.paisFeitos, p.field.ID)
 		if p.kind != jsonp.KindObject {
-			if err := b.removeAsColunasDoPai(p); err != nil {
+			if err := b.removeAsColumnsOfPai(p); err != nil {
 				return err
 			}
 			continue
 		}
-		if p.campo.DiscoverNested {
+		if p.field.DiscoverNested {
 			if err := b.descobreAninhados(p); err != nil {
 				return err
 			}
 		}
-		for _, d := range p.campo.DerivedColumns {
-			f, ok := b.buscaCaminho(p.valor, d.Path, 0)
+		for _, d := range p.field.DerivedColumns {
+			f, ok := b.buscaPath(p.value, d.Path, 0)
 			if !ok {
 				continue
 			}
 			// A chave APARECEU. Conta aqui, antes da conversão, e não no
 			// sucesso: é o que faz a divergência ser um subconjunto da
 			// ocorrência, e "2.315 de 2.383" sair direto do SQL.
-			b.conta(contaOcorrencia, d, types.TypeNull)
-			alvo := d.EffectiveType()
-			val, arena, err := Convert(f, alvo, d.Layout, b.arena)
+			b.count(countOcorrencia, d, types.TypeNull)
+			target := d.EffectiveType()
+			val, arena, err := Convert(f, target, d.Layout, b.arena)
 			if err != nil || val.Type == types.TypeNull {
 				// REMOÇÃO explícita, e não `continue`: no modo merge, campo
 				// ausente do patch PRESERVA o valor anterior, então sair calado
@@ -89,18 +89,18 @@ func (b *PatchBuffer) extraiDerivadas() error {
 				// O arena pode ter crescido mesmo no erro, então ele é
 				// reatribuído aqui como em qualquer outro caminho.
 				b.arena = arena
-				b.contaSeDivergiu(d, f)
+				b.countSeDivergiu(d, f)
 				continue
 			}
 			b.arena = arena
-			b.contaSeCoergiu(d, f, alvo)
+			b.countSeCoergiu(d, f, target)
 			b.entries = append(b.entries, patchEntry{field: d, val: val})
 		}
 	}
 	return nil
 }
 
-// removeAsColunasDoPai emite remoção explícita para TODA coluna derivada de um
+// removeAsColumnsOfPai emite remoção explícita para TODA coluna derivada de um
 // pai que chegou com forma divergente — array, null ou escalar.
 //
 // Sair calado daqui era a mesma família do defeito que o valor de tipo
@@ -131,8 +131,8 @@ func (b *PatchBuffer) extraiDerivadas() error {
 // afirmação diferente e mais honesta: o que divergiu foi UM documento, e as
 // colunas nem estavam nele — não havia objeto onde procurá-las. Contar 1.650
 // afogaria o sinal por coluna que o contador existe para dar.
-func (b *PatchBuffer) removeAsColunasDoPai(p paiVisto) error {
-	if b.soLeitura {
+func (b *PatchBuffer) removeAsColumnsOfPai(p paiVisto) error {
+	if b.onlyLeitura {
 		// AQUI ESTÁ A ÚNICA LEITURA DO SCHEMA QUE O DECODE NÃO PODE FAZER.
 		//
 		// Todas as outras ou são imutáveis depois do Compile (Derivadas,
@@ -156,16 +156,16 @@ func (b *PatchBuffer) removeAsColunasDoPai(p paiVisto) error {
 		// custo é o mesmo que o bloco abaixo já aceita: este caminho só acontece
 		// quando a origem manda a forma errada, e no piloto isso foi medido em
 		// 0 de 3.000 documentos.
-		return errPrecisaDoWriter
+		return errPrecisaOfWriter
 	}
-	b.filhosBuf = b.compilado.AppendChildren(p.campo, b.filhosBuf[:0])
+	b.filhosBuf = b.compilado.AppendChildren(p.field, b.filhosBuf[:0])
 	if len(b.filhosBuf) == 0 {
 		return nil
 	}
 	for _, f := range b.filhosBuf {
 		b.entries = append(b.entries, patchEntry{field: f, isNull: true})
 	}
-	b.conta(contaDivergencia, p.campo, InferType(jsonp.Field{Kind: p.kind}))
+	b.count(countDivergencia, p.field, InferType(jsonp.Field{Kind: p.kind}))
 	return nil
 }
 
@@ -178,16 +178,16 @@ func (b *PatchBuffer) jaResolvido(id types.FieldID) bool {
 	return false
 }
 
-// buscaCaminho encontra o campo endereçado por path dentro do documento.
+// buscaPath encontra o campo endereçado por path dentro do documento.
 //
 // O caminho é percorrido segmento a segmento, sem alocar: strings.IndexByte
 // sobre a própria string do path, e um parser por NÍVEL, reusado entre
 // eventos. Erro de sintaxe em qualquer nível devolve (_, false), nunca erro —
-// ver a regra dura em extraiDerivadas.
-func (b *PatchBuffer) buscaCaminho(doc []byte, path string, nivel int) (jsonp.Field, bool) {
-	seg, resto := path, ""
+// ver a regra dura em extractDerived.
+func (b *PatchBuffer) buscaPath(doc []byte, path string, nivel int) (jsonp.Field, bool) {
+	sec, resto := path, ""
 	if i := strings.IndexByte(path, '.'); i >= 0 {
-		seg, resto = path[:i], path[i+1:]
+		sec, resto = path[:i], path[i+1:]
 	}
 	for len(b.aninhados) <= nivel {
 		b.aninhados = append(b.aninhados, &jsonp.Parser{})
@@ -202,7 +202,7 @@ func (b *PatchBuffer) buscaCaminho(doc []byte, path string, nivel int) (jsonp.Fi
 			// Documento malformado num nível interno: a coluna fica ausente.
 			break
 		}
-		if string(f.Key) != seg {
+		if string(f.Key) != sec {
 			continue
 		}
 		// Last-wins também DENTRO do documento, pela mesma razão de fora: é a
@@ -226,7 +226,7 @@ func (b *PatchBuffer) buscaCaminho(doc []byte, path string, nivel int) (jsonp.Fi
 	if achado.Kind != jsonp.KindObject {
 		return jsonp.Field{}, false
 	}
-	return b.buscaCaminho(achado.Raw, resto, nivel+1)
+	return b.buscaPath(achado.Raw, resto, nivel+1)
 }
 
 // descobreAninhados promove a coluna toda chave do documento que não esteja
@@ -245,7 +245,7 @@ func (b *PatchBuffer) buscaCaminho(doc []byte, path string, nivel int) (jsonp.Fi
 //
 // Como o resto da segunda passada, não propaga erro de DADO: chave que não vira
 // coluna some da projeção e continua no documento. Infra e política declarada
-// sobem — ver o godoc de extraiDerivadas.
+// sobem — ver o godoc de extractDerived.
 func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 	for len(b.aninhados) <= 0 {
 		b.aninhados = append(b.aninhados, &jsonp.Parser{})
@@ -255,7 +255,7 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 	if b.descobridor == nil {
 		b.descobridor = &jsonp.Parser{}
 	}
-	b.descobridor.Reset(p.valor)
+	b.descobridor.Reset(p.value)
 	for {
 		f, ok, err := b.descobridor.Next()
 		if err != nil || !ok {
@@ -267,13 +267,13 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 			// descobrir isso é o fuzz do jsonp, não um evento em produção.
 			return nil
 		}
-		if b.declarado(p.campo, f.Key) {
+		if b.declarado(p.field, f.Key) {
 			continue // declaração vence: o nome e o tipo já foram escolhidos
 		}
 		// "pai.chave" num buffer reusado — um nome novo por chave por evento
 		// seria alocação no hot path.
-		b.nomeBuf = append(append(append(b.nomeBuf[:0], p.campo.Name...), '.'), f.Key...)
-		cf, err := b.resolveAninhado(p.campo, b.nomeBuf, f.Key)
+		b.nameBuf = append(append(append(b.nameBuf[:0], p.field.Name...), '.'), f.Key...)
+		cf, err := b.resolveAninhado(p.field, b.nameBuf, f.Key)
 		if err != nil {
 			// Teto sob política `stop` (schema.ErrFieldCeiling, que o classify
 			// mapeia para FIELDS_EXHAUSTED e que PARA a ingestão) ou falha do
@@ -289,9 +289,9 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 			// guardando o valor. A perda do teto está no discardedFieldCount.
 			continue
 		}
-		b.conta(contaOcorrencia, cf, types.TypeNull)
-		alvo := cf.EffectiveType()
-		if alvo == types.TypeNull {
+		b.count(countOcorrencia, cf, types.TypeNull)
+		target := cf.EffectiveType()
+		if target == types.TypeNull {
 			t := InferType(f)
 			if t == types.TypeNull {
 				continue // null JSON não fixa tipo
@@ -311,12 +311,12 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 				// não cabe — a coluna é removida e a divergência é contada —, e
 				// NÃO derruba o evento, que é a regra desta passada.
 				b.entries = append(b.entries, patchEntry{field: cf, isNull: true})
-				b.conta(contaDivergencia, cf, t)
+				b.count(countDivergencia, cf, t)
 				continue
 			}
-			alvo = t
+			target = t
 		}
-		val, arena, err := Convert(f, alvo, cf.Layout, b.arena)
+		val, arena, err := Convert(f, target, cf.Layout, b.arena)
 		b.arena = arena
 		if err != nil || val.Type == types.TypeNull {
 			// A chave ESTÁ no documento, com um valor que a coluna não
@@ -332,18 +332,18 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 			// evento chegou primeiro, não por quem escreveu o schema, então
 			// divergir é esperado e precisa ser contável.
 			b.entries = append(b.entries, patchEntry{field: cf, isNull: true})
-			b.contaSeDivergiu(cf, f)
+			b.countSeDivergiu(cf, f)
 			continue
 		}
-		b.contaSeCoergiu(cf, f, alvo)
+		b.countSeCoergiu(cf, f, target)
 		b.entries = append(b.entries, patchEntry{field: cf, val: val})
 	}
 }
 
 // declarado informa se o caminho de um nível já é coberto por um extract.
-func (b *PatchBuffer) declarado(pai *schema.CompiledField, chave []byte) bool {
+func (b *PatchBuffer) declarado(pai *schema.CompiledField, key []byte) bool {
 	for _, d := range pai.DerivedColumns {
-		if d.Path == string(chave) {
+		if d.Path == string(key) {
 			return true
 		}
 	}

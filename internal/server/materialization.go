@@ -9,19 +9,19 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
-// materializacaoStats traduz o snapshot do materializer para o documento da
+// materializationStats traduz o snapshot do materializer para o documento da
 // rota, casando cada contagem de regra com a regra que a produziu.
 //
 // A spec entra junto porque o snapshot só tem contagens por ÍNDICE: publicar o
 // índice sem o `when` mandaria quem lê o painel abrir o YAML para saber o que
 // casou, e a ordem das regras é justamente o que decide qual vence.
-func materializacaoStats(spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) protocol.MaterializationStats {
+func materializationStats(spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) protocol.MaterializationStats {
 	out := protocol.MaterializationStats{
 		FrozenCaptured:  snap.CongeladasCapturadas,
 		FrozenPreserved: snap.CongeladasPreservadas,
 		Summed:          snap.Acumuladas,
 		SummedSaturated: snap.Saturadas,
-		TTLUnmatched:    snap.SemRegra,
+		TTLUnmatched:    snap.WithoutRegra,
 	}
 	regras := spec.Materialization.TTLRules
 	if len(regras) == 0 {
@@ -36,29 +36,29 @@ func materializacaoStats(spec *schema.DatasetSpec, snap materializer.MetricsSnap
 		out.TTLRules = append(out.TTLRules, protocol.TTLRuleStats{
 			Index:            i,
 			When:             r.When,
-			ExpireAfterWrite: duracaoDaRegra(r),
+			ExpireAfterWrite: ruleDuration(r),
 			Matched:          casou,
 		})
 	}
 	return out
 }
 
-// duracaoDaRegra rende a duração como o operador a escreveu: `never` sai como
+// ruleDuration rende a duração como o operador a escreveu: `never` sai como
 // o literal, e não como "0s" — zero e imortal não são a mesma coisa, e um
 // painel mostrando 0s diria o oposto do que a regra faz.
-func duracaoDaRegra(r schema.TTLRule) string {
+func ruleDuration(r schema.TTLRule) string {
 	if r.Duration == 0 {
 		return schema.DurationNever
 	}
 	return r.Duration.String()
 }
 
-// amostrasDeMaterializacao publica as mesmas contagens como séries.
+// samplesOfMaterializacao publica as mesmas contagens como séries.
 //
 // Saem pela MESMA leitura do snapshot que alimenta o /v1/stats, e não de uma
 // cópia própria: dois contadores para o mesmo fato divergem no dia em que um
 // caminho de erro esquece de somar, e em produção alguém lê o errado.
-func amostrasDeMaterializacao(dataset string, spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) []metrics.Sample {
+func samplesOfMaterializacao(dataset string, spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) []metrics.Sample {
 	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: dataset}}
 	out := []metrics.Sample{
 		{
@@ -95,7 +95,7 @@ func amostrasDeMaterializacao(dataset string, spec *schema.DatasetSpec, snap mat
 			Family: metrics.MetTTLUnmatched, Name: metrics.MetTTLUnmatched,
 			Help:   "escritas que não casaram com regra de ttl nenhuma; só acontece em dataset sem regra de fundo",
 			Type:   metrics.TypeCounter,
-			Labels: rotulo, Value: float64(snap.SemRegra),
+			Labels: rotulo, Value: float64(snap.WithoutRegra),
 		},
 	}
 	for i := range spec.Materialization.TTLRules {

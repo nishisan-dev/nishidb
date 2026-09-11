@@ -13,7 +13,7 @@ import (
 
 func TestCheckpointEscreveManifestCoerente(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}})
 	const n = 8
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("cp-%d", i)
@@ -39,12 +39,12 @@ func TestCheckpointEscreveManifestCoerente(t *testing.T) {
 	}
 	// Stats de liveness com os totais que o writer conhece (refinamento
 	// live/garbage é S14; sem compaction, live == total).
-	seg := m.Segments[0]
-	if seg.TotalRecords != n || seg.LiveRecords != n {
-		t.Fatalf("records do segmento: %+v", seg)
+	sec := m.Segments[0]
+	if sec.TotalRecords != n || sec.LiveRecords != n {
+		t.Fatalf("records do segmento: %+v", sec)
 	}
-	if seg.LiveBytes == 0 || seg.LiveBytes > uint64(seg.SizeBytes) {
-		t.Fatalf("liveBytes fora da faixa: %+v", seg)
+	if sec.LiveBytes == 0 || sec.LiveBytes > uint64(sec.SizeBytes) {
+		t.Fatalf("liveBytes fora da faixa: %+v", sec)
 	}
 	if m.DurableOffset <= 64 {
 		t.Fatalf("DurableOffset deveria estar após o header: %d", m.DurableOffset)
@@ -130,12 +130,12 @@ func TestCheckpointComLeitoresConcorrentes(t *testing.T) {
 				return
 			default:
 			}
-			if _, b, ok, err := s.GetByKey(s.presente(), key, buf); err != nil || !ok {
+			_, b, ok, err := s.GetByKey(s.presente(), key, buf)
+			if err != nil || !ok {
 				t.Errorf("leitura durante checkpoint: (%v,%v)", ok, err)
 				return
-			} else {
-				buf = b
 			}
+			buf = b
 		}
 	}()
 	var prev types.Record

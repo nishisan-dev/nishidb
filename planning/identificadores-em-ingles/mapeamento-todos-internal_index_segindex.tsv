@@ -1,0 +1,15 @@
+pacote	especie	endereco	novo	motivo
+internal/index/segindex	param	SealedPath.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	local	SegmentsWithSealed.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	param	Seal.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	param	RemoveWIPs.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	local	newSealed.segID	secID	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	const	offPostIdx	offPostIDx	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	param	WIPPath.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	local	parseWIPName.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	param	ListWIP.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	local	ListWIP.fileSeg	fileSec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	local	SegmentsWithWIP.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	param	OpenWIP.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	field#gopls	TestSegmentosComWIPEnumeraODiretorioInteiro.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/index/segindex	param	Writer.WriteSealed.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado

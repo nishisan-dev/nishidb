@@ -13,45 +13,45 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 )
 
-// leitorDeLinhas entrega UMA linha por Read e, esgotadas as linhas, devolve
-// erroFinal. Um Read por linha é o que torna determinístico o ponto em que o
+// readerOfRows entrega UMA line por Read e, esgotadas as linhas, devolve
+// errFinal. Um Read por line é o que torna determinístico o ponto em que o
 // erro (ou o cancelamento de aoEntregarAUltima) alcança o laço de ingestão:
 // com um strings.Reader o Scanner leria o arquivo inteiro de uma vez e não
 // haveria "meio da entrada".
-type leitorDeLinhas struct {
-	linhas            []string
+type readerOfRows struct {
+	rows              []string
 	i                 int
-	erroFinal         error
+	errFinal          error
 	aoEntregarAUltima func()
 }
 
-func (l *leitorDeLinhas) Read(p []byte) (int, error) {
-	if l.i >= len(l.linhas) {
-		return 0, l.erroFinal
+func (l *readerOfRows) Read(p []byte) (int, error) {
+	if l.i >= len(l.rows) {
+		return 0, l.errFinal
 	}
-	linha := l.linhas[l.i] + "\n"
-	if len(p) < len(linha) {
-		return 0, fmt.Errorf("buffer de %d bytes menor que a linha de %d", len(p), len(linha))
+	row := l.rows[l.i] + "\n"
+	if len(p) < len(row) {
+		return 0, fmt.Errorf("buffer de %d bytes menor que a linha de %d", len(p), len(row))
 	}
-	n := copy(p, linha)
+	n := copy(p, row)
 	l.i++
-	if l.i == len(l.linhas) && l.aoEntregarAUltima != nil {
+	if l.i == len(l.rows) && l.aoEntregarAUltima != nil {
 		l.aoEntregarAUltima()
 	}
 	return n, nil
 }
 
-// rodaIngestCom executa o ingest com um reader e um contexto arbitrários — o
-// helper rodaComEntrada só aceita string, e a entrada interrompida exige um
+// runIngestWith executa o ingest com um reader e um contexto arbitrários — o
+// helper runWithEntry só aceita string, e a entrada interrompida exige um
 // reader que falhe no meio.
-func rodaIngestCom(a *ambiente, ctx context.Context, entrada io.Reader) int {
+func runIngestWith(a *env, ctx context.Context, entry io.Reader) int {
 	a.stdout.Reset()
 	a.stderr.Reset()
 	return cli.Run([]string{"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"},
-		cli.Ambiente{Stdin: entrada, Stdout: &a.stdout, Stderr: &a.stderr, Ctx: ctx})
+		cli.Context{Stdin: entry, Stdout: &a.stdout, Stderr: &a.stderr, Ctx: ctx})
 }
 
-func manifestDo(t *testing.T, a *ambiente) *checkpoint.Manifest {
+func manifestOf(t *testing.T, a *env) *checkpoint.Manifest {
 	t.Helper()
 	m, err := checkpoint.Load(filepath.Join(a.dir, "dados", "radius_sessions", "checkpoint", "manifest.bin"))
 	if err != nil {
@@ -65,20 +65,20 @@ func manifestDo(t *testing.T, a *ambiente) *checkpoint.Manifest {
 // desaparecia do código de saída. É o mesmo defeito que criou o 7: perda com
 // código enganoso é o pior desfecho para quem opera por $?.
 func TestErroDeLeituraNaoMascaraPerdaDeDado(t *testing.T) {
-	a := novoAmbiente(t)
-	leitor := &leitorDeLinhas{
-		linhas: []string{
+	a := newEnv(t)
+	reader := &readerOfRows{
+		rows: []string{
 			`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`,
-			eventoComNomeDeCampoGigante(),
+			eventWithNameOfFieldGigante(),
 		},
-		erroFinal: errors.New("disco caiu no meio da leitura"),
+		errFinal: errors.New("disco caiu no meio da leitura"),
 	}
 
-	code := rodaIngestCom(a, context.Background(), leitor)
+	code := runIngestWith(a, context.Background(), reader)
 
-	if code != cli.ExitPerdaDeDados {
+	if code != cli.ExitDataLoss {
 		t.Errorf("code = %d, want %d (perda de dado, não erro de uso)\n%s",
-			code, cli.ExitPerdaDeDados, a.stderr.String())
+			code, cli.ExitDataLoss, a.stderr.String())
 	}
 	msg := a.stderr.String()
 	// O erro de leitura continua VISÍVEL: trocar o código enganoso por
@@ -98,16 +98,16 @@ func TestErroDeLeituraNaoMascaraPerdaDeDado(t *testing.T) {
 // depois do erro nunca foi ingerido, e a ação de quem recebe o código é a
 // mesma do 7 — investigar e reprocessar —, não conferir a linha de comando.
 func TestEntradaInterrompidaSemFalhaDeEventoAindaEPerda(t *testing.T) {
-	a := novoAmbiente(t)
-	leitor := &leitorDeLinhas{
-		linhas:    []string{`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`},
-		erroFinal: errors.New("stdin fechou"),
+	a := newEnv(t)
+	reader := &readerOfRows{
+		rows:     []string{`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`},
+		errFinal: errors.New("stdin fechou"),
 	}
 
-	code := rodaIngestCom(a, context.Background(), leitor)
+	code := runIngestWith(a, context.Background(), reader)
 
-	if code != cli.ExitPerdaDeDados {
-		t.Errorf("code = %d, want %d\n%s", code, cli.ExitPerdaDeDados, a.stderr.String())
+	if code != cli.ExitDataLoss {
+		t.Errorf("code = %d, want %d\n%s", code, cli.ExitDataLoss, a.stderr.String())
 	}
 	if msg := a.stderr.String(); !strings.Contains(msg, "ENTRADA INTERROMPIDA") ||
 		!strings.Contains(msg, "stdin fechou") {
@@ -117,12 +117,12 @@ func TestEntradaInterrompidaSemFalhaDeEventoAindaEPerda(t *testing.T) {
 	// O que ENTROU antes do erro é durabilizado do mesmo jeito que no caminho
 	// de interrupção por sinal: o manifest conta a row aplicada, em vez de
 	// deixá-la para o tail scan da recovery.
-	if m := manifestDo(t, a); m.RowCount != 1 {
+	if m := manifestOf(t, a); m.RowCount != 1 {
 		t.Errorf("manifest.RowCount = %d, want 1 (o checkpoint final não rodou)", m.RowCount)
 	}
 
 	// E o dataset reabre com a row: o encerramento é limpo.
-	if code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
+	if code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 		"SELECT id FROM radius_sessions"); code != cli.ExitOK {
 		t.Fatalf("query = %d\n%s", code, a.stderr.String())
 	}
@@ -135,17 +135,17 @@ func TestEntradaInterrompidaSemFalhaDeEventoAindaEPerda(t *testing.T) {
 // Scanner. O Scanner não sabe pular a linha — ele para —, então o resto do
 // arquivo não entra: perda, não erro de uso.
 func TestLinhaLongaDemaisInterrompeAEntradaComPerda(t *testing.T) {
-	a := novoAmbiente(t)
-	entrada := io.MultiReader(
+	a := newEnv(t)
+	entry := io.MultiReader(
 		strings.NewReader(`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`+"\n"),
 		// Acima do teto de 8 MiB configurado no sc.Buffer, e sem \n.
 		strings.NewReader(strings.Repeat("x", 9<<20)),
 	)
 
-	code := rodaIngestCom(a, context.Background(), entrada)
+	code := runIngestWith(a, context.Background(), entry)
 
-	if code != cli.ExitPerdaDeDados {
-		t.Errorf("code = %d, want %d\n%s", code, cli.ExitPerdaDeDados, a.stderr.String())
+	if code != cli.ExitDataLoss {
+		t.Errorf("code = %d, want %d\n%s", code, cli.ExitDataLoss, a.stderr.String())
 	}
 	if msg := a.stderr.String(); !strings.Contains(msg, "ENTRADA INTERROMPIDA") ||
 		!strings.Contains(msg, "token too long") {
@@ -157,27 +157,27 @@ func TestLinhaLongaDemaisInterrompeAEntradaComPerda(t *testing.T) {
 // desfecho que o operador PEDIU e já conhece; a perda é notícia que exige
 // investigação — quando os dois acontecem, quem manda no $? é a notícia.
 func TestInterrupcaoNaoApagaAPerdaJaApurada(t *testing.T) {
-	a := novoAmbiente(t)
-	ctx, cancela := context.WithCancel(context.Background())
-	leitor := &leitorDeLinhas{
-		linhas: []string{
+	a := newEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	reader := &readerOfRows{
+		rows: []string{
 			`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`,
-			eventoComNomeDeCampoGigante(),
+			eventWithNameOfFieldGigante(),
 			`{"id":"C","_SEQ":1,"Acct-Status-Type":"Start"}`,
 		},
-		erroFinal: io.EOF,
+		errFinal: io.EOF,
 		// O cancelamento chega junto com a ÚLTIMA linha: as duas primeiras já
 		// passaram pelo materializador, e a falha do evento gigante já está
 		// apurada quando o laço vê o contexto cancelado.
-		aoEntregarAUltima: cancela,
+		aoEntregarAUltima: cancel,
 	}
-	defer cancela()
+	defer cancel()
 
-	code := rodaIngestCom(a, ctx, leitor)
+	code := runIngestWith(a, ctx, reader)
 
-	if code != cli.ExitPerdaDeDados {
+	if code != cli.ExitDataLoss {
 		t.Errorf("code = %d, want %d (a perda vence o sinal)\n%s",
-			code, cli.ExitPerdaDeDados, a.stderr.String())
+			code, cli.ExitDataLoss, a.stderr.String())
 	}
 	msg := a.stderr.String()
 	// A interrupção continua visível no stderr — o código de saída escolhe o

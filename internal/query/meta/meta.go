@@ -35,15 +35,15 @@ import (
 // spec.
 const Namespace = "_meta"
 
-// TabelaFields é a única tabela virtual da v1.
-const TabelaFields = "fields"
+// TableFields é a única tabela virtual da v1.
+const TableFields = "fields"
 
 // Capacidades é o que a tabela precisa saber do storage do dataset alvo.
 // Interface, e não o *storage.Store, porque a tabela não lê dado nenhum: ela
 // só quer saber se um índice EXISTE. nil é aceito e vale "não sei", que
 // reporta indexed=false.
 //
-// UM método, e não mais o par HasBitmap/HasHash somado em fonte.record: existe
+// UM método, e não mais o par HasBitmap/HasHash somado em source.record: existe
 // um motor de índice só (spec §3.1), e a soma de duas respostas idênticas era o
 // resto do dia em que a coluna `indexed` mentia — enquanto só havia HasBitmap,
 // uma coluna com `index: hash` saía com indexed=false, o que era verdade (não
@@ -62,9 +62,9 @@ func Reconhece(st *parser.SelectStmt) bool {
 	return st != nil && strings.HasPrefix(st.Namespace, "_")
 }
 
-// Abre executa o statement contra a tabela virtual que descreve alvo.
-func Abre(ctx context.Context, st *parser.SelectStmt, alvo *schema.Compiled, caps Capacidades, params []types.Value) (executor.RowIterator, error) {
-	if alvo == nil {
+// Open executa o statement contra a tabela virtual que descreve alvo.
+func Open(ctx context.Context, st *parser.SelectStmt, target *schema.Compiled, caps Capacidades, params []types.Value) (executor.RowIterator, error) {
+	if target == nil {
 		return nil, fmt.Errorf("%s: dataset alvo não informado", Namespace)
 	}
 	// As duas recusas abaixo são erro de quem escreveu a query — o FROM aponta
@@ -79,47 +79,47 @@ func Abre(ctx context.Context, st *parser.SelectStmt, alvo *schema.Compiled, cap
 		// é chamador que não passou pelo motor.
 		return nil, binder.ErrorAt(st.DatasetPos, "namespace %q não existe; este ponto serve só %q (os demais namespaces são registrados no motor)", st.Namespace, Namespace)
 	}
-	if st.Dataset != TabelaFields {
-		return nil, binder.ErrorAt(st.DatasetPos, "%s não tem tabela %q; existe %s.%s", Namespace, st.Dataset, Namespace, TabelaFields)
+	if st.Dataset != TableFields {
+		return nil, binder.ErrorAt(st.DatasetPos, "%s não tem tabela %q; existe %s.%s", Namespace, st.Dataset, Namespace, TableFields)
 	}
 
-	sch, err := schemaDaTabela()
+	sch, err := schemaOfTable()
 	if err != nil {
 		return nil, err
 	}
 	bq, err := binder.Bind(st, sch, params)
 	if err != nil {
-		return nil, renomeia(err)
+		return nil, rename(err)
 	}
-	store := novaFonte(alvo, caps, sch)
+	store := newSource(target, caps, sch)
 	plan := planner.New(store, nil).Plan(bq)
 	return executor.Open(ctx, bq, plan, executor.Options{Store: store})
 }
 
-// renomeia troca o nome interno do schema sintético pelo nome que o usuário
+// rename troca o nome interno do schema sintético pelo nome que o usuário
 // escreveu. Sem isto, "coluna desconhecida em fields" mandaria procurar uma
 // tabela chamada `fields`, que não existe em lugar nenhum.
-func renomeia(err error) error {
+func rename(err error) error {
 	var be *binder.Error
 	if !errorsAs(err, &be) {
 		return err
 	}
-	msg := strings.ReplaceAll(be.Error(), `"`+TabelaFields+`"`, `"`+Namespace+`.`+TabelaFields+`"`)
-	if !strings.Contains(msg, Namespace+"."+TabelaFields) {
-		msg += " (em " + Namespace + "." + TabelaFields + ")"
+	msg := strings.ReplaceAll(be.Error(), `"`+TableFields+`"`, `"`+Namespace+`.`+TableFields+`"`)
+	if !strings.Contains(msg, Namespace+"."+TableFields) {
+		msg += " (em " + Namespace + "." + TableFields + ")"
 	}
-	return &erroDaTabela{msg: msg, err: err}
+	return &errOfTable{msg: msg, err: err}
 }
 
-type erroDaTabela struct {
+type errOfTable struct {
 	msg string
 	err error
 }
 
-func (e *erroDaTabela) Error() string { return e.msg }
-func (e *erroDaTabela) Unwrap() error { return e.err }
+func (e *errOfTable) Error() string { return e.msg }
+func (e *errOfTable) Unwrap() error { return e.err }
 
-// especDaTabela é a spec da tabela virtual, escrita no MESMO YAML de um
+// especOfTable é a spec da tabela virtual, escrita no MESMO YAML de um
 // dataset de verdade. Reusar o compilador em vez de montar um *schema.Compiled
 // à mão é o que garante que a tabela obedeça às mesmas regras — tipos, chave,
 // ordem determinística de FieldID — que qualquer outro dataset.
@@ -143,8 +143,8 @@ func (e *erroDaTabela) Unwrap() error { return e.err }
 // /v1/metadata já publica. Dizer só `auto` jogaria fora a informação que se foi
 // buscar ali: campo autodescoberto TEM tipo fixado depois da primeira
 // observação.
-const especDaTabela = `version: 1
-name: ` + TabelaFields + `
+const especOfTable = `version: 1
+name: ` + TableFields + `
 materialization:
   key:
     field: name
@@ -174,28 +174,28 @@ schema:
 `
 
 var (
-	umaVez     sync.Once
+	oneVez     sync.Once
 	schCache   *schema.Compiled
 	schErr     error
-	colunasIDs map[string]types.FieldID
+	columnsIDs map[string]types.FieldID
 )
 
-func schemaDaTabela() (*schema.Compiled, error) {
-	umaVez.Do(func() {
-		s, err := schema.Parse([]byte(especDaTabela), schema.BuiltinDefaults)
+func schemaOfTable() (*schema.Compiled, error) {
+	oneVez.Do(func() {
+		s, err := schema.Parse([]byte(especOfTable), schema.BuiltinDefaults)
 		if err != nil {
 			schErr = fmt.Errorf("%s: spec da tabela virtual inválida: %w", Namespace, err)
 			return
 		}
-		c, err := s.Compile(novoDicionario())
+		c, err := s.Compile(newDicionario())
 		if err != nil {
 			schErr = fmt.Errorf("%s: compilando a tabela virtual: %w", Namespace, err)
 			return
 		}
 		schCache = c
-		colunasIDs = map[string]types.FieldID{}
+		columnsIDs = map[string]types.FieldID{}
 		for _, f := range c.FieldsByID() {
-			colunasIDs[f.Name] = f.ID
+			columnsIDs[f.Name] = f.ID
 		}
 	})
 	return schCache, schErr

@@ -29,7 +29,7 @@ const (
 	// como fim de entrada, que é a falha segura para um parser recursivo.
 	TokenEOF TokenType = iota
 
-	// Keywords (case-insensitive no fonte; Text preserva a grafia original).
+	// TokenSelect (case-insensitive no fonte; Text preserva a grafia original).
 	TokenSelect
 	TokenFrom
 	TokenWhere
@@ -42,14 +42,13 @@ const (
 	TokenTrue
 	TokenFalse
 
-	// Identificadores e literais.
+	// TokenIdent e literais.
 	TokenIdent       // bare: [A-Za-z_][A-Za-z0-9_]*
 	TokenQuotedIdent // "Acct-Status-Type" — Text sem aspas, "" já desescapado
 	TokenString      // 'Stop' — Text sem aspas, '' já desescapado
 	TokenNumber      // Text = lexema verbatim (inclui o '-' e o expoente)
 	TokenPlaceholder // ?
 
-	// Pontuação.
 	TokenComma     // ,
 	TokenStar      // *
 	TokenLParen    // (
@@ -61,7 +60,7 @@ const (
 	// separador.
 	TokenDot // .
 
-	// Comparadores (spec §61).
+	// TokenEq (spec §61).
 	TokenEq  // =
 	TokenNeq // !=
 	TokenGt  // >

@@ -10,7 +10,7 @@ import (
 // REGISTRADA sob o dataset — é por aí que a `_meta.counters` entra sem o
 // pacote meta conhecer o storage.
 func TestMetaRoteiaFieldsParaOMetaEOsDemaisParaORegistro(t *testing.T) {
-	h := novoHarness(t)
+	h := newHarness(t)
 	// Antes de qualquer registro o `_meta` já existe, com a `fields`.
 	rows := h.consultaOK("SELECT name FROM _meta.fields")
 	if len(rows) == 0 {
@@ -22,7 +22,7 @@ func TestMetaRoteiaFieldsParaOMetaEOsDemaisParaORegistro(t *testing.T) {
 	}
 
 	// Registrada, a tabela corre pelo pipeline do registro.
-	tabelaVirtualDeTeste(t, h.engine, "_meta", "counters")
+	tableVirtualOfTest(t, h.engine, "_meta", "counters")
 	rows = h.consultaOK("SELECT groupKey, total FROM _meta.counters ORDER BY total DESC LIMIT 1")
 	if len(rows) != 1 || rows[0]["total"] != "2802" {
 		t.Fatalf("_meta.counters registrada = %v", rows)
