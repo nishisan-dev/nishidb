@@ -792,12 +792,22 @@ func ValidateGroupUniqueness(specs map[string]*schema.DatasetSpec) error {
 // CONJUNTO não cabe em schema.validate, que vê um arquivo por vez.
 //
 // O que ela impede: o schemaName é o container SQL em que as tabelas do
-// dataset aparecem para o cliente. Repetido entre dois datasets, um
-// `FROM telecom.tabela` passaria a ter duas respostas possíveis, e qual delas
-// o cliente recebe dependeria da ordem de carga do diretório — que é
-// alfabética por acaso da implementação, nunca contrato. É a mesma classe de
-// defeito do groupId duplicado: nada quebra, tudo responde, e a resposta é de
-// outro dataset.
+// dataset serão apresentadas ao cliente — é o primeiro nível do catálogo que
+// o /v1/metadata e o driver JDBC vão expor. Repetido entre dois datasets, o
+// catálogo teria dois containers de mesmo nome com tabelas diferentes dentro,
+// e qual deles o cliente enxergaria dependeria da ordem de carga do diretório
+// — que é alfabética por acaso da implementação, nunca contrato. É a mesma
+// classe de defeito do groupId duplicado: nada quebra, tudo responde, e a
+// resposta é de outro dataset.
+//
+// A recusa é PREVENTIVA, e o godoc não pode fingir o contrário: o motor de
+// hoje IGNORA o qualificador de um `FROM telecom.tabela` — o roteamento só
+// desvia namespace com prefixo `_` (query/meta.Reconhece) e o binder confere
+// apenas o dataset da requisição —, de modo que `FROM telecom.x` e
+// `FROM qualquercoisa.x` são ambos aceitos e idênticos a `FROM x`. O schema é
+// o que VAI identificar o dataset quando o catálogo existir; deixar dois
+// datasets nascerem no mesmo schema agora só adiaria a colisão para um dia em
+// que já haveria YAML em produção para corrigir.
 //
 // A tabela IRMÃ do histórico NÃO entra nesta conta, e isso é desenho: ela
 // herda o schemaName do dataset base (schema.DeriveHistory) porque é outra
@@ -820,10 +830,11 @@ func ValidateSchemaUniqueness(specs map[string]*schema.DatasetSpec) error {
 		schemaName := specs[name].SchemaName
 		if other, dup := seen[schemaName]; dup {
 			return fmt.Errorf(
-				"datasets %q e %q declaram o mesmo schemaName %q: o schema é o que identifica o dataset "+
-					"num `FROM %s.tabela`, e repetido a mesma consulta responderia de um ou de outro conforme "+
-					"a ordem de carga; dê a cada dataset um schemaName próprio",
-				other, name, schemaName, schemaName)
+				"datasets %q e %q declaram o mesmo schemaName %q: o schema é o container em que as "+
+					"tabelas de cada dataset serão apresentadas no catálogo, e repetido ele deixa de "+
+					"identificar um dataset — qual dos dois o cliente enxergaria dependeria da ordem de "+
+					"carga do diretório; dê a cada dataset um schemaName próprio",
+				other, name, schemaName)
 		}
 		seen[schemaName] = name
 	}

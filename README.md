@@ -373,11 +373,17 @@ uma delas.
 
 O schema é **único no servidor**: dois datasets do mesmo `datasets.directory`
 não podem declarar o mesmo `schemaName`, e o par repetido derruba a carga
-nomeando o schema e os **dois** datasets. A razão é que o schema é o que
-identifica o dataset num `FROM telecom.tabela` — repetido, a mesma consulta
-responderia de um dataset ou de outro conforme a ordem em que o diretório foi
-lido, que nunca foi contrato. A recusa vale para o servidor e para os comandos
-locais (`ingest`, `query`, `counters`, `offsets`), que leem o mesmo diretório.
+nomeando o schema e os **dois** datasets. A razão é que o schema é o container
+em que as tabelas de cada dataset **serão apresentadas no catálogo** que o
+cliente SQL lê — repetido, o catálogo teria dois containers de mesmo nome com
+tabelas diferentes dentro, e qual deles o cliente enxergaria dependeria da
+ordem em que o diretório foi lido, que nunca foi contrato. A recusa é
+**preventiva**: o SQL de hoje ignora o qualificador (`SELECT * FROM telecom.x`
+e `SELECT * FROM x` são a mesma consulta, e qualquer outro prefixo que não
+comece por `_` também), e é justamente por isso que a unicidade entra antes de
+haver YAML em produção para corrigir. A recusa vale para o servidor e para os
+comandos locais (`ingest`, `query`, `counters`, `offsets`), que leem o mesmo
+diretório.
 A tabela **histórica não entra nessa conta**: ela herda o schema do dataset que
 a declara, porque é outra tabela do mesmo dataset.
 
