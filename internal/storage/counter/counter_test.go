@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
+	"github.com/nishisan-dev/nishidb/internal/keyformat"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -47,6 +48,7 @@ func defByOLT(name string, withWhere bool, ceiling uint32) Definition {
 		Types:     []types.FieldType{types.TypeString},
 		MaxGroups: ceiling,
 	}
+	d.Format = keyformat.Default(keyformat.Columns(d.Names, d.Types))
 	if withWhere {
 		d.Where = "authenticated = true"
 		d.NewEvaluator = func() Evaluator { return &testEvaluator{} }
@@ -55,7 +57,7 @@ func defByOLT(name string, withWhere bool, ceiling uint32) Definition {
 }
 
 func defByPON(name string, ceiling uint32) Definition {
-	return Definition{
+	d := Definition{
 		Name:         name,
 		Columns:      []types.FieldID{cOLT, cSlot, cPort},
 		Names:        []string{"olt", "slot", "port"},
@@ -64,6 +66,8 @@ func defByPON(name string, ceiling uint32) Definition {
 		NewEvaluator: func() Evaluator { return &testEvaluator{} },
 		MaxGroups:    ceiling,
 	}
+	d.Format = keyformat.Default(keyformat.Columns(d.Names, d.Types))
+	return d
 }
 
 // payload monta o estado de uma linha. olt vazio OMITE a coluna.

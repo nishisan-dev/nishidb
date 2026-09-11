@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/keyformat"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
@@ -76,6 +77,7 @@ func callbackOfCounters(cs ...counterOfTest) func(*fielddict.Dict) ([]counter.De
 				def.Where = "authenticated = true"
 				def.NewEvaluator = func() counter.Evaluator { return &avaliadorByID{field: auth} }
 			}
+			def.Format = keyformat.Default(keyformat.Columns(def.Names, def.Types))
 			out = append(out, def)
 		}
 		return out, nil

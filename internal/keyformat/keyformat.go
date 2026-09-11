@@ -60,6 +60,16 @@ type Column struct {
 	Type types.FieldType
 }
 
+// Columns monta as colunas a partir dos nomes e tipos do groupBy, que é como o
+// contador e o schema já os carregam — índice a índice, na ordem declarada.
+func Columns(names []string, kinds []types.FieldType) []Column {
+	out := make([]Column, len(names))
+	for i := range names {
+		out[i] = Column{Name: names[i], Type: kinds[i]}
+	}
+	return out
+}
+
 // Format é um molde compilado. É imutável depois de Parse e pode ser lido por
 // vários leitores ao mesmo tempo.
 type Format struct {
@@ -76,6 +86,10 @@ type item struct {
 	after []byte // literal que segue o marcador
 	esc   byte   // after[0], ou 0 quando não há literal depois
 }
+
+// Len é quantos componentes o molde renderiza — sempre o tamanho do groupBy,
+// porque toda coluna entra exatamente uma vez.
+func (f *Format) Len() int { return len(f.items) }
 
 // String devolve o molde efetivo — o declarado, ou o default já expandido. É o
 // que `_meta.counters` mostra, para o operador nunca ter de adivinhar qual

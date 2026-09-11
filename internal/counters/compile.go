@@ -12,6 +12,7 @@ package counters
 import (
 	"fmt"
 
+	"github.com/nishisan-dev/nishidb/internal/keyformat"
 	"github.com/nishisan-dev/nishidb/internal/predicate"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
@@ -52,6 +53,7 @@ func Compile(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definitio
 			def.Columns = append(def.Columns, f.ID)
 			def.Types = append(def.Types, f.Type)
 		}
+		def.Format = keyformat.Default(keyformat.Columns(def.Names, def.Types))
 		if cs.Where != "" {
 			prog, slots, err := predicate.CompileCondition(rotulo+".where", cs.Where, sc)
 			if err != nil {

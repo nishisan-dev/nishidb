@@ -6,10 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
+	"github.com/nishisan-dev/nishidb/internal/keyformat"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -54,6 +57,11 @@ type Definition struct {
 	// RetainEmptyGroups é quanto tempo um grupo com refs == 0 continua
 	// visível antes de ser aposentado; zero é "nunca".
 	RetainEmptyGroups time.Duration
+	// Format é o molde do groupKey — declarado no YAML ou o default. NÃO
+	// decide o conteúdo do vetor, e por isso fica fora do manifest e da
+	// comparação que adota ou reconstrói: trocar o molde re-renderiza o texto
+	// na abertura e não mexe em um byte de disco.
+	Format *keyformat.Format
 }
 
 var vectorMagic = [4]byte{'N', 'D', 'B', 'K'}
@@ -212,6 +220,10 @@ func validateDefinition(def Definition) error {
 		return fmt.Errorf("contador %s: maxGroups %d fora de [1, %d]", def.Name, def.MaxGroups, conditionBit-1)
 	case def.Where != "" && def.NewEvaluator == nil:
 		return fmt.Errorf("contador %s: where declarado sem avaliador", def.Name)
+	case def.Format == nil:
+		return fmt.Errorf("contador %s: sem molde de groupKey — quem monta a Definition tem de passar o declarado ou o keyformat.Default", def.Name)
+	case def.Format.Len() != len(def.Columns):
+		return fmt.Errorf("contador %s: o molde %q renderiza %d componentes para um groupBy de %d colunas", def.Name, def.Format, def.Format.Len(), len(def.Columns))
 	}
 	return nil
 }
@@ -234,7 +246,7 @@ func (c *Counter) catchUpWithDict() error {
 			continue
 		}
 		var err error
-		c.textBuf, c.textScratch, err = KeyText(c.textBuf[:0], c.dict.keys[id-1], c.textScratch)
+		c.textBuf, c.textScratch, err = KeyText(c.textBuf[:0], c.def.Format, c.dict.keys[id-1], c.textScratch)
 		if err != nil {
 			return fmt.Errorf("contador %s: grupo %d: %w", c.def.Name, id, err)
 		}
@@ -242,6 +254,9 @@ func (c *Counter) catchUpWithDict() error {
 		copy(text, c.textBuf)
 		c.texts[id] = text
 		if c.dict.live[id-1] {
+			if other, colide := c.byText[string(text)]; colide {
+				return c.collisionError(text, other, c.dict.keys[other-1], c.dict.keys[id-1])
+			}
 			c.byText[string(text)] = id
 		}
 	}
@@ -375,6 +390,18 @@ func (c *Counter) Transition(rowID types.RowID, payload []byte, tombstone bool) 
 			return fmt.Errorf("contador %s: derivar a linha %d: %w", c.def.Name, rowID, err)
 		}
 		if hasGroup {
+			// A colisão é conferida ANTES do Intern, e não depois: o Intern
+			// fsynca a chave antes de o id existir em memória, e id de grupo
+			// nunca é reemitido — uma chave colidente que chegasse ao disco
+			// faria TODA abertura seguinte falhar, deixando o dataset
+			// impossível de abrir. Só no caminho de grupo novo: com grupo
+			// conhecido o ByKey devolve na hora e nada é renderizado, que é o
+			// que mantém o caminho quente sem alocação.
+			if _, known := c.dict.ByKey(key); !known {
+				if err := c.checkTextCollision(key); err != nil {
+					return fmt.Errorf("contador %s: linha %d: %w", c.def.Name, rowID, err)
+				}
+			}
 			id, err := c.dict.Intern(key)
 			switch {
 			case errors.Is(err, ErrGroupCeilingReached):
@@ -611,6 +638,60 @@ func (c *Counter) Group(id uint32) (key, text []byte, total, refs int64, live bo
 	}
 	return c.dict.keys[id-1], c.texts[id],
 		atomic.LoadInt64(&c.totals[id]), atomic.LoadInt64(&c.refs[id]), c.dict.live[id-1]
+}
+
+// checkTextCollision recusa uma chave NOVA cujo texto já pertence a um grupo
+// vivo. Roda antes do Intern, no caminho de grupo novo.
+//
+// Com as recusas de keyformat.Parse no lugar, colisão é impossível por
+// construção — esta é a rede embaixo do argumento, e um disparo dela é bug do
+// renderizador, nunca dado ruim. Por isso é erro, e não linha pulada: contar
+// duas entidades no mesmo grupo responderia errado em silêncio.
+func (c *Counter) checkTextCollision(key []byte) error {
+	var err error
+	c.textBuf, c.textScratch, err = KeyText(c.textBuf[:0], c.def.Format, key, c.textScratch)
+	if err != nil {
+		return err
+	}
+	if other, colide := c.ByText(c.textBuf); colide {
+		otherKey, _ := c.dict.Key(other)
+		return c.collisionError(c.textBuf, other, otherKey, key)
+	}
+	return nil
+}
+
+// collisionError nomeia o molde, o texto e as DUAS chaves: sem elas o operador
+// não tem como saber qual valor do inventário quebrou o formato que escolheu.
+// A saída diz o remédio porque ele não é adivinhável — trocar o keyFormat
+// resolve sem reconstruir o contador, já que o texto é derivado da chave.
+// As duas chaves vêm por parâmetro, e não de c.dict.Key: catchUpWithDict chama
+// esta função SEGURANDO o lock do dicionário, e tomá-lo de novo aqui travaria.
+func (c *Counter) collisionError(text []byte, other uint32, otherKey, newKey []byte) error {
+	return fmt.Errorf("groupKey %q sairia igual para o grupo %d (%s) e para a chave nova (%s) sob o molde %q: "+
+		"dois grupos com a mesma key seriam indistinguíveis no ponto de busca. "+
+		"Troque o keyFormat — o texto é derivado da chave, e mudá-lo não reconstrói o contador",
+		text, other, describeKey(otherKey), describeKey(newKey), c.def.Format)
+}
+
+// describeKey abre a chave composta em componentes legíveis. Só roda no
+// caminho de erro, e por isso pode alocar.
+func describeKey(key []byte) string {
+	vals, err := valuekey.DecodeComposite(key, nil)
+	if err != nil {
+		return fmt.Sprintf("chave ilegível (%v)", err)
+	}
+	parts := make([]string, len(vals))
+	for i, v := range vals {
+		switch v.Type {
+		case types.TypeString:
+			parts[i] = fmt.Sprintf("%q", v.Bytes)
+		case types.TypeBool:
+			parts[i] = strconv.FormatBool(v.I64 != 0)
+		default:
+			parts[i] = strconv.FormatInt(v.I64, 10)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // ByText resolve o groupKey de um grupo VIVO para o id. Não aloca.

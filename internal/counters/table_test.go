@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/counters"
+	"github.com/nishisan-dev/nishidb/internal/keyformat"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -40,7 +41,7 @@ func (a *avaliadorOfTest) Evaluate(payload []byte) (bool, error) {
 }
 
 func defByPON(name string) counter.Definition {
-	return counter.Definition{
+	d := counter.Definition{
 		Name:         name,
 		Columns:      []types.FieldID{fOlt, fSlot, fPort},
 		Names:        []string{"olt", "slot", "port"},
@@ -49,10 +50,12 @@ func defByPON(name string) counter.Definition {
 		NewEvaluator: func() counter.Evaluator { return &avaliadorOfTest{} },
 		MaxGroups:    1000,
 	}
+	d.Format = keyformat.Default(keyformat.Columns(d.Names, d.Types))
+	return d
 }
 
 func defByOLT(name string) counter.Definition {
-	return counter.Definition{
+	d := counter.Definition{
 		Name:         name,
 		Columns:      []types.FieldID{fOlt},
 		Names:        []string{"olt"},
@@ -61,6 +64,8 @@ func defByOLT(name string) counter.Definition {
 		NewEvaluator: func() counter.Evaluator { return &avaliadorOfTest{} },
 		MaxGroups:    1000,
 	}
+	d.Format = keyformat.Default(keyformat.Columns(d.Names, d.Types))
+	return d
 }
 
 func payloadOfServico(t *testing.T, olt string, slot, port int64, auth bool) []byte {
