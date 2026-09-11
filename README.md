@@ -371,6 +371,16 @@ e o prefixo `_` é recusado — ele é reservado aos espaços de nome do produto
 declara os **campos**: um é o container das tabelas, o outro é o conteúdo de
 uma delas.
 
+O schema é **único no servidor**: dois datasets do mesmo `datasets.directory`
+não podem declarar o mesmo `schemaName`, e o par repetido derruba a carga
+nomeando o schema e os **dois** datasets. A razão é que o schema é o que
+identifica o dataset num `FROM telecom.tabela` — repetido, a mesma consulta
+responderia de um dataset ou de outro conforme a ordem em que o diretório foi
+lido, que nunca foi contrato. A recusa vale para o servidor e para os comandos
+locais (`ingest`, `query`, `counters`, `offsets`), que leem o mesmo diretório.
+A tabela **histórica não entra nessa conta**: ela herda o schema do dataset que
+a declara, porque é outra tabela do mesmo dataset.
+
 Um campo **não declarado** aqui continua sendo aceito (`unknownFields:
 include`) e vira coluna `auto`, mas só é consultável pelo **nome original** —
 o alias existe apenas para campo declarado.
