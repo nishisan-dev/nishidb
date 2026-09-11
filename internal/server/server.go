@@ -482,6 +482,17 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	}); err != nil {
 		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
+	// `_meta.tables` entra por último só por leitura: ela lista as tabelas
+	// acima, e as linhas são montadas a cada consulta, a partir do catálogo do
+	// momento — registrá-la antes ou depois das outras dá a mesma resposta.
+	//
+	// A irmã recebe a DELA, em openHistory, e é por isso que esta não é como a
+	// `_meta.counters` e a `_meta.kafka`: aquelas descrevem a ingestão, que a
+	// irmã não tem própria; esta descreve o que se pode consultar, e a irmã é
+	// um dataset consultável por direito.
+	if err := s.eng.RegisterMetaTables(spec.Name); err != nil {
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
 
 	// A irmã abre por ÚLTIMO, depois de o base estar inteiro: ela recebe o
 	// dicionário dele e espelha o Compiled dele, e as duas coisas exigem que

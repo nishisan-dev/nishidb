@@ -104,6 +104,14 @@ func (s *Server) openHistory(base *dataset, log *logging.Logger) (*dataset, erro
 	if err := s.eng.Register(specIrma.Name, compilado, st); err != nil {
 		return nil, closingStore(st, fmt.Errorf("tabela histórica de %q: %w", base.nome, err))
 	}
+	// A irmã é um dataset consultável por direito — `FROM <irma>` funciona —,
+	// então ela tem catálogo próprio. É a única tabela de meta que ela recebe:
+	// a `_meta.counters` e a `_meta.kafka` descrevem a ingestão, que é a do
+	// dataset base, e a `_meta.fields` não é registrada (o motor a desvia para
+	// o pacote meta antes de olhar o registro).
+	if err := s.eng.RegisterMetaTables(specIrma.Name); err != nil {
+		return nil, closingStore(st, fmt.Errorf("tabela histórica de %q: %w", base.nome, err))
+	}
 
 	var raw *schema.CompiledField
 	if h.RawPayload {

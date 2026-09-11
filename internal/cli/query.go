@@ -131,6 +131,13 @@ func runQuery(args []string, amb Context) int {
 			return ExitUsageError
 		}
 	}
+	// `_meta.tables` entra por último só por leitura: ela lista as tabelas
+	// acima, e as linhas são montadas a cada consulta, a partir do catálogo do
+	// momento — registrá-la antes ou depois das outras dá a mesma resposta.
+	if err := eng.RegisterMetaTables(*dataset); err != nil {
+		notify(amb, "query: %v\n", err)
+		return ExitUsageError
+	}
 
 	// O caminho local recebe os MESMOS valores. Ignorá-los aqui faria a flag
 	// mentir num dos dois modos, e quebraria a promessa escrita em
