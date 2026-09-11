@@ -359,6 +359,18 @@ schema:
       alias: username
 ```
 
+`schemaName` é o schema SQL em que **todas** as tabelas deste dataset
+aparecem para o cliente — a tabela base, a histórica, as de contador e as de
+meta. É **obrigatório e não tem default**: o dataset sem a chave **não sobe**.
+Adivinhar o nome do dataset entregaria `radius_sessions.radius_sessions`, e
+deixar em branco entregaria a schema nula que o cliente mostra hoje; as duas
+foram consideradas e recusadas, porque a chave existe justamente para desfazer
+a ambiguidade entre datasets de um mesmo servidor. A gramática é `[a-z0-9_]+`,
+e o prefixo `_` é recusado — ele é reservado aos espaços de nome do produto
+(`_meta`, `_counters`). Não confunda com o bloco `schema:` logo abaixo, que
+declara os **campos**: um é o container das tabelas, o outro é o conteúdo de
+uma delas.
+
 Um campo **não declarado** aqui continua sendo aceito (`unknownFields:
 include`) e vira coluna `auto`, mas só é consultável pelo **nome original** —
 o alias existe apenas para campo declarado.
