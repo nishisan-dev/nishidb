@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
@@ -265,13 +266,19 @@ func errorCode(err error) int {
 // Os campos indexados saem do PRÓPRIO YAML, e são passados por NOME: os
 // FieldIDs nascem do dicionário, que vive dentro do Store — exigir IDs aqui
 // obrigaria a abrir sem índice, compilar, fechar e reabrir.
+//
+// O diretório INTEIRO é lido, e não só o `<name>.yaml`: as regras de conjunto
+// (unicidade de groupId e de schemaName) são propriedade do diretório, e um
+// `nishidb ingest` que as ignorasse gravaria dados num dataset que o servidor
+// depois recusa subir. É a mesma porta do servidor, pelo mesmo motivo.
 func openDataset(cfg *nishiconfig.Config, name string) (*storage.Store, *schema.Compiled, *schema.DatasetSpec, error) {
-	spec, err := schema.Load(cfg.DatasetSpecPath(name), cfg.QueryDefaults())
+	specs, err := cfg.LoadDatasetSpecs()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("dataset %q: %w", name, err)
+		return nil, nil, nil, err
 	}
-	if spec.Name != name {
-		return nil, nil, nil, fmt.Errorf("dataset %q: o arquivo declara name: %q", name, spec.Name)
+	spec, declared := specs[name]
+	if !declared {
+		return nil, nil, nil, fmt.Errorf("dataset %q: não há %s em datasets.directory", name, cfg.DatasetSpecPath(name))
 	}
 
 	indexedFieldNames := schema.IndexedFieldNames(spec)
@@ -419,18 +426,29 @@ func openForQuery(cfg *nishiconfig.Config, name string) (*storage.Store, *schema
 // A varredura é sobre o diretório inteiro porque o sufixo é declarável: não dá
 // para inverter o nome sem saber qual sufixo cada dataset escolheu. São alguns
 // arquivos YAML lidos uma vez, no caminho de um comando interativo.
+//
+// Entra pelo LoadDatasetSpecs, que é ESTRITO: um YAML quebrado em qualquer
+// lugar do diretório derruba a busca nomeando o arquivo, em vez de ser pulado.
+// A tolerância de antes era ilusória — o dataset base que a busca encontrasse
+// seria aberto logo em seguida pelo openDataset, que lê o mesmo diretório —, e
+// escondia a metade do diretório que não parseia de quem está justamente
+// tentando entender por que a consulta não responde.
 func datasetDerivedFromSibling(cfg *nishiconfig.Config, name string) (string, error) {
-	names, err := cfg.ListDatasets()
+	specs, err := cfg.LoadDatasetSpecs()
 	if err != nil {
 		return "", err
 	}
+	names := make([]string, 0, len(specs))
+	for candidate := range specs {
+		names = append(names, candidate)
+	}
+	// Alfabética: o laço de um mapa não tem ordem, e dois datasets cujo
+	// `history` derivasse o mesmo nome fariam a resposta variar entre
+	// execuções. (O servidor recusa esse par no validateHistoryNames; aqui o
+	// que se garante é que a resposta é sempre a mesma.)
+	sort.Strings(names)
 	for _, nameCandidate := range names {
-		spec, err := schema.Load(cfg.DatasetSpecPath(nameCandidate), cfg.QueryDefaults())
-		if err != nil {
-			// Um YAML quebrado no diretório não pode impedir a consulta a
-			// OUTRO dataset: ele já será recusado quando alguém o pedir.
-			continue
-		}
+		spec := specs[nameCandidate]
 		if spec.History != nil && spec.History.TableName(nameCandidate) == name {
 			return nameCandidate, nil
 		}

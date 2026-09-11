@@ -241,6 +241,43 @@ schema:
 	}
 }
 
+// TestDoisDatasetsNoMesmoSchemaRecusamASubida é a contraparte do teste acima
+// para a unicidade de schemaName, e existe no pacote do SERVIDOR — e não só no
+// do config, onde a regra mora — para amarrar que a subida entra pela porta que
+// a aplica. Sem ele, tirar o LoadDatasetSpecs do Novo deixaria a regra válida
+// em teste unitário e ausente no binário.
+//
+// Os dois datasets não dividem NADA além do schema: sem `source`, nenhum
+// consumer sobe, então a recusa só pode ser a do schemaName. O assert cobra os
+// três nomes da mensagem pelo mesmo motivo do teste do groupId — erro de subida
+// este servidor tem de sobra, e um `err != nil` não diz de qual se trata.
+func TestDoisDatasetsNoMesmoSchemaRecusamASubida(t *testing.T) {
+	a := newEnv(t)
+	yml := `version: 1
+name: %NOME%
+schemaName: telecom
+materialization:
+  key:
+    field: id
+schema:
+  fields:
+    id:
+      type: string
+`
+	a.writeDataset("servicos", strings.ReplaceAll(yml, "%NOME%", "servicos"))
+	a.writeDataset("eventos", strings.ReplaceAll(yml, "%NOME%", "eventos"))
+
+	_, err := server.Novo(a.load(), server.Options{})
+	if err == nil {
+		t.Fatal("quer recusa: dois datasets no mesmo schema tornariam `FROM telecom.tabela` ambíguo")
+	}
+	for _, quero := range []string{"schemaName", "telecom", "servicos", "eventos"} {
+		if !strings.Contains(err.Error(), quero) {
+			t.Errorf("a recusa não nomeia %q — ela precisa do schema E dos DOIS datasets: %v", quero, err)
+		}
+	}
+}
+
 // §92/§93: o scrape tem de trazer os nomes literais da spec.
 func TestMetricsExpoeOsNomesDoSpec92(t *testing.T) {
 	a := newEnv(t)

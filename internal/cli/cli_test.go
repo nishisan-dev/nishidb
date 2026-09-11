@@ -69,7 +69,14 @@ func newEnv(t *testing.T) *env {
 			t.Fatal(err)
 		}
 	}
-	// O YAML de produção, com o nome do arquivo casando o dataset.
+	// O YAML de produção, com o nome do arquivo casando o dataset. Ele declara
+	// `schemaName: telecom`.
+	//
+	// Todo fixture que ACRESCENTA um dataset a este mesmo diretório — e são
+	// vários, espalhados pelos testes do pacote — declara o PRÓPRIO nome como
+	// schemaName, e não `telecom`: dois datasets no mesmo schema são recusados
+	// na carga (config.ValidateSchemaUniqueness), e um fixture que repetisse o
+	// schema daqui falharia pela colisão em vez de pelo que o teste afirma.
 	yaml, err := os.ReadFile("../../testdata/radius.materialization.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -336,6 +343,47 @@ func TestHelpSaiComSucesso(t *testing.T) {
 	for _, quer := range []string{"EXIT CODES", "0  sucesso", "5  resultado truncado"} {
 		if !strings.Contains(a.stdout.String(), quer) {
 			t.Errorf("--help não documenta %q", quer)
+		}
+	}
+}
+
+// TestQueryLocalRecusaDiretorioComSchemaRepetido é a contraparte, no CLI, do
+// TestDoisDatasetsNoMesmoSchemaRecusamASubida do servidor.
+//
+// Ela existe porque a regra é do DIRETÓRIO, não do processo: o `nishidb query`
+// e o `nishidb ingest` leem os mesmos YAMLs que o servidor, e uma unicidade que
+// valesse só na subida deixaria o comando local gravar num dataset que o
+// servidor depois recusa abrir. O comando pede um dataset que NÃO é o
+// duplicado, e mesmo assim é recusado — o defeito está na configuração, não na
+// tabela que se quis ler.
+func TestQueryLocalRecusaDiretorioComSchemaRepetido(t *testing.T) {
+	a := newEnv(t)
+	// O `radius_sessions` do harness declara `schemaName: telecom`; este
+	// segundo dataset repete o schema de propósito.
+	yml := `version: 1
+name: colidente
+schemaName: telecom
+materialization:
+  key:
+    field: id
+schema:
+  fields:
+    id:
+      type: string
+`
+	if err := os.WriteFile(filepath.Join(a.dir, "datasets", "colidente.yaml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
+		"SELECT * FROM radius_sessions")
+	if code == cli.ExitOK {
+		t.Fatalf("quer recusa: dois datasets no mesmo schema tornariam `FROM telecom.tabela` ambíguo\n%s",
+			a.stdout.String())
+	}
+	for _, quero := range []string{"schemaName", "telecom", "radius_sessions", "colidente"} {
+		if !strings.Contains(a.stderr.String(), quero) {
+			t.Errorf("a recusa não nomeia %q — ela precisa do schema E dos DOIS datasets: %s", quero, a.stderr.String())
 		}
 	}
 }

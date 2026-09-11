@@ -26,7 +26,7 @@ import (
 const specWithoutSecaoQuery = `
 version: 1
 name: sem_query
-schemaName: telecom
+schemaName: sem_query
 materialization:
   key:
     source: payload

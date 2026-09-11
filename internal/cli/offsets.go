@@ -69,11 +69,21 @@ func runOffsets(args []string, amb Context) int {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
 		return ExitUsageError
 	}
-	spec, err := schema.Load(cfg.DatasetSpecPath(*dataset), cfg.QueryDefaults())
+	// Pela MESMA porta do servidor e do openDataset: as regras de conjunto do
+	// diretório (unicidade de groupId e de schemaName) valem aqui também —
+	// reposicionar o offset de um dataset que o servidor não consegue subir
+	// só adia a descoberta do defeito.
+	specs, err := cfg.LoadDatasetSpecs()
+	if err == nil {
+		if _, declared := specs[*dataset]; !declared {
+			err = fmt.Errorf("não há %s em datasets.directory", cfg.DatasetSpecPath(*dataset))
+		}
+	}
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
 		return ExitUsageError
 	}
+	spec := specs[*dataset]
 	if spec.Source.Kafka == nil {
 		fmt.Fprintf(amb.Stderr, "offsets: o dataset %q não declara source.kafka\n", *dataset)
 		return ExitUsageError
