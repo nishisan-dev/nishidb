@@ -21,9 +21,16 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
+// O schemaName é DERIVADO do nome do dataset, e não um literal fixo. A razão
+// é de prova, não de estética: quase todo teste deste pacote que sobe DOIS
+// datasets afirma a recusa de OUTRA coisa (o groupId duplicado, o nome da
+// tabela irmã). Com os dois no mesmo schema, a unicidade de schema — que ainda
+// vai entrar — passaria a recusar antes, e esses testes ficariam verdes sem
+// exercitar nada do que dizem exercitar. Derivar do nome torna a colisão de
+// schema impossível de acontecer por descuido.
 const specWithoutKafka = `version: 1
 name: %s
-schemaName: telecom
+schemaName: schema_%s
 materialization:
   key:
     field: id
@@ -38,11 +45,11 @@ schema:
 // §51 é que as consultas subam assim mesmo.
 const specWithKafka = `version: 1
 name: %s
-schemaName: telecom
+schemaName: schema_%s
 source:
   type: kafka
   kafka:
-    enabled: %s
+    enabled: %ENABLED%
     bootstrapServers:
       - 127.0.0.1:1
     topic: t-%s
@@ -122,6 +129,11 @@ func (a *env) load() *config.Config {
 // O contrato do §51, que é a razão de o servidor existir: um dataset cuja
 // ingestão NÃO pode subir continua consultável, e o problema aparece no health
 // em vez de derrubar o processo.
+//
+// Os dois datasets ficam em schemas diferentes (os dois templates derivam o
+// schemaName do nome): o que este teste precisa que a subida ACEITE é o
+// servidor com um dataset quebrado e um são, e uma recusa por schema repetido
+// o transformaria num teste de subida recusada.
 func TestIngestaoQueNaoSobeNaoDerrubaAsConsultas(t *testing.T) {
 	a := newEnv(t)
 	a.writeDataset("bom", strings.ReplaceAll(specWithoutKafka, "%s", "bom"))
@@ -185,12 +197,20 @@ func TestEnabledFalseNaoSobeConsumer(t *testing.T) {
 
 // D4 — a colisão de groupId é validação de CONJUNTO e tem de matar a subida,
 // não virar estado parcial silencioso.
+//
+// Os dois datasets dividem o tópico e o group, e NÃO dividem mais nada: cada
+// um tem o seu schemaName. Isso é o que mantém o teste honesto quando a
+// unicidade de schema entrar — com os dois em `telecom`, a recusa passaria a
+// vir do schema e este teste ficaria verde sem nunca mais tocar no caminho do
+// groupId. Pelo mesmo motivo o assert cobra a mensagem do ValidateGroupUniqueness
+// (a chave `consumer.groupId` e o valor duplicado), e não um `err != nil`
+// qualquer: erro de subida este servidor tem de sobra.
 func TestGroupIdDuplicadoRecusaASubida(t *testing.T) {
 	a := newEnv(t)
 	// Os dois com o mesmo tópico e o mesmo group.
 	yml := `version: 1
 name: %NOME%
-schemaName: telecom
+schemaName: schema_%NOME%
 source:
   type: kafka
   kafka:
@@ -214,8 +234,10 @@ schema:
 	if err == nil {
 		t.Fatal("quer recusa: dois datasets no mesmo group dividiriam as partições")
 	}
-	if !strings.Contains(err.Error(), "mesmo-group") {
-		t.Errorf("a mensagem não nomeia o group: %v", err)
+	for _, quero := range []string{"consumer.groupId", "mesmo-group", "mesmo-topico"} {
+		if !strings.Contains(err.Error(), quero) {
+			t.Errorf("a recusa não fala de %q — não é a do groupId duplicado: %v", quero, err)
+		}
 	}
 }
 
@@ -275,9 +297,16 @@ func TestHealthTemAChaveKafka(t *testing.T) {
 	}
 }
 
+// preenche instancia o template do dataset: `%ENABLED%` recebe a flag da
+// ingestão e todo `%s` recebe o nome do dataset — nome, schemaName, tópico e
+// groupId saem todos dele.
+//
+// O `%ENABLED%` tem marca própria porque a versão anterior preenchia por
+// POSIÇÃO (o segundo `%s` era a flag), e posição amarra o template à ordem das
+// linhas no YAML: acrescentar uma chave acima do bloco `source` trocava
+// silenciosamente a flag pelo valor da chave nova.
 func preenche(tmpl, name, enabled string) string {
-	s := strings.Replace(tmpl, "%s", name, 1)
-	s = strings.Replace(s, "%s", enabled, 1)
+	s := strings.ReplaceAll(tmpl, "%ENABLED%", enabled)
 	return strings.ReplaceAll(s, "%s", name)
 }
 
