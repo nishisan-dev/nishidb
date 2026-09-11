@@ -927,3 +927,4 @@ internal/storage	func	mesmaDefinicao	sameDefinition	renomeado ao tocar o arquivo
 internal/storage	func	descreveCounters	describeCounters	renomeado ao tocar o arquivo no ciclo do formato declarável do groupKey (11/09/2026)
 internal/server	var	nomes	names	renomeado ao tocar o Novo no ciclo do schema declarado (11/09/2026)
 internal/query	var	record.virtuais	virtualTables	renomeado ao tocar o record no ciclo do schema declarado (11/09/2026)
+internal/query	var	todas	byIsNull	renomeado no fechamento de achados da _meta.tables (11/09/2026)

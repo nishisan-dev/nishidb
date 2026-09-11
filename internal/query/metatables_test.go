@@ -146,9 +146,9 @@ func TestMetaTablesPublicaDescriptionNulaEnquantoNadaADeclara(t *testing.T) {
 			t.Fatalf("tabela %q com descrição %q: nada declara descrição de tabela hoje", l["id"], l["description"])
 		}
 	}
-	todas := h.consultaOK("SELECT id FROM _meta.tables WHERE description IS NULL")
-	if len(todas) != len(rows) || len(rows) == 0 {
-		t.Fatalf("IS NULL tem de achar as %d linhas, achou %d", len(rows), len(todas))
+	byIsNull := h.consultaOK("SELECT id FROM _meta.tables WHERE description IS NULL")
+	if len(byIsNull) != len(rows) || len(rows) == 0 {
+		t.Fatalf("IS NULL tem de achar as %d linhas, achou %d", len(rows), len(byIsNull))
 	}
 }
 
