@@ -8,6 +8,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/nishisan-dev/nishidb/internal/keyformat"
+
 	"github.com/nishisan-dev/nishidb/internal/units"
 )
 
@@ -18,8 +20,12 @@ import (
 //	  - name: autenticados_por_olt
 //	    groupBy: [olt]
 //	    where: authenticated = true      # opcional; ausente conta toda linha
+//	    keyFormat: "{olt}.{slot:02}"     # opcional; molde do groupKey
 //	    maxGroups: 65536                 # opcional
 //	    retainEmptyGroups: 7d            # opcional; `never` mantém para sempre
+//
+// O `keyFormat` precisa de aspas: `{` abre mapa no YAML. Ausente, o groupKey
+// sai como sempre saiu — as colunas na ordem do groupBy separadas por `|`.
 //
 // A leitura sai por SQL em `_counters.<name>`, uma tabela por contador com a
 // coluna `groupKey`, as colunas do groupBy abertas e tipadas, e `total`.
@@ -59,6 +65,11 @@ type CounterSpec struct {
 	MaxGroups uint32
 	// RetainEmptyGroups é o prazo de visibilidade do grupo vazio; zero é never.
 	RetainEmptyGroups time.Duration
+	// KeyFormat é o molde do groupKey como declarado; "" é o default. Fica
+	// como TEXTO e é compilado de novo em internal/counters, contra o schema
+	// compilado — aqui a validação existe para recusar na subida, e guardar o
+	// molde já compilado faria a spec carregar estado que ela não usa.
+	KeyFormat string
 }
 
 // groupingTypes são os tipos que o groupBy aceita. Três, e não a lista de
@@ -73,6 +84,7 @@ type rawCounter struct {
 	Where             *string
 	MaxGroups         *int64
 	RetainEmptyGroups string
+	KeyFormat         *string
 	hasGroupBy        bool
 }
 
@@ -93,7 +105,7 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 	out := make([]rawCounter, 0, len(n.Content))
 	for i, item := range n.Content {
 		keyPath := fmt.Sprintf("counters[%d]", i)
-		keys, err := block(item, keyPath, "name", "groupBy", "where", "maxGroups", "retainEmptyGroups")
+		keys, err := block(item, keyPath, "name", "groupBy", "where", "keyFormat", "maxGroups", "retainEmptyGroups")
 		if err != nil {
 			return nil, err
 		}
@@ -110,6 +122,10 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 				var w string
 				err = decodeInto(value, keyPath+".where", &w)
 				r.Where = &w
+			case "keyFormat":
+				var kf string
+				err = decodeInto(value, keyPath+".keyFormat", &kf)
+				r.KeyFormat = &kf
 			case "maxGroups":
 				var m int64
 				err = decodeInto(value, keyPath+".maxGroups", &m)
@@ -174,6 +190,12 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq s
 				return nil, specErrf("%s.where vazio — omita a chave para contar toda linha com grupo", keyPath)
 			}
 			c.Where = w
+		}
+		if r.KeyFormat != nil {
+			if err := validateKeyFormat(keyPath, *r.KeyFormat, r.GroupBy, columns); err != nil {
+				return nil, err
+			}
+			c.KeyFormat = *r.KeyFormat
 		}
 		if r.MaxGroups != nil {
 			if *r.MaxGroups < 1 || *r.MaxGroups > MaxGroupsPhysicalCeiling {
@@ -241,6 +263,28 @@ func validateGroupingColumn(keyPath, col string, columns map[string]string, key,
 	}
 	if !groupingTypes[typ] {
 		return specErrf("%s.groupBy: coluna %q tem tipo %q; groupBy aceita string, int64 e boolean", keyPath, col, typ)
+	}
+	return nil
+}
+
+// validateKeyFormat recusa o molde na subida, pelo MESMO parser que renderiza
+// (internal/keyformat). Não é regra duplicada: é a única forma de a recusa e a
+// renderização não divergirem, e é aqui que o erro sai com o caminho do YAML
+// que o operador precisa para achar a linha.
+func validateKeyFormat(keyPath, mold string, groupBy []string, columns map[string]string) error {
+	cols := make([]keyformat.Column, len(groupBy))
+	for i, name := range groupBy {
+		t, ok := fieldTypeNames[columns[name]]
+		if !ok {
+			// validateGroupingColumn já recusou o que não é agrupável; chegar
+			// aqui seria a lista de tipos aceitos ter crescido sem a
+			// renderização correspondente.
+			return specErrf("%s.keyFormat: coluna %q tem tipo %q, sem renderização declarada", keyPath, name, columns[name])
+		}
+		cols[i] = keyformat.Column{Name: name, Type: t}
+	}
+	if _, err := keyformat.Parse(mold, cols); err != nil {
+		return specErrf("%s.%s", keyPath, err)
 	}
 	return nil
 }

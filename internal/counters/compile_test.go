@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/counters"
+	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
@@ -229,5 +231,44 @@ func TestCompiladorSemCountersDevolveNada(t *testing.T) {
 	}
 	if len(defs) != 0 || comp.Compiled() == nil {
 		t.Fatalf("sem counters: nenhuma definição, mas o schema compilado: %d, %v", len(defs), comp.Compiled())
+	}
+}
+
+// TestCompilaLevaOMoldeDeclaradoAteADefinicao fecha o caminho da chave do YAML
+// até o texto que sai na tabela: sem ele, `keyFormat` poderia ser aceito pela
+// spec e ignorado pelo compilador, e o groupKey continuaria com o separador
+// velho sem ninguém reclamar.
+func TestCompilaLevaOMoldeDeclaradoAteADefinicao(t *testing.T) {
+	spec, sc := load(t, yamlBase+`
+counters:
+  - name: default
+    groupBy: [olt, slot]
+  - name: declarado
+    groupBy: [olt, slot]
+    keyFormat: "{olt}.{slot:02}"
+`)
+	defs, err := counters.Compile(spec, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := valuekey.AppendComposite(nil, []types.Value{
+		{Type: types.TypeString, Bytes: []byte("BR_SPOAM_OLT")},
+		{Type: types.TypeInt64, I64: 8},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quero := map[string]string{"default": "BR_SPOAM_OLT|8", "declarado": "BR_SPOAM_OLT.08"}
+	for _, def := range defs {
+		texto, _, err := counter.KeyText(nil, def.Format, key, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(texto); got != quero[def.Name] {
+			t.Errorf("groupKey do contador %q = %q, quero %q", def.Name, got, quero[def.Name])
+		}
+		if def.Format.Len() != len(def.Columns) {
+			t.Errorf("contador %q: molde de %d componentes para %d colunas", def.Name, def.Format.Len(), len(def.Columns))
+		}
 	}
 }

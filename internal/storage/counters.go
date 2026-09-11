@@ -162,6 +162,11 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 
 // mesmaDefinicao compara os parâmetros que decidem o conteúdo: nome, colunas
 // (na ordem) e where.
+//
+// O molde do groupKey NÃO entra, pelo mesmo critério do maxGroups: ele decide
+// como o grupo é ESCRITO, não o que foi contado. O texto é derivado da chave em
+// toda abertura, então trocá-lo re-renderiza e não custa uma varredura. Quem
+// avisa que ele mudou é o log de subida, que sai com o molde efetivo.
 func mesmaDefinicao(info checkpoint.CounterInfo, def counter.Definition) bool {
 	return info.Name == def.Name && info.Where == def.Where && slices.Equal(info.Columns, columnsOf(def))
 }
@@ -629,7 +634,7 @@ func descreveCounters(cs []*counter.Counter) string {
 			sb.WriteString("; ")
 		}
 		def := c.Def()
-		fmt.Fprintf(&sb, "%s groupBy=%v", def.Name, def.Names)
+		fmt.Fprintf(&sb, "%s groupBy=%v keyFormat=%q", def.Name, def.Names, def.Format)
 		if def.Where != "" {
 			fmt.Fprintf(&sb, " where=%q", def.Where)
 		}

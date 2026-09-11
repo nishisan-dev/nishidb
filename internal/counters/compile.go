@@ -31,6 +31,7 @@ func Compile(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definitio
 		return nil, fmt.Errorf("contadores: spec ou schema ausentes")
 	}
 	out := make([]counter.Definition, 0, len(spec.Counters))
+	var err error
 	for i, cs := range spec.Counters {
 		rotulo := fmt.Sprintf("counters[%d]", i)
 		def := counter.Definition{
@@ -53,7 +54,14 @@ func Compile(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definitio
 			def.Columns = append(def.Columns, f.ID)
 			def.Types = append(def.Types, f.Type)
 		}
-		def.Format = keyformat.Default(keyformat.Columns(def.Names, def.Types))
+		cols := keyformat.Columns(def.Names, def.Types)
+		if cs.KeyFormat == "" {
+			def.Format = keyformat.Default(cols)
+		} else if def.Format, err = keyformat.Parse(cs.KeyFormat, cols); err != nil {
+			// A spec já recusou na subida, pelo MESMO parser. Chegar aqui é
+			// spec e schema compilado discordarem sobre os tipos das colunas.
+			return nil, fmt.Errorf("%s.keyFormat: %w", rotulo, err)
+		}
 		if cs.Where != "" {
 			prog, slots, err := predicate.CompileCondition(rotulo+".where", cs.Where, sc)
 			if err != nil {
