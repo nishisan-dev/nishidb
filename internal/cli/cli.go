@@ -429,10 +429,17 @@ func openForQuery(cfg *nishiconfig.Config, name string) (*storage.Store, *schema
 //
 // Entra pelo LoadDatasetSpecs, que é ESTRITO: um YAML quebrado em qualquer
 // lugar do diretório derruba a busca nomeando o arquivo, em vez de ser pulado.
-// A tolerância de antes era ilusória — o dataset base que a busca encontrasse
-// seria aberto logo em seguida pelo openDataset, que lê o mesmo diretório —, e
-// escondia a metade do diretório que não parseia de quem está justamente
-// tentando entender por que a consulta não responde.
+//
+// É mudança de comportamento deliberada, e o argumento NÃO é que a tolerância
+// de antes fosse inócua — ela valia de verdade: o openDataset de então
+// carregava UM arquivo, e um `outro.yaml` quebrado no diretório não impedia
+// `query --dataset eventos_history`. O que mudou foi o openDataset, que passou
+// a ler o diretório inteiro para aplicar as regras de conjunto (unicidade de
+// groupId e de schemaName). Manter a tolerância só aqui daria uma busca que
+// acha um dataset base que a abertura seguinte recusa: o comando falharia do
+// mesmo jeito, uma etapa depois, e por um erro que não nomearia o arquivo
+// culpado. Recusar já na busca é a doutrina do projeto — configuração quebrada
+// é recusada nomeando o defeito, nunca contornada em silêncio.
 func datasetDerivedFromSibling(cfg *nishiconfig.Config, name string) (string, error) {
 	specs, err := cfg.LoadDatasetSpecs()
 	if err != nil {
