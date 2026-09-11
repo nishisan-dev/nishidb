@@ -12,9 +12,13 @@ import (
 )
 
 // TableMetaTables é a tabela `_meta.tables`: uma linha por tabela consultável
-// do dataset. É a resposta por SQL para "que tabelas existem" — antes dela a
-// lista só saía por engano, na mensagem de recusa de um `FROM` para tabela
-// desconhecida, e pelo `/v1/metadata`, que nenhum cliente SQL fala.
+// do dataset. É a resposta por SQL para "que tabelas existem" — e antes dela a
+// lista COMPLETA não saía de lugar nenhum. O `/v1/metadata` devolve os
+// datasets registrados no servidor, o base e a irmã histórica, com as colunas
+// de cada um (internal/server/documents.go): é a lista das tabelas BASE, sem
+// contador e sem tabela de meta, e nenhum cliente SQL a fala. O que faltava
+// nela só aparecia por engano, na mensagem de recusa de um `FROM` para tabela
+// desconhecida.
 //
 // Ela mora no pacote query, e não em `internal/query/meta` ao lado da
 // `fields`, porque o conteúdo dela é o Catalog — e `internal/query/meta` não
@@ -29,11 +33,13 @@ const TableMetaTables = "tables"
 // que ela obedeça às mesmas regras — tipos, chave, ordem determinística de
 // FieldID — que qualquer outro dataset.
 //
-// A key é `id`, e NÃO `name`: o nome não é único dentro do dataset. A única
-// colisão que a compilação da spec recusa é entre o nome de um contador e o do
-// próprio dataset (internal/schema/counter.go), então um contador chamado
-// `tables` é aceito e apareceria aqui ao lado desta própria tabela, com o mesmo
-// `name` e schemas diferentes. Duas linhas de mesma key fariam o point lookup
+// A key é `id`, e NÃO `name`: o nome não é único dentro do dataset. A
+// compilação da spec recusa TRÊS colisões no nome de um contador — o prefixo
+// `_`, que é a reserva do produto; o nome do próprio dataset; e o nome repetido
+// entre dois contadores (internal/schema/counter.go) —, e nenhuma das três
+// alcança o nome de uma tabela de meta: um contador chamado `tables` é aceito e
+// apareceria aqui ao lado desta própria tabela, com o mesmo `name` e schemas
+// diferentes. Duas linhas de mesma key fariam o point lookup
 // devolver uma e a varredura devolver duas — o motor discordando de si mesmo
 // conforme o plano escolhido. `id` é o endereço que o FROM aceita
 // (`_counters.por_olt`, `_meta.tables`, ou só o nome na tabela base), e ele é
@@ -130,9 +136,24 @@ func (e *Engine) MetaTables(dataset string) (*schema.Compiled, Store, error) {
 // RegisterMetaTables declara `_meta.tables` sob o dataset já registrado no
 // motor.
 //
-// Chamado por todo caminho que registra um dataset BASE — servidor e CLI —,
-// ao lado de counters.Register e metakafka.Register, para que a tabela responda
-// da mesma forma nos dois.
+// Chamado por todo caminho que registra um dataset CONSULTÁVEL, e não só os
+// que registram um dataset base: o servidor (internal/server/server.go), o
+// `nishidb query --config` (internal/cli/query.go) e a tabela histórica irmã
+// (internal/server/history.go) — que não é base, mas é consultável por direito
+// (`FROM <irma>` funciona) e por isso publica o próprio catálogo.
+//
+// A TABELA responde igual em todo caminho; o CONTEÚDO dela é o que cada um
+// registrou, e nisso os caminhos não são simétricos. No dataset BASE a lista
+// coincide entre servidor e CLI: os dois chamam counters.Register e
+// metakafka.Register ao lado desta função. Na IRMÃ não coincide: o CLI chama
+// counters.Register sem condição (internal/cli/query.go), e a `_meta.counters`
+// é registrada sempre, com contador ou sem (internal/counters/table.go), então
+// ela aparece na listagem da irmã pelo CLI e não aparece pela do servidor, que
+// na irmã só chama esta função. A assimetria é da FIAÇÃO e é anterior a esta
+// tabela — que está contando a verdade sobre cada processo; está registrada
+// como débito 117, com os dois lados travados por teste
+// (TestMetaTablesRespondeNaTabelaIrmaAbertaPeloServidor e
+// TestQueryLocalListaMetaCountersNaIrmaQueOServidorNaoLista).
 //
 // A ordem em relação a esses dois não importa, e é de propósito: as linhas são
 // montadas a cada consulta, a partir do Catalog do momento. É isso que faz a

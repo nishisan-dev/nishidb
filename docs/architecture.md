@@ -825,10 +825,12 @@ de T0, e a varredura não vê tabela aparecer no meio.
 
 **A key é o endereço, não o nome.** `id` é o que o `FROM` aceita
 (`_counters.por_olt`, `_meta.tables`, ou só o nome na base). O nome não serve
-de key porque não é único: a compilação da spec só recusa contador homônimo do
-próprio dataset, então um contador `tables` é aceito e teria o mesmo `name` que
-esta tabela. Com duas linhas de mesma key, o point lookup devolveria uma e a
-varredura devolveria duas — o motor discordando de si mesmo conforme o plano.
+de key porque não é único: a compilação da spec recusa três colisões no nome de
+um contador — o prefixo `_`, o nome do próprio dataset e o nome repetido entre
+dois contadores —, e nenhuma delas alcança o nome de uma tabela de meta. Um
+contador `tables` é aceito e teria o mesmo `name` que esta tabela; com duas
+linhas de mesma key, o point lookup devolveria uma e a varredura devolveria
+duas — o motor discordando de si mesmo conforme o plano.
 
 Ela mora em `internal/query`, e não em `internal/query/meta` ao lado da
 `fields`, porque o conteúdo dela é o `Catalog` e o pacote `meta` não pode

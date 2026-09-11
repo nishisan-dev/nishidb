@@ -77,8 +77,9 @@ type TableInfo struct {
 // tarefa seguinte do ciclo; até lá, quem consome esta lista para executar SQL
 // tem de usar o Namespace, e o Schema é só o lugar na árvore do cliente.
 //
-// Por ora o único consumidor é o teste desta função: o /v1/metadata e a
-// `_meta.tables` passam a sair daqui nas tarefas seguintes do ciclo. Ela nasce
+// A `_meta.tables` já sai daqui (metatables.go); o /v1/metadata ainda monta a
+// resposta dele por conta própria, a partir do compilado do dataset, e passa a
+// sair daqui na tarefa seguinte do ciclo. Ela nasce
 // como função única justamente para que as duas não derivem cada uma a sua
 // lista — duas derivações do mesmo fato divergem, e a divergência aparece como
 // uma ferramenta que discorda do SQL sem nada estar quebrado.
