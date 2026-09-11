@@ -48,9 +48,9 @@ const (
 	ExitPolicyStopped = 8
 )
 
-// CLIContext são as dependências de processo, injetadas para o teste rodar o
+// Context são as dependências de processo, injetadas para o teste rodar o
 // CLI como função em vez de precisar de um binário compilado.
-type CLIContext struct {
+type Context struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
@@ -171,7 +171,7 @@ EXIT CODES
 
 // Run executa o CLI e devolve o exit code. Não chama os.Exit: quem decide
 // terminar o processo é o main, e o teste precisa poder chamar isto direto.
-func Run(args []string, amb CLIContext) int {
+func Run(args []string, amb Context) int {
 	if len(args) < 1 {
 		fmt.Fprint(amb.Stderr, usage)
 		return ExitUsageError

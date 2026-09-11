@@ -16,14 +16,14 @@ import (
 // O motivo de serem o mesmo processo é o flock: ele é exclusivo por processo,
 // então um consumer separado tornaria o dataset inconsultável enquanto
 // rodasse. Ver o godoc do internal/server.
-func runServer(args []string, amb CLIContext) int {
+func runServer(args []string, amb Context) int {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
-		argConfig = fs.String("config", "", "caminho do nishidb.yaml")
+		argConfig    = fs.String("config", "", "caminho do nishidb.yaml")
 		argLogFormat = fs.String("log-format", "json", "json|texto")
 		argLogLevel  = fs.String("log-level", "info", "debug|info|warn|error")
-		pprofAddr = fs.String("pprof", "", "endereço dos endpoints de debug (§112); vazio desliga")
+		pprofAddr    = fs.String("pprof", "", "endereço dos endpoints de debug (§112); vazio desliga")
 	)
 	if err := fs.Parse(args); err != nil {
 		return ExitUsageError

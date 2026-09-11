@@ -247,9 +247,9 @@ func TestTopNDaOMesmoResultadoQueOSortCompleto(t *testing.T) {
 	st := semeiaTopN(t, c, linhas)
 
 	casos := []struct {
-		nome            string
+		nome          string
 		keys          []binder.BoundOrderKey
-		limit, offset  int64
+		limit, offset int64
 		rowsEsperadas int
 	}{
 		{"uma chave asc", []binder.BoundOrderKey{chaveNome(t, c, false, false)}, 25, 0, 25},

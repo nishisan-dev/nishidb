@@ -48,7 +48,7 @@ func rodaIngestCom(a *ambiente, ctx context.Context, entrada io.Reader) int {
 	a.stdout.Reset()
 	a.stderr.Reset()
 	return cli.Run([]string{"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"},
-		cli.CLIContext{Stdin: entrada, Stdout: &a.stdout, Stderr: &a.stderr, Ctx: ctx})
+		cli.Context{Stdin: entrada, Stdout: &a.stdout, Stderr: &a.stderr, Ctx: ctx})
 }
 
 func manifestDo(t *testing.T, a *ambiente) *checkpoint.Manifest {

@@ -151,7 +151,7 @@ type colunaComID struct {
 	k  coluna
 }
 
-// Tabela monta o schema sintético e o Store virtual de `_meta.kafka`.
+// Table monta o schema sintético e o Store virtual de `_meta.kafka`.
 func Table(f Fonte) (*schema.Compiled, query.Store, error) {
 	spec, err := schema.Parse([]byte(especDaTabela), schema.BuiltinDefaults)
 	if err != nil {

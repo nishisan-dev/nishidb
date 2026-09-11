@@ -65,7 +65,7 @@ func caminhoCanonicoDoSegmento(dataDir string, seg uint32) string {
 // O registro de por que isto está escrito: até a revisão desta tarefa nenhum
 // teste sustentava qualquer uma das duas, e apagar cada uma deixava
 // `go test ./... -count=1` INTEIRO verde.
-func retiredNameId(nome string) (uint32, bool) {
+func retiredNameID(nome string) (uint32, bool) {
 	base, temSufixo := strings.CutSuffix(nome, sufixoAposentado)
 	if !temSufixo {
 		return 0, false

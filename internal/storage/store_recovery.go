@@ -249,7 +249,7 @@ func (s *Store) reparaAposentados(dataDir string, listados []checkpoint.SegmentI
 		if e.IsDir() {
 			continue
 		}
-		seg, ok := retiredNameId(e.Name())
+		seg, ok := retiredNameID(e.Name())
 		if !ok {
 			continue
 		}

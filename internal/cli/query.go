@@ -19,7 +19,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 )
 
-func runQuery(args []string, amb CLIContext) int {
+func runQuery(args []string, amb Context) int {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (

@@ -28,7 +28,7 @@ import (
 // como a consulta truncada — o número não é confiável nem inconfiável, é
 // desconhecido.
 
-func runCounters(args []string, amb CLIContext) int {
+func runCounters(args []string, amb Context) int {
 	fs := flag.NewFlagSet("counters", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
@@ -69,7 +69,7 @@ func runCounters(args []string, amb CLIContext) int {
 	return countersLocal(*argConfig, *dataset, *audit, *rebuild, amb)
 }
 
-func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb CLIContext) int {
+func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Context) int {
 	cfg, err := nishiconfig.Load(argConfig)
 	if err != nil {
 		notify(amb, "counters: %v\n", err)
@@ -117,7 +117,7 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb CLICo
 	}
 }
 
-func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred remoteCredential, amb CLIContext) int {
+func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred remoteCredential, amb Context) int {
 	switch {
 	case audita:
 		var resp protocol.CountersAuditResponse
@@ -294,7 +294,7 @@ func writeAudit(w io.Writer, dataset string, linhas []linhaDeAuditoria) {
 // desfechoDaAuditoria decide o exit code depois de a tabela ter saído:
 // divergência é corrupção de índice derivado, e sai com ExitDataset (3) — o
 // mesmo código de "dataset corrompido", que é o que um script de operação lê.
-func auditOutcome(linhas []linhaDeAuditoria, code int, amb CLIContext) int {
+func auditOutcome(linhas []linhaDeAuditoria, code int, amb Context) int {
 	if code != ExitOK {
 		return code
 	}

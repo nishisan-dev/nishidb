@@ -75,7 +75,7 @@ func (a *ambienteRemoto) sobeServidor(t *testing.T) {
 	fim := make(chan int, 1)
 	go func() {
 		fim <- cli.Run([]string{"server", "--config", a.config},
-			cli.CLIContext{Stdin: strings.NewReader(""), Stdout: os.Stdout, Stderr: os.Stderr, Ctx: ctx})
+			cli.Context{Stdin: strings.NewReader(""), Stdout: os.Stdout, Stderr: os.Stderr, Ctx: ctx})
 	}()
 	t.Cleanup(func() {
 		cancela()

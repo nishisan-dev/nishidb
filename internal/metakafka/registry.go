@@ -103,7 +103,7 @@ type Fonte struct {
 	Vigia func() (trips uint64, desistiu, ok bool)
 }
 
-// EstadoDeclarado é o que o YAML SOZINHO prova sobre o estado, e é usado
+// DeclaredState é o que o YAML SOZINHO prova sobre o estado, e é usado
 // APENAS quando Fonte.State é nil.
 //
 // Sem bloco Kafka, ou com `enabled: false`, o veredito é DISABLED e não
@@ -117,7 +117,7 @@ func DeclaredState(d Declarada) (estado, detalhe string) {
 	return "", ""
 }
 
-// Registra declara `_meta.kafka` sob o dataset já registrado no motor.
+// Register declara `_meta.kafka` sob o dataset já registrado no motor.
 //
 // Chamado por todo caminho que registra um dataset BASE — servidor e CLI —,
 // SEMPRE, inclusive num dataset que não declara Kafka: "esta tabela não tem

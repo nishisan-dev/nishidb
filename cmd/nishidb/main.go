@@ -24,7 +24,7 @@ func main() {
 	// O efeito prático é nulo — o processo está morrendo e o SO recolhe o
 	// handler —, mas defer que não executa é o tipo de linha que a próxima
 	// leitura toma por garantia de limpeza que não existe.
-	code := cli.Run(os.Args[1:], cli.CLIContext{
+	code := cli.Run(os.Args[1:], cli.Context{
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,

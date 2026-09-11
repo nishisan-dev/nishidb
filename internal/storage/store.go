@@ -345,8 +345,8 @@ type Store struct {
 	// dele.
 	schedule      *rowindex.Schedule
 	duration      time.Duration
-	writeFieldId  types.FieldID
-	writeFieldTtl types.FieldID
+	writeFieldID  types.FieldID
+	writeFieldTTL types.FieldID
 	// expireBuffer e tempBuffer são do Expira, owned pelo wmu como o compactBuf:
 	// reter os dois evita realocar o record lido e o payload da lápide a cada
 	// expiração, e a varredura expira em rajada.
@@ -1166,7 +1166,7 @@ func Open(opts Options) (*Store, error) {
 	// antes, porque declarar `history.expireAfterWrite` faz o Compile dele
 	// exigir o campo.
 	if s.writes == nil && opts.Mode == HistoryMode && opts.WriteInstantFieldName != "" {
-		if s.writeFieldId, err = s.dict.LookupOrCreate([]byte(opts.WriteInstantFieldName)); err != nil {
+		if s.writeFieldID, err = s.dict.LookupOrCreate([]byte(opts.WriteInstantFieldName)); err != nil {
 			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.WriteInstantFieldName, err)
 		}
 	}
@@ -1177,10 +1177,10 @@ func Open(opts Options) (*Store, error) {
 		// para sempre: _writtenAt, _expiresIn, e só então os campos indexados,
 		// resolvidos logo abaixo (ver o comentário ali para o que mudou DENTRO
 		// desse último grupo desde a D5). Nunca reordene esta sequência.
-		if s.writeFieldId, err = s.dict.LookupOrCreate([]byte(opts.WriteInstantFieldName)); err != nil {
+		if s.writeFieldID, err = s.dict.LookupOrCreate([]byte(opts.WriteInstantFieldName)); err != nil {
 			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.WriteInstantFieldName, err)
 		}
-		if s.writeFieldTtl, err = s.dict.LookupOrCreate([]byte(opts.TTLFieldName)); err != nil {
+		if s.writeFieldTTL, err = s.dict.LookupOrCreate([]byte(opts.TTLFieldName)); err != nil {
 			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.TTLFieldName, err)
 		}
 	}
@@ -1924,7 +1924,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// do relógio, o replay empurraria todos os prazos para frente pelo tempo
 	// de queda — e um processo reiniciado em laço nunca expiraria nada.
 	if s.writes != nil {
-		if ms, ok := writeInstant(a.payload, s.writeFieldId); ok {
+		if ms, ok := writeInstant(a.payload, s.writeFieldID); ok {
 			if err := s.writes.Set(a.rowID, ms); err != nil {
 				return err
 			}
@@ -1933,7 +1933,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// 6c. duração de ociosidade da linha, LIDA DO PAYLOAD pela mesma razão do
 	// instante: o replay do tail repõe as MESMAS durações depois de um crash.
 	if s.ttlMapping != nil {
-		if ms, ok := campoDoPayload(a.payload, s.writeFieldTtl, types.TypeInt64); ok {
+		if ms, ok := campoDoPayload(a.payload, s.writeFieldTTL, types.TypeInt64); ok {
 			if err := s.ttlMapping.Set(a.rowID, ms); err != nil {
 				return err
 			}
@@ -2073,7 +2073,7 @@ func (s *Store) venceuNaVersao(rec types.Record, em time.Time) bool {
 	if s.writes == nil {
 		return false
 	}
-	ms, declarado := writeInstant(rec.Payload, s.writeFieldId)
+	ms, declarado := writeInstant(rec.Payload, s.writeFieldID)
 	if !declarado {
 		return s.prazoVencido(rec.RowID, em)
 	}
@@ -2088,7 +2088,7 @@ func (s *Store) venceuNaVersao(rec types.Record, em time.Time) bool {
 // caindo na duração de fundo quando ele não declara nenhuma — a mesma
 // precedência de duracaoEfetiva, sobre o payload em vez do índice.
 func (s *Store) duracaoDoPayload(payload []byte) time.Duration {
-	if ms, ok := campoDoPayload(payload, s.writeFieldTtl, types.TypeInt64); ok {
+	if ms, ok := campoDoPayload(payload, s.writeFieldTTL, types.TypeInt64); ok {
 		if ms <= 0 {
 			return 0 // imortal declarado pela regra `never`
 		}

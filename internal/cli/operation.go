@@ -35,7 +35,7 @@ import (
 // divergem, e a divergência aparece como um operador que discorda do painel sem
 // nada estar quebrado.
 
-func runStatus(args []string, amb CLIContext) int {
+func runStatus(args []string, amb Context) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	server := fs.String("server", "", "endereço do nishidb server (host:porta)")
@@ -63,7 +63,7 @@ func runStatus(args []string, amb CLIContext) int {
 	return writeOutputWithContext("status", amb, func(w io.Writer) { showStatsDetails(w, *server, e) })
 }
 
-func runDatasets(args []string, amb CLIContext) int {
+func runDatasets(args []string, amb Context) int {
 	fs := flag.NewFlagSet("datasets", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
@@ -91,7 +91,7 @@ func runDatasets(args []string, amb CLIContext) int {
 	return writeOutputWithContext("datasets", amb, func(w io.Writer) { writeDatasetMetadata(w, *servidor, m) })
 }
 
-func runInspect(args []string, amb CLIContext) int {
+func runInspect(args []string, amb Context) int {
 	fs := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
@@ -136,7 +136,7 @@ func runInspect(args []string, amb CLIContext) int {
 // exigeServidor recusa o comando sem `--server` explicando POR QUE não existe
 // caminho local — sem isso o operador procuraria um `--config` que estes
 // comandos não têm.
-func requiresServer(cmd, endereco string, amb CLIContext) int {
+func requiresServer(cmd, endereco string, amb Context) int {
 	if endereco != "" {
 		return ExitOK
 	}
@@ -161,7 +161,7 @@ func requiresServer(cmd, endereco string, amb CLIContext) int {
 // cred entra pelo MESMO remoteClient/aplicaCredencial que consultaRemota e
 // postaMutacao usam (Task B6) — o client HTTP compartilhado com Proxy: nil e
 // o CertPool de --tls-ca, e o Authorization quando --user foi dado.
-func searchDocument(cmd, endereco, caminho string, cred remoteCredential, destino any, amb CLIContext) int {
+func searchDocument(cmd, endereco, caminho string, cred remoteCredential, destino any, amb Context) int {
 	client, err := remoteClient(cred)
 	if err != nil {
 		notify(amb, "%s: %v\n", cmd, err)
@@ -203,7 +203,7 @@ func searchDocument(cmd, endereco, caminho string, cred remoteCredential, destin
 // por código, nunca pelo texto. Renomeada na revisão da B5 (Minor 6): o
 // nome antigo, recusaDeLeitura, já não descrevia os dois comandos mutantes
 // que a B5 acrescentou como chamadores.
-func remoteRefusal(cmd string, resp *http.Response, amb CLIContext) int {
+func remoteRefusal(cmd string, resp *http.Response, amb Context) int {
 	corpo, dica, ok := readErrorBody(resp)
 	if !ok {
 		notify(amb, "%s: o servidor respondeu %s sem corpo legível\n", cmd, resp.Status)
@@ -225,7 +225,7 @@ func remoteRefusal(cmd string, resp *http.Response, amb CLIContext) int {
 // punhado de linhas por dataset. Montar antes compra duas coisas: o tabwriter
 // alinha as colunas, que ele não consegue fazer sem ver a maior célula, e a
 // falha de escrita ganha UM ponto de tratamento em vez de um por line.
-func writeOutputWithContext(cmd string, amb CLIContext, corpo func(w io.Writer)) int {
+func writeOutputWithContext(cmd string, amb Context, corpo func(w io.Writer)) int {
 	var buf bytes.Buffer
 	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
 	corpo(tw)
@@ -448,6 +448,6 @@ func line(w io.Writer, cells ...string) {
 // onde reportar a falha de escrever uma mensagem de falha, e o gate de lint
 // deste projeto cobra 0 apontamentos novos — um `fmt.Fprintf` solto aqui viraria
 // mais um errcheck na conta que a Task 0 acabou de tornar visível.
-func notify(amb CLIContext, format string, args ...any) {
+func notify(amb Context, format string, args ...any) {
 	_, _ = fmt.Fprintf(amb.Stderr, format, args...)
 }

@@ -178,7 +178,7 @@ func TestIngestInterrompidoPreservaOQueFoiAplicado(t *testing.T) {
 	ctx, cancela := context.WithCancel(context.Background())
 	cancela()
 	code := cli.Run([]string{"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"},
-		cli.CLIContext{
+		cli.Context{
 			Stdin: strings.NewReader(sb.String()), Stdout: &a.stdout, Stderr: &a.stderr, Ctx: ctx,
 		})
 	if code != cli.ExitInterrupted {

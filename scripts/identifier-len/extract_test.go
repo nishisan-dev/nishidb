@@ -8,66 +8,66 @@ import "testing"
 // string" do que não é string).
 func TestExtraiCampo(t *testing.T) {
 	casos := []struct {
-		nome          string
-		payload       string
-		field         string
-		querValue     string
+		nome       string
+		payload    string
+		field      string
+		querValue  string
 		querResult ResultadoExtracao
 	}{
 		{
-			nome:          "campo presente e string",
-			payload:       `{"identifier":"abc123","outro":1}`,
-			field:         "identifier",
-			querValue:     "abc123",
+			nome:       "campo presente e string",
+			payload:    `{"identifier":"abc123","outro":1}`,
+			field:      "identifier",
+			querValue:  "abc123",
 			querResult: ExtraidoOK,
 		},
 		{
-			nome:          "campo ausente em JSON válido",
-			payload:       `{"outro":1}`,
-			field:         "identifier",
-			querValue:     "",
+			nome:       "campo ausente em JSON válido",
+			payload:    `{"outro":1}`,
+			field:      "identifier",
+			querValue:  "",
 			querResult: ExtraidoSemCampo,
 		},
 		{
-			nome:          "payload não é JSON",
-			payload:       `{isso nao e json}`,
-			field:         "identifier",
-			querValue:     "",
+			nome:       "payload não é JSON",
+			payload:    `{isso nao e json}`,
+			field:      "identifier",
+			querValue:  "",
 			querResult: ExtraidoInvalido,
 		},
 		{
-			nome:          "payload vazio",
-			payload:       ``,
-			field:         "identifier",
-			querValue:     "",
+			nome:       "payload vazio",
+			payload:    ``,
+			field:      "identifier",
+			querValue:  "",
 			querResult: ExtraidoInvalido,
 		},
 		{
-			nome:          "campo presente mas não é string",
-			payload:       `{"identifier":12345}`,
-			field:         "identifier",
-			querValue:     "",
+			nome:       "campo presente mas não é string",
+			payload:    `{"identifier":12345}`,
+			field:      "identifier",
+			querValue:  "",
 			querResult: ExtraidoInvalido,
 		},
 		{
-			nome:          "campo presente e string vazia conta como OK com comprimento zero",
-			payload:       `{"identifier":""}`,
-			field:         "identifier",
-			querValue:     "",
+			nome:       "campo presente e string vazia conta como OK com comprimento zero",
+			payload:    `{"identifier":""}`,
+			field:      "identifier",
+			querValue:  "",
 			querResult: ExtraidoOK,
 		},
 		{
-			nome:          "string com bytes multibyte mede em BYTES, não em runas",
-			payload:       `{"identifier":"áéí"}`, // 3 runas, 6 bytes em UTF-8
-			field:         "identifier",
-			querValue:     "áéí",
+			nome:       "string com bytes multibyte mede em BYTES, não em runas",
+			payload:    `{"identifier":"áéí"}`, // 3 runas, 6 bytes em UTF-8
+			field:      "identifier",
+			querValue:  "áéí",
 			querResult: ExtraidoOK,
 		},
 		{
-			nome:          "campo de nome configurável, não só identifier",
-			payload:       `{"outroCampo":"xyz"}`,
-			field:         "outroCampo",
-			querValue:     "xyz",
+			nome:       "campo de nome configurável, não só identifier",
+			payload:    `{"outroCampo":"xyz"}`,
+			field:      "outroCampo",
+			querValue:  "xyz",
 			querResult: ExtraidoOK,
 		},
 	}

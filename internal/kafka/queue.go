@@ -154,7 +154,7 @@ func inProgress(inicio *atomic.Int64) int64 {
 	return 0
 }
 
-// NovaFila constrói a fila com os dois tetos.
+// NewQueue constrói a fila com os dois tetos.
 func NewQueue(registros int, maxBytes int64) *Fila {
 	return &Fila{
 		ch:       make(chan Item, registros),

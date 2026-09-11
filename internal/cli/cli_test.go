@@ -88,7 +88,7 @@ func novoAmbiente(t *testing.T) *ambiente {
 func (a *ambiente) roda(args ...string) int {
 	a.stdout.Reset()
 	a.stderr.Reset()
-	return cli.Run(args, cli.CLIContext{
+	return cli.Run(args, cli.Context{
 		Stdin:  strings.NewReader(""),
 		Stdout: &a.stdout,
 		Stderr: &a.stderr,
@@ -99,7 +99,7 @@ func (a *ambiente) roda(args ...string) int {
 func (a *ambiente) rodaComEntrada(entrada string, args ...string) int {
 	a.stdout.Reset()
 	a.stderr.Reset()
-	return cli.Run(args, cli.CLIContext{
+	return cli.Run(args, cli.Context{
 		Stdin:  strings.NewReader(entrada),
 		Stdout: &a.stdout,
 		Stderr: &a.stderr,

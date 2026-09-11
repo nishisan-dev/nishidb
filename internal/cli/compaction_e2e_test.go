@@ -445,7 +445,7 @@ func (b *bancadaE2E) consulta(sql string) map[string]int64 {
 	b.t.Helper()
 	var saida, erro bytes.Buffer
 	code := cli.Run([]string{"query", "--server", b.endereco(), "--dataset", e2eDataset, sql},
-		cli.CLIContext{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
+		cli.Context{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
 	if code != 0 {
 		b.t.Fatalf("a consulta remota %q saiu com %d: %s", sql, code, erro.String())
 	}
@@ -593,7 +593,7 @@ func (b *bancadaE2E) consultaLocal() map[string]int64 {
 	var saida, erro bytes.Buffer
 	code := cli.Run([]string{"query", "--config", b.config, "--dataset", e2eDataset,
 		"SELECT id, seq FROM " + e2eDataset},
-		cli.CLIContext{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
+		cli.Context{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
 	if code != 0 {
 		b.t.Fatalf("a consulta após a reabertura saiu com %d: %s", code, erro.String())
 	}
@@ -1039,7 +1039,7 @@ func TestCompactManualPeloCLIReduzDiscoNumaBancadaPequena(t *testing.T) {
 
 	var saida, erro bytes.Buffer
 	code := cli.Run([]string{"compact", "--server", b.endereco()},
-		cli.CLIContext{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
+		cli.Context{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
 	if code != 0 {
 		t.Fatalf("compact saiu %d: %s", code, erro.String())
 	}

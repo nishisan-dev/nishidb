@@ -35,7 +35,7 @@ func TestCarenciaGravaNoIndiceENaoNoPayload(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
-	if _, tem := writeInstant(rec.Payload, s.writeFieldId); tem {
+	if _, tem := writeInstant(rec.Payload, s.writeFieldID); tem {
 		t.Fatal("a carência escreveu no payload; ela deve escrever só no índice")
 	}
 	_ = types.RowID(0)

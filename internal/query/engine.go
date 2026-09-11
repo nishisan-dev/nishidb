@@ -78,7 +78,7 @@ func (e *Engine) Register(name string, sch *schema.Compiled, st Store) error {
 	return nil
 }
 
-// RegistraVirtual associa `namespace.tabela`, sob o dataset já registrado, a
+// RegisterVirtual associa `namespace.tabela`, sob o dataset já registrado, a
 // um schema sintético e um store virtual.
 //
 // A tabela entra no MESMO pipeline de um dataset de verdade — binder, planner

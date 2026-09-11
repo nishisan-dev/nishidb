@@ -249,8 +249,8 @@ func TestAvaliaHeapDoisRegimes(t *testing.T) {
 	const mib = 1 << 20
 	casos := []struct {
 		nome                  string
-		current, base           uint64
-		entCurrent, entBase     int
+		current, base         uint64
+		entCurrent, entBase   int
 		querPassar            bool
 		trechoExpectedNoTexto string
 	}{

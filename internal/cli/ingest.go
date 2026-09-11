@@ -80,7 +80,7 @@ func mostSevereOutcome(a, b int) int {
 	return a
 }
 
-func runIngest(args []string, amb CLIContext) int {
+func runIngest(args []string, amb Context) int {
 	fs := flag.NewFlagSet("ingest", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (

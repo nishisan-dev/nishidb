@@ -28,7 +28,7 @@ import (
 // server.authentication DESLIGADA, rodar sem --user continua byte a byte
 // igual a antes desta task.
 
-func runCompact(args []string, amb CLIContext) int {
+func runCompact(args []string, amb Context) int {
 	fs := flag.NewFlagSet("compact", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
@@ -61,7 +61,7 @@ func runCompact(args []string, amb CLIContext) int {
 	return writeOutputWithContext("compact", amb, func(w io.Writer) { writeCompact(w, *servidor, resp) })
 }
 
-func runCheckpoint(args []string, amb CLIContext) int {
+func runCheckpoint(args []string, amb Context) int {
 	fs := flag.NewFlagSet("checkpoint", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
@@ -109,7 +109,7 @@ func runCheckpoint(args []string, amb CLIContext) int {
 // cred entra pelo MESMO remoteClient/aplicaCredencial que consultaRemota e
 // searchDocument usam (Task B6) — este É o ponto de costura único que a B5
 // já apontava para a credencial entrar.
-func postMutation(cmd, endereco, caminho, dataset string, cred remoteCredential, destino any, amb CLIContext) int {
+func postMutation(cmd, endereco, caminho, dataset string, cred remoteCredential, destino any, amb Context) int {
 	var corpo io.Reader
 	if dataset != "" {
 		b, err := json.Marshal(protocol.DatasetRequest{Dataset: dataset})

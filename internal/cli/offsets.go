@@ -35,7 +35,7 @@ import (
 // Toma o flock do dataset, logo exige o servidor parado. É proposital: mexer
 // na posição com o consumer de pé faria o writer sobrescrever a decisão no
 // checkpoint seguinte.
-func runOffsets(args []string, amb CLIContext) int {
+func runOffsets(args []string, amb Context) int {
 	fs := flag.NewFlagSet("offsets", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
@@ -150,8 +150,8 @@ func runOffsets(args []string, amb CLIContext) int {
 				*dataset, formatOffsets(offsets))
 			return ExitUsageError
 		}
-		new := checkpoint.SourceOffsets{Source: specOrigin(spec), Offsets: offsets}
-		if err := grava(st, new); err != nil {
+		newOffsets := checkpoint.SourceOffsets{Source: specOrigin(spec), Offsets: offsets}
+		if err := grava(st, newOffsets); err != nil {
 			fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
 			return errorCode(err)
 		}
@@ -179,7 +179,7 @@ func grava(st *storage.Store, o checkpoint.SourceOffsets) error {
 	return st.Checkpoint()
 }
 
-func printOffsets(amb CLIContext, dataset string, rows uint64,
+func printOffsets(amb Context, dataset string, rows uint64,
 	o checkpoint.SourceOffsets, existe bool, errLeitura error,
 ) int {
 	fmt.Fprintf(amb.Stdout, "dataset: %s\nrows: %d\n", dataset, rows)

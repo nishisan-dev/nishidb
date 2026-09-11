@@ -161,7 +161,7 @@ type Desfecho struct {
 	Falhas      int64
 }
 
-// NovoWriter monta o writer.
+// NewWriter monta o writer.
 func NewWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fila,
 	log *logging.Logger, met *metricas, offsets map[int32]int64, cad Cadencia,
 	commit func(context.Context, map[int32]int64) error,

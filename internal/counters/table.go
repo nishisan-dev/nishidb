@@ -119,7 +119,7 @@ func idDaColuna(sc *schema.Compiled, nome string) (types.FieldID, error) {
 	return f.ID, nil
 }
 
-// Registra declara o namespace `_counters` sob o dataset, registra a tabela
+// Register declara o namespace `_counters` sob o dataset, registra a tabela
 // de cada contador aberto no Store e a `_meta.counters` que os lista — esta
 // SEMPRE, mesmo sem contador nenhum: "quais existem" tem resposta quando é
 // nenhum. Chamado por todo caminho que registra um dataset no motor —

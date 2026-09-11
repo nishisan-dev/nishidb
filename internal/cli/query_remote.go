@@ -25,7 +25,7 @@ import (
 // O contrato de saída é o MESMO do caminho local: NDJSON cru no stdout, uma
 // line por row, e o exit code dizendo o que aconteceu. Um script que troca
 // `--config` por `--server` não muda mais nada.
-func remoteQuery(endereco, dataset, sql string, params []protocol.Param, cred remoteCredential, amb CLIContext) int {
+func remoteQuery(endereco, dataset, sql string, params []protocol.Param, cred remoteCredential, amb Context) int {
 	corpo, err := json.Marshal(protocol.Request{Dataset: dataset, SQL: sql, Parameters: params})
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
@@ -116,7 +116,7 @@ func schemaHint(status int, corpoBruto []byte) string {
 
 // recusaDoServidor trata o erro que chegou ANTES de qualquer line: o corpo é
 // um JSON único e o status é de verdade.
-func serverRefusal(resp *http.Response, amb CLIContext) int {
+func serverRefusal(resp *http.Response, amb Context) int {
 	corpo, dica, ok := readErrorBody(resp)
 	if !ok {
 		fmt.Fprintf(amb.Stderr, "query: o servidor respondeu %s sem corpo legível\n", resp.Status)
@@ -141,7 +141,7 @@ func serverRefusal(resp *http.Response, amb CLIContext) int {
 //
 // As linhas vão CRUAS: decodificá-las para recodificá-las mudaria a grafia dos
 // doubles e não acrescentaria nada — o servidor já emitiu o formato final.
-func readStream(corpo io.Reader, amb CLIContext) int {
+func readStream(corpo io.Reader, amb Context) int {
 	l := protocol.NewReader(corpo)
 	for l.Next() {
 		if _, err := amb.Stdout.Write(append(l.Line(), '\n')); err != nil {
@@ -226,7 +226,7 @@ func codigoDoProtocolo(codigo string) int {
 //
 // A mensagem do exit 3 já nomeia o pid que segura o dataset; até esta fase ela
 // parava aí, e o operador não tinha para onde ir. Agora tem.
-func serverHint(err error, cfgPath, dataset string, amb CLIContext) {
+func serverHint(err error, cfgPath, dataset string, amb Context) {
 	if err == nil {
 		return
 	}

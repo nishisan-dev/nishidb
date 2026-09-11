@@ -15,7 +15,7 @@ import (
 // é testado sobre o relatório — o mesmo que os dois caminhos montam.
 func TestDesfechoDaAuditoriaDivergenteSaiComExitDataset(t *testing.T) {
 	var stderr bytes.Buffer
-	amb := CLIContext{Stderr: &stderr, Ctx: context.Background()}
+	amb := Context{Stderr: &stderr, Ctx: context.Background()}
 	limpo := []linhaDeAuditoria{{nome: "a"}, {nome: "b"}}
 	if code := auditOutcome(limpo, ExitOK, amb); code != ExitOK {
 		t.Fatalf("sem divergência: %d", code)

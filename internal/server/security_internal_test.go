@@ -150,7 +150,7 @@ func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 	}
 
 	casos := []struct {
-		nome    string
+		nome string
 		path string
 	}{
 		{"LF", comLF},
