@@ -25,7 +25,12 @@ import (
 // sentinela `_virtual` pelo schema da árvore do cliente, e um dublê que já
 // chega com o schema final passaria verde mesmo se o catálogo não trocasse
 // nada.
-func tableVirtualOfTest(t *testing.T, eng *query.Engine, namespace, table string) {
+//
+// O dataset sob o qual a tabela é registrada vem por PARÂMETRO, e não do const
+// do pacote: os testes de roteamento por schema sobem mais de um dataset no
+// mesmo motor, e um helper que só soubesse registrar sob o primeiro deixaria o
+// segundo sem view nenhuma — justamente a metade da prova que interessa.
+func tableVirtualOfTest(t *testing.T, eng *query.Engine, dataset, namespace, table string) {
 	t.Helper()
 	spec, err := schema.Parse([]byte(`version: 1
 name: `+table+`
@@ -80,7 +85,7 @@ schema:
 
 func TestExecuteRoteiaTabelaVirtualRegistrada(t *testing.T) {
 	h := newHarness(t)
-	tableVirtualOfTest(t, h.engine, "_counters", "autenticados_por_olt")
+	tableVirtualOfTest(t, h.engine, dataset, "_counters", "autenticados_por_olt")
 	rows := h.consultaOK("SELECT olt, total FROM _counters.autenticados_por_olt ORDER BY total ASC LIMIT 5")
 	if got := chaves(rows, "olt"); strings.Join(got, ",") != "BR_SPOMO_OLT14,PRCTA_G1M10" {
 		t.Fatalf("olts = %v", got)
@@ -119,7 +124,7 @@ func TestNamespaceDesconhecidoListaOsExistentes(t *testing.T) {
 
 func TestTabelaVirtualDesconhecidaListaAsDoDataset(t *testing.T) {
 	h := newHarness(t)
-	tableVirtualOfTest(t, h.engine, "_counters", "servicos_por_olt")
+	tableVirtualOfTest(t, h.engine, dataset, "_counters", "servicos_por_olt")
 	_, err := h.consulta("SELECT a FROM _counters.nao_existe")
 	if err == nil || !strings.Contains(err.Error(), "servicos_por_olt") {
 		t.Fatalf("tabela desconhecida tem de listar as que existem no dataset: %v", err)
@@ -140,7 +145,7 @@ func TestTabelaVirtualDesconhecidaListaAsDoDataset(t *testing.T) {
 
 func TestRegistraVirtualRecusaDuplicataEDatasetDesconhecido(t *testing.T) {
 	h := newHarness(t)
-	tableVirtualOfTest(t, h.engine, "_counters", "x")
+	tableVirtualOfTest(t, h.engine, dataset, "_counters", "x")
 	spec, _ := schema.Parse([]byte("version: 1\nname: x\nschemaName: telecom\nmaterialization:\n  key:\n    field: k\nschema:\n  fields:\n    k:\n      type: string\n"), schema.BuiltinDefaults)
 	sc, _ := spec.Compile(fakestorage.NewDict())
 	if err := h.engine.RegisterVirtual(dataset, "_counters", "x", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
@@ -156,7 +161,7 @@ func TestRegistraVirtualRecusaDuplicataEDatasetDesconhecido(t *testing.T) {
 
 func TestMetaContinuaRespondendoComORegistroVirtual(t *testing.T) {
 	h := newHarness(t)
-	tableVirtualOfTest(t, h.engine, "_counters", "x")
+	tableVirtualOfTest(t, h.engine, dataset, "_counters", "x")
 	rows := h.consultaOK("SELECT name FROM _meta.fields WHERE name = 'Acct-Status-Type'")
 	if len(rows) != 1 {
 		t.Fatalf("_meta.fields = %v", rows)

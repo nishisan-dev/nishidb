@@ -20,8 +20,8 @@ import (
 // catálogo faz uma vez e é legítima.
 func TestTabelaMetaTablesNaoAlocaPorLinha(t *testing.T) {
 	h := newHarness(t)
-	tableVirtualOfTest(t, h.engine, schema.CountersNamespace, "por_olt")
-	tableVirtualOfTest(t, h.engine, meta.Namespace, "counters")
+	tableVirtualOfTest(t, h.engine, dataset, schema.CountersNamespace, "por_olt")
+	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "counters")
 	_, source, err := h.engine.MetaTables(dataset)
 	if err != nil {
 		t.Fatal(err)

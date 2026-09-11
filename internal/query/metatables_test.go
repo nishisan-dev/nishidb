@@ -23,9 +23,9 @@ func harnessWithMetaTables(t *testing.T) *harness {
 	if err := h.engine.RegisterMetaTables(dataset); err != nil {
 		t.Fatal(err)
 	}
-	tableVirtualOfTest(t, h.engine, schema.CountersNamespace, "por_olt")
-	tableVirtualOfTest(t, h.engine, meta.Namespace, "counters")
-	tableVirtualOfTest(t, h.engine, meta.Namespace, "kafka")
+	tableVirtualOfTest(t, h.engine, dataset, schema.CountersNamespace, "por_olt")
+	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "counters")
+	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "kafka")
 	return h
 }
 
@@ -92,10 +92,12 @@ func TestMetaTablesPublicaOSchemaDeCadaTabela(t *testing.T) {
 	}
 }
 
-// TestMetaTablesNamespaceEhNuloSoNaTabelaBase: o namespace é o qualificador
-// que abre a tabela no FROM, e a base é aberta sem qualificador nenhum —
-// ausência, que neste produto é NULL. Sem ele o cliente não teria como
-// reconstruir `_counters.por_olt` a partir de `telecom` e `por_olt`.
+// TestMetaTablesNamespaceEhNuloSoNaTabelaBase: o namespace é o qualificador do
+// ATALHO — o que abre a tabela no dataset da requisição —, e a base não tem
+// atalho com prefixo: ausência, que neste produto é NULL. Sem ele o cliente não
+// teria como reconstruir `_counters.por_olt` a partir de `telecom` e `por_olt`.
+// O par `schema.tabela` abre as seis, base inclusive, e sai nas colunas
+// `schema` e `name`.
 func TestMetaTablesNamespaceEhNuloSoNaTabelaBase(t *testing.T) {
 	h := harnessWithMetaTables(t)
 	rows := h.consultaOK("SELECT id, namespace FROM _meta.tables ORDER BY id")
@@ -161,7 +163,7 @@ func TestMetaTablesSeparaHomonimasPeloEndereco(t *testing.T) {
 	h := harnessWithMetaTables(t)
 	// O nome vai como literal, e não pela constante da implementação: o teste
 	// tem de reprovar se o nome da tabela mudar sem ninguém perceber.
-	tableVirtualOfTest(t, h.engine, schema.CountersNamespace, "tables")
+	tableVirtualOfTest(t, h.engine, dataset, schema.CountersNamespace, "tables")
 
 	rows := h.consultaOK("SELECT id, schema FROM _meta.tables WHERE name = 'tables' ORDER BY id")
 	if got := strings.Join(chaves(rows, "id"), ","); got != "_counters.tables,_meta.tables" {

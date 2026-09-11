@@ -19,10 +19,10 @@ import (
 func engineWithCountersAndMeta(t *testing.T) *query.Engine {
 	t.Helper()
 	h := newHarness(t)
-	tableVirtualOfTest(t, h.engine, schema.CountersNamespace, "por_olt")
-	tableVirtualOfTest(t, h.engine, schema.CountersNamespace, "por_pon")
-	tableVirtualOfTest(t, h.engine, meta.Namespace, "counters")
-	tableVirtualOfTest(t, h.engine, meta.Namespace, "kafka")
+	tableVirtualOfTest(t, h.engine, dataset, schema.CountersNamespace, "por_olt")
+	tableVirtualOfTest(t, h.engine, dataset, schema.CountersNamespace, "por_pon")
+	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "counters")
+	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "kafka")
 	return h.engine
 }
 
@@ -158,10 +158,15 @@ func TestCatalogoDaACadaViewAsColunasDaPropriaView(t *testing.T) {
 	}
 }
 
-// TestCatalogoPublicaONamespaceQueAbreAView: o par (Schema, Name) ainda não é
-// o endereço que o FROM aceita — `telecom.por_olt` é recusado hoje e
-// `_counters.por_olt` abre. Quem consome o catálogo para executar SQL precisa
-// do namespace publicado na linha; sem ele não há como reconstruir o FROM.
+// TestCatalogoPublicaONamespaceQueAbreAView: o namespace é o endereço do
+// ATALHO — `_counters.por_olt`, que significa "no dataset da requisição" —, e
+// não é reconstruível a partir do par (Schema, Name). Quem consome o catálogo
+// para montar essa forma precisa dele publicado na linha.
+//
+// O par (Schema, Name) é o outro endereço, e tem teste próprio
+// (schema_routing_test.go). Aqui o que se cobra é que a linha carregue os
+// DOIS: o roteamento por schema resolve pelo par, mas quem quiser o atalho
+// continua sem ter de adivinhá-lo.
 func TestCatalogoPublicaONamespaceQueAbreAView(t *testing.T) {
 	eng := engineWithCountersAndMeta(t)
 	tables, err := eng.Catalog(dataset)
@@ -227,7 +232,7 @@ func TestCatalogoTemOrdemEstavel(t *testing.T) {
 // tarefa seguinte entra por aqui, sem tocar neste código.
 func TestCatalogoIncluiTabelaDeMetaRegistradaDepois(t *testing.T) {
 	h := newHarness(t)
-	tableVirtualOfTest(t, h.engine, meta.Namespace, "tables")
+	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "tables")
 	got := mustCatalog(t, h.engine)
 	want := []string{
 		"TABLE:telecom.radius_sessions",
@@ -246,7 +251,7 @@ func TestCatalogoIncluiTabelaDeMetaRegistradaDepois(t *testing.T) {
 // devolve.
 func TestCatalogoNaoListaDuasVezesAFieldsSombreada(t *testing.T) {
 	h := newHarness(t)
-	tableVirtualOfTest(t, h.engine, meta.Namespace, meta.TableFields)
+	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, meta.TableFields)
 	got := mustCatalog(t, h.engine)
 	want := []string{
 		"TABLE:telecom.radius_sessions",
