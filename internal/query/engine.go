@@ -423,6 +423,44 @@ func (e *Engine) Execute(ctx context.Context, dataset, sql string, params []type
 	}
 }
 
+// TargetDataset devolve o dataset que esta consulta vai LER: o dono do schema,
+// quando o FROM é qualificado por um schema declarado, e o handle recebido em
+// todo o resto.
+//
+// Ela existe para quem precisa saber o alvo ANTES de chamar o Execute, e hoje
+// isso é um chamador só: o servidor, que aplica `query.maxRows`,
+// `query.timeout` e `query.maxTimeout` — declarados POR DATASET no YAML — antes
+// de abrir o iterador, e precisa aplicar os do dataset de que o YAML fala. Sem
+// isto, um handle com teto alto seria porta para ler, sob os limites dele, um
+// dataset cujo YAML declara teto baixo.
+//
+// Ela REUSA o parser e o resolveSchemaQualified do Execute, e não uma segunda
+// leitura do SQL: o preço é um parse a mais por consulta no servidor, e a
+// alternativa — o servidor decidindo por conta própria quem é o dono — seria
+// uma segunda fonte de verdade sobre onde cada tabela mora, que é exatamente o
+// que a resolução pelo catálogo existe para não ter.
+//
+// SQL que não compila, schema que não resolve e tabela que não existe devolvem
+// o handle, e não um erro: quem recusa e explica é o Execute, logo em seguida,
+// com a posição do token ofensor. Duplicar a recusa aqui daria duas mensagens
+// para o mesmo defeito, e a dela seria a pior.
+func (e *Engine) TargetDataset(dataset, sql string) string {
+	stmt, err := parser.Parse(sql)
+	if err != nil || stmt == nil {
+		return dataset
+	}
+	// O atalho `_ns.x` não nomeia dataset nenhum — significa "o da requisição"
+	// —, e é o mesmo desvio que o Execute faz primeiro.
+	if stmt.Namespace == "" || meta.Reconhece(stmt) {
+		return dataset
+	}
+	target, err := e.resolveSchemaQualified(stmt.Namespace, stmt.Dataset, stmt.DatasetPos)
+	if err != nil {
+		return dataset
+	}
+	return target.dataset
+}
+
 // openTable binda, planeja e abre contra a tabela BASE do registro.
 func (e *Engine) openTable(ctx context.Context, reg *record, stmt *parser.SelectStmt, params []types.Value) (executor.RowIterator, error) {
 	bq, err := binder.Bind(stmt, reg.sch, params)

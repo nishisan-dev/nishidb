@@ -894,6 +894,17 @@ requisição. Provas: `TestSchemaQualificadoResolveODatasetCerto` (a view e a
 base do OUTRO dataset abrem pelo schema) e
 `TestAtalhoSemSchemaUsaODatasetDaRequisicao` (o atalho não virou busca global).
 
+**Os limites de consulta são do dataset LIDO, não do handle.** `query.maxRows`,
+`query.timeout` e `query.maxTimeout` são declarados por dataset no YAML, e com
+o `FROM` qualificado o handle da requisição e o dataset lido podem ser
+diferentes. O servidor resolve o alvo antes de admitir a consulta
+(`Engine.TargetDataset`, que reusa o mesmo parser e a mesma resolução do
+`Execute`) e aplica os limites do dono — sem isso, um dataset com teto alto
+seria a porta para ler, sob o teto dele, outro cujo YAML declara teto baixo
+(`TestOsLimitesSaoDoDatasetLidoENaoDoHandle`). O que continua saindo do handle
+é a identificação: o label das métricas, o dataset do log e o registro de
+queries em voo.
+
 **Ler o qualificador é também recusar o que não é schema.** Até aqui
 `FROM qualquercoisa.tabela` era aceito e idêntico a `FROM tabela` — o prefixo
 era descartado. Agora qualificador que não é schema declarado é recusado

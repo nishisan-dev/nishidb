@@ -932,3 +932,81 @@ func TestMetaFieldsRespondePelaRotaDeQuery(t *testing.T) {
 		}
 	}
 }
+
+// specComSchemaETeto é o specConsultavel com schemaName e `query.maxRows`
+// próprios: é o mínimo para provar de QUEM são os limites aplicados a uma
+// consulta que atravessa datasets.
+const specComSchemaETeto = `version: 1
+name: %s
+schemaName: %s
+materialization:
+  key:
+    field: id
+query:
+  maxRows: %d
+schema:
+  fields:
+    id:
+      type: string
+    status:
+      type: string
+`
+
+// TestOsLimitesSaoDoDatasetLidoENaoDoHandle: `query.maxRows` é declarado POR
+// DATASET no YAML, e desde que o `FROM <schema>.<tabela>` resolve o dataset
+// dono, o handle da requisição e o dataset lido podem ser diferentes.
+//
+// Aplicar os limites do HANDLE faria de um dataset com teto alto a porta para
+// ler, sob o teto dele, outro cujo YAML declara teto baixo — o YAML deixaria de
+// valer para a tabela de que ele fala. O teste cobra os dois lados, e é o
+// segundo que separa "aplicou o do dono" de "aplicou o mais baixo dos dois":
+//
+//   - pelo handle `alto`, pedir 500 linhas de `baixo_schema.baixo` (teto 10) é
+//     RECUSADO, e a mensagem nomeia o teto do dono;
+//   - pelo handle `baixo`, pedir 500 linhas de `alto_schema.alto` (teto 1000) é
+//     ACEITO.
+func TestOsLimitesSaoDoDatasetLidoENaoDoHandle(t *testing.T) {
+	a := newEnvWithStorage(t, blockPadrao, "")
+	a.writeDataset("alto", fmt.Sprintf(specComSchemaETeto, "alto", "alto_schema", 1000))
+	a.writeDataset("baixo", fmt.Sprintf(specComSchemaETeto, "baixo", "baixo_schema", 10))
+	seed(t, a, "alto", 3)
+	seed(t, a, "baixo", 3)
+
+	cfg := a.load()
+	srv, err := server.Novo(cfg, server.Options{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	run(t, srv)
+
+	resp := consulta(t, srv,
+		`{"dataset":"alto","sql":"SELECT id FROM baixo_schema.baixo","maxRows":500}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 400: o teto do dataset LIDO é 10", resp.StatusCode)
+	}
+	f := failOf(t, resp)
+	if f.Code != protocol.CodeMaxRowsAboveCeiling {
+		t.Fatalf("código = %q, quer %s", f.Code, protocol.CodeMaxRowsAboveCeiling)
+	}
+	if !strings.Contains(f.Message, "10") {
+		t.Fatalf("a mensagem tem de nomear o teto do dataset lido: %q", f.Message)
+	}
+
+	// O simétrico: o handle de teto baixo lendo o dataset de teto alto passa.
+	// Sem ele, uma implementação que aplicasse o MENOR dos dois tetos — ou que
+	// tivesse baixado o teto de todo mundo — passaria na metade de cima.
+	resp = consulta(t, srv,
+		`{"dataset":"baixo","sql":"SELECT id FROM alto_schema.alto","maxRows":500}`)
+	if resp.StatusCode != http.StatusOK {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 200: o teto do dataset LIDO é 1000", resp.StatusCode)
+	}
+	rows, l := result(t, resp)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, quer 3", len(rows))
+	}
+	if l.Failure() != nil {
+		t.Fatalf("fecho com falha: %+v", l.Failure())
+	}
+}

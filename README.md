@@ -1422,6 +1422,12 @@ existem; schema certo com tabela que não existe é recusado listando as tabelas
 daquele schema. Nenhum dos dois é erro interno: o cliente recebe erro de bind
 com a posição do nome ofensor.
 
+Os limites `query.maxRows`, `query.timeout` e `query.maxTimeout` são do
+**dataset lido**, não do da conexão: numa consulta `FROM telecom.tabela` valem
+os declarados no YAML de quem é dono do schema `telecom`, venha a requisição
+pelo handle que vier. Uma conexão com teto alto não vira porta para ler, sob
+esse teto, um dataset que declarou teto baixo.
+
 `LIKE` vale só para coluna de **texto** — outro tipo é recusado no bind, com a
 posição da coluna, nunca com resultado vazio. `%` casa qualquer sequência e `_`
 casa **um caractere** (não um byte: `_` casa o `ç` inteiro). **Não há cláusula

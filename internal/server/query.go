@@ -82,12 +82,27 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ceilingOfRequest, fail := rowCeiling(req, d.sch.MaxRows)
+	// Os limites de consulta — `query.maxRows`, `query.timeout` e
+	// `query.maxTimeout` — são declarados POR DATASET no YAML, então quem os
+	// governa é o dataset que a consulta vai LER, e não o handle por onde ela
+	// entrou. Desde que o `FROM <schema>.<tabela>` resolve o dataset dono, os
+	// dois podem ser diferentes: aplicar os do handle faria de um dataset com
+	// teto alto a porta para ler, sob o teto dele, um dataset cujo YAML declara
+	// teto baixo — o YAML deixaria de valer para a tabela de que ele fala.
+	//
+	// O handle continua governando tudo o mais: é ele que o `d.nome` leva para
+	// as métricas, para o log e para o registro de queries em voo.
+	limits := d
+	if owner, ok := s.byNome[s.eng.TargetDataset(d.nome, req.SQL)]; ok {
+		limits = owner
+	}
+
+	ceilingOfRequest, fail := rowCeiling(req, limits.sch.MaxRows)
 	if fail != nil {
 		s.reject(w, r, http.StatusBadRequest, d.nome, *fail)
 		return
 	}
-	ctx, cancel, prazo, fail := s.contextoOfConsulta(r, req, d.sch)
+	ctx, cancel, prazo, fail := s.contextoOfConsulta(r, req, limits.sch)
 	if fail != nil {
 		s.reject(w, r, http.StatusBadRequest, d.nome, *fail)
 		return
@@ -97,7 +112,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// número fixo: `query.timeout` é a declaração de quanto tempo uma consulta
 	// deste dataset costuma levar, então tudo que a excede é, por definição
 	// dele mesmo, fora do comum.
-	longa := prazo > d.sch.Timeout
+	longa := prazo > limits.sch.Timeout
 
 	// A vaga é tomada DEPOIS de toda validação barata e ANTES de tocar o
 	// Store: recusar cedo custa nada, e o §81 é explícito em preferir rejeitar
@@ -139,7 +154,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 				Message: fmt.Sprintf(
 					"as %d vagas de consulta longa estão ocupadas (runtime.query.maxLongRunning); "+
 						"peça um timeoutMs de até %d ms para entrar pelo pool geral",
-					s.cfg.MaxLongRunning(), d.sch.Timeout.Milliseconds()),
+					s.cfg.MaxLongRunning(), limits.sch.Timeout.Milliseconds()),
 			})
 			return
 		}
