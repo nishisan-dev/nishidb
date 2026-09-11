@@ -1419,11 +1419,26 @@ O namespace `_meta` responde o que o dataset tem, por SQL, sem precisar de
 suporte em cliente nenhum:
 
 ```sql
+SELECT id, name, schema, kind, columns FROM _meta.tables ORDER BY id
 SELECT name, type, auto, index, indexed, parent, occurrences, typeMismatches, coercions FROM _meta.fields
 SELECT name FROM _meta.fields WHERE parent = 'persistent'
 SELECT name, rows, total, groupBy, condition, groups, refused FROM _meta.counters
 SELECT partition, appliedOffset, highWatermark, lag, state FROM _meta.kafka ORDER BY partition
 ```
+
+`_meta.tables` lista **toda tabela consultável do dataset**, a começar por ela
+mesma: a base como `TABLE` no schema declarado no YAML, os contadores como
+`VIEW` no mesmo schema, e as tabelas de meta como `VIEW` no schema `_meta`. É a
+primeira pergunta de quem chega a um dataset que não conhece, e a resposta não
+exige rota HTTP nem suporte em cliente nenhum.
+
+`id` é o endereço que o `FROM` aceita — `_counters.por_olt`, `_meta.kafka`, ou
+só o nome na tabela base —, e é a chave da tabela: `name` sozinho não é único,
+porque um contador pode se chamar `tables` e aparecer ao lado desta.
+`namespace` é NULL só na tabela base, que abre sem qualificador; `columns` é a
+contagem de colunas descritíveis (os nomes estão na `_meta.fields`); e
+`description` é NULL em toda linha hoje — nada declara descrição de tabela, e o
+catálogo não inventa uma.
 
 `_meta.counters` lista os contadores mantidos na escrita do dataset, com a
 definição e os números vivos; `_counters.<nome>`, uma tabela por contador

@@ -805,6 +805,36 @@ caminho consigo mesmo — sem que nada acusasse.
 
 ### Introspecção pelo próprio SQL
 
+`_meta.tables` responde "que tabelas existem" — a base como `TABLE` no schema
+declarado, os contadores como `VIEW` no mesmo schema, e as tabelas de meta como
+`VIEW` no `_meta`:
+
+```sql
+SELECT id, name, schema, kind, columns FROM _meta.tables ORDER BY id
+```
+
+Duas decisões a sustentam.
+
+**Ela se inclui.** Perguntar "que tabelas existem" e não ver a própria pergunta
+listada deixaria o catálogo incompleto na primeira linha. O que garante isso é
+o momento da montagem: as linhas saem do `Engine.Catalog` **a cada consulta**,
+não do catálogo congelado no registro — por isso a ordem em que ela é
+registrada, em relação à `_meta.counters` e à `_meta.kafka`, não muda a
+resposta. O congelamento existe, mas é POR CONSULTA: o snapshot fixa o catálogo
+de T0, e a varredura não vê tabela aparecer no meio.
+
+**A key é o endereço, não o nome.** `id` é o que o `FROM` aceita
+(`_counters.por_olt`, `_meta.tables`, ou só o nome na base). O nome não serve
+de key porque não é único: a compilação da spec só recusa contador homônimo do
+próprio dataset, então um contador `tables` é aceito e teria o mesmo `name` que
+esta tabela. Com duas linhas de mesma key, o point lookup devolveria uma e a
+varredura devolveria duas — o motor discordando de si mesmo conforme o plano.
+
+Ela mora em `internal/query`, e não em `internal/query/meta` ao lado da
+`fields`, porque o conteúdo dela é o `Catalog` e o pacote `meta` não pode
+importar `query`; e não num pacote à parte como `internal/counters` e
+`internal/metakafka`, porque não costura o motor a subsistema nenhum.
+
 `_meta.fields` responde "o que este dataset tem" — nome, tipo, se é
 autodescoberto, índice declarado, índice físico, campo de origem e a
 **densidade** de cada coluna derivada — como uma tabela qualquer:
