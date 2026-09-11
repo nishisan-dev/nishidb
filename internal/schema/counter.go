@@ -148,7 +148,10 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 // derivedColumnName lhes dá. key e seq são os papéis que o groupBy não pode
 // usar: agrupar pela key é um grupo por entidade, e pela sequence é agrupar
 // pela ordem do evento — os dois são cardinalidade sem teto por engano.
-func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq string) ([]CounterSpec, error) {
+// dataset é o nome do próprio dataset: no schema declarado a tabela base
+// aparece como `<schemaName>.<dataset>` (planning/schema-declarado-e-catalogo-jdbc.md),
+// e é contra esse nome que o nome do contador precisa ser distinto.
+func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, dataset string) ([]CounterSpec, error) {
 	if len(raws) == 0 {
 		return nil, specErrf("counters: lista vazia — remova a chave ou declare um contador")
 	}
@@ -165,6 +168,25 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq s
 		}
 		if !isIdentName(r.Name) {
 			return nil, specErrf("%s.name %q inválido (esperado [a-z0-9_]+)", keyPath, r.Name)
+		}
+		// O prefixo "_" não fecha colisão nenhuma hoje — `_fields`, `_counters`
+		// e `_kafka` moram no schema `_meta`, não no do dataset (planning/
+		// schema-declarado-e-catalogo-jdbc.md). A recusa fica de qualquer jeito,
+		// como higiene: o prefixo é a reserva do produto (mesma regra do nome
+		// de dataset em validate, spec.go), e um contador `_fields` seria
+		// confusão gratuita mesmo sem colidir com nada.
+		if strings.HasPrefix(r.Name, "_") {
+			return nil, specErrf(
+				"%s.name %q: o prefixo \"_\" é reservado ao produto; escolha outro nome", keyPath, r.Name)
+		}
+		// Esta, sim, é colisão real: no schema declarado a tabela base do
+		// dataset aparece como `<schemaName>.<dataset>`, e um contador com o
+		// mesmo nome apareceria no MESMO lugar — as duas tabelas disputariam
+		// uma única entrada no catálogo.
+		if r.Name == dataset {
+			return nil, specErrf(
+				"%s.name %q é o nome do próprio dataset: no schema declarado os dois seriam a mesma tabela",
+				keyPath, r.Name)
 		}
 		if j, dup := seenNames[r.Name]; dup {
 			return nil, specErrf("%s.name %q repetido (já declarado em counters[%d])", keyPath, r.Name, j)

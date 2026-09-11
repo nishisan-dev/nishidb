@@ -185,6 +185,37 @@ counters:
 	}
 }
 
+// TestCountersRecusaPrefixoReservado: dentro do schema declarado, a tabela do
+// contador divide o espaço de nomes com `_fields`, `_counters` e `_kafka` — só
+// que elas moram no schema `_meta`, não no do dataset, então hoje não há
+// colisão real a evitar. A recusa fica como higiene: reservar o `_` para o
+// produto, como já vale para o nome do dataset.
+func TestCountersRecusaPrefixoReservado(t *testing.T) {
+	_, err := Parse([]byte(yamlWithCounters(`
+counters:
+  - name: _fields
+    groupBy: [olt]
+`)), BuiltinDefaults)
+	if err == nil || !strings.Contains(err.Error(), "_") {
+		t.Fatalf("contador com prefixo reservado tem de ser recusado: %v", err)
+	}
+}
+
+// TestCountersRecusaNomeDoProprioDataset: é a colisão real — no schema
+// declarado a tabela base do dataset `servicos` aparece como
+// `telecom.servicos`, e um contador chamado `servicos` apareceria no mesmo
+// lugar.
+func TestCountersRecusaNomeDoProprioDataset(t *testing.T) {
+	_, err := Parse([]byte(yamlWithCounters(`
+counters:
+  - name: servicos
+    groupBy: [olt]
+`)), BuiltinDefaults)
+	if err == nil || !strings.Contains(err.Error(), "servicos") {
+		t.Fatalf("contador homônimo do dataset tem de ser recusado: %v", err)
+	}
+}
+
 func TestOPrefixoReservadoNomeiaOsDoisNamespaces(t *testing.T) {
 	_, err := Parse([]byte(strings.Replace(yamlWithCounters(""), "name: servicos", "name: _counters", 1)), BuiltinDefaults)
 	if err == nil || !strings.Contains(err.Error(), "_counters") || !strings.Contains(err.Error(), "_meta") {

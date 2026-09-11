@@ -972,7 +972,7 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 	if raws, err := countersFromNode(&raw.Counters); err != nil {
 		return nil, err
 	} else if raws != nil {
-		validated, err := validateCounters(raws, fields, key.Field, declaredSeq)
+		validated, err := validateCounters(raws, fields, key.Field, declaredSeq, s.Name)
 		if err != nil {
 			return nil, err
 		}
