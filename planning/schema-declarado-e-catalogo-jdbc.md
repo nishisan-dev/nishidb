@@ -44,11 +44,31 @@ Tudo daquele dataset passa a viver nele:
 ```
 telecom.service_view            -- a tabela base
 telecom.autenticados_por_slot   -- um contador
-telecom._fields                 -- o dicionário de campos
-telecom._counters               -- a lista de contadores
-telecom._kafka                  -- o estado da fonte
-telecom._tables                 -- NOVA: a lista das tabelas
+telecom.autenticados_por_pon    -- outro contador
+
+_meta.fields                    -- o dicionário de campos
+_meta.counters                  -- a lista de contadores
+_meta.kafka                     -- o estado da fonte
+_meta.tables                    -- NOVA: a lista das tabelas
 ```
+
+**As tabelas de meta ficam no `_meta`, e não dentro do schema do dataset.**
+A primeira versão deste desenho as punha em `telecom._fields`, tipadas
+`SYSTEM TABLE` para o cliente separá-las. O spike da Task 1 mostrou que o
+DBeaver separa **escondendo**: objeto de sistema não aparece na árvore por
+default, e a opção que o revela não foi encontrada na interface. Uma tabela
+que existe para ser descoberta, invisível por default, é a tabela errada.
+
+`_meta` já é namespace reservado, o parser já o aceita e o SQL dele já
+funciona — `SELECT * FROM _meta.counters` responde hoje, sem depender do
+roteamento de schema. Expô-lo como schema próprio na árvore é o caminho mais
+curto e o que gera SELECT válido desde já. Inventar um `_system` ao lado seria
+um segundo nome para a mesma coisa.
+
+O preço: `_meta` descreve UM dataset — o da requisição. Com vários datasets no
+servidor, o `_meta` da árvore é o do dataset default da conexão. É o
+comportamento de hoje, mas passa a ficar visível, e por isso entra na
+documentação.
 
 Dois níveis exatos, sem schema nula, sem ambiguidade entre datasets, e a árvore
 do DBeaver com a forma que a ferramenta espera.
@@ -73,20 +93,20 @@ correção não é zelo, é o que separa uma recusa útil de um "faltando".
 
 ### A colisão fica impossível por construção, não detectada
 
-O ponto que decide a qualidade do desenho. Dentro de um schema, a tabela base,
-os contadores e as tabelas de meta dividem um espaço de nomes. Em vez de
-conferir colisão na subida, o desenho a torna irrepresentável:
+Com as tabelas de meta no `_meta`, dentro do schema do dataset sobram a tabela
+base e os contadores. A colisão entre eles é tornada irrepresentável, e não
+conferida:
 
 - **nome de dataset** já é recusado com prefixo `_` (`spec.go:682`);
 - **nome de contador** passa a ser recusado com prefixo `_` — hoje não é
   (`validateCounters` só chama `isIdentName`, que aceita o underscore), e é uma
   linha;
-- **tabelas de meta** mantêm o `_` dentro do schema (`telecom._fields`), porque
-  o prefixo nunca foi enfeite: é a reserva que separa o que é do motor do que é
-  do dado.
+- **nome de contador** também recusa o mesmo nome do dataset — é a única
+  colisão que o prefixo não fecha, e é recusa na subida nomeando os dois.
 
-Sobra UMA colisão possível: contador com o mesmo nome do dataset. Essa continua
-sendo recusa na subida, nomeando os dois.
+A recusa do prefixo `_` em contador deixou de ser carga estrutural quando as
+tabelas de meta saíram do schema do dataset. Fica como higiene: o `_` é a
+reserva do produto, e um contador chamado `_fields` seria confusão gratuita.
 
 ### `schemaName`, e não `schema_name`
 
@@ -135,9 +155,10 @@ cobram paridade entre os clients precisam ser lidos ANTES, não depois.
 
 - `getSchemas` devolve os schemas declarados dos datasets do servidor;
 - `getTableTypes` devolve `TABLE`, `VIEW` e `SYSTEM TABLE`;
-- `getTables` passa a listar as virtuais com `TABLE_SCHEM` preenchido —
-  contadores como `VIEW` (derivada, somente leitura, sem armazenamento próprio)
-  e as de meta como `SYSTEM TABLE`, que o DBeaver separa numa pasta de sistema;
+- `getTables` passa a listar as virtuais com `TABLE_SCHEM` preenchido — os
+  contadores como `VIEW` no schema do dataset (derivada, somente leitura, sem
+  armazenamento próprio) e as de meta como `VIEW` no schema `_meta`. **Não**
+  `SYSTEM TABLE`: o spike provou que isso as esconde;
 - `getColumns` cobre as virtuais pelo mesmo documento.
 
 O que o DBeaver gera a partir disso é `SELECT * FROM telecom.autenticados_por_slot`,
@@ -180,6 +201,28 @@ tabela.
 de todo dataset existente, e isso foi aceito explicitamente: até a primeira
 release, quebrar contrato de config, wire ou nome em disco é decisão barata e
 não precisa ser negociada caso a caso. No piloto é uma linha e um restart.
+
+**O risco de ferramenta foi MEDIDO em 11/09/2026, e o desenho passou.** O spike
+da Task 1 (driver com metadata fixa, contra o piloto) respondeu:
+
+1. **Sim** — o DBeaver monta `telecom` como schema, com pastas `Tables` e
+   `Views` e as tabelas dentro.
+2. **Sim** — e é o que decide o desenho: a ferramenta gera o SELECT
+   **qualificado**, `SELECT * FROM telecom.autenticados_por_pon`.
+3. **As `SYSTEM TABLE` não apareceram na árvore.** O DBeaver esconde objeto de
+   sistema por default (a opção "Show system objects" da conexão). A separação
+   que o desenho pediu acontece — mas por ocultação, não por pasta ao lado.
+   Decidir se `_fields`/`_counters`/`_tables` devem ficar escondidas por
+   default é decisão de produto, e está registrada aqui porque só o spike podia
+   revelá-la.
+
+O SELECT qualificado ainda FALHA contra o servidor — `dataset
+"autenticados_por_pon" desconhecido (este handle é de "service_view")` —, e
+isso é o estado esperado: o spike falsifica só o lado do driver, e o
+roteamento do schema no motor é a Task 7. O erro confirma o diagnóstico do
+desenho: o parser toma `telecom` como namespace e `autenticados_por_pon` como
+DATASET, e o binder o compara com o dataset da requisição. É exatamente esse
+passo que a Task 7 troca.
 
 **O risco que sobra é o de ferramenta.** O desenho pressupõe que o DBeaver monte a
 árvore a partir de `getSchemas` + `getTables` e gere `schema.tabela` no SELECT.

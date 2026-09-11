@@ -39,6 +39,11 @@ driver, `golangci-lint` v2.12.2.
 - Antes de commitar: `make test` E `make test-race` (nenhum substitui o outro) e
   `make lint` **igual** à baseline — ela quebra nos dois sentidos.
 - Excluir `.claude/worktrees/` de qualquer grep.
+- **As tabelas de meta vivem no schema `_meta`, NUNCA dentro do schema do
+  dataset, e NUNCA tipadas `SYSTEM TABLE`.** O spike da Task 1 provou que o
+  DBeaver esconde objeto de sistema por default e que a opção que o revela não
+  é achável na interface. `_meta` já é namespace reservado e o SQL dele já
+  funciona hoje, então o SELECT que a ferramenta gera vale desde já.
 
 **Base:** este ciclo começa DEPOIS de a issue #38 entrar em `main`. As duas
 tocam `internal/schema/counter.go` e `internal/counters/`, e rebasear é mais
@@ -262,8 +267,10 @@ func TestDoisDatasetsNoMesmoSchemaSaoRecusados(t *testing.T) {
 
 ### Task 4: o nome do contador não pode colidir dentro do schema
 
-Duas recusas, e as duas fecham a colisão por construção em vez de detectá-la
-tarde.
+Duas recusas. A do prefixo `_` deixou de ser carga estrutural quando as tabelas
+de meta saíram do schema do dataset (ver Global Constraints) — fica como
+higiene, porque o `_` é a reserva do produto. A do nome do dataset é a única
+colisão real que sobra, e é a que tem de funcionar.
 
 **Files:**
 - Modify: `internal/schema/counter.go` (`validateCounters`, a validação de
@@ -345,9 +352,12 @@ if r.Name == dataset {
 type TableKind string
 
 const (
-	KindTable       TableKind = "TABLE"        // a tabela base do dataset
-	KindView        TableKind = "VIEW"         // _counters.<nome>
-	KindSystemTable TableKind = "SYSTEM TABLE" // as tabelas do _meta
+	KindTable TableKind = "TABLE" // a tabela base do dataset
+	// KindView cobre o contador E a tabela de meta. Não existe
+	// KindSystemTable: o spike da Task 1 provou que o DBeaver esconde objeto
+	// de sistema por default, e tabela que existe para ser descoberta não
+	// pode nascer invisível.
+	KindView TableKind = "VIEW"
 )
 
 // TableInfo descreve UMA tabela consultável.
@@ -385,10 +395,10 @@ func TestCatalogoListaBaseViewsESistema(t *testing.T) {
 		"TABLE:telecom.servicos",
 		"VIEW:telecom.por_olt",
 		"VIEW:telecom.por_pon",
-		"SYSTEM TABLE:telecom._counters",
-		"SYSTEM TABLE:telecom._fields",
-		"SYSTEM TABLE:telecom._kafka",
-		"SYSTEM TABLE:telecom._tables",
+		"VIEW:_meta.counters",
+		"VIEW:_meta.fields",
+		"VIEW:_meta.kafka",
+		"VIEW:_meta.tables",
 	}
 	if !slices.Equal(got, quero) {
 		t.Fatalf("catálogo = %v, quero %v", got, quero)
@@ -420,11 +430,14 @@ func TestCatalogoRecusaDatasetDesconhecido(t *testing.T) { /* erro nomeando o da
 
 ---
 
-### Task 6: `_tables`
+### Task 6: `_meta.tables`
 
 **Files:**
 - Create: `internal/query/meta/tables.go`
 - Test: `internal/query/meta/tables_test.go`
+
+A tabela é **`_meta.tables`** — no namespace que já existe, ao lado de `fields`,
+`counters` e `kafka`. NÃO `telecom._tables`.
 
 **Interfaces:**
 - Consumes: `Engine.Catalog` (Task 5)
@@ -440,8 +453,8 @@ Colunas: `name` (key), `schema`, `kind`, `columns` (int64), `description`.
 // `kafka`, e faltava a que lista as tabelas.
 func TestMetaTablesListaOCatalogo(t *testing.T) {
 	eng := engineComDatasetEContadores(t)
-	rows := consulta(t, eng, "SELECT name, schema, kind FROM _tables ORDER BY name")
-	if got := column(rows, "kind"); !strings.Contains(got, "VIEW") || !strings.Contains(got, "SYSTEM TABLE") {
+	rows := consulta(t, eng, "SELECT name, schema, kind FROM _meta.tables ORDER BY name")
+	if got := column(rows, "kind"); !strings.Contains(got, "TABLE") || !strings.Contains(got, "VIEW") {
 		t.Fatalf("kind = %s", got)
 	}
 	if got := column(rows, "schema"); strings.Contains(got, ",,") {
@@ -566,10 +579,11 @@ type TableMeta struct {
       do driver já sobem)
 
 ```java
-// getTables traz a base como TABLE, os contadores como VIEW e as de meta como
-// SYSTEM TABLE, todas com TABLE_SCHEM preenchido — é o TABLE_SCHEM que faz o
-// DBeaver gerar `FROM telecom.x`, que é SQL que o motor aceita.
-@Test void listaBaseViewsESistemaComSchema() { }
+// getTables traz a base como TABLE no schema do dataset, e os contadores e as
+// tabelas de meta como VIEW — os contadores no schema do dataset, as de meta
+// no schema `_meta`. Todas com TABLE_SCHEM preenchido: é o TABLE_SCHEM que faz
+// o DBeaver gerar `FROM telecom.x`, comprovado pelo spike da Task 1.
+@Test void listaBaseEViewsComSchema() { }
 
 // Filtrar por tipo tem de funcionar: o DBeaver pede só VIEW ao abrir a pasta.
 @Test void filtraPorTipoDeTabela() { }
