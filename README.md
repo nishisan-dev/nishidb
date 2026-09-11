@@ -720,7 +720,7 @@ outra.
 | bloco `index:` ausente | **janela infinita** — indexa tudo que a retenção mantém. É o default |
 | `index:` fora do bloco `history:` | recusado, **exit 3** — a janela é da tabela histórica |
 | `window: 0` | recusado, **exit 3** — ambíguo entre "nada" e "tudo"; desligar é omitir o bloco |
-| `window` maior que `expireAfterWrite` | aceito, com **WARN** `janela.maior_que_retencao`: é inócuo, a retenção limita antes |
+| `window` maior que `expireAfterWrite` | aceito, com **WARN** `window.maior_que_retencao`: é inócuo, a retenção limita antes |
 | `index.maxBytes` sem `window` | aceito — teto puro é declaração válida |
 
 A fronteira por tempo usa o record **mais novo** de cada segmento: um segmento
@@ -1230,7 +1230,7 @@ que a consulta congela é o conjunto de grupos.
 
 Mudar `groupBy` ou `where` de um contador, ou declarar um contador novo num
 dataset que já tem linhas, **reconstrói o contador na abertura** varrendo as
-linhas vivas (o log `contador.construido` diz o motivo e quanto custou — a
+linhas vivas (o log `counter.construido` diz o motivo e quanto custou — a
 ordem de grandeza de uma varredura completa). Mudar `maxGroups` não
 reconstrói; um teto abaixo dos grupos em uso é recusado na subida. Um grupo
 novo acima do teto é recusado em runtime: a linha entra, **não é contada**, e

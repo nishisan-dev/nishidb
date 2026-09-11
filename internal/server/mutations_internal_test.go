@@ -118,7 +118,7 @@ func TestProcessaDatasetsSemErroDevolveTodosNaOrdem(t *testing.T) {
 // ORDEM; falta o EXTREMO em que não há absolutamente nada processado antes
 // da falha — Processados tem de vir VAZIO (não nil-mas-tratado-como-vazio
 // por acidente; a asserção confere len==0 de verdade), e é este caso que
-// mensagemParcial usa para decidir entre nomear os antecessores e dizer
+// partialMessage usa para decidir entre nomear os antecessores e dizer
 // "nenhum". Substitui o teste anterior, que montava um *ErrParcial à mão
 // em vez de produzi-lo pelo caminho real.
 func TestProcessaDatasetsFalhaNoPrimeiroItemDevolveProcessadosVazio(t *testing.T) {

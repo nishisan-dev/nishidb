@@ -171,7 +171,7 @@ func TestAjustaOffsetsEsperaOffsetsProntoAntesDeLerOMapa(t *testing.T) {
 // pediu sobre os demais callbacks.
 //
 // c.w só é atribuído ao FIM de Abre, depois de resolveSourceEPosition e de
-// NovaFila. O loop do group nasce assíncrono no metadata loop (mesma raiz do
+// NewQueue. O loop do group nasce assíncrono no metadata loop (mesma raiz do
 // 60) e pode completar join→assign→heartbeat→revoke antes disso —
 // `manageFailWait` do franz-go chama onRevoked (aoRevogar) incondicionalmente
 // ao perceber o contexto do group cancelado. O `if c.w == nil { return }`

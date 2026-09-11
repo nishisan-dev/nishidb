@@ -512,7 +512,7 @@ func TestReparoDoAposentadoDurabilizaODiretorioDepoisDeRestaurar(t *testing.T) {
 }
 
 // TestRetiredComPaddingDivergenteNaoEhInstaladoSobreONomeCanonico fixa a
-// guarda de igualdade EXATA do idDoNomeAposentado (compaction.go), que o
+// guarda de igualdade EXATA do retiredNameID (compaction.go), que o
 // godoc de lá declara load-bearing e que nenhum teste sustentava: apagar a
 // linha deixava a suíte inteira verde.
 //
@@ -567,7 +567,7 @@ func TestRetiredComPaddingDivergenteNaoEhInstaladoSobreONomeCanonico(t *testing.
 }
 
 // TestRetiredDoSegmentoZeroNaoEhClassificadoPeloReparo fixa a recusa de
-// id==0 do idDoNomeAposentado, a outra guarda que nenhum teste sustentava.
+// id==0 do retiredNameID, a outra guarda que nenhum teste sustentava.
 //
 // Ela NÃO é redundante com a de igualdade exata, e é por isso que precisa de
 // teste próprio: "segment-00000000.dat.retired" tem o padding canônico, então

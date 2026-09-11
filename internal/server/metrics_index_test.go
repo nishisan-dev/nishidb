@@ -996,7 +996,7 @@ func TestAsSeriesDeIndiceSaemSoPelasConstantes(t *testing.T) {
 //
 // É o alarme que a própria Ajuda da série promete: *"ele para de vez na primeira
 // falha"*. Um `.sidx` substituído por um DIRETÓRIO faz o mmap devolver ENODEV, que
-// não é nenhum dos três estados não-anômalos do indiceIlegivel: a passada seguinte
+// não é nenhum dos três estados não-anômalos do unreadableIndex: a passada seguinte
 // falha, o laço morre e o medidor desce. O retrato de estados ANTERIOR fica de pé,
 // porque uma passada que falhou não publica — então o dataset passa a ter
 // `corrente=1` com `reconstrucao_ativa=0`, que é o único estado em que os dois

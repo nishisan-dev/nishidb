@@ -85,7 +85,7 @@ type LoopbackSpec struct {
 }
 
 // bindCollidesWithLoopback diz se o bind do listener PRINCIPAL alcança o mesmo
-// endereço que o listener loopback usa fixo (127.0.0.1, enderecoLoopback em
+// endereço que o listener loopback usa fixo (127.0.0.1, loopbackAddress em
 // internal/server/security.go) — a única condição em que os dois listeners
 // na MESMA porta colidiriam de fato no kernel.
 //

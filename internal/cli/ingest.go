@@ -57,7 +57,7 @@ type summaryIngest struct {
 //     desfecho nomeado diz mais.
 var gravidadeIngest = [...]int{ExitWriter, ExitDataset, ExitDataLoss, ExitPolicyStopped, ExitInterrupted, ExitUsageError}
 
-// desfechoMaisGrave devolve, entre dois códigos de saída, o de maior
+// mostSevereOutcome devolve, entre dois códigos de saída, o de maior
 // gravidade. Código sem gravidade declarada (nenhum é alcançável hoje pelo
 // ingest) vale o mesmo que o vala-comum: perde para os nomeados e vence o
 // sucesso, porque sair 0 com desfecho anômalo é a perda silenciosa de volta.
@@ -285,7 +285,7 @@ func runIngest(args []string, amb Context) int {
 	return encerra(motivo)
 }
 
-// precisaCheckpoint dispara por CONTAGEM ou por TEMPO, o que vier primeiro:
+// needsCheckpoint dispara por CONTAGEM ou por TEMPO, o que vier primeiro:
 // uma ingestão lenta não pode ficar horas sem checkpoint só porque não atingiu
 // a contagem, e uma rápida não pode esperar o relógio.
 func needsCheckpoint(everyN int, lidos int64, ultimo time.Time, intervalo time.Duration) bool {

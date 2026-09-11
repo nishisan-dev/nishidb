@@ -39,7 +39,7 @@ func TestAJanelaArredondaParaCima(t *testing.T) {
 	casos := map[int]int{1: 1, 2: 2, 3: 4, 1000: 1024, 1024: 1024, 1025: 2048}
 	for pedido, quero := range casos {
 		if got := newPipeline(pedido).size(); got != quero {
-			t.Errorf("novaEsteira(%d).tamanho() = %d, quero %d", pedido, got, quero)
+			t.Errorf("newPipeline(%d).tamanho() = %d, quero %d", pedido, got, quero)
 		}
 	}
 }

@@ -157,7 +157,7 @@ def _para_bytes(texto: str) -> bytes:
 def do_fio(valor: Any, jdbc: str) -> Any:
     """Converte UM valor já decodificado do JSON, guiado pelo tipo da coluna.
 
-    `valor` vem do `json.loads`, então já é str/int/float/bool/None/dict/list.
+    `value` vem do `json.loads`, então já é str/int/float/bool/None/dict/list.
     O que falta é só o que o JSON não sabe expressar.
     """
     if valor is None:

@@ -14,7 +14,7 @@ import (
 // Um byte invertido DENTRO da região durável de um segmento não é detectado no
 // Open (a guarda do §14.20 vê encolhimento, não sobrescrita): ele aparece na
 // leitura, no meio do resultado. O que estava errado era o exit code — o erro
-// real é encoding.ErrCorrupt, que não constava do codigoDoErro e caía no
+// real é encoding.ErrCorrupt, que não constava do errorCode e caía no
 // default ExitUsageError. O operador recebia "erro de uso ou de configuração", que é
 // justamente o único código que NÃO manda olhar o dataset.
 func TestDatasetCorrompidoSaiComExitDeDataset(t *testing.T) {

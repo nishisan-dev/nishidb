@@ -417,7 +417,7 @@ func (f *source) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, [
 	return types.Record{}, buf, false, nil
 }
 
-// igualAChave compara a key pedida com o `id` da linha SEM alocar: o resumo é
+// equalsKey compara a key pedida com o `id` da linha SEM alocar: o resumo é
 // a literal fixa, e a partição é o número em decimal.
 func equalsKey(key []byte, l row) bool {
 	if l.Summary {

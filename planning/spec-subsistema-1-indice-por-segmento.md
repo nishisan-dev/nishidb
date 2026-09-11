@@ -185,7 +185,7 @@ postings (array append-only)                           16 B por posting:
 `ultimo` e `anterior` são índices 1-based; `0` é "não há". `hash == 0` marca
 slot vazio, e isso é seguro porque `primary.HashKey` nunca devolve 0 nem 1.
 
-**`contagem` e `ultimo` moram na MESMA palavra de 64 bits, e isso é a
+**`count` e `ultimo` moram na MESMA palavra de 64 bits, e isso é a
 linearização.** Publicá-los em duas escritas deixaria um leitor ver a cabeça
 nova com a contagem velha — ele dimensionaria a fatia com um elemento a menos
 que a caminhada produz. Uma escrita atômica de `estado`, depois de a posting
@@ -222,7 +222,7 @@ forma selada, e isso só existe **para um segmento por vez**: 224 mil linhas sã
 
 O `Lookup` sobre a forma WIP percorre a cadeia de `ultimo` para trás, o que
 devolve as postings em ordem **decrescente** de inserção; materializa
-`contagem` elementos e preenche de trás para frente, produzindo ordem crescente
+`count` elementos e preenche de trás para frente, produzindo ordem crescente
 com uma alocação de tamanho exato. É a mesma alocação que o `Lookup` de hoje já
 admite carregar ([hash/index.go:428](../internal/index/hash/index.go:428)), e
 agora ela existe para **um** segmento em vez de para o dataset inteiro.
@@ -542,7 +542,7 @@ Em ordem crescente de segmento:
 | Estado do segmento | Fonte | Alocação |
 |---|---|---|
 | Selado, **com** seção do campo | fatia contígua do array de postings | **zero** |
-| Corrente (WIP) | caminhada da cadeia, materializada em `contagem` elementos | uma, de tamanho exato |
+| Corrente (WIP) | caminhada da cadeia, materializada em `count` elementos | uma, de tamanho exato |
 | Sem índice — histórico | a faixa `[primeiro, primeiroDoSeguinte)` | zero |
 | Sem índice — materializado | **colapsa a consulta**: ver abaixo | zero |
 

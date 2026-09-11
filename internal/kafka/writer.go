@@ -45,7 +45,7 @@ type Store interface {
 // storage.checkpoint.interval), e não uma chave nova — o §48 fixa a ORDEM do
 // fluxo, não a periodicidade.
 //
-// Onde as duas regras divergem, e por quê: o precisaCheckpoint do
+// Onde as duas regras divergem, e por quê: o needsCheckpoint do
 // `internal/cli/ingest.go` cai para um padrão quando o intervalo é <= 0 e não
 // tem guarda de "nenhum evento desde o último checkpoint". Ele pode se dar a
 // esse luxo porque lê uma entrada FINITA do começo ao fim — só é consultado
@@ -76,7 +76,7 @@ type Writer struct {
 	// assim está no caminho: um caminho de código, dimensionado diferente.
 	est *esteira
 	// limiarOfEncolhimento é o teto de memória retida por slot acima do qual os
-	// buffers são soltos ao liberar o slot. Ver o godoc de limiarDeSlot.
+	// buffers são soltos ao liberar o slot. Ver o godoc de slotThreshold.
 	limiarOfEncolhimento int
 	log                  *logging.Logger
 	met                  *metricas
@@ -230,7 +230,7 @@ func (w *Writer) Run(ctx context.Context) error {
 			// milhão de atraso num consumidor que não tem atraso nenhum.
 			//
 			// O despertar só AVALIA a regra — quem decide continua sendo o
-			// precisaCheckpoint.
+			// needsCheckpoint.
 			if err := w.talvezCheckpoint(ctx); err != nil {
 				return err
 			}
@@ -272,7 +272,7 @@ func (w *Writer) despertador() (<-chan time.Time, func()) {
 		return nil, func() {}
 	}
 	// Ticker, e não timer rearmado a cada checkpoint: o despertar é barato
-	// (precisaCheckpoint é aritmética) e um tique que chega cedo demais
+	// (needsCheckpoint é aritmética) e um tique que chega cedo demais
 	// simplesmente não faz nada. O custo de errar para o lado do timer seria
 	// pior — esquecer um Reset num caminho de erro deixa o laço mudo de novo,
 	// que é exatamente o débito que se está fechando.
@@ -519,7 +519,7 @@ func (w *Writer) finaliza(ctx context.Context) error {
 	return w.checkpoint(cctx)
 }
 
-// precisaCheckpoint dispara por contagem OU por tempo, o que vier primeiro.
+// needsCheckpoint dispara por contagem OU por tempo, o que vier primeiro.
 // Eventos == 0 desliga os dois.
 //
 // `desde == 0` também desliga, e a guarda passou a importar quando o laço

@@ -622,7 +622,7 @@ func TestStatusMostraOEstadoDaCompaction(t *testing.T) {
 
 // TestStatusMostraACompactionDesligada é a outra metade do par acima, e sem
 // ela o teste de cima não prova a palavra: `return "ligada"` no corpo do
-// estadoDaCompaction passa por todo oráculo que só sobe com a chave no
+// compactionStatus passa por todo oráculo que só sobe com a chave no
 // default, e o `waitCompactionInAr` está lá justamente para garantir que o
 // laço esteja de pé quando a saída for lida.
 //
@@ -705,7 +705,7 @@ func TestStatusSeparaOsSegmentosDoCorrenteEOsBytesDaCompaction(t *testing.T) {
 		quer := strconv.FormatInt(c.value, 10)
 		got := fieldOfSaida(t, saida, c.rotulo)
 		if c.inBytes {
-			// O byte EXATO vem primeiro no bytesLegiveis, e é ele que se
+			// O byte EXATO vem primeiro no bytesToReadableString, e é ele que se
 			// confere: quem compara duas medições — antes e depois de uma
 			// passada — precisa do número, não da grandeza arredondada.
 			if !strings.HasPrefix(got, quer+" B") {
@@ -1211,7 +1211,7 @@ func TestOsComandosDeLeituraExigemOServidor(t *testing.T) {
 }
 
 // Revisão da B6, Important 2: a paridade byte a byte "sem --user, sem
-// Authorization" era só argumento estrutural (credencialRemota{} vazio) e
+// Authorization" era só argumento estrutural (remoteCredential{} vazio) e
 // unit de caixa branca (TestAplicaCredencialSoDefineBasicComUsuario,
 // credential_internal_test.go). Aqui o oráculo é o HEADER que chega pela
 // rede de verdade: um servidor de mentira captura o request de um `status

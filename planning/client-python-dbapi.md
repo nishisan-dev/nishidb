@@ -213,7 +213,7 @@ soltos. E acrescentar os diretórios à lista que `testesOfRepositorio`
   falha de autenticação custa 100 ms fixos no servidor**, e desafio-resposta pagaria isso em
   toda requisição.
 - Corpo de erro: decodifica `protocol.ErrorBody`; quando não é JSON, **espelhar
-  `dicaDeEsquema`** ([query_remote.go:110](internal/cli/query_remote.go:110)) — porta TLS
+  `schemaHint`** ([query_remote.go:110](internal/cli/query_remote.go:110)) — porta TLS
   respondendo a texto puro devolve `Client sent an HTTP request to an HTTPS server`, e a
   mensagem tem de sugerir o `nishidbs://`/`tls=true`. Sem isso o usuário vê "400 sem corpo
   legível" e culpa o servidor.

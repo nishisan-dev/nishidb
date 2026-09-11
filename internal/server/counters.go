@@ -124,8 +124,8 @@ func (s *Server) handleRebuildOfCounters(w http.ResponseWriter, r *http.Request)
 	s.respondeJSON(w, protocol.CountersRebuildResponse{Datasets: results})
 }
 
-// erroDeContadores traduz o erro do storage para as duas rotas. Além dos casos
-// de erroDeMutacao, o snapshot estourado — a auditoria ficou inconclusiva — e
+// countersError traduz o erro do storage para as duas rotas. Além dos casos
+// de mutationError, o snapshot estourado — a auditoria ficou inconclusiva — e
 // o contexto cancelado (o servidor encerrando, ou o cliente desistindo).
 func countersError(err error) (int, protocol.ErrorDetail) {
 	switch {

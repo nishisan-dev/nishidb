@@ -532,12 +532,18 @@ var danglingCitationSkipPaths = map[string]bool{
 	"planning/identificadores-em-ingles":          true,
 	"planning/identificadores-em-ingles.md":       true,
 	"planning/identificadores-em-ingles-plano.md": true,
-	"scripts/renamecite":                          true,
-	"scripts/ifacerename":                         true,
-	"scripts/renametools":                         true,
-	"benchmark/baselines":                         true,
-	"docs/glossario.md":                           true,
-	"internal/gates/dangling_citations_test.go":   true,
+	// Os dois registros do fechamento à mão (11/09/2026) são tabelas De→Para
+	// como o plano, e o aceite do ciclo nomeia o que foi renomeado para
+	// registrar o rename: o nome velho ali é o DADO, não citação.
+	"planning/rename_pt_functions_plan.md":      true,
+	"planning/checkpoint_variaveis.md":          true,
+	"docs/aceite-identificadores-em-ingles.md":  true,
+	"scripts/renamecite":                        true,
+	"scripts/ifacerename":                       true,
+	"scripts/renametools":                       true,
+	"benchmark/baselines":                       true,
+	"docs/glossario.md":                         true,
+	"internal/gates/dangling_citations_test.go": true,
 }
 
 // danglingCitationChunks devolve tudo que o gate varre — os comentários e

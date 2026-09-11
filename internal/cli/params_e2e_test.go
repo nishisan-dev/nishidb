@@ -99,7 +99,7 @@ func TestParamProduzOMesmoResultadoQueOLiteralPeloProtocoloRemoto(t *testing.T) 
 
 // A flag vale nos DOIS caminhos.
 //
-// consultaRemota promete que "um script que troca --config por --server não
+// remoteQuery promete que "um script que troca --config por --server não
 // muda mais nada". Uma flag que só funcionasse no remoto quebraria a promessa
 // justamente onde ela é mais fácil de verificar — e a query com ? pelo caminho
 // local saía com exit 2 desde o M1, o que o README registrava como limite.

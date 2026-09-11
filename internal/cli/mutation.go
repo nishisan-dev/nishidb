@@ -22,8 +22,8 @@ import (
 //
 // Credencial e TLS (Task B6): os dois comandos aceitam --user, --tls-ca e
 // senha por NISHIDB_PASSWORD/--password-file, no MESMO ponto de costura que
-// consultaRemota (query_remote.go) e buscaDocumento (operation.go) usam —
-// postaMutacao, abaixo, chama clienteRemoto/aplicaCredencial, nunca monta
+// remoteQuery (query_remote.go) e searchDocument (operation.go) usam —
+// postMutation, abaixo, chama remoteClient/aplicaCredencial, nunca monta
 // Authorization ou Transport por conta própria. Contra um servidor com
 // server.authentication DESLIGADA, rodar sem --user continua byte a byte
 // igual a antes desta task.
@@ -94,19 +94,19 @@ func runCheckpoint(args []string, amb Context) int {
 	return writeOutputWithContext("checkpoint", amb, func(w io.Writer) { writeCheckpoint(w, *server, resp) })
 }
 
-// postaMutacao faz o POST de uma rota mutante (compact/checkpoint) e
+// postMutation faz o POST de uma rota mutante (compact/checkpoint) e
 // decodifica o corpo de SUCESSO no destino. dataset == "" omite o corpo por
 // completo — não manda "{}" — para exercitar o mesmo caminho "todos os
 // datasets" que um corpo ausente já cobre no servidor (mutations.go,
 // readRequisicaoDataset).
 //
-// O tratamento de erro é o do query_remota (recusaRemota, que operation.go
+// O tratamento de erro é o do query_remota (remoteRefusal, que operation.go
 // já generaliza com um parâmetro `cmd`): ErrorBody decodificado,
 // mensagem no stderr, código traduzido por codigoOfProtocolo — a MESMA
 // tabela que WRITER_FAILED (→ ExitWriter) e COMPACTION_BUSY (→ ExitUsageError, com
 // justificativa no comentário de codigoOfProtocolo) alimentam.
 //
-// cred entra pelo MESMO remoteClient/aplicaCredencial que consultaRemota e
+// cred entra pelo MESMO remoteClient/aplicaCredencial que remoteQuery e
 // searchDocument usam (Task B6) — este É o ponto de costura único que a B5
 // já apontava para a credencial entrar.
 func postMutation(cmd, endereco, path, dataset string, cred remoteCredential, destination any, amb Context) int {

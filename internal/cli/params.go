@@ -48,7 +48,7 @@ func (l *listaOfParametros) Set(s string) error {
 	return nil
 }
 
-// valorDeWire monta o json.RawMessage que o field "value" do protocolo espera.
+// wireValue monta o json.RawMessage que o field "value" do protocolo espera.
 //
 // O int64 e o double vão VERBATIM, sem passar por strconv aqui. É o mesmo
 // motivo de protocol.Param.Value ser json.RawMessage e não any: decodificar

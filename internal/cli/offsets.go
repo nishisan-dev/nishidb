@@ -160,7 +160,7 @@ func runOffsets(args []string, amb Context) int {
 	}
 }
 
-// origemDaSpec reconstrói a identidade a partir do YAML. O cluster id fica
+// specOrigin reconstrói a identidade a partir do YAML. O cluster id fica
 // vazio: quem o preenche é a primeira subida, que fala com o broker — e a
 // Divergencia trata o vazio como "não confere", não como "divergiu".
 func specOrigin(spec *schema.DatasetSpec) checkpoint.Source {

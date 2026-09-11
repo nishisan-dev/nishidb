@@ -57,7 +57,7 @@ payload. O leitor lê a versão antiga por `ReadRecord(segAntigo, offAntigo)`.
 
 Consequência boa: `escritas` e `prazos` da versão antiga **não precisam ser
 guardados**. São índices derivados cuja fonte da verdade é o campo de sistema
-do payload — `instanteDeEscrita` ([store.go:1826](internal/storage/store.go:1826))
+do payload — `writeInstant` ([store.go:1826](internal/storage/store.go:1826))
 os extrai do record antigo lido, que é exatamente o que o `applyRecord` faz.
 
 **2. O copy-forward da compaction NÃO pode versionar.** `reapendaSeVivo` chama

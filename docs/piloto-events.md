@@ -696,7 +696,7 @@ não acompanhou por um instante.
 
 | Cadeia | % cumulativo |
 |---|---:|
-| `decodificadores.roda` → `Decode` → `PatchBuffer.Parse` | **33,2%** |
+| `decodificadores.run` → `Decode` → `PatchBuffer.Parse` | **33,2%** |
 | `Writer.aplica` → `Materializer.Aplica` | **33,8%** |
 
 Meio a meio. É a medida do teto que o godoc de `decodeWorkers` afirmava por

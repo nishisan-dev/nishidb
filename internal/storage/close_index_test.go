@@ -13,7 +13,7 @@ import (
 
 // A QUARTA rota de leitura. O quiesce da I2 cobriu Put, GetByKey, GetByRowID e
 // ScanLive, e o teste daquela tarefa asseriu "toda operação após o Close" — mas
-// o helper `abre` não configura índice, então o Lookup estava fora do alcance da
+// o helper `open` não configura índice, então o Lookup estava fora do alcance da
 // asserção. A invariante valia em três rotas e falhava na quarta.
 //
 // O iterador do índice é o mais exposto de todos: ele SOBREVIVE à chamada que o

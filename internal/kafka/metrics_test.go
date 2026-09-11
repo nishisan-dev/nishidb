@@ -19,7 +19,7 @@ import (
 // evento daquela categoria — mudança observável na superfície /metrics que o
 // piloto em produção já expõe. Como o enum §101 de evento ruim é fechado
 // (ErrorCategory.BadEvent()), pré-registrar as seis categorias em
-// registraMetricas restaura a presença-em-zero, que é a prática canônica do
+// registerMetrics restaura a presença-em-zero, que é a prática canônica do
 // Prometheus para séries cuja cardinalidade é conhecida de antemão.
 func TestRegistraMetricasPreRegistraAsSeisCategoriasDeEventoRuimEmZero(t *testing.T) {
 	m := registerMetrics(nil, "events")

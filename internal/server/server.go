@@ -151,7 +151,7 @@ type Server struct {
 	pprofSrv *http.Server
 
 	// credenciais é o cache imutável de server.authentication.users já
-	// resolvido contra o ambiente (§74-77, resolveCredenciais em
+	// resolvido contra o ambiente (§74-77, resolveCredentials em
 	// security.go): username -> digest SHA-256 da senha + papel. Nil quando
 	// AuthenticationEnabled() é false — é o que withAuth
 	// (auth.go) lê para decidir entre o middleware de verdade e o
@@ -165,7 +165,7 @@ type Server struct {
 	authFalhas *metrics.CounterFamily
 
 	// tlsCert é o par certificado/chave já CARREGADO por
-	// validaCertificadoNaSubida (security.go), nil quando server.tls está
+	// validateCertificateAtStartup (security.go), nil quando server.tls está
 	// desligado. risesHTTP o REUSA no ServeTLS — nunca relido do disco depois
 	// da subida; rotação de certificado é reiniciar o processo.
 	tlsCert *tls.Certificate
@@ -272,7 +272,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	cert, err := validateCertificateOnUpload(cfg)
+	cert, err := validateCertificateAtStartup(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -496,7 +496,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	return d, nil
 }
 
-// fechandoStore devolve o erro original, fechando o Store antes. O erro do
+// closingStore devolve o erro original, fechando o Store antes. O erro do
 // Close é agregado e nunca substitui a causa: quem lê precisa do motivo de a
 // abertura ter falhado, não do que aconteceu na limpeza.
 func closingStore(st *storage.Store, causa error) error {
@@ -817,7 +817,7 @@ func (s *Server) risesHTTP() error {
 
 	// ServeTLS no ponto único (§77, Task B4): MinVersion TLS12 é o mesmo
 	// precedente de internal/kafka/config.go (Resolve, security.TLS()). O
-	// certificado é o que validaCertificadoNaSubida já carregou e validou —
+	// certificado é o que validateCertificateAtStartup já carregou e validou —
 	// nunca relido do disco aqui. Rotação de certificado é reiniciar o
 	// processo (limite nomeado: sem SIGHUP-reload nesta versão).
 	if s.tlsCert != nil {

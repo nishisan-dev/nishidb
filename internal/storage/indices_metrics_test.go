@@ -471,7 +471,7 @@ func TestAPassadaQueFalhaPreservaORetratoAnterior(t *testing.T) {
 
 	// Metade 2 — falha NO MEIO do laço. Um diretório no lugar do .sidx faz o
 	// mmap devolver ENODEV, que não é nenhum dos três estados não-anômalos do
-	// indiceIlegivel: é falha de infra, e ela para a passada com parte dos
+	// unreadableIndex: é falha de infra, e ela para a passada com parte dos
 	// segmentos já classificados.
 	hist, rel := histIndexed(t, 512)
 	povoaHistory(t, hist, rel, 40, time.Minute)
@@ -574,7 +574,7 @@ func TestOGaugeDeEstadosEhCegoAIndicePodre(t *testing.T) {
 // corruptOUltimoByte troca o byte final do arquivo, que é onde o crc32c mora.
 //
 // O FIM, e não o começo: corrompendo o cabeçalho o arquivo vira "ilegível", cai
-// no indiceIlegivel e o segmento é reagendado — a corrupção some e o teste passa
+// no unreadableIndex e o segmento é reagendado — a corrupção some e o teste passa
 // a medir outra coisa. É o mesmo cuidado que a bancada do servidor documenta.
 func corruptOUltimoByte(t *testing.T, path string) {
 	t.Helper()

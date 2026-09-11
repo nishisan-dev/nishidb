@@ -43,7 +43,7 @@ const TableFields = "fields"
 // só quer saber se um índice EXISTE. nil é aceito e vale "não sei", que
 // reporta indexed=false.
 //
-// UM método, e não mais o par HasBitmap/HasHash somado em fonte.record: existe
+// UM método, e não mais o par HasBitmap/HasHash somado em source.record: existe
 // um motor de índice só (spec §3.1), e a soma de duas respostas idênticas era o
 // resto do dia em que a coluna `indexed` mentia — enquanto só havia HasBitmap,
 // uma coluna com `index: hash` saía com indexed=false, o que era verdade (não

@@ -212,7 +212,7 @@ melhorias — não sobreviveram à leitura:
    fechamento depois.**
 
 9. **O `OFFSET` quebra o `--limit` do CLI — o débito 46 vira pré-requisito, não
-   dívida.** `comLimit` ([query.go:156](internal/cli/query.go:156)) reescreve o
+   dívida.** `withLimit` ([query.go:156](internal/cli/query.go:156)) reescreve o
    **texto** do SQL: corta na última cláusula `LIMIT` e anexa a sua. Com
    `OFFSET`, `SELECT ... LIMIT 10 OFFSET 20` vira `SELECT ... OFFSET 20 LIMIT 5`
    — ordem inválida, e o usuário recebe erro de sintaxe sobre um texto que não
@@ -240,7 +240,7 @@ melhorias — não sobreviveram à leitura:
 13. **Débito 77 é a armadilha operacional das duas melhorias.** Ligar
    `unknownFields: include` num dataset com linhas **não é recusado** hoje. A
    Melhoria A troca colunas descobertas por colunas declaradas, e o nome novo
-   **é** pego pela guarda `validaDerivadasContraDicionario`
+   **é** pego pela guarda `validateDerivedAgainstDictionary`
    ([store.go:1857](internal/storage/store.go:1857)) — a recriação é cobrada
    corretamente. Mas o débito continua aberto ao lado.
 
@@ -748,7 +748,7 @@ senão o zero-alocação do matcher não é medido.
 
 #### D1 — `OFFSET`, e o conserto do `--limit`
 
-> **O achado que torna esta fase obrigatória e não opcional.** `comLimit`
+> **O achado que torna esta fase obrigatória e não opcional.** `withLimit`
 > ([query.go:151](internal/cli/query.go:151)) corta em `ultimoLimit` e **descarta
 > tudo à direita**. Com `... LIMIT 5 OFFSET 10`, o `--limit 3` produz
 > `... LIMIT 3`: a paginação **evapora** e o comando devolve as 3 **primeiras**
@@ -760,7 +760,7 @@ senão o zero-alocação do matcher não é medido.
 `HasLimit`); `parseOffset` reusando as recusas de `parseLimit`
 ([:469](internal/query/parser/parser.go:469)); `offset` sai de
 `unsupportedClauses`; contador de skip antes de `it.emitidas++`
-([executor.go:222](internal/query/executor/executor.go:222)); e `comLimit` passa a
+([executor.go:222](internal/query/executor/executor.go:222)); e `withLimit` passa a
 usar **`parser.Parse`**, cortando em `min(LimitPos, OffsetPos)` e **preservando o
 OFFSET**. Isso paga a metade local do **débito 46**.
 

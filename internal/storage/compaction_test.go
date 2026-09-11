@@ -2598,7 +2598,7 @@ func tamanhosOfSegmentosByArquivo(t *testing.T, dir string) map[string]int64 {
 // de record copiado. O writer rotaciona criando o segmento seguinte com um
 // header de segment.HeaderSize, que é o único byte de um arquivo novo que não
 // veio do cpy-forward, e por isso ele é descontado. E os IDs são monotônicos
-// (openNew(segID+1)), de modo que nenhum nome aposentado volta com outro
+// (openNew(secID+1)), de modo que nenhum nome aposentado volta com outro
 // conteúdo por baixo do mesmo caminho.
 //
 // Arquivo que existia antes e não existe depois é candidato APOSENTADO: ele

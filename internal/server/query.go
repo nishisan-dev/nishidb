@@ -207,7 +207,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	s.transmite(w, r, d, req, it, columns, ceilingOfRequest, start, orc)
 }
 
-// ehJSON aceita application/json com ou sem parâmetros (charset, por exemplo).
+// isJSON aceita application/json com ou sem parâmetros (charset, por exemplo).
 func isJSON(ct string) bool {
 	if i := strings.IndexByte(ct, ';'); i >= 0 {
 		ct = ct[:i]
@@ -251,7 +251,7 @@ func (s *Server) readRequisicao(w http.ResponseWriter, r *http.Request) (protoco
 	return req, nil, http.StatusOK
 }
 
-// tetoDeLinhas resolve o maxRows do request contra o do dataset.
+// rowCeiling resolve o maxRows do request contra o do dataset.
 //
 // O request pode pedir MENOS, nunca mais: o teto do dataset é proteção do
 // servidor, não uma sugestão. Pedir mais é recusado em vez de reduzido em
@@ -485,7 +485,7 @@ func (s *Server) reject(w http.ResponseWriter, r *http.Request, status int, data
 		"codigo", fail.Code, "status", status, "remoto", r.RemoteAddr)
 }
 
-// traduzErroDeAbertura mapeia a falha do Execute — que acontece antes de
+// translateOpenError mapeia a falha do Execute — que acontece antes de
 // qualquer leitura de dado — em status e código.
 func translateOpenError(err error, sql string) (int, protocol.ErrorDetail) {
 	switch {

@@ -14,7 +14,7 @@ import (
 )
 
 // engineWithMeta registra o dataset de mentira e a `_meta.counters` sobre os
-// contadores dados — a mesma costura do Registra, sem o Store real.
+// contadores dados — a mesma costura do Register, sem o Store real.
 func engineWithMeta(t *testing.T, cs ...*counter.Counter) *query.Engine {
 	t.Helper()
 	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)

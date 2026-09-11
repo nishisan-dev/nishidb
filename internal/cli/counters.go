@@ -69,7 +69,7 @@ func runCounters(args []string, amb Context) int {
 	return countersLocal(*argConfig, *dataset, *audit, *rebuild, amb)
 }
 
-func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Context) int {
+func countersLocal(argConfig, dataset string, audit, rebuild bool, amb Context) int {
 	cfg, err := nishiconfig.Load(argConfig)
 	if err != nil {
 		notify(amb, "counters: %v\n", err)
@@ -84,7 +84,7 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Conte
 	defer func() { _ = st.Close() }()
 
 	switch {
-	case audita:
+	case audit:
 		rs, err := st.AuditaCounters(amb.Ctx)
 		if err != nil {
 			notify(amb, "counters: auditoria: %v\n", err)
@@ -96,7 +96,7 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Conte
 		}
 		code := writeOutputWithContext("counters", amb, func(w io.Writer) { writeAudit(w, dataset, rows) })
 		return auditOutcome(rows, code, amb)
-	case reconstroi:
+	case rebuild:
 		recs, err := st.ReconstroiCounters(amb.Ctx)
 		if err != nil {
 			notify(amb, "counters: reconstrução: %v\n", err)
@@ -117,9 +117,9 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Conte
 	}
 }
 
-func countersRemote(server, dataset string, audita, reconstroi bool, cred remoteCredential, amb Context) int {
+func countersRemote(server, dataset string, audit, rebuild bool, cred remoteCredential, amb Context) int {
 	switch {
-	case audita:
+	case audit:
 		var resp protocol.CountersAuditResponse
 		if code := postMutation("counters", server, "/v1/counters/audit", dataset, cred, &resp, amb); code != ExitOK {
 			return code
@@ -132,7 +132,7 @@ func countersRemote(server, dataset string, audita, reconstroi bool, cred remote
 		}
 		code := writeOutputWithContext("counters", amb, func(w io.Writer) { writeAudit(w, dataset, rows) })
 		return auditOutcome(rows, code, amb)
-	case reconstroi:
+	case rebuild:
 		var resp protocol.CountersRebuildResponse
 		if code := postMutation("counters", server, "/v1/counters/rebuild", dataset, cred, &resp, amb); code != ExitOK {
 			return code
@@ -173,7 +173,7 @@ type rowOfCounter struct {
 	name                         string
 	rows, total                  int64
 	groups, ceiling, aposentados uint32
-	recusados, orfas             uint64
+	refusedCount, orphanCount    uint64
 	bytes                        int64
 	auditDivergentes, auditUnix  int64
 }
@@ -181,14 +181,14 @@ type rowOfCounter struct {
 func storageCounter(e counter.Stats) rowOfCounter {
 	return rowOfCounter{name: e.Name, rows: e.Rows, total: e.Total,
 		groups: e.Groups, ceiling: e.Ceiling, aposentados: e.Retired,
-		recusados: e.Refused, orfas: e.Orphans, bytes: e.Bytes,
+		refusedCount: e.Refused, orphanCount: e.Orphans, bytes: e.Bytes,
 		auditDivergentes: e.AuditDivergences, auditUnix: e.AuditLastUnix}
 }
 
 func wireCounter(c protocol.CounterStats) rowOfCounter {
 	return rowOfCounter{name: c.Name, rows: c.Rows, total: c.Total,
 		groups: c.Groups, ceiling: c.MaxGroups, aposentados: c.Retired,
-		recusados: c.Refused, orfas: c.OrphanEntries, bytes: c.Bytes,
+		refusedCount: c.Refused, orphanCount: c.OrphanEntries, bytes: c.Bytes,
 		auditDivergentes: c.AuditDivergentGroups, auditUnix: c.AuditLastSuccessUnix}
 }
 
@@ -210,7 +210,7 @@ func writeCounters(w io.Writer, dataset string, rows []rowOfCounter) {
 		}
 		line(w, l.name, strconv.FormatInt(l.rows, 10), strconv.FormatInt(l.total, 10),
 			u32(l.groups), u32(l.ceiling), u32(l.aposentados),
-			strconv.FormatUint(l.recusados, 10), strconv.FormatUint(l.orfas, 10),
+			strconv.FormatUint(l.refusedCount, 10), strconv.FormatUint(l.orphanCount, 10),
 			bytesToReadableString(l.bytes), audit)
 	}
 }
@@ -291,7 +291,7 @@ func writeAudit(w io.Writer, dataset string, rows []rowOfAudit) {
 	}
 }
 
-// desfechoDaAuditoria decide o exit code depois de a tabela ter saído:
+// auditOutcome decide o exit code depois de a tabela ter saído:
 // divergência é corrupção de índice derivado, e sai com ExitDataset (3) — o
 // mesmo código de "dataset corrompido", que é o que um script de operação lê.
 func auditOutcome(rows []rowOfAudit, code int, amb Context) int {

@@ -167,7 +167,7 @@ func TestQueryRemotaComTLSEAuthFuncionaDePontaAPonta(t *testing.T) {
 }
 
 // status/datasets/inspect também falam TLS+auth pelo MESMO ponto de costura
-// (buscaDocumento) — um representante basta para confirmar que a costura
+// (searchDocument) — um representante basta para confirmar que a costura
 // vale para os três, já que a suíte de operation_test.go trava o resto do
 // contrato deles sem credencial.
 func TestStatusRemotoComTLSEAuthFuncionaComPasswordFile(t *testing.T) {
@@ -252,7 +252,7 @@ func TestCompactRemotoComUsuarioReadSaiComExit1EMencionaOPapel(t *testing.T) {
 
 // ---------------------------------------------------------------- dica de esquema
 
-// A porta fala TLS; o operador esqueceu o https:// e normalizaEndereco
+// A porta fala TLS; o operador esqueceu o https:// e normalizeAddress
 // assume http:// por default — o Go entrega "Client sent an HTTP request to
 // an HTTPS server." cru, e a mensagem do comando precisa virar uma dica
 // acionável em vez do genérico "sem corpo legível".
@@ -274,8 +274,8 @@ func TestDicaDeEsquemaQuandoAPortaFalaTLSMasOClienteUsaHTTP(t *testing.T) {
 // Revisão da B6, Important 1: o cliente compartilhado fala com UM servidor
 // que o operador nomeou na linha de comando — esse servidor não redireciona,
 // e a política DEFAULT do stdlib seguiria um 3xx same-host reenviando
-// Authorization nele (só remove em cross-host). clienteRemoto instala
-// recusaRedirect para eliminar a classe inteira; este teste prova a versão
+// Authorization nele (só remove em cross-host). remoteClient instala
+// refuseRedirect para eliminar a classe inteira; este teste prova a versão
 // observável pela rede, com DOIS servidores de mentira: "origem" (onde o
 // --server aponta, sempre responde 302) e "alvo" (o destino do Location),
 // que precisa NUNCA ser alcançado.

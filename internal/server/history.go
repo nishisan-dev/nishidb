@@ -12,7 +12,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
-// validaNomesDeHistorico recusa o nome derivado que colide com um dataset
+// validateHistoryNames recusa o nome derivado que colide com um dataset
 // declarado.
 //
 // A colisão é decidida ANTES de abrir qualquer coisa, junto da unicidade de
@@ -130,7 +130,7 @@ func (s *Server) openHistory(base *dataset, log *logging.Logger) (*dataset, erro
 	// quem lê o aviso precisa do dataset BASE para achar o YAML em que a chave
 	// foi escrita, e lá só há a tabela irmã.
 	if h.WindowExceedsRetention() {
-		log.Warn("janela.maior_que_retencao",
+		log.Warn("window.maior_que_retencao",
 			"history.index.window é maior que history.expireAfterWrite e não indexa nada a mais: "+
 				"a retenção aposenta o segmento antes de a janela o alcançar",
 			"dataset", base.nome, "tabela", specIrma.Name,

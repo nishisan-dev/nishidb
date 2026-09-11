@@ -367,7 +367,7 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
         # dataset com a ingestão desligada checkpointa uma vez, na abertura,
         # e nunca mais — e era isso que fazia a seção do processo acusar
         # "parado" com o writer do service_view checkpointando a cada 30 s
-        # (`valor` sem rótulo devolvia a primeira série, a do events).
+        # (`value` sem rótulo devolvia a primeira série, a do events).
         ult_ds = m.valor("nishidb_checkpoint_last_success_timestamp", dataset=nome)
         if ult_ds:
             idade_ds = time.time() - ult_ds

@@ -250,7 +250,7 @@ schema:
 
 // TestDatasetComGrafiaDeIndiceObsoletaSaiComExitDataset é o gate de exit code
 // da D5: sem ele, a recusa do schema poderia sair pelo default genérico do
-// codigoDoErro (ExitUsageError, 1) sem que ninguém percebesse — e exit 1 manda o
+// errorCode (ExitUsageError, 1) sem que ninguém percebesse — e exit 1 manda o
 // operador olhar a LINHA DE COMANDO, não o dataset. `index: hash`/`index:
 // bitmap` são config RECUSADA na subida (o `Config recusa na subida` do
 // README), a mesma categoria do manifest ilegível e do dataset travado, e por
@@ -278,7 +278,7 @@ func TestDatasetComGrafiaDeIndiceObsoletaSaiComExitDataset(t *testing.T) {
 // query"; sem este, a frase do README ficava sem trava sobre o comando que
 // ela de fato descreve. server.Novo carrega e valida TODAS as specs do
 // diretório antes de abrir qualquer dataset (internal/server/server.go), e
-// roteia pelo MESMO codigoDoErro que "query" — o teste conta com isso, não
+// roteia pelo MESMO errorCode que "query" — o teste conta com isso, não
 // com um caminho de erro próprio do server.
 func TestServidorComGrafiaDeIndiceObsoletaSaiComExitDataset(t *testing.T) {
 	a := newEnv(t)
@@ -315,7 +315,7 @@ schema:
 
 // TestDatasetComJanelaInvalidaSaiComExitDataset é o gate de exit code da §4.1,
 // no mesmo molde do gate da D5 e pelo mesmo motivo: a recusa da janela é config
-// do DATASET recusada na subida, e sem o errors.Is no codigoDoErro ela cairia no
+// do DATASET recusada na subida, e sem o errors.Is no errorCode ela cairia no
 // default (ExitUsageError, 1) — o código que manda o operador olhar a linha de comando
 // em vez do YAML.
 func TestDatasetComJanelaInvalidaSaiComExitDataset(t *testing.T) {

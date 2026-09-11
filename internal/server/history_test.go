@@ -262,7 +262,7 @@ func TestJanelaMaiorQueARetencaoSobeComWarn(t *testing.T) {
 	run(t, srv)
 	// Sem espera: o aviso sai do openHistory, que roda DENTRO do Novo — se
 	// ele não está aqui, não vai chegar depois.
-	if !strings.Contains(record.String(), "janela.maior_que_retencao") {
+	if !strings.Contains(record.String(), "window.maior_que_retencao") {
 		t.Fatalf("o WARN nomeado não foi emitido:\n%s", record.String())
 	}
 	// E ele nomeia o dataset BASE, que é onde o YAML com a chave está: nomear
@@ -399,7 +399,7 @@ schema:
 `
 
 // seedHistory enche a tabela IRMÃ pelo pipeline real — Materializer.Apply
-// com o histórico ligado —, do mesmo jeito que o `semeia` do dataset base, e
+// com o histórico ligado —, do mesmo jeito que o `seed` do dataset base, e
 // pela mesma razão: o que os testes medem depende de segmentos selados de
 // verdade, com índice escrito pelo writer, e um arquivo montado à mão não
 // exercitaria nem a selagem nem a rotação.

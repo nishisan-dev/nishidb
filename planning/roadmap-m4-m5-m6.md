@@ -233,7 +233,7 @@ auth entra envolvendo o mux num ponto só. O listener também é criado num pont
 - **Papéis:** READ nas rotas de leitura; ADMIN nas mutantes. É aqui que entram
   `POST /v1/compact` e `POST /v1/checkpoint`, fechando o resto do §96 (D3).
 - **CLI:** `nishidb query --server` ganha credencial — por **variável de ambiente ou
-  arquivo**, nunca flag de senha, que apareceria em `ps`. `normalizaEndereco` já aceita
+  arquivo**, nunca flag de senha, que apareceria em `ps`. `normalizeAddress` já aceita
   `https://` ([query_remote.go:64](internal/cli/query_remote.go:64)).
 
 Fecha os débitos **57** e **14**.

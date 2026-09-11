@@ -20,8 +20,8 @@ import (
 )
 
 // Testes de caixa branca das regras de precedência de fonte de senha
-// (flagsRemotas.resolve) e da montagem do client HTTP compartilhado
-// (clienteRemoto/aplicaCredencial) — os dois mecanismos que credential_test.go
+// (remoteFlags.resolve) e da montagem do client HTTP compartilhado
+// (remoteClient/aplicaCredencial) — os dois mecanismos que credential_test.go
 // (package cli_test) exercita ponta a ponta contra um servidor de verdade.
 // Aqui o oráculo é a REGRA em si, sem precisar subir nada.
 
@@ -148,13 +148,13 @@ func TestFlagsRemotasResolveMensagensNaoEcoamSenha(t *testing.T) {
 }
 
 // TestUserComNISHIDBPASSWORDDefinidaEVaziaEhRecusado é o Minor 8 da revisão
-// final: t.Setenv(envSenha, "") deixa a variável DEFINIDA
+// final: t.Setenv(envPass, "") deixa a variável DEFINIDA
 // (os.LookupEnv devolve ok=true), só vazia — antes desta recusa, resolve()
 // não tinha case nenhum que casasse esta combinação (temUsuario && temEnv
 // && !temArquivo, com o VALOR vazio) e caía no caminho feliz com senha ==
 // "": o Basic saía com senha vazia, e o servidor respondia 401 sem nenhuma
 // pista, porque para o operador a variável "está setada". Espelha
-// resolveSenha (internal/server/security.go), que já distingue "ausente"
+// resolvePassword (internal/server/security.go), que já distingue "ausente"
 // de "definida e vazia" para o MESMO cenário do lado do servidor.
 func TestUserComNISHIDBPASSWORDDefinidaEVaziaEhRecusado(t *testing.T) {
 	t.Setenv(envPass, "")
@@ -229,7 +229,7 @@ func TestClienteRemotoTransportTemProxyNil(t *testing.T) {
 	}
 }
 
-// Revisão da B6, Important 1: clienteRemoto tem de instalar CheckRedirect —
+// Revisão da B6, Important 1: remoteClient tem de instalar CheckRedirect —
 // sem ele, o *http.Client usa a política default do stdlib, que segue
 // redirect same-host reenviando Authorization. A prova ponta a ponta (302
 // de verdade, credencial nunca chega ao alvo) mora em credential_test.go;

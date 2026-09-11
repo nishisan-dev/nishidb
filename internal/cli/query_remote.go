@@ -13,7 +13,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
-// consultaRemota executa a query pelo protocolo do §67 em vez de abrir o
+// remoteQuery executa a query pelo protocolo do §67 em vez de abrir o
 // dataset local.
 //
 // Existe porque o flock do dataset é exclusivo por processo: com o `nishidb
@@ -70,7 +70,7 @@ func remoteQuery(endereco, dataset, sql string, params []protocol.Param, cred re
 	return readStream(resp.Body, amb)
 }
 
-// normalizaEndereco aceita host:porta e URL completa. O operador digita
+// normalizeAddress aceita host:porta e URL completa. O operador digita
 // `--server db01:9142`, que não é URL; exigir o esquema seria cerimônia.
 func normalizeAddress(e string) string {
 	if strings.HasPrefix(e, "http://") || strings.HasPrefix(e, "https://") {
@@ -86,10 +86,10 @@ func normalizeAddress(e string) string {
 // oportunidade que tem antes de fechar a conexão.
 const corpoHTTPQuandoEsperavaHTTPS = "Client sent an HTTP request to an HTTPS server"
 
-// leCorpoErro lê o corpo bruto de uma resposta de erro e tenta decodificá-lo
+// readErrorBody lê o corpo bruto de uma resposta de erro e tenta decodificá-lo
 // como protocol.ErrorBody. ok=false cobre tanto falha de leitura quanto
 // corpo que não é JSON — só o segundo caso preserva os BYTES originais para
-// dicaDeEsquema examinar; uma falha de leitura não tem corpo nenhum a
+// schemaHint examinar; uma falha de leitura não tem corpo nenhum a
 // examinar.
 func readErrorBody(resp *http.Response) (corpo protocol.ErrorBody, dica string, ok bool) {
 	bruto, err := io.ReadAll(resp.Body)
@@ -102,10 +102,10 @@ func readErrorBody(resp *http.Response) (corpo protocol.ErrorBody, dica string, 
 	return corpo, "", true
 }
 
-// dicaDeEsquema troca "servidor respondeu 400 sem corpo legível" — mensagem
+// schemaHint troca "servidor respondeu 400 sem corpo legível" — mensagem
 // sem nenhuma pista — pela causa mais provável: a porta fala TLS
 // (server.tls.enabled: true) e o operador esqueceu o https://.
-// normalizaEndereco (acima) já ACEITA o esquema quando ele vem escrito; só
+// normalizeAddress (acima) já ACEITA o esquema quando ele vem escrito; só
 // não assume sozinho — a dica fecha essa distância.
 func schemaHint(status int, corpoBruto []byte) string {
 	if status != http.StatusBadRequest || !bytes.Contains(corpoBruto, []byte(corpoHTTPQuandoEsperavaHTTPS)) {
@@ -114,7 +114,7 @@ func schemaHint(status int, corpoBruto []byte) string {
 	return "  a porta parece falar TLS: tente --server https://host:porta\n"
 }
 
-// recusaDoServidor trata o erro que chegou ANTES de qualquer line: o corpo é
+// serverRefusal trata o erro que chegou ANTES de qualquer line: o corpo é
 // um JSON único e o status é de verdade.
 func serverRefusal(resp *http.Response, amb Context) int {
 	corpo, dica, ok := readErrorBody(resp)
@@ -137,7 +137,7 @@ func serverRefusal(resp *http.Response, amb Context) int {
 	return codigoOfProtocolo(corpo.Error.Code)
 }
 
-// leStream repassa as rows para o stdout e traduz o fecho em exit code.
+// readStream repassa as rows para o stdout e traduz o fecho em exit code.
 //
 // As linhas vão CRUAS: decodificá-las para recodificá-las mudaria a grafia dos
 // doubles e não acrescentaria nada — o servidor já emitiu o formato final.
@@ -183,7 +183,7 @@ func codigoOfProtocolo(codigo string) int {
 		return ExitResultTruncated
 	case protocol.CodeSnapshotExpired:
 		// O caminho LOCAL já mapeia storage.ErrSnapshotExpirado para 5
-		// (codigoDoErro): a consulta — ou a auditoria dos contadores — não
+		// (errorCode): a consulta — ou a auditoria dos contadores — não
 		// chegou ao fim porque o journal de versões estourou o teto. O
 		// resultado é desconhecido, não errado; a mesma classe do truncado.
 		return ExitResultTruncated
@@ -194,7 +194,7 @@ func codigoOfProtocolo(codigo string) int {
 	case protocol.CodeWriterFailed:
 		// Fase 11, Task B5 (POST /v1/compact e /v1/checkpoint): o MESMO
 		// sentinela types.ErrWriterFailed que o caminho LOCAL mapeia para 4
-		// em codigoDoErro (cli.go) — o writer está em modo falho sticky, e só
+		// em errorCode (cli.go) — o writer está em modo falho sticky, e só
 		// reabrir o dataset (reiniciar o servidor) o tira de lá. Coerência
 		// com a tabela: o exit code não pode depender de a consulta ter
 		// chegado local ou remota.
@@ -222,7 +222,7 @@ func codigoOfProtocolo(codigo string) int {
 	}
 }
 
-// dicaDeServidor sugere o `--server` quando o flock barrou a consulta local.
+// serverHint sugere o `--server` quando o flock barrou a consulta local.
 //
 // A mensagem do exit 3 já nomeia o pid que segura o dataset; até esta fase ela
 // parava aí, e o operador não tinha para onde ir. Agora tem.

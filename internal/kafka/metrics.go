@@ -130,7 +130,7 @@ var limitsDoApply = []float64{
 // número velho não é.
 const validadeOfMarkDagua = time.Minute
 
-// registraMetricas instala as séries do dataset.
+// registerMetrics instala as séries do dataset.
 func registerMetrics(r *metrics.Registry, dataset string) *metricas {
 	if r == nil {
 		r = metrics.NewRegistry()

@@ -108,7 +108,7 @@ func samplesOfIndex(name string, e storage.EstatisticasOfIndex) []metrics.Sample
 		})
 }
 
-// comRotulo devolve o rótulo do dataset acrescido de UM par, sem tocar na fatia
+// withLabel devolve o rótulo do dataset acrescido de UM par, sem tocar na fatia
 // de origem.
 //
 // A cópia não é zelo: `append` sobre uma fatia compartilhada com capacidade
@@ -121,7 +121,7 @@ func withLabel(base []metrics.Label, name, value string) []metrics.Label {
 	return append(out, metrics.Label{Name: name, Value: value})
 }
 
-// indiceStats monta o bloco `index` do /v1/stats a partir da MESMA estrutura que
+// indexStats monta o bloco `index` do /v1/stats a partir da MESMA estrutura que
 // o /metrics lê.
 //
 // Nenhum número é recalculado aqui, pela regra do handleStats: duas fontes para

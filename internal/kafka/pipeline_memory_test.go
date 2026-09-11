@@ -93,7 +93,7 @@ func TestOLimiarPorSlotSaiDoOrcamentoDaFila(t *testing.T) {
 	cfg := &Config{MaxPollRecords: 1000, QueueBytes: 64 << 20}
 	// janela arredonda 1000 → 1024; 64 MiB / 1024 = 64 KiB.
 	if got, quero := slotThreshold(cfg), 64<<10; got != quero {
-		t.Errorf("limiarDeSlot = %d, quero %d (%d bytes de fila / janela de %d)",
+		t.Errorf("slotThreshold = %d, quero %d (%d bytes de fila / janela de %d)",
 			got, quero, cfg.QueueBytes, powerOfTwo(cfg.MaxPollRecords))
 	}
 	// E o piso: uma fila declarada minúscula não pode transformar cada evento
@@ -101,7 +101,7 @@ func TestOLimiarPorSlotSaiDoOrcamentoDaFila(t *testing.T) {
 	// ao sistema operacional.
 	pequena := &Config{MaxPollRecords: 1000, QueueBytes: 1 << 10}
 	if got := slotThreshold(pequena); got != paginaOfSO {
-		t.Errorf("limiarDeSlot com fila minúscula = %d, quero o piso de %d", got, paginaOfSO)
+		t.Errorf("slotThreshold com fila minúscula = %d, quero o piso de %d", got, paginaOfSO)
 	}
 }
 

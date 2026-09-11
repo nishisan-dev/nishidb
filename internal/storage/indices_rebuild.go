@@ -278,7 +278,7 @@ func (s *Store) reconstroiUmSegment(ctx context.Context, sec uint32) (bool, erro
 	return s.constroiIndexOfSegment(ctx, sec, s.fieldsIndexados)
 }
 
-// oSegmentoSaiuDoDataset separa a corrida BENIGNA — o segmento aposentado entre
+// segmentLeftDataset separa a corrida BENIGNA — o segmento aposentado entre
 // a fotografia da fila e a varredura — do erro que tem de parar o laço.
 //
 // São os dois desfechos que a aposentadoria produz em quem está lendo: ENOENT
@@ -310,7 +310,7 @@ func segmentLeftDataset(err error) bool {
 // e responder "está no ponto fixo" a partir dela silenciaria um disco doente
 // (§101). Os estados que NÃO são anomalia — ausente, formato desconhecido, zero
 // bytes — são "sem seção nenhuma", pela mesma lista que a fila usa
-// (indiceIlegivel); ter duas listas diferentes daria um segmento que a fila
+// (unreadableIndex); ter duas listas diferentes daria um segmento que a fila
 // julga refazível e a memória julga fatal.
 func (s *Store) inPontoFixo(sec uint32) (bool, error) {
 	anotado, has := s.recPontoFixo[sec]
@@ -423,7 +423,7 @@ func (s *Store) secoesOfSealed(sec uint32) ([]types.FieldID, error) {
 // o secR inteiro. Quem chama do laço é a passOfRebuild, e ela resolve os
 // dois: contra o Close, o ForRebuild cancela e AGUARDA antes do quiesce;
 // contra a aposentadoria de UM segmento, ela classifica o os.ErrClosed/ENOENT
-// como corrida benigna e segue para o próximo (oSegmentoSaiuDoDataset) em vez de
+// como corrida benigna e segue para o próximo (segmentLeftDataset) em vez de
 // tomar o aposMu por uma varredura inteira, o que travaria toda consulta atrás do
 // escritor pendente. Varredura interrompida não publica índice parcial: o erro
 // sobe antes do Escreve.
@@ -830,7 +830,7 @@ func (s *Store) SegmentosPendentesOfRebuild(j WindowOfIndex) ([]uint32, error) {
 //
 // Arquivo ILEGÍVEL conta como pendente, e não como erro: um .sidx que este
 // binário não decodifica é dado derivado que não serve, e a resposta para dado
-// derivado que não serve é derivá-lo de novo (indiceIlegivel). Erro fora dessa
+// derivado que não serve é derivá-lo de novo (unreadableIndex). Erro fora dessa
 // lista sobe intacto — EIO ao abrir o índice é falha de infra, e chamá-la de
 // "reconstrua" mandaria o laço varrer 512 MiB por um disco doente (§101, três
 // baldes).
@@ -845,7 +845,7 @@ func (s *Store) segmentPendente(dir string, sec uint32) (bool, error) {
 	return !slices.Equal(fields, s.fieldsIndexados), nil
 }
 
-// indiceIlegivel separa "este .sidx não serve, refaça" de "o disco falhou,
+// unreadableIndex separa "este .sidx não serve, refaça" de "o disco falhou,
 // pare". É a fronteira do §101 aplicada ao índice, e ela é UMA função porque os
 // dois chamadores — o teste de pendência e a cobertura da reconstrução —
 // precisam concordar: um arquivo que a fila julgasse refazível e a cobertura

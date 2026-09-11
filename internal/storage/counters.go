@@ -126,7 +126,7 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 		}
 		name := def.Name
 		c.OnRefuse(func() {
-			s.opts.Log.Warn("contador.teto",
+			s.opts.Log.Warn("counter.teto",
 				"um grupo novo foi recusado pelo teto de maxGroups; a linha entrou, mas não é contada até o contador ser reconstruído com teto maior",
 				"contador", name, "maxGroups", def.MaxGroups)
 		})
@@ -138,7 +138,7 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 			return fmt.Errorf("storage: dobrar o contador %q de %s: %w", def.Name, opts.Dir, err)
 		}
 		if orfas := c.Stats().Orphans; orfas > 0 {
-			s.opts.Log.Warn("contador.orfas",
+			s.opts.Log.Warn("counter.orfas",
 				"entradas do vetor apontavam para grupos aposentados ou inexistentes e foram zeradas; não é esperado fora de uma janela de crash",
 				"contador", name, "orfas", orfas)
 		}
@@ -153,7 +153,7 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
 			return fmt.Errorf("storage: apagar o contador %q removido da configuração: %w", name, err)
 		}
-		s.opts.Log.Info("contador.removido",
+		s.opts.Log.Info("counter.removido",
 			"o contador saiu da configuração do dataset e os arquivos dele foram apagados",
 			"contador", name)
 	}
@@ -207,7 +207,7 @@ func (s *Store) reconstroiCountersPendentes() error {
 		// O log nomeia o custo pela mesma razão do da agenda: é a única coisa
 		// que o operador precisa decidir — segundos numa subida são aceitáveis,
 		// minutos num dataset grande mudam a janela de manutenção.
-		s.opts.Log.Info("contador.construido",
+		s.opts.Log.Info("counter.construido",
 			"o contador foi construído varrendo as linhas vivas do dataset",
 			"contador", p.c.Def().Name, "motivo", p.motivo, "linhas", rows,
 			"grupos", p.c.Stats().Groups, "duracao", time.Since(start).String())
@@ -509,7 +509,7 @@ func (s *Store) ReconstroiCounters(ctx context.Context) ([]counter.Rebuild, erro
 		out = append(out, counter.Rebuild{
 			Name: c.Def().Name, Rows: rows, Groups: c.Stats().Groups, Duration: time.Since(start),
 		})
-		s.opts.Log.Info("contador.reconstruido",
+		s.opts.Log.Info("counter.reconstruido",
 			"o contador foi reconstruído em operação, varrendo as linhas vivas sob o lock do writer",
 			"contador", c.Def().Name, "linhas", rows, "grupos", c.Stats().Groups, "duracao", time.Since(start).String())
 	}
@@ -608,13 +608,13 @@ func (s *Store) runRetirement(ctx context.Context) {
 		if err != nil {
 			// Erro aqui é do writer (sticky) ou do store fechando; insistir
 			// só produz log em laço.
-			s.opts.Log.Warn("contador.aposentadoria_parou",
+			s.opts.Log.Warn("counter.aposentadoria_parou",
 				"o laço de aposentadoria de grupos vazios encerrou; grupos vazios deixam de sair da tabela",
 				"erro", err)
 			return
 		}
 		if n > 0 {
-			s.opts.Log.Info("contador.aposentadoria",
+			s.opts.Log.Info("counter.aposentadoria",
 				"grupos vazios há mais que retainEmptyGroups saíram das tabelas de contadores",
 				"aposentados", n)
 		}

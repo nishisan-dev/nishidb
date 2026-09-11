@@ -4,7 +4,7 @@
 // constrói o mux CRU — só rotas, papel required por rota, ZERO autenticação —
 // e withAuth é o WRAPPER ÚNICO que a Fase 11 pede em torno dele no
 // listener EXPOSTO. A B5 registra as duas rotas ADMIN-only do §96 (POST
-// /v1/compact e POST /v1/checkpoint) chamando roteador.registra com
+// /v1/compact e POST /v1/checkpoint) chamando router.registra com
 // config.RoleAdmin — o mecanismo já saiu da B3 testado com um handler de
 // teste (auth_internal_test.go), e agora tem produção de verdade
 // para exercitá-lo.
@@ -101,7 +101,7 @@ func (rt *router) Raw() http.Handler {
 // existe=false quando a rota é DESCONHECIDA ou o método não é aceito
 // (mux.Handler devolve padrão vazio) — não há papel a checar, e o mux
 // resolve 404/405 sozinho. existe=true com papel=="" é o BUG DE REGISTRO
-// fail-closed (rota casou no mux sem passar por roteador.registra, a única
+// fail-closed (rota casou no mux sem passar por router.registra, a única
 // função que grava em rt.papeis): um papel VÁLIDO nunca é string vazia — o
 // enum é fechado em {config.RoleRead, config.RoleAdmin} desde a B1 —, então
 // os dois chamadores tratam papel=="" com existe=true como recusa, nunca
@@ -168,7 +168,7 @@ func (s *Server) buildMux() *router {
 // A decisão de papel é FAIL-CLOSED (revisão pós-implementação): um padrão que
 // CASOU (pattern != "") mas não tem entrada em rt.papeis só pode significar
 // que algum código registrou rota direto em rt.mux, por fora de
-// roteador.registra — a única via que grava papel junto com o handler. Isso é
+// router.registra — a única via que grava papel junto com o handler. Isso é
 // bug de REGISTRO, não ausência legítima de restrição, e por isso não cai em
 // "sem checagem": nomeia o defeito e recusa com 500. Padrão vazio (rota
 // desconhecida ou método não aceito) segue direto para o mux, que resolve
@@ -409,7 +409,7 @@ func (s *Server) rejectLoopbackAdmin(w http.ResponseWriter, r *http.Request) {
 // rejectRecordWithoutRole é o fail-closed do mecanismo de papel (revisão
 // pós-implementação): uma rota CASOU no mux (pattern != "") mas não tem
 // entrada em rt.papeis. Isso só acontece se algum código dentro do pacote
-// chamou rt.mux.HandleFunc/Handle diretamente, por fora de roteador.registra
+// chamou rt.mux.HandleFunc/Handle diretamente, por fora de router.registra
 // — a única via que grava em rt.papeis junto com o handler. Não é erro de
 // CLIENTE nem ausência legítima de restrição: é bug de REGISTRO, e por isso
 // nunca deixa passar sem checagem. 500 para aparecer alto em teste e em log —
@@ -417,7 +417,7 @@ func (s *Server) rejectLoopbackAdmin(w http.ResponseWriter, r *http.Request) {
 // alguém notar em produção).
 //
 // O corpo HTTP é genérico de propósito (retoque da revisão da B3): nomear
-// símbolos internos ("use roteador.registra") ou a própria rota para um
+// símbolos internos ("use router.registra") ou a própria rota para um
 // cliente já AUTENTICADO devolveria detalhe de implementação a alguém que só
 // tem uma credencial válida, sem relação com quem opera o servidor. O
 // detalhe inteiro — rota e a dica de correção — vai SÓ para s.log.Error, que
@@ -432,7 +432,7 @@ func (s *Server) rejectRecordWithoutRole(w http.ResponseWriter, r *http.Request,
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 500 de registro sem papel", "erro", err.Error())
 	}
 	s.log.Error("auth.rota_sem_papel",
-		"rota registrada sem papel required — bug de registro, use roteador.registra, nunca HandleFunc direto",
+		"rota registrada sem papel required — bug de registro, use router.registra, nunca HandleFunc direto",
 		"remote", r.RemoteAddr, "route", pattern)
 }
 

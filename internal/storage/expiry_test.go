@@ -265,7 +265,7 @@ func TestExpiraEmDatasetSemExpiracaoEhErro(t *testing.T) {
 	}
 }
 
-// instanteDeEscrita para no primeiro FieldID maior: o payload é ordenado, e
+// writeInstant para no primeiro FieldID maior: o payload é ordenado, e
 // varrer o resto seria custo por row sem ganho.
 func TestInstanteDeEscritaLeOCampoCertoOuNadaInforma(t *testing.T) {
 	var p []byte

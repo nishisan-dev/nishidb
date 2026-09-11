@@ -131,7 +131,7 @@ type Fila struct {
 // ErrFilaFechada é devolvido a quem tenta enfileirar durante o encerramento.
 var ErrFilaFechada = errors.New("kafka: fila encerrada")
 
-// marcaEspera registra o início de uma espera e devolve a função que a fecha,
+// markWait registra o início de uma espera e devolve a função que a fecha,
 // somando o trecho ao acumulado.
 func markWait(start, acumulado *atomic.Int64) func() {
 	comeco := time.Now()
@@ -142,7 +142,7 @@ func markWait(start, acumulado *atomic.Int64) func() {
 	}
 }
 
-// emCurso é o trecho da espera que ainda não terminou, no instante da leitura.
+// inProgress é o trecho da espera que ainda não terminou, no instante da leitura.
 func inProgress(start *atomic.Int64) int64 {
 	t := start.Load()
 	if t == 0 {

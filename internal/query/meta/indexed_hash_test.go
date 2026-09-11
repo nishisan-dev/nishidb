@@ -42,7 +42,7 @@ schema:
 // Chamava-se TestIndexedSomaAsDuasCapacidadesDeMotor e montava um cenário
 // sintético — status só em Bitmap, node só em Hash — para exercitar os dois
 // lados da SOMA `HasBitmap(c.ID) || HasHash(c.ID)`. A soma virou uma chamada só
-// (fonte.record), e o cenário deixou de ser construível: as duas colunas
+// (source.record), e o cenário deixou de ser construível: as duas colunas
 // entram no mesmo conjunto indexado. As asserções abaixo são as MESMAS, valor
 // por valor, incluindo o vocabulário de wire da coluna `index`.
 func TestIndexedRefleteACapacidadeDoMotor(t *testing.T) {

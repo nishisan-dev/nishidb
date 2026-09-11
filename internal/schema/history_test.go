@@ -740,7 +740,7 @@ func TestAdmissaoDaJanela(t *testing.T) {
 
 // A recusa da janela sai com ExitDataset (3), e não com o exit de uso: o
 // problema está no YAML do dataset, não na linha de comando. O sentinela é o
-// que o codigoDoErro do cli consulta — sem ele a recusa cairia no default, e o
+// que o errorCode do cli consulta — sem ele a recusa cairia no default, e o
 // operador seria mandado conferir a flag que digitou.
 func TestRecusaDaJanelaTemSentinelaPropria(t *testing.T) {
 	cases := map[string]string{

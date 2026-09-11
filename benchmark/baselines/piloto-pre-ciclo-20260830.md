@@ -27,7 +27,7 @@ evento comprometido na janela inteira da medida.
 (`piloto-pre-ciclo-20260830.pprof`). Uma única pilha responde por 99,16%:
 
 ```
-kafka.Writer.Roda → aplica → materializer.Aplica → apendaNoHistorico
+kafka.Writer.Roda → aplica → materializer.Aplica → apendaInHistory
   → storage.Store.Apenda → applyRecord → applyHashSets → setHash
     → hash.Index.Set → talvezReconstrua → hash.Index.reconstroi
 ```

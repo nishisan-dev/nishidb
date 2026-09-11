@@ -34,7 +34,7 @@ func runQuery(args []string, amb Context) int {
 	if err := fs.Parse(args); err != nil {
 		return ExitUsageError
 	}
-	// A credencial só é USADA no caminho --server (consultaRemota, abaixo),
+	// A credencial só é USADA no caminho --server (remoteQuery, abaixo),
 	// mas a validação roda sempre: --user/--password-file/NISHIDB_PASSWORD
 	// mal combinados são erro de uso independente de --config ou --server, e
 	// resolver aqui garante a MESMA mensagem que status/datasets/inspect/
@@ -134,7 +134,7 @@ func runQuery(args []string, amb Context) int {
 
 	// O caminho local recebe os MESMOS valores. Ignorá-los aqui faria a flag
 	// mentir num dos dois modos, e quebraria a promessa escrita em
-	// consultaRemota: "um script que troca --config por --server não muda mais
+	// remoteQuery: "um script que troca --config por --server não muda mais
 	// nada".
 	it, err := eng.Execute(amb.Ctx, *dataset, sql, values)
 	if err != nil {
@@ -180,7 +180,7 @@ func runQuery(args []string, amb Context) int {
 		return ExitUsageError
 	}
 	if err := it.Err(); err != nil {
-		// O truncamento sai por aqui como qualquer outro erro: o codigoDoErro
+		// O truncamento sai por aqui como qualquer outro erro: o errorCode
 		// já o traduz no exit code próprio, e a mensagem do sentinela já diz
 		// "resultado truncado no teto de query.maxRows" com o número. Um ramo
 		// especial aqui seria indistinguível deste — código que nenhum teste
@@ -194,7 +194,7 @@ func runQuery(args []string, amb Context) int {
 	return ExitOK
 }
 
-// comLimit acrescenta (ou substitui) o LIMIT da query, PRESERVANDO o OFFSET.
+// withLimit acrescenta (ou substitui) o LIMIT da query, PRESERVANDO o OFFSET.
 //
 // A substituição continua textual — reescrever a AST exigiria serializá-la de
 // volta, e a v1 não tem serializador —, mas o corte deixou de ser "da última
@@ -237,7 +237,7 @@ func withLimit(sql string, n int) string {
 	return fmt.Sprintf("%s LIMIT %d", corte, n)
 }
 
-// inicioDaClausula recua da posição do LITERAL até o início da palavra-chave
+// clauseStart recua da posição do LITERAL até o início da palavra-chave
 // que o precede.
 //
 // O parser guarda a posição do NÚMERO (`LimitPos` aponta para o `10` de
@@ -258,7 +258,7 @@ func clauseStart(sql string, posOfLiteral int) int {
 
 func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
-// imprimeErroDeQuery mostra a POSIÇÃO e o trecho ofensor, não só a mensagem.
+// printQueryError mostra a POSIÇÃO e o trecho ofensor, não só a mensagem.
 // A posição é a informação que o front-end já carrega e que o usuário precisa
 // para achar o erro numa query de várias linhas.
 func printQueryError(w io.Writer, sql string, err error) {

@@ -127,7 +127,7 @@ type Consumidor struct {
 	// os demais callbacks).
 	//
 	// c.w só é atribuído ao FIM de Abre, depois de resolveSourceEPosition E
-	// de NovaFila. A checagem `if c.w == nil` em aoRevogar impede o
+	// de NewQueue. A checagem `if c.w == nil` em aoRevogar impede o
 	// nil-deref, mas não sincroniza a LEITURA do ponteiro com a escrita: o
 	// loop do group nasce assíncrono no metadata loop (mesma raiz do 60) e
 	// pode completar join→assign→heartbeat→revoke — `manageFailWait` chama
@@ -137,7 +137,7 @@ type Consumidor struct {
 	// mapa: sem esta barreira, o "degrada com segurança" do nil-check não é
 	// garantia de sincronização, só de não panicar.
 	//
-	// Reordenar a atribuição de c.w para mais cedo NÃO é opção: NovoWriter
+	// Reordenar a atribuição de c.w para mais cedo NÃO é opção: NewWriter
 	// depende de c.fila (criada depois de resolveSourceEPosition) e de
 	// c.offsetsIniciais (escrita POR resolveSourceEPosition), então c.w não
 	// pode existir antes desse ponto — a barreira é a única saída, como já

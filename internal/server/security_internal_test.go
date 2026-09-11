@@ -69,7 +69,7 @@ func TestResolveSenhaComPasswordFileInexistenteNomeiaOCaminho(t *testing.T) {
 	}
 }
 
-// Regra NOVA em relação ao molde do kafka.Resolve: lá security.caFile é
+// Regra NOVA em relação ao molde do kafka.ResolveKafkaConfig: lá security.caFile é
 // pública; senha não. group/world-readable recusa nomeando caminho E modo.
 func TestResolveSenhaComPasswordFileGroupOuWorldReadableRecusaNomeandoCaminhoEModo(t *testing.T) {
 	casos := []struct {
@@ -239,7 +239,7 @@ func TestResolveSenhaPasswordEnvNaoEhAparada(t *testing.T) {
 	}
 }
 
-// resolveCredenciais só faz I/O quando a autenticação está LIGADA: um
+// resolveCredentials só faz I/O quando a autenticação está LIGADA: um
 // usuário com FORMA válida mas passwordEnv apontando para uma variável
 // inexistente não pode travar a subida enquanto authentication.enabled é
 // false ou ausente (débito 49, mesma doutrina da B1 aplicada à ativação).
@@ -253,7 +253,7 @@ func TestResolveCredenciaisIgnoraUsuariosQuandoAutenticacaoDesligada(t *testing.
 
 	out, err := resolveCredentials(cfg)
 	if err != nil {
-		t.Fatalf("com autenticação desligada, resolveCredenciais não deveria tocar o ambiente: %v", err)
+		t.Fatalf("com autenticação desligada, resolveCredentials não deveria tocar o ambiente: %v", err)
 	}
 	if out != nil {
 		t.Errorf("quer nil com autenticação desligada, veio %v", out)
@@ -436,7 +436,7 @@ func TestAvisaValidadeDoCertificadoSaudavelNaoLogaMasPublicaGauge(t *testing.T) 
 	}
 }
 
-// enderecoLoopback desligado (default) não monta endereço nenhum — nenhum
+// loopbackAddress desligado (default) não monta endereço nenhum — nenhum
 // listener a mais sobe.
 func TestEnderecoLoopbackDesligadoDevolveVazio(t *testing.T) {
 	var cfg config.Config

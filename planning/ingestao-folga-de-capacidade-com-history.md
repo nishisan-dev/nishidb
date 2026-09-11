@@ -148,7 +148,7 @@ morrer.
 
 `checkpoint` ([writer.go:307-330](internal/kafka/writer.go:307)) lê `w.offsets` (mapa) e
 escreve `w.desdeCP`/`w.ultimoCP` **sem lock** — `w.mu` protege apenas `desfecho` e `pausa`.
-`avanca` ([writer.go:265-269](internal/kafka/writer.go:265)) escreve no mesmo mapa, também
+`advance` ([writer.go:265-269](internal/kafka/writer.go:265)) escreve no mesmo mapa, também
 sem lock. E `checkpoint` é chamado de **duas goroutines**:
 
 - a do writer, via `talvezCheckpoint` — inclusive acordado pelo ticker do despertador
@@ -183,7 +183,7 @@ exclusão mútua.
 Trocar `kadm.Lag` (três requisições: `DescribeGroups` → `FetchOffsets` → `ListEndOffsets`)
 por **`ListEndOffsets`** — uma requisição. O custo cai a um terço do que produção já paga,
 então não há trade-off a negociar. O lag vira `max(0, highWatermark − offset aplicado)`,
-usando a posição que `avanca` já publica em `nishidb_kafka_offset`.
+usando a posição que `advance` já publica em `nishidb_kafka_offset`.
 
 Três decisões que evitam repetir defeitos já conhecidos:
 
@@ -219,7 +219,7 @@ Sem isto, nenhum número de laboratório vale:
 - **67 (o `ingest-bench` trava para sempre).** `sourceKafka.Next` bloqueia em
   `fila.Recebe(context.Background())` — contexto sem prazo — e a checagem de duração roda
   *antes* do `Next`, nunca sendo reavaliada. A fase de aceite do M4 publicou
-  `duration_sec` de **1.327,6 s para 600 s** de ingestão. Correção: a interface `fonte`
+  `duration_sec` de **1.327,6 s para 600 s** de ingestão. Correção: a interface `source`
   passa a receber `ctx`, e `PhaseReport` ganha `StopReason`
   (`duration | events | source_drained`) — hoje o relatório não consegue dizer se
   `events_per_sec` é vazão ou fim de corpus.
@@ -255,7 +255,7 @@ Sem isto, nenhum número de laboratório vale:
   | ≈0 | ≈1 | ≈0 | Sem produção — o tópico está calado |
   | ≈0 | ≈1 | subindo | Poller não entrega — é o incidente de 27/08 |
 
-- **Alocação por evento no writer (verificada).** `avanca` chama `w.met.offset(p)` →
+- **Alocação por evento no writer (verificada).** `advance` chama `w.met.offset(p)` →
   `famOffset.With(dataset, strconv.Itoa(p))` → `chave(valores)` =
   `strings.Join(valores, "\xff")` ([metrics.go:197](internal/metrics/metrics.go:197)) —
   **string nova a cada evento**, mais o slice variádico. Nenhum gate cobre esse trecho: os

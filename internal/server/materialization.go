@@ -9,7 +9,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
-// materializacaoStats traduz o snapshot do materializer para o documento da
+// materializationStats traduz o snapshot do materializer para o documento da
 // rota, casando cada contagem de regra com a regra que a produziu.
 //
 // A spec entra junto porque o snapshot só tem contagens por ÍNDICE: publicar o
@@ -43,7 +43,7 @@ func materializationStats(spec *schema.DatasetSpec, snap materializer.MetricsSna
 	return out
 }
 
-// duracaoDaRegra rende a duração como o operador a escreveu: `never` sai como
+// ruleDuration rende a duração como o operador a escreveu: `never` sai como
 // o literal, e não como "0s" — zero e imortal não são a mesma coisa, e um
 // painel mostrando 0s diria o oposto do que a regra faz.
 func ruleDuration(r schema.TTLRule) string {

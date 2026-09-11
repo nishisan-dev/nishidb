@@ -253,7 +253,7 @@ valor pós-merge do campo F = valor de F no patch, se presente e não-null
 
 Como a regra menciona poucos campos, é uma leitura dirigida do estado anterior — uma
 passada de `FieldReader` colhendo só os FieldIDs que as regras citam, no mesmo padrão de
-[`instanteDeEscrita`](../internal/storage/store.go:1502), interrompida quando o cursor
+[`writeInstant`](../internal/storage/store.go:1502), interrompida quando o cursor
 passa do maior id procurado.
 
 `mergeRecords` já percorre os dois lados e vê o valor final de cada campo enquanto o
@@ -425,7 +425,7 @@ versus ordem numérica — e divergiria em silêncio.
 Pacote novo `internal/predicate`, recebendo:
 
 - `slot` e `coleta` de [collect.go](../internal/query/executor/collect.go);
-- `programa`, `instr`, `compila`, `emite`, `eval`, `testa` e os comparadores de
+- `programa`, `instr`, `compile`, `emite`, `eval`, `testa` e os comparadores de
   [predicate.go](../internal/query/executor/predicate.go).
 
 Dependências resultantes: `query/parser`, `query/binder`, `schema`, `types`,
@@ -437,7 +437,7 @@ Dependências resultantes: `query/parser`, `query/binder`, `schema`, `types`,
 [predicate_prova_test.go](../internal/query/executor/predicate_prova_test.go) e os testes
 de binder existentes são a prova de que nada mudou de comportamento.
 
-O `contadores` que o `eval` recebe hoje é do executor. Ele vira uma interface mínima no
+O `counters` que o `eval` recebe hoje é do executor. Ele vira uma interface mínima no
 pacote novo, ou um ponteiro opcional — a ingestão não tem os mesmos contadores e não
 deve inventá-los.
 

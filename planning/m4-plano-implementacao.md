@@ -53,7 +53,7 @@ O trabalho é **ciclo de vida de arquivo e coordenação com o writer**, não mo
 
 | # | Decisão | Escolha | Alternativa rejeitada |
 |---|---|---|---|
-| **D1** | Destino dos records vivos | **Copy-forward pelo segmento corrente**: re-apendar pelo `secW.Append` normal | Construir arquivo novo com ID próprio. Esbarra em três restrições reais: `checkHeader` amarra o `segmentID` ao nome do arquivo ([segment.go:70](../internal/storage/segment/segment.go:70)), `openNew` usa `O_EXCL`, e IDs vêm de `segID+1` no writer. Copy-forward faz as três desaparecerem e reusa rotação, tally e durabilidade já provadas |
+| **D1** | Destino dos records vivos | **Copy-forward pelo segmento corrente**: re-apendar pelo `secW.Append` normal | Construir arquivo novo com ID próprio. Esbarra em três restrições reais: `checkHeader` amarra o `segmentID` ao nome do arquivo ([segment.go:70](../internal/storage/segment/segment.go:70)), `openNew` usa `O_EXCL`, e IDs vêm de `secID+1` no writer. Copy-forward faz as três desaparecerem e reusa rotação, tally e durabilidade já provadas |
 | **D2** | Critério de "vivo" | **A location ainda nomeia este record** (`Unpack(locs.Get(rowID)) == (seg, off)`) | "Row visível". Um record **tombstoned** precisa ser copiado também: a location aponta para ele, e não copiá-lo deixaria a location pendurada num arquivo removido. Recuperar tombstone exige limpar location e primary, que é trabalho do TTL (M6) |
 | **D3** | Corrida com a ingestão | **Verificação e append na MESMA seção crítica de `s.wmu`** | Verificar fora do lock e apendar depois. Um update entre os dois faria o payload **antigo** vencer o novo — perda de dado silenciosa. É o motivo de existir `reapendaSeVivo` em vez de chamar `Put` |
 | **D4** | Tally do segmento esvaziado | **Zerado por autoridade da varredura completa** | Confiar nos decrementos. Não fecha: o tally é limite superior (débitos 38 e 45), então os decrementos param no resíduo órfão e nunca alcançam zero. A varredura viu **todos** os records e é a única fonte exata — é exatamente o que [manifest.go:73](../internal/storage/checkpoint/manifest.go:73) prevê ao dizer "só uma varredura do segmento reconstrói o tally" |
@@ -387,7 +387,7 @@ func TestStorageBytesBateComOsArquivosEmDisco(t *testing.T) {
 	if !ok {
 		t.Fatal("nishidb_storage_bytes não foi publicada")
 	}
-	var emDisco int64
+	var inDisk int64
 	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
 	if err != nil {
 		t.Fatalf("glob: %v", err)
@@ -397,13 +397,13 @@ func TestStorageBytesBateComOsArquivosEmDisco(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stat %s: %v", p, err)
 		}
-		emDisco += fi.Size()
+		inDisk += fi.Size()
 	}
-	if emDisco == 0 {
+	if inDisk == 0 {
 		t.Fatal("nenhum segmento em disco: o teste não estaria provando nada")
 	}
-	if int64(amostra.Value) != emDisco {
-		t.Errorf("storage_bytes = %d, arquivos em disco somam %d", int64(amostra.Value), emDisco)
+	if int64(amostra.Value) != inDisk {
+		t.Errorf("storage_bytes = %d, arquivos em disco somam %d", int64(amostra.Value), inDisk)
 	}
 }
 ```
@@ -1452,7 +1452,7 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 
 - [ ] **Step 2: Rodar e confirmar a falha** → FAIL: comando não registrado.
 
-- [ ] **Step 3: Implementar.** `status` resume storage, rows, segmentos e ingestão; `datasets` lista; `inspect <dataset>` detalha colunas e índices a partir do `/v1/metadata`. Reusar `normalizaEndereco` e a tradução código→exit code de `query_remote.go:124`. Atualizar o texto de uso em `cli.go:58`.
+- [ ] **Step 3: Implementar.** `status` resume storage, rows, segmentos e ingestão; `datasets` lista; `inspect <dataset>` detalha colunas e índices a partir do `/v1/metadata`. Reusar `normalizeAddress` e a tradução código→exit code de `query_remote.go:124`. Atualizar o texto de uso em `cli.go:58`.
 
 - [ ] **Step 4: Rodar** `go test ./... && go test ./... -race && golangci-lint run`
 

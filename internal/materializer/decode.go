@@ -60,7 +60,7 @@ type Decodificado struct {
 	// precisaOfWriter marca o evento que o decode não pôde terminar porque
 	// teria de CRIAR metadado — coluna nova ou tipo fixado. O conteúdo do
 	// Decodificado é lixo parcial neste caso, e o único uso legítimo dele é o
-	// `evento`: quem aplica refaz o parse do zero, pelo caminho completo, na
+	// `event`: quem aplica refaz o parse do zero, pelo caminho completo, na
 	// goroutine que pode escrever.
 	precisaOfWriter bool
 }

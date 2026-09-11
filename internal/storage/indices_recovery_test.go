@@ -305,7 +305,7 @@ func TestConstruirOIndiceDoSegmentoCorrenteEhRecusado(t *testing.T) {
 // percorre o diretório INTEIRO, então recusar um nome ilegível deixou de custar
 // "a selagem perde um campo" e passou a custar "o dataset não abre". A recusa é a
 // doutrina; o que este teste trava é a CLASSIFICAÇÃO. Sem ela o erro cai no
-// default do codigoDoErro e sai como exit 1, "erro de uso" — o único código que
+// default do errorCode e sai como exit 1, "erro de uso" — o único código que
 // manda o operador olhar a linha de comando em vez do dataset, que aqui está
 // certa.
 func TestNomeIlegivelNoEspacoDoWIPSaiComoDatasetIlegivel(t *testing.T) {

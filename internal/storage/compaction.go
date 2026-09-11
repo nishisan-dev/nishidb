@@ -41,7 +41,7 @@ func pathCanonicoOfSegment(dataDir string, sec uint32) string {
 	return filepath.Join(dataDir, fmt.Sprintf(nameCanonicoOfSegment, sec))
 }
 
-// idDoNomeAposentado devolve o segmento que um nome aposentado descreve, e
+// retiredNameID devolve o segmento que um nome aposentado descreve, e
 // recusa tudo o mais. A recusa por igualdade EXATA é a mesma do ListSegments
 // (segment.go:254) e pelo mesmo motivo: o Sscanf aceita padding divergente,
 // de modo que dois nomes diferentes responderiam o mesmo id — e aqui o id

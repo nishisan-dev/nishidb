@@ -1624,7 +1624,7 @@ Os três `s.curSecID.Store(novoSeg)` (`store.go:1475`, `compaction.go:206`,
 //
 // Um ponto só, e não três, porque a rotação acontece DENTRO do
 // segment.Writer.Append (segment.go:195) e é invisível a quem chama — os três
-// callers só veem o segID de volta. Três cópias divergiriam, e a que
+// callers só veem o secID de volta. Três cópias divergiriam, e a que
 // esquecesse de selar deixaria um segmento com .widx que o Open descarta:
 // um índice inteiro jogado fora, sem erro e sem log.
 //

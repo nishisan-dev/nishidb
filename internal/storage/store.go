@@ -1419,7 +1419,7 @@ func (s *Store) resolveFieldsIndexados(ids []types.FieldID, nomesDeclarados []st
 	return out, nil
 }
 
-// limparIndicesGlobaisLegados apaga os arquivos dos dois motores de índice que
+// cleanLegacyGlobalIndices apaga os arquivos dos dois motores de índice que
 // este binário não tem mais: indexes/bitmap/ e indexes/hash/.
 //
 // Eles não têm leitor nenhum a partir daqui, e por isso não podem ficar. O
@@ -2018,7 +2018,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	return nil
 }
 
-// instanteDeEscrita extrai o campo de sistema do payload. Ausente devolve
+// writeInstant extrai o campo de sistema do payload. Ausente devolve
 // ok=false, que o índice registra como DESCONHECIDO — nunca como vencido.
 func writeInstant(payload []byte, field types.FieldID) (int64, bool) {
 	return fieldOfPayload(payload, field, types.TypeTimestamp)
@@ -2677,7 +2677,7 @@ func (s *Store) Close() error {
 // contador.
 func (s *Store) RowCount() uint64 { return s.rowCount.Load() }
 
-// validaDerivadasContraDicionario recusa uma coluna extraída NOVA num dataset
+// validateDerivedAgainstDictionary recusa uma coluna extraída NOVA num dataset
 // que já tem linhas.
 //
 // A extração roda na ingestão: as linhas gravadas antes de a coluna existir
@@ -2712,7 +2712,7 @@ func validateDerivedAgainstDictionary(m *checkpoint.Manifest, dict *fielddict.Di
 		ErrDatasetCorrupt, novas, m.RowCount)
 }
 
-// validaOpcoesDoModo recusa as combinações que produziriam um dataset
+// validateModeOptions recusa as combinações que produziriam um dataset
 // histórico malformado. As duas recusas são de CONFIGURAÇÃO e saem antes do
 // flock: um Open que vai falhar não pode travar o dataset nem tocar arquivo.
 func validateModeOptions(opts Options) error {

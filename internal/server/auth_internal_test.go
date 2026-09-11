@@ -105,7 +105,7 @@ func TestComAutenticacaoLigadaEmbrulhaOMux(t *testing.T) {
 }
 
 // O fail-closed do mecanismo de papel (Important da revisão pós-implementação):
-// uma rota registrada por FORA de roteador.registra — direto em rt.mux, sem
+// uma rota registrada por FORA de router.registra — direto em rt.mux, sem
 // papel declarado — tem de ser RECUSADA, nunca servida sem checagem, mesmo
 // para o usuário ADMIN. Prova que a segurança do mecanismo vem da
 // CONSTRUÇÃO (withAuth recusa padrão sem entrada em papeis), não da
@@ -140,7 +140,7 @@ func TestRotaRegistradaPorForaDeRegistraEhRecusadaFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Retoque da revisão da B3 (dono natural: B4): o corpo HTTP é genérico —
-	// nomear a rota ou o símbolo interno (roteador.registra) para um cliente
+	// nomear a rota ou o símbolo interno (router.registra) para um cliente
 	// já AUTENTICADO devolveria detalhe de implementação sem relação com quem
 	// só tem uma credencial válida. TestRecusaRegistroSemPapelLogaODetalheQueNaoVaiAoCliente
 	// prova o outro lado: o detalhe existe, só que SÓ no log.
@@ -172,8 +172,8 @@ func TestRecusaRegistroSemPapelLogaODetalheQueNaoVaiAoCliente(t *testing.T) {
 	if !strings.Contains(saida, "/rota-esquecida") {
 		t.Errorf("o log não nomeia a rota sem papel: %s", saida)
 	}
-	if !strings.Contains(saida, "roteador.registra") {
-		t.Errorf("o log não traz a dica de correção (roteador.registra): %s", saida)
+	if !strings.Contains(saida, "router.registra") {
+		t.Errorf("o log não traz a dica de correção (router.registra): %s", saida)
 	}
 	if !strings.Contains(saida, `"level":"ERROR"`) {
 		t.Errorf("o evento não saiu em nível Error: %s", saida)

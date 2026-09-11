@@ -135,7 +135,7 @@ vazio; **chave desconhecida dentro de `tls`/`authentication` é erro** (bloco de
 segurança não engole typo — `enabld: true` engolido é o typo mais caro do arquivo).
 
 ### B2 — Ativação: segredos e a matriz do §77
-Resolução na subida, fail-fast, molde de `kafka.Resolve`
+Resolução na subida, fail-fast, molde de `kafka.ResolveKafkaConfig`
 ([config.go:154](internal/kafka/config.go:154)): env ausente/vazia recusa nomeando a
 variável; `passwordFile` ilegível recusa; **group/world-readable recusa** nomeando
 caminho e modo; trailing `\n` aparado. Sem recarga a quente (`passwordEnv` não é

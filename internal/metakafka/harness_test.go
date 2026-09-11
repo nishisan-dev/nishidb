@@ -43,7 +43,7 @@ func declarada() metakafka.Declarada {
 }
 
 // engineWithKafka registra o dataset de mentira e a `_meta.kafka` sobre a fonte
-// dada — a mesma costura do Registra, sem servidor.
+// dada — a mesma costura do Register, sem servidor.
 func engineWithKafka(t *testing.T, f metakafka.Source) *query.Engine {
 	t.Helper()
 	spec, err := schema.Parse([]byte("version: 1\nname: "+dataset+"\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)

@@ -133,7 +133,7 @@ func runInspect(args []string, amb Context) int {
 	return writeOutputWithContext("inspect", amb, func(w io.Writer) { writeDatasetInfo(w, m.Datasets[0]) })
 }
 
-// exigeServidor recusa o comando sem `--server` explicando POR QUE não existe
+// requiresServer recusa o comando sem `--server` explicando POR QUE não existe
 // caminho local — sem isso o operador procuraria um `--config` que estes
 // comandos não têm.
 func requiresServer(cmd, endereco string, amb Context) int {
@@ -149,17 +149,17 @@ func requiresServer(cmd, endereco string, amb Context) int {
 
 // searchDocument faz o GET e decodifica o corpo no destino.
 //
-// Reusa o `normalizaEndereco` e a tradução código→exit code da consulta
+// Reusa o `normalizeAddress` e a tradução código→exit code da consulta
 // remota, e é isso que mantém UMA tabela de $? para o binário inteiro: um
 // script que decide pelo código de saída não pode precisar de uma segunda
 // tabela porque trocou `query` por `status`.
 //
-// Sem timeout no cliente, pelo mesmo argumento do consultaRemota: quem impõe
+// Sem timeout no cliente, pelo mesmo argumento do remoteQuery: quem impõe
 // prazo é o servidor, e um prazo local faria o operador culpá-lo por uma
 // decisão da máquina de onde ele pergunta.
 //
-// cred entra pelo MESMO remoteClient/aplicaCredencial que consultaRemota e
-// postaMutacao usam (Task B6) — o client HTTP compartilhado com Proxy: nil e
+// cred entra pelo MESMO remoteClient/aplicaCredencial que remoteQuery e
+// postMutation usam (Task B6) — o client HTTP compartilhado com Proxy: nil e
 // o CertPool de --tls-ca, e o Authorization quando --user foi dado.
 func searchDocument(cmd, endereco, path string, cred remoteCredential, destination any, amb Context) int {
 	client, err := remoteClient(cred)
@@ -190,14 +190,14 @@ func searchDocument(cmd, endereco, path string, cred remoteCredential, destinati
 	if err := json.NewDecoder(resp.Body).Decode(destination); err != nil {
 		// Corpo 200 que não decodifica é falha de TRANSPORTE, não de uso: o
 		// comando estava certo e a resposta veio quebrada. É a mesma distinção
-		// que o leStream faz, e o mesmo código.
+		// que o readStream faz, e o mesmo código.
 		notify(amb, "%s: resposta ilegível de %s: %v\n", cmd, endereco, err)
 		return ExitDataset
 	}
 	return ExitOK
 }
 
-// recusaRemota trata a resposta de erro de QUALQUER rota do protocolo
+// remoteRefusal trata a resposta de erro de QUALQUER rota do protocolo
 // remoto — leitura (status/datasets/inspect) e mutante (compact/checkpoint,
 // Task B5) por igual: um JSON único com o código estável, e o cliente casa
 // por código, nunca pelo texto. Renomeada na revisão da B5 (Minor 6): o

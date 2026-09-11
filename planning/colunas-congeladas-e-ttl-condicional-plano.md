@@ -47,7 +47,7 @@
 | Arquivo | Mudança |
 |---|---|
 | `internal/query/executor/collect.go` | Esvaziado; `slot`/`coleta` viram alias do pacote novo |
-| `internal/query/executor/predicate.go` | Esvaziado; `programa`/`compila` viram alias do pacote novo |
+| `internal/query/executor/predicate.go` | Esvaziado; `programa`/`compile` viram alias do pacote novo |
 | `internal/query/parser/parser.go` | `ParseCondition` |
 | `internal/query/binder/binder.go` | `BindCondition` + `BoundCondition` |
 | `internal/schema/spec.go` | `FieldSpec.FrozenFrom`; `TTLSpec` vira `[]TTLRuleSpec`; `_expiresIn` em `systemNames` |
@@ -112,7 +112,7 @@ tocam os identificadores movidos, e mova SÓ esses.
 
 - [ ] **Passo 2: exportar os identificadores movidos**
 
-Renomeie no pacote novo: `slot`→`Slot` (e os campos `id`/`val`/`present`→`ID`/`Val`/`Present`), `novosSlots`→`NovosSlots`, `coleta`→`Coleta`, `programa`→`Programa`, `compila`→`Compile`, `eval`→`Evaluate`. `instr`, `opKind`, `tarefa`, `testa`, `emite`, `ordemInt`, `ordemFloat`, `ordemBytes` continuam privados.
+Renomeie no pacote novo: `slot`→`Slot` (e os campos `id`/`val`/`present`→`ID`/`Val`/`Present`), `novosSlots`→`NovosSlots`, `coleta`→`Coleta`, `programa`→`Programa`, `compile`→`Compile`, `eval`→`Evaluate`. `instr`, `opKind`, `tarefa`, `testa`, `emite`, `ordemInt`, `ordemFloat`, `ordemBytes` continuam privados.
 
 Troque `ErrInvalidPlan` (que ficou no executor) por um erro do próprio pacote:
 
@@ -125,7 +125,7 @@ var ErrProgramaInvalido = errors.New("predicado: programa inválido")
 
 - [ ] **Passo 3: trocar `*contadores` por `*int64` na assinatura**
 
-`contadores` é do executor e a ingestão não tem os mesmos. `testa` só usa `cnt.typeMismatch++`, então a dependência inteira some:
+`counters` é do executor e a ingestão não tem os mesmos. `testa` só usa `cnt.typeMismatch++`, então a dependência inteira some:
 
 ```go
 // Evaluate roda o programa. Sem alocação, sem chamada recursiva, sem pilha.
@@ -1611,7 +1611,7 @@ Em `store.go:1467`, ao lado do instante:
 	}
 ```
 
-`campoInt64` é o gêmeo de `instanteDeEscrita` (`store.go:1502`) para `types.TypeInt64`. Extraia o corpo comum numa função que recebe o tipo esperado, em vez de duplicar a varredura.
+`campoInt64` é o gêmeo de `writeInstant` (`store.go:1502`) para `types.TypeInt64`. Extraia o corpo comum numa função que recebe o tipo esperado, em vez de duplicar a varredura.
 
 - [ ] **Passo 6: a conta do prazo**
 

@@ -119,7 +119,7 @@ func TestColunaChamadaDistinctSozinhaNaProjecaoContinuaValida(t *testing.T) {
 // A cláusula não suportada continua sendo erro de SINTAXE para quem
 // classifica.
 //
-// É o que garante que codigoDoErro do CLI e imprimeErroDeQuery não precisem de
+// É o que garante que errorCode do CLI e printQueryError não precisem de
 // uma linha: os dois testam errors.Is(err, ErrSyntax) e leem a posição por
 // errors.As. Um tipo de erro NOVO teria quebrado os dois em silêncio — o
 // campo, não.

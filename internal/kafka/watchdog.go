@@ -33,7 +33,7 @@ var ErrWithoutProgresso = errors.New("kafka: consumidor sem progresso com lag pe
 // watchdog, e um admin que também travasse não pode travar o vigia junto.
 const prazoOfConsultaOfLag = 10 * time.Second
 
-// intervaloDaVigia é de quanto em quanto tempo o watchdog olha. A janela de
+// watchdogInterval é de quanto em quanto tempo o watchdog olha. A janela de
 // decisão é o WatchdogTimeout; este é só o passo da amostragem, e um quarto da
 // janela dá quatro chances de ver o progresso antes de concluir que não houve.
 func watchdogInterval(window time.Duration) time.Duration {

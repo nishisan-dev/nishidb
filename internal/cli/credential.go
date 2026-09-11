@@ -15,19 +15,19 @@ import (
 // pelo operador que só tem o binário do CLI.
 //
 // TODO comando remoto (`query --server`, `status`, `datasets`, `inspect`,
-// `compact`, `checkpoint`) chama registraFlagsRemotas no seu FlagSet e, logo
-// após o Parse, flagsRemotas.resolve() — o ÚNICO lugar em que as fontes de
+// `compact`, `checkpoint`) chama setupRemoteFlags no seu FlagSet e, logo
+// após o Parse, remoteFlags.resolve() — o ÚNICO lugar em que as fontes de
 // senha são lidas e validadas. Dali em diante o comando carrega só um
-// credencialRemota, que os TRÊS pontos de costura do protocolo remoto
-// (consultaRemota em query_remote.go, buscaDocumento em operation.go,
-// postaMutacao em mutation.go — a B5 já apontava o último deles) consomem via
-// clienteRemoto (monta o *http.Client, com Proxy: nil e o CertPool de
+// remoteCredential, que os TRÊS pontos de costura do protocolo remoto
+// (remoteQuery em query_remote.go, searchDocument em operation.go,
+// postMutation em mutation.go — a B5 já apontava o último deles) consomem via
+// remoteClient (monta o *http.Client, com Proxy: nil e o CertPool de
 // --tls-ca) e aplicaCredencial (o req.SetBasicAuth, quando --user foi dado).
 //
 // NUNCA existe uma flag de senha: apareceria em `ps aux` para qualquer
 // usuário da máquina (§95). A senha entra SOMENTE por NISHIDB_PASSWORD (env,
 // que não sobrevive a um `ps`) ou --password-file — o mesmo desenho do
-// servidor (internal/server/security.go:resolveSenha — trailing newline
+// servidor (internal/server/security.go:resolvePassword — trailing newline
 // aparado), mas SEM a checagem de modo 0600 de lá: aquele arquivo é lido por
 // um PROCESSO SERVIDOR que pode compartilhar host com outros usuários e
 // datasets sensíveis; este é lido pelo comando do PRÓPRIO operador, na
@@ -94,7 +94,7 @@ func (f *remoteFlags) resolve() (remoteCredential, error) {
 		return remoteCredential{}, fmt.Errorf(
 			"--user exige uma senha por %s ou --password-file", envPass)
 	case hasUser && hasEnv && !hasFile && passwordFromEnv == "":
-		// Mesma distinção do servidor (security.go:resolveSenha): "ausente"
+		// Mesma distinção do servidor (security.go:resolvePassword): "ausente"
 		// e "definida e vazia" NÃO são a mesma coisa — o caso do container
 		// cujo orquestrador injeta a chave sem valor, e sem esta recusa o
 		// Basic sairia com senha vazia e o 401 do servidor não daria pista
@@ -115,7 +115,7 @@ func (f *remoteFlags) resolve() (remoteCredential, error) {
 		if err != nil {
 			return remoteCredential{}, fmt.Errorf("--password-file: %w", err)
 		}
-		// Mesma aparagem do servidor (security.go:resolveSenha): todo
+		// Mesma aparagem do servidor (security.go:resolvePassword): todo
 		// `echo senha > arquivo` termina em LF ou CRLF.
 		password = strings.TrimRight(string(b), "\r\n")
 		if password == "" {
@@ -128,7 +128,7 @@ func (f *remoteFlags) resolve() (remoteCredential, error) {
 }
 
 // remoteClient monta o *http.Client COMPARTILHADO pelos três pontos de
-// costura do protocolo remoto (consultaRemota, searchDocument, postaMutacao)
+// costura do protocolo remoto (remoteQuery, searchDocument, postMutation)
 // — um cliente novo por invocação do comando, nunca um estado global.
 //
 // Transport próprio com Proxy: nil — nunca http.DefaultClient, que honra
@@ -199,8 +199,8 @@ func refuseRedirect(req *http.Request, _ []*http.Request) error {
 
 // applyCredential injeta o HTTP Basic quando --user foi dado. É o ÚNICO
 // lugar em que Authorization entra num *http.Request do protocolo remoto —
-// o ponto de costura que a B5 já apontava em postaMutacao, agora estendido a
-// consultaRemota e searchDocument.
+// o ponto de costura que a B5 já apontava em postMutation, agora estendido a
+// remoteQuery e searchDocument.
 func applyCredential(req *http.Request, cred remoteCredential) {
 	if cred.user != "" {
 		req.SetBasicAuth(cred.user, cred.pass)

@@ -483,7 +483,7 @@ e nada no M1 devolvia esse espaço.
 record vivo pelo caminho **normal** de escrita, no segmento corrente. A
 alternativa — montar um arquivo novo com ID próprio — esbarra em três
 restrições que já existiam: o `checkHeader` amarra o `segmentID` ao nome do
-arquivo, o `openNew` usa `O_EXCL`, e os IDs vêm de `segID+1` no writer. O
+arquivo, o `openNew` usa `O_EXCL`, e os IDs vêm de `secID+1` no writer. O
 copy-forward faz as três desaparecerem e reusa rotação, tally e durabilidade já
 provadas.
 
@@ -1167,7 +1167,7 @@ scrape. A senha do request é hasheada (SHA-256) e comparada contra o digest
 guardado com `subtle.ConstantTimeCompare` — os dois lados sempre 32 bytes,
 para que a comparação em tempo constante não vaze o comprimento da senha
 certa pela diferença de tamanho de slice. Usuário inexistente compara contra
-um digest fantasma fixo (`credencialFantasma`), e a resposta de falha é
+um digest fantasma fixo (`ghostCredential`), e a resposta de falha é
 **uma função só** (`rejectAuth`) para os três casos — header
 malformado, usuário inexistente, senha errada —, sempre com a MESMA
 mensagem e os MESMOS headers: o 401 é byte-idêntico entre "não existe" e
@@ -1188,7 +1188,7 @@ um usuário READ nunca alcança rota ADMIN. O enum é fechado desde o parse
 (`config.RoleRead`/`config.RoleAdmin`) e comparado por string EXATA: `role:
 read` ou `role: Read` no YAML são recusados na subida, não normalizados.
 
-**O registro de rota é fail-closed por construção.** `roteador.registra` é a
+**O registro de rota é fail-closed por construção.** `router.registra` é a
 ÚNICA função que grava o papel exigido junto com o handler
 (`rt.papeis[padrao]`); o middleware (`withAuth`) consulta essa mesma
 tabela para decidir 403. Uma rota que casasse no mux SEM ter passado por
@@ -1221,7 +1221,7 @@ credencial no caso de uso central do §96 (modo manual).
 **Resolução de segredos na subida, nunca no parse.** O YAML só declara ONDE
 a senha mora — `passwordEnv` (nome da variável) ou `passwordFile` (caminho),
 nunca o valor — e a B1 garante XOR entre os dois; ler o valor de verdade é
-ativação (`resolveCredenciais`/`resolveSenha`,
+ativação (`resolveCredentials`/`resolvePassword`,
 `internal/server/security.go`), fail-fast ANTES de qualquer listener abrir.
 Uma env var ausente ou definida-e-vazia recusa a subida nomeando a variável
 (nunca o valor); um `passwordFile` group- ou world-readable (`modo&0o077 !=
@@ -1236,7 +1236,7 @@ recarga a quente: `passwordEnv` não é recarregável por construção, e
 ~0,28s no piloto, o que barateia a alternativa.
 
 **TLS.** O certificado é carregado uma vez na subida
-(`validaCertificadoNaSubida`, `tls.LoadX509KeyPair`) e nunca relido do disco
+(`validateCertificateAtStartup`, `tls.LoadX509KeyPair`) e nunca relido do disco
 depois — rotação é reiniciar o processo. `MinVersion: tls.VersionTLS12` é
 explícito no `tls.Config` (mesmo precedente de `internal/kafka/config.go`). O
 leaf é parseado na subida para publicar `nishidb_tls_cert_expiry_timestamp`

@@ -172,7 +172,7 @@ func (s *Store) deleteSidxOrfaos() error {
 // classificaNameIlegivelOfIndex põe o ErrFormat do espaço de nomes .widx na
 // sentinela que o exit code entende.
 //
-// Sem isto o erro sobe cru e cai no default do codigoDoErro (cli.go) — exit 1,
+// Sem isto o erro sobe cru e cai no default do errorCode (cli.go) — exit 1,
 // "erro de uso", o único código que manda o operador olhar a LINHA DE COMANDO em
 // vez do dataset. E aqui a linha de comando está certa: o que há é um arquivo em
 // data/ que este binário não escreveu, e ele impede a abertura porque a varredura
@@ -288,7 +288,7 @@ func (s *Store) closeWIPs() error {
 //
 // Um ponto só, e não um por caller, porque a rotação acontece DENTRO do
 // segment.Writer.Append (segment.go:195) e é invisível a quem chama — os
-// callers só veem o segID de volta. Cópias divergiriam, e a que esquecesse de
+// callers só veem o secID de volta. Cópias divergiriam, e a que esquecesse de
 // selar deixaria um segmento com .widx que o Open descarta: um índice inteiro
 // jogado fora, sem erro e sem log.
 //
@@ -310,7 +310,7 @@ func (s *Store) closeWIPs() error {
 func (s *Store) aposAppend(newSeg uint32) error {
 	anterior := s.curSecID.Swap(newSeg)
 	// anterior == 0 é o Store que ainda não adotou segmento nenhum, e não
-	// acontece depois do Open — os dois ramos dele publicam um segID >= 1. A
+	// acontece depois do Open — os dois ramos dele publicam um secID >= 1. A
 	// guarda fica porque o preço dela é uma comparação e o preço de faltar é
 	// selar o "segmento 0", que não existe.
 	if anterior == newSeg || anterior == 0 || len(s.fieldsIndexados) == 0 {

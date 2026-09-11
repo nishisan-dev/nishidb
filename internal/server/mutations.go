@@ -75,7 +75,7 @@ func (s *Server) datasetsTarget(name string) ([]*dataset, *protocol.ErrorDetail,
 	return []*dataset{d}, nil, http.StatusOK
 }
 
-// erroDeMutacao traduz o erro do storage (Store.Checkpoint ou
+// mutationError traduz o erro do storage (Store.Checkpoint ou
 // Store.CompactaUmaVez) em status HTTP e código do protocolo. É
 // COMPARTILHADA pelas duas rotas porque as duas passam pelo MESMO writer e
 // podem encontrar o MESMO modo falho sticky (aposentaSegment chama
@@ -124,7 +124,7 @@ type ErrParcial struct {
 //
 // fn devolve o erro CRU do storage — processaDatasets não traduz status HTTP
 // nem código de protocolo, só agrega ordem e nomes; a tradução continua em
-// erroDeMutacao, chamada pelo handler com ErrParcial.Err.
+// mutationError, chamada pelo handler com ErrParcial.Err.
 func processDatasets[T any](targets []*dataset, fn func(*dataset) (T, error)) (processados []T, parcial *ErrParcial) {
 	nomes := make([]string, 0, len(targets))
 	for _, d := range targets {
@@ -138,7 +138,7 @@ func processDatasets[T any](targets []*dataset, fn func(*dataset) (T, error)) (p
 	return processados, nil
 }
 
-// mensagemParcial decora a mensagem de erroDeMutacao com o dataset que
+// partialMessage decora a mensagem de mutationError com o dataset que
 // falhou e os que já tinham sido processados ANTES dele. "nenhum" quando a
 // lista está vazia (falhou no primeiro) — nunca uma lista vazia silenciosa
 // que o operador poderia ler como "não sei".

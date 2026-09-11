@@ -16,7 +16,7 @@ import (
 )
 
 // lockOfRow é um io.Writer de log que trava a goroutine gravando na
-// PRIMEIRA linha que contém `alvo`, e só a solta quando `libera` fecha.
+// PRIMEIRA linha que contém `alvo`, e só a solta quando `release` fecha.
 //
 // Existe porque storage.SetRetirementTraceForTest — o gate que a suíte de
 // internal/storage usa para travar uma passada de compaction no meio — mora

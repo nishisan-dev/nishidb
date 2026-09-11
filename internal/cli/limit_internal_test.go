@@ -105,7 +105,7 @@ func TestComLimitNaoCortaDentroDeLiteralNemDeIdentificador(t *testing.T) {
 	for _, c := range casos {
 		t.Run(c.name, func(t *testing.T) {
 			if got := withLimit(c.sql, c.n); got != c.want {
-				t.Errorf("comLimit(%q, %d)\n got %q\nwant %q", c.sql, c.n, got, c.want)
+				t.Errorf("withLimit(%q, %d)\n got %q\nwant %q", c.sql, c.n, got, c.want)
 			}
 		})
 	}
@@ -127,7 +127,7 @@ func TestComLimitNaoCortaQueryQueNaoTokeniza(t *testing.T) {
 		`SELECT a FROM t LIMIT 3 AND s = 'x`,
 	} {
 		if got, want := withLimit(sql, 5), sql+" LIMIT 5"; got != want {
-			t.Errorf("comLimit(%q, 5)\n got %q\nwant %q", sql, got, want)
+			t.Errorf("withLimit(%q, 5)\n got %q\nwant %q", sql, got, want)
 		}
 	}
 }

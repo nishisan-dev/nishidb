@@ -167,7 +167,7 @@ func TestBindExpostoComAuthenticationSecaoVaziaSobeComAviso(t *testing.T) {
 // evaluateExposicaoEAuth/New (matriz antes de segredos, porque a
 // matriz é só leitura de config) diz que a recusa da matriz (célula "auth
 // sem TLS") tem de sair PRIMEIRO — nomeando as três chaves — sem que
-// resolveCredenciais chegue a tocar o ambiente. Este teste pega uma
+// resolveCredentials chegue a tocar o ambiente. Este teste pega uma
 // reordenação acidental futura: se alguém inverter a ordem, o erro passaria
 // a nomear a variável de ambiente em vez das três chaves da matriz.
 func TestViolacoesSimultaneasSaemNaOrdemDaMatrizNaoNosSegredos(t *testing.T) {
@@ -240,7 +240,7 @@ func TestCertificadoOuChaveInvalidosRecusamASubidaNomeandoOCaminho(t *testing.T)
 
 // Prova de que a resolução de segredos (security.go) está de fato ligada ao
 // caminho de subida de server.Novo, e não só correta em isolamento
-// (security_internal_test.go já cobre resolveSenha em detalhe).
+// (security_internal_test.go já cobre resolvePassword em detalhe).
 func TestPasswordEnvAusenteRecusaASubidaDoServidor(t *testing.T) {
 	const variavel = "NISHIDB_TESTE_SUBIDA_SENHA_AUSENTE"
 	os.Unsetenv(variavel) //nolint:errcheck // ausência é o próprio setup do teste

@@ -30,9 +30,9 @@ type credencial struct {
 	role           string
 }
 
-// resolveCredenciais lê, na subida e ANTES do bind, o VALOR de cada
+// resolveCredentials lê, na subida e ANTES do bind, o VALOR de cada
 // credencial declarada em server.authentication.users — no molde de
-// kafka.Resolve/kafka.env (internal/kafka/config.go:154-169): o parse (B1)
+// kafka.ResolveKafkaConfig/kafka.env (internal/kafka/config.go:154-169): o parse (B1)
 // só validou o NOME da variável ou o CAMINHO do arquivo; é aqui, na
 // ativação, que a variável é lida ou o arquivo é aberto, e uma falha de
 // credencial tem de abortar a subida antes que qualquer listener abra —
@@ -65,7 +65,7 @@ func resolveCredentials(cfg *config.Config) (map[string]credencial, error) {
 	return out, nil
 }
 
-// resolveSenha lê a credencial de UM usuário do ambiente (env ou arquivo,
+// resolvePassword lê a credencial de UM usuário do ambiente (env ou arquivo,
 // XOR já garantido pela B1) e devolve o digest SHA-256 — nunca a senha em
 // si além do escopo desta função.
 func resolvePassword(u config.UserSpec) ([sha256.Size]byte, error) {
@@ -99,7 +99,7 @@ func resolvePassword(u config.UserSpec) ([sha256.Size]byte, error) {
 				"server.authentication.users: usuário %q: passwordFile %s: %w",
 				u.Username, u.PasswordFile, err)
 		}
-		// Regra NOVA em relação ao molde do kafka.Resolve: lá security.caFile
+		// Regra NOVA em relação ao molde do kafka.ResolveKafkaConfig: lá security.caFile
 		// é uma CA pública, e ninguém perde nada se outro usuário da máquina
 		// a ler. Uma senha é o oposto — group/world-readable é o mesmo
 		// descuido de deixar a chave privada TLS com o modo errado, só que
@@ -148,7 +148,7 @@ func resolvePassword(u config.UserSpec) ([sha256.Size]byte, error) {
 	return sha256.Sum256([]byte(password)), nil
 }
 
-// validaCertificadoNaSubida confere, na subida e ANTES do bind, que o par
+// validateCertificateAtStartup confere, na subida e ANTES do bind, que o par
 // certificado/chave de server.tls CARREGA — LoadX509KeyPair e não apenas
 // "os arquivos existem", porque um PEM corrompido ou uma chave que não
 // corresponde ao certificado só apareceria hoje no primeiro handshake TLS,
@@ -159,8 +159,8 @@ func resolvePassword(u config.UserSpec) ([sha256.Size]byte, error) {
 // avisaValidadeOfCert (abaixo) leia o leaf sem um segundo
 // LoadX509KeyPair — o par nunca é relido do disco depois deste ponto;
 // rotação de certificado é reiniciar o processo (limite nomeado: não há
-// SIGHUP-reload aqui, mesma decisão de resolveCredenciais acima).
-func validateCertificateOnUpload(cfg *config.Config) (*tls.Certificate, error) {
+// SIGHUP-reload aqui, mesma decisão de resolveCredentials acima).
+func validateCertificateAtStartup(cfg *config.Config) (*tls.Certificate, error) {
 	if !cfg.TLSEnabled() {
 		return nil, nil
 	}
@@ -180,7 +180,7 @@ func validateCertificateOnUpload(cfg *config.Config) (*tls.Certificate, error) {
 const avisoOfExpirationOfCert = 30 * 24 * time.Hour
 
 // avisaValidadeOfCert parseia o leaf do certificado já CARREGADO por
-// validaCertificadoNaSubida (nunca relido do disco) e publica a métrica de
+// validateCertificateAtStartup (nunca relido do disco) e publica a métrica de
 // expiração — SEMPRE que TLS está ligado, para que o operador derive "quanto
 // falta" no painel/alerta sem que esta função precise decidir o que é "pouco
 // tempo" além do próprio WARN abaixo.
@@ -192,7 +192,7 @@ const avisoOfExpirationOfCert = 30 * 24 * time.Hour
 // exatamente o cenário que "ERRO no log + métrica" cobre em vez de recusa.
 // Só devolve erro se o leaf em si não decodificar, o que não deveria
 // acontecer com um par que já passou por LoadX509KeyPair (violação de
-// invariante, mesma doutrina do `default` de resolveSenha).
+// invariante, mesma doutrina do `default` de resolvePassword).
 func avisaValidadeOfCert(cert tls.Certificate, log *logging.Logger, reg *metrics.Registry) error {
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
@@ -220,7 +220,7 @@ func avisaValidadeOfCert(cert tls.Certificate, log *logging.Logger, reg *metrics
 	return nil
 }
 
-// enderecoLoopback resolve o endereço do listener secundário do plano
+// loopbackAddress resolve o endereço do listener secundário do plano
 // loopback (decisão 4 do plano do ciclo, §77-78) a partir de
 // server.loopback. Devolve "" quando desligado — nenhum listener a mais.
 //

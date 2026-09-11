@@ -54,7 +54,7 @@ type esteira struct {
 
 	// pronto acorda o writer. Channel e não cond porque o writer espera em
 	// select junto do despertador do checkpoint — o débito 56 — e cond não
-	// entra em select. Buffer 1 pela mesma razão que o `espera` da Fila: o
+	// entra em select. Buffer 1 pela mesma razão que o `wait` da Fila: o
 	// sinal não pode se perder entre a checagem e o bloqueio.
 	pronto chan struct{}
 
@@ -223,7 +223,7 @@ func (e *esteira) consome(ctx context.Context, wake <-chan time.Time) (*slot, bo
 //
 // Encolhe é chamado AQUI, e não no decode, porque este é o único instante em
 // que o slot está comprovadamente ocioso: o writer terminou e o próximo dono
-// dele só chega daqui a `janela` eventos. Encolher no decode devolveria a
+// dele só chega daqui a `window` eventos. Encolher no decode devolveria a
 // memória e a retomaria no evento seguinte, que é churn, não economia.
 func (e *esteira) advance(limiarOfEncolhimento int) bool {
 	e.mu.Lock()
@@ -333,7 +333,7 @@ func powerOfTwo(window int) int64 {
 // ocupa memória é o array, e devolvê-lo só vale quando ele é grande.
 const paginaOfSO = 4096
 
-// limiarDeSlot é quanta memória um slot pode reter antes de ser encolhido.
+// slotThreshold é quanta memória um slot pode reter antes de ser encolhido.
 //
 // DERIVADO, e não inventado. O operador já declarou quanto a ingestão pode
 // segurar de eventos em voo: `ingestionQueueBytes`, o segundo gate da fila. A

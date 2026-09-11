@@ -18,7 +18,7 @@ import (
 //
 // O gate nasce COM a estrutura, e não depois. Foi a ausência de um gate
 // equivalente sobre o writer Kafka que deixou a alocação por evento do
-// `avanca` — uma string nova por partição por evento — passar despercebida até
+// `advance` — uma string nova por partição por evento — passar despercebida até
 // alguém ir procurar com profile na mão.
 //
 // O limiar de encolhimento entra generoso de propósito: encolher SOLTA memória
