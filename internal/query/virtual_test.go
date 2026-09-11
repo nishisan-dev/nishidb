@@ -17,11 +17,19 @@ import (
 // tableVirtualOfTest monta um Store virtual com o formato de um contador
 // (groupKey, olt, total) sobre o dublê, e o registra no motor sob o namespace
 // dado. O dublê serve porque o motor só precisa de um query.Store.
+//
+// O `schemaName` é o SyntheticSchemaName, como em TODA spec sintética de
+// produção (counters/table.go, counters/meta.go, metakafka/table.go,
+// query/meta/meta.go). Declarar aqui o schema do dataset faria o dublê mentir
+// justamente no ponto que o catálogo tem de resolver: é ele quem troca o
+// sentinela `_virtual` pelo schema da árvore do cliente, e um dublê que já
+// chega com o schema final passaria verde mesmo se o catálogo não trocasse
+// nada.
 func tableVirtualOfTest(t *testing.T, eng *query.Engine, namespace, table string) {
 	t.Helper()
 	spec, err := schema.Parse([]byte(`version: 1
 name: `+table+`
-schemaName: telecom
+schemaName: `+schema.SyntheticSchemaName+`
 materialization:
   key:
     field: groupKey
