@@ -27,19 +27,30 @@ type TableInfo struct {
 	// pelo dataset para a base e para os contadores, e o namespace `_meta`
 	// para as tabelas de meta — que descrevem o motor, não o dado.
 	Schema string
-	// Name é o nome pelo qual o SQL a endereça DENTRO do Schema.
+	// Name é o nome da tabela DENTRO do Schema.
 	Name string
-	Kind TableKind
+	// Namespace é o espaço de nome virtual por onde o FROM abre a tabela hoje
+	// (`_counters`, `_meta`), e sai VAZIO para a tabela base — que é aberta
+	// pelo nome, sem prefixo. Ele é publicado porque o par (Schema, Name) não
+	// é endereço: quem precisar montar o FROM de uma view — o /v1/metadata e a
+	// `_meta.tables` — não teria como reconstruir `_counters.por_olt` a partir
+	// de `telecom` e `por_olt`.
+	Namespace string
+	Kind      TableKind
 	// Description é o texto que o cliente mostra ao lado da tabela. Hoje sai
 	// vazia em TODA linha: nem a spec do dataset nem o registro de tabela
 	// virtual declaram descrição, e o catálogo não inventa uma. O campo existe
 	// porque o wire do /v1/metadata e a `_meta.tables` o publicam, e passa a
 	// ter conteúdo quando houver onde declará-lo.
 	Description string
-	// Columns são as colunas que um SELECT * devolveria, na mesma ordem e pela
-	// mesma regra do /v1/metadata (FieldsForMetadata): a coluna derivada fica
-	// fora do SELECT *, e esconder também aqui deixaria o operador sem forma
-	// nenhuma de saber que ela existe.
+	// Columns são as colunas DESCRITÍVEIS da tabela, pela mesma regra do
+	// /v1/metadata (FieldsForMetadata): as de topo mais as derivadas, sem os
+	// campos de sistema, em ordem crescente de FieldID.
+	//
+	// É deliberadamente um SUPERSET do que o `SELECT *` devolve — a coluna
+	// derivada fica fora do `SELECT *` e está aqui, porque esconder também
+	// aqui deixaria o operador sem forma nenhuma de saber que ela existe, e
+	// ela foi declarada justamente para ser consultada pelo nome.
 	Columns []*schema.CompiledField
 }
 
@@ -55,8 +66,16 @@ type TableInfo struct {
 // base sai do `record.sch`, as views saem do `record.virtualTables` — o mesmo
 // mapa que o tableVirtual consulta — e a `_meta.fields` é acrescentada à parte
 // porque ela é fixa do pacote meta e não está no registro, exatamente como o
-// desvio do Execute a trata. Tabela que o Execute não sabe abrir não aparece
-// aqui, e tabela que ele abre não fica de fora.
+// desvio do Execute a trata. Toda tabela listada aqui É aberta pelo Execute, e
+// tabela que ele abre não fica de fora.
+//
+// Mas o par (Schema, Name) ainda NÃO é o endereço que o FROM aceita: o
+// contador publicado como `(telecom, por_olt)` só abre hoje por
+// `FROM _counters.por_olt`, porque o motor resolve a view pelo NAMESPACE e não
+// pelo schema. Por isso a linha também carrega o Namespace — é com ele que se
+// monta o FROM que funciona. Fazer o schema declarado ser aceito no FROM é a
+// tarefa seguinte do ciclo; até lá, quem consome esta lista para executar SQL
+// tem de usar o Namespace, e o Schema é só o lugar na árvore do cliente.
 //
 // Por ora o único consumidor é o teste desta função: o /v1/metadata e a
 // `_meta.tables` passam a sair daqui nas tarefas seguintes do ciclo. Ela nasce
@@ -75,7 +94,7 @@ func (e *Engine) Catalog(dataset string) ([]TableInfo, error) {
 		return nil, fmt.Errorf("query: dataset %q não registrado", dataset)
 	}
 
-	fieldsSchema, err := meta.SchemaOfFields()
+	fieldsColumns, err := meta.ColumnsOfFields()
 	if err != nil {
 		return nil, err
 	}
@@ -95,13 +114,13 @@ func (e *Engine) Catalog(dataset string) ([]TableInfo, error) {
 	})
 	entries = append(entries, catalogEntry{
 		info: TableInfo{
-			Schema:  meta.Namespace,
-			Name:    meta.TableFields,
-			Kind:    KindView,
-			Columns: fieldsSchema.FieldsForMetadata(),
+			Schema:    meta.Namespace,
+			Name:      meta.TableFields,
+			Namespace: meta.Namespace,
+			Kind:      KindView,
+			Columns:   fieldsColumns,
 		},
-		rank:      rankMeta,
-		namespace: meta.Namespace,
+		rank: rankMeta,
 	})
 	for _, v := range virtualTables {
 		// Registro homônimo da tabela fixa é inalcançável: o Execute desvia
@@ -123,13 +142,13 @@ func (e *Engine) Catalog(dataset string) ([]TableInfo, error) {
 		}
 		entries = append(entries, catalogEntry{
 			info: TableInfo{
-				Schema:  tableSchema,
-				Name:    v.table,
-				Kind:    KindView,
-				Columns: v.sch.FieldsForMetadata(),
+				Schema:    tableSchema,
+				Name:      v.table,
+				Namespace: v.namespace,
+				Kind:      KindView,
+				Columns:   v.sch.FieldsForMetadata(),
 			},
-			rank:      rank,
-			namespace: v.namespace,
+			rank: rank,
 		})
 	}
 
@@ -146,7 +165,7 @@ func (e *Engine) Catalog(dataset string) ([]TableInfo, error) {
 		case a.info.Name != b.info.Name:
 			return a.info.Name < b.info.Name
 		default:
-			return a.namespace < b.namespace
+			return a.info.Namespace < b.info.Namespace
 		}
 	})
 
@@ -164,12 +183,12 @@ const (
 	rankMeta
 )
 
-// catalogEntry carrega, além da linha publicada, os dois critérios de ordem que
-// não cabem nela: o grupo e o namespace de origem.
+// catalogEntry carrega, além da linha publicada, o único critério de ordem que
+// não cabe nela: o grupo. O namespace é critério de desempate e mora na linha,
+// porque o consumidor precisa dele para montar o FROM.
 type catalogEntry struct {
-	info      TableInfo
-	rank      int
-	namespace string
+	info TableInfo
+	rank int
 }
 
 type virtualTableRef struct {

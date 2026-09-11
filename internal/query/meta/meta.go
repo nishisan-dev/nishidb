@@ -181,14 +181,26 @@ var (
 	columnsIDs map[string]types.FieldID
 )
 
-// SchemaOfFields devolve o schema compilado da `_meta.fields` — o MESMO que o
-// Open usa para bindar a consulta.
+// ColumnsOfFields devolve as colunas descritíveis da `_meta.fields`, tiradas do
+// MESMO schema compilado que o Open usa para bindar a consulta.
 //
-// Exportado para o catálogo do motor, que precisa das colunas desta tabela e
-// não tem como alcançá-las: a `fields` é fixa deste pacote e não está no
-// registro de tabelas virtuais. Sem isto o catálogo redeclararia a lista de
-// colunas e divergiria dela na primeira mudança daqui.
-func SchemaOfFields() (*schema.Compiled, error) { return schemaOfTable() }
+// Existe para o catálogo do motor, que precisa das colunas desta tabela e não
+// tem como alcançá-las: a `fields` é fixa deste pacote e não está no registro
+// de tabelas virtuais. Sem isto o catálogo redeclararia a lista de colunas e
+// divergiria dela na primeira mudança daqui.
+//
+// Devolve as COLUNAS e não o `*schema.Compiled` de propósito: o compilado é o
+// singleton cacheado deste pacote, e exportá-lo entregaria a quem chama os
+// mutadores dele (FixAutoType, ResolveUnknown, OnIncompatibleValue) sobre o
+// estado compartilhado da tabela. A necessidade é de leitura, e a exportação
+// tem o tamanho dela.
+func ColumnsOfFields() ([]*schema.CompiledField, error) {
+	sch, err := schemaOfTable()
+	if err != nil {
+		return nil, err
+	}
+	return sch.FieldsForMetadata(), nil
+}
 
 func schemaOfTable() (*schema.Compiled, error) {
 	oneVez.Do(func() {
