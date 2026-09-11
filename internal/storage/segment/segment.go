@@ -235,20 +235,20 @@ func (w *Writer) Current() (uint32, int64) { return w.segID, w.offset }
 // Close fecha o segmento corrente.
 func (w *Writer) Close() error { return w.f.Close() }
 
-// SegmentRef descreve um segmento presente no diretório de dados.
-type SegmentRef struct {
+// Ref descreve um segmento presente no diretório de dados.
+type Ref struct {
 	ID        uint32
 	SizeBytes int64
 }
 
 // ListSegments enumera os segmentos do diretório em ordem crescente de ID
 // (usado pelo checkpoint e pelo dir-listing da recovery, design §10.3).
-func ListSegments(dir string) ([]SegmentRef, error) {
+func ListSegments(dir string) ([]Ref, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("segment: listar %s: %w", dir, err)
 	}
-	var refs []SegmentRef
+	var refs []Ref
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -270,9 +270,9 @@ func ListSegments(dir string) ([]SegmentRef, error) {
 			}
 			return nil, err
 		}
-		refs = append(refs, SegmentRef{ID: id, SizeBytes: info.Size()})
+		refs = append(refs, Ref{ID: id, SizeBytes: info.Size()})
 	}
-	slices.SortFunc(refs, func(a, b SegmentRef) int { return cmp.Compare(a.ID, b.ID) })
+	slices.SortFunc(refs, func(a, b Ref) int { return cmp.Compare(a.ID, b.ID) })
 	return refs, nil
 }
 

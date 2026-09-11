@@ -121,7 +121,7 @@ type Writer struct {
 	pausa    error
 	desfecho Desfecho
 
-	// parado fecha quando Roda retorna, e existe para o Quiesce.
+	// parado fecha quando Run retorna, e existe para o Quiesce.
 	//
 	// É o braço que impede o modo de falha mais perigoso desta mudança: um
 	// writer que já saiu (por ErrPausado, por exemplo) nunca alcançaria a
@@ -130,14 +130,14 @@ type Writer struct {
 	// seriam revogadas e a ingestão morreria em silêncio.
 	parado chan struct{}
 
-	// iniciado fecha quando Roda começa, e é o QUARTO caso do Quiesce.
+	// iniciado fecha quando Run começa, e é o QUARTO caso do Quiesce.
 	//
 	// O plano da Fase 3 nomeou três: barreira pronta, writer que já saiu, e
 	// contexto. Falta o writer que NUNCA subiu — e ele existe de verdade: o
 	// group do franz-go pode revogar partições durante o próprio Abre, antes de
-	// o Consumidor.Roda ter lançado goroutine nenhuma. Nesse instante a fila
+	// o Consumidor.Run ter lançado goroutine nenhuma. Nesse instante a fila
 	// aceita a barreira (está aberta), ninguém a consome, `parado` não está
-	// fechado porque Roda não retornou, e o contexto que o franz-go passa ao
+	// fechado porque Run não retornou, e o contexto que o franz-go passa ao
 	// callback de revogação não está cancelado. O Quiesce espera para sempre,
 	// dentro de um callback: o group cai, e o Close do cliente trava atrás dele.
 	//
@@ -203,9 +203,9 @@ func (w *Writer) Desfecho() Desfecho {
 	return w.desfecho
 }
 
-// Roda drena a fila até o contexto acabar, a fila fechar ou a ingestão
+// Run drena a fila até o contexto acabar, a fila fechar ou a ingestão
 // pausar. Devolve ErrPausado quando parou por política.
-func (w *Writer) Roda(ctx context.Context) error {
+func (w *Writer) Run(ctx context.Context) error {
 	// Antes de qualquer outra coisa: é este fechamento que autoriza o Quiesce a
 	// esperar. Fechá-lo depois deixaria uma janela — estreita, e já basta — em
 	// que a revogação vê o writer como "não iniciado" enquanto ele está subindo.
@@ -412,7 +412,7 @@ func (w *Writer) para(ctx context.Context, motivo error, evento string, rec *kgo
 // "uma FIFO, um consumidor". Está escrito aqui porque a barreira parecia
 // sustentá-la, e sem o registro a próxima revisão a reintroduz "por segurança".
 //
-// Roda dentro de um callback do franz-go, então NUNCA pode esperar para
+// Run dentro de um callback do franz-go, então NUNCA pode esperar para
 // sempre: os três braços do select são a barreira, o writer que já saiu, e o
 // contexto.
 func (w *Writer) Quiesce(ctx context.Context) error {

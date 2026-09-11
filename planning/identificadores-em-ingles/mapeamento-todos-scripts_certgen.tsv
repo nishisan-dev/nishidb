@@ -1,0 +1,17 @@
+pacote	especie	endereco	novo	motivo
+scripts/certgen	local	main.chave	key	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	param	gera.caminhoCert	pathCert	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	param	gera.caminhoChave	pathKey	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	func	gera	generate	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	local	gera.chave	key	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	local	gera.bytesChave	bytesKey	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	param	escrevePEM.caminho	path	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	param	escrevePEM.bloco	block	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	func	escrevePEM	writePEM	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	local	TestAValidadeEhCurtaEComeçaNoPassado.bloco	block	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	local	TestOCertificadoServeParaLocalhostEParaOIP.chave	key	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	local	TestOCertificadoServeParaLocalhostEParaOIP.bloco	block	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	local	TestOCertificadoServeParaLocalhostEParaOIP.temLocalhost	hasLocalhost	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	local	TestOCertificadoServeParaLocalhostEParaOIP.temIP	hasIP	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	local	TestOParDeCertificadoEChaveCasa.chave	key	tradução abrangente de funções/tipos/métodos via script automatizado
+scripts/certgen	local	TestAChavePrivadaNaoEhLegivelPorOutros.chave	key	tradução abrangente de funções/tipos/métodos via script automatizado

@@ -35,7 +35,7 @@ type TLSSpec struct {
 // mesmo que viesse (validateUsers recusa a chave por não estar na
 // whitelist). PasswordEnv/PasswordFile guardam ONDE a credencial mora — nome
 // de variável de ambiente ou caminho de arquivo —, nunca o valor; resolver o
-// valor é ativação (B2, em server.Novo), não parse.
+// valor é ativação (B2, em server.New), não parse.
 type UserSpec struct {
 	Username     string `yaml:"username"`
 	PasswordEnv  string `yaml:"passwordEnv"`

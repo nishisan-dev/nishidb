@@ -11,7 +11,7 @@ import "testing"
 // cruzamento deles com a perda que o defeito original deixava ao acaso.
 func TestDesfechoMaisGraveRespeitaAOrdemDeGravidade(t *testing.T) {
 	casos := []struct {
-		nome   string
+		name   string
 		a, b   int
 		quer   int
 		porque string
@@ -36,7 +36,7 @@ func TestDesfechoMaisGraveRespeitaAOrdemDeGravidade(t *testing.T) {
 		{"código desconhecido vence sucesso", ExitOK, 99, 99, ""},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			// Comutativo: a ordem dos argumentos não pode mudar o resultado.
 			if got := mostSevereOutcome(c.a, c.b); got != c.quer {
 				t.Errorf("desfechoMaisGrave(%d, %d) = %d, want %d — %s", c.a, c.b, got, c.quer, c.porque)

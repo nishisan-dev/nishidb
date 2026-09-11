@@ -308,10 +308,10 @@ func (f *fonte) contextoDaMarca() context.Context {
 		cancela()
 		return ctx
 	}
-	ctx, cancela := context.WithTimeout(context.Background(), kafka.PrazoDaMarcaDagua)
+	ctx, cancel := context.WithTimeout(context.Background(), kafka.PrazoDaMarcaDagua)
 	go func() {
 		<-ctx.Done()
-		cancela()
+		cancel()
 		f.medindo.Store(false)
 	}()
 	return ctx

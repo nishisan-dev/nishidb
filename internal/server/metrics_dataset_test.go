@@ -68,8 +68,8 @@ func coletaAmostras(t *testing.T, srv *server.Servidor) []amostraExposta {
 			continue
 		}
 		if depois, achou := strings.CutPrefix(linha, "# TYPE "); achou {
-			familia, texto, _ := strings.Cut(depois, " ")
-			tipos[familia] = tipoDoScrape(t, texto)
+			familia, text, _ := strings.Cut(depois, " ")
+			tipos[familia] = tipoDoScrape(t, text)
 			continue
 		}
 		if strings.HasPrefix(linha, "#") {

@@ -98,7 +98,7 @@ Pacotes que estruturam o todo:
 - `internal/kafka` — poller → fila limitada (DOIS gates: registros e bytes) →
   writer único; uma goroutine de ponta a ponta preserva ordem por partição.
   Watchdog recria o consumidor só com a conjunção de três fatos (eventos parados
-  + lag no broker + fila vazia), pelo MESMO `kafka.Abre` da subida.
+  + lag no broker + fila vazia), pelo MESMO `kafka.Open` da subida.
 - `internal/metakafka` — a tabela virtual `_meta.kafka`. Mora fora de
   `internal/kafka` e de `internal/query` porque precisa dos dois, e nenhum dos
   dois pode importar o outro (mesmo argumento de `internal/counters`).

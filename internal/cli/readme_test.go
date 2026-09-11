@@ -129,14 +129,14 @@ func TestQuickstartDoREADMEExecuta(t *testing.T) {
 
 	// Blocos 2 e 3: as duas consultas, com a saída conferida linha a linha.
 	casos := []struct {
-		bloco    string
+		block    string
 		wantCode int
 	}{
 		{consoles[1], cli.ExitOK},
 		{consoles[2], cli.ExitQuery},
 	}
 	for i, caso := range casos {
-		cmd, esperado := comandoESaida(caso.bloco)
+		cmd, esperado := comandoESaida(caso.block)
 		sql, ok := sqlDoComando(cmd)
 		if !ok {
 			t.Fatalf("bloco console %d não tem uma query: %q", i+1, cmd)

@@ -45,16 +45,16 @@ schema:
 	for i, olt := range []string{"BR_SPOMO_OLT14", "PRCTA_G1M10"} {
 		var p []byte
 		for _, col := range []struct {
-			nome string
+			name string
 			v    types.Value
 		}{
 			{"groupKey", types.Value{Type: types.TypeString, Bytes: []byte(olt)}},
 			{"olt", types.Value{Type: types.TypeString, Bytes: []byte(olt)}},
 			{"total", types.Value{Type: types.TypeInt64, I64: int64(i * 2802)}},
 		} {
-			f, ok := sc.FieldByName([]byte(col.nome))
+			f, ok := sc.FieldByName([]byte(col.name))
 			if !ok {
-				t.Fatal(col.nome)
+				t.Fatal(col.name)
 			}
 			if p, err = encoding.AppendField(p, f.ID, col.v); err != nil {
 				t.Fatal(err)
@@ -169,7 +169,7 @@ func TestRecusaDeRoteamentoVirtualEhErroDeBind(t *testing.T) {
 	}
 
 	casos := []struct {
-		nome    string
+		name    string
 		sql     string
 		ofensor string // o texto que a posição tem de apontar
 		naMsg   string
@@ -179,7 +179,7 @@ func TestRecusaDeRoteamentoVirtualEhErroDeBind(t *testing.T) {
 		{"tabela inexistente no _meta", "SELECT a FROM _meta.nada", "nada", `_meta não tem tabela "nada"`},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			_, err := h.consulta(c.sql)
 			if err == nil {
 				t.Fatal("a recusa tem de acontecer")

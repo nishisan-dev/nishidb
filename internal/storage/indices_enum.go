@@ -426,7 +426,7 @@ func (s *Store) fonteDoWIP(seg uint32, campo types.FieldID, h uint64) (segindex.
 //
 // O aposMu continua aqui pela razão do GetByRowID: ele impede que o descritor
 // feche ENTRE o pread e a leitura dos bytes.
-func (s *Store) fonteDaFaixa(refs []segment.SegmentRef, i int) (segindex.Source, error) {
+func (s *Store) fonteDaFaixa(refs []segment.Ref, i int) (segindex.Source, error) {
 	s.aposMu.RLock()
 	defer s.aposMu.RUnlock()
 	var buf []byte
@@ -461,7 +461,7 @@ func (s *Store) fonteDaFaixa(refs []segment.SegmentRef, i int) (segindex.Source,
 // CHAMADOR: o s.retBuf daquele caminho é do writer, e uma consulta que o
 // reutilizasse o corromperia sem tomar o wmu — que é justamente o que este
 // ciclo existe para não fazer.
-func (s *Store) primeiroRowIDDe(ref segment.SegmentRef, buf []byte) (types.RowID, []byte, bool, error) {
+func (s *Store) primeiroRowIDDe(ref segment.Ref, buf []byte) (types.RowID, []byte, bool, error) {
 	if ref.SizeBytes <= segment.HeaderSize {
 		return 0, buf, false, nil
 	}

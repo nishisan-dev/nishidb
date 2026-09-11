@@ -248,11 +248,11 @@ func TestGateHeapComBaselineCompara(t *testing.T) {
 func TestAvaliaHeapDoisRegimes(t *testing.T) {
 	const mib = 1 << 20
 	casos := []struct {
-		nome                  string
-		current, base         uint64
-		entCurrent, entBase   int
-		querPassar            bool
-		trechoExpectedNoTexto string
+		name                 string
+		current, base        uint64
+		entCurrent, entBase  int
+		querPassar           bool
+		trechoExpectedInText string
 	}{
 		{"desprezível encerra pelo valor", 1 * mib, 400 * 1024, 8_000_000, 1_000_000, true, "piso"},
 		{"desprezível mesmo com razão alta", 15 * mib, 1 * mib, 8_000_000, 1_000_000, true, "piso"},
@@ -267,13 +267,13 @@ func TestAvaliaHeapDoisRegimes(t *testing.T) {
 		{"base zerada não divide por zero", 100 * mib, 0, 8_000_000, 1_000_000, false, "teto 2x"},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			passou, detalhe := avaliaHeap(tc.current, tc.base, tc.entCurrent, tc.entBase)
 			if passou != tc.querPassar {
 				t.Errorf("passou = %v, want %v (detalhe: %s)", passou, tc.querPassar, detalhe)
 			}
-			if !strings.Contains(detalhe, tc.trechoExpectedNoTexto) {
-				t.Errorf("detalhe = %q, want conter %q", detalhe, tc.trechoExpectedNoTexto)
+			if !strings.Contains(detalhe, tc.trechoExpectedInText) {
+				t.Errorf("detalhe = %q, want conter %q", detalhe, tc.trechoExpectedInText)
 			}
 		})
 	}
@@ -426,7 +426,7 @@ func abs(f float64) float64 {
 // Config inválida falha ANTES de tocar em disco.
 func TestConfigInvalida(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		cfg  Config
 		msg  string
 	}{
@@ -435,7 +435,7 @@ func TestConfigInvalida(t *testing.T) {
 		{"spec inexistente", Config{SpecPath: "nao-existe.yaml", DataDir: t.TempDir(), Entities: 10}, "spec"},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := Run(tc.cfg)
 			if err == nil {
 				t.Fatal("erro esperado")
@@ -1158,24 +1158,24 @@ func TestSomaDasEntradasSoIgnoraOQueSumiu(t *testing.T) {
 	vivo := reais[0]
 
 	casos := []struct {
-		nome    string
-		entrada fs.DirEntry
+		name    string
+		entry   fs.DirEntry
 		want    int64
 		wantErr bool
 	}{
 		{
-			nome:    "arquivo aposentado entre o ReadDir e o stat",
-			entrada: entradaDescrita{nome: "seg-9.retired", erroDoInfo: fs.ErrNotExist},
-			want:    77,
+			name:  "arquivo aposentado entre o ReadDir e o stat",
+			entry: entradaDescrita{nome: "seg-9.retired", erroDoInfo: fs.ErrNotExist},
+			want:  77,
 		},
 		{
-			nome:    "subdiretório que sumiu durante a recursão",
-			entrada: entradaDescrita{nome: "sub-que-sumiu", diretorio: true},
-			want:    77,
+			name:  "subdiretório que sumiu durante a recursão",
+			entry: entradaDescrita{nome: "sub-que-sumiu", diretorio: true},
+			want:  77,
 		},
 		{
-			nome:    "entrada ilegível: instrumento cego aborta",
-			entrada: entradaDescrita{nome: "seg-10.dat", erroDoInfo: fs.ErrPermission},
+			name:    "entrada ilegível: instrumento cego aborta",
+			entry:   entradaDescrita{nome: "seg-10.dat", erroDoInfo: fs.ErrPermission},
 			wantErr: true,
 		},
 		{
@@ -1187,27 +1187,27 @@ func TestSomaDasEntradasSoIgnoraOQueSumiu(t *testing.T) {
 			// mesmo ramo por permissão real e PULA sob root; sem este caso,
 			// trocar aquele `return 0, err` por `continue` sobreviveria em CI
 			// que rode como root, que é o normal em container.
-			nome:    "subdiretório que não é diretório: recursão aborta",
-			entrada: entradaDescrita{nome: "vivo.dat", diretorio: true},
+			name:    "subdiretório que não é diretório: recursão aborta",
+			entry:   entradaDescrita{nome: "vivo.dat", diretorio: true},
 			wantErr: true,
 		},
 	}
 	for _, tc := range casos {
-		got, err := somaDasEntradas(raiz, []fs.DirEntry{vivo, tc.entrada})
+		got, err := somaDasEntradas(raiz, []fs.DirEntry{vivo, tc.entry})
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("%s: somaDasEntradas devolveu %d sem erro", tc.nome, got)
+				t.Errorf("%s: somaDasEntradas devolveu %d sem erro", tc.name, got)
 			} else if got != 0 {
-				t.Errorf("%s: soma parcial %d junto do erro — o chamador que ignorar o erro lê isso como disco medido", tc.nome, got)
+				t.Errorf("%s: soma parcial %d junto do erro — o chamador que ignorar o erro lê isso como disco medido", tc.name, got)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("%s: %v", tc.nome, err)
+			t.Errorf("%s: %v", tc.name, err)
 			continue
 		}
 		if got != tc.want {
-			t.Errorf("%s: somaDasEntradas = %d, want %d", tc.nome, got, tc.want)
+			t.Errorf("%s: somaDasEntradas = %d, want %d", tc.name, got, tc.want)
 		}
 	}
 }

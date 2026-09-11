@@ -106,7 +106,7 @@ func TestPlanoInvalido(t *testing.T) {
 	id, doc := campo(t, c, "id"), campo(t, c, "doc")
 
 	casos := []struct {
-		nome  string
+		name  string
 		bq    func() *binder.BoundQuery
 		plan  planner.Plan
 		store executor.Store
@@ -171,7 +171,7 @@ func TestPlanoInvalido(t *testing.T) {
 	}
 
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			it, err := executor.Open(context.Background(), tc.bq(), tc.plan,
 				executor.Options{Store: tc.store})
 			if err == nil {

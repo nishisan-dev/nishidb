@@ -140,7 +140,7 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 	}
 
 	vals := []struct {
-		nome string
+		name string
 		v    types.Value
 	}{
 		{"name", texto(c.Name)},
@@ -161,19 +161,19 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 	// bem-vindo, `WHERE typeMismatches > 0` já filtra o topo naturalmente.
 	if c.Parent != nil {
 		vals = append(vals, struct {
-			nome string
+			name string
 			v    types.Value
 		}{"parent", texto(c.Parent.Name)},
 			struct {
-				nome string
+				name string
 				v    types.Value
 			}{"occurrences", inteiro(c.OccurrenceCount())},
 			struct {
-				nome string
+				name string
 				v    types.Value
 			}{"typeMismatches", inteiro(c.DivergenceCount())},
 			struct {
-				nome string
+				name string
 				v    types.Value
 			}{"coercions", inteiro(c.CoercionCount())})
 	}
@@ -184,9 +184,9 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 	}
 	pares := make([]par, 0, len(vals))
 	for _, kv := range vals {
-		id, ok := f.ids[kv.nome]
+		id, ok := f.ids[kv.name]
 		if !ok {
-			return types.Record{}, buf, false, fmt.Errorf("meta: coluna %q sem FieldID", kv.nome)
+			return types.Record{}, buf, false, fmt.Errorf("meta: coluna %q sem FieldID", kv.name)
 		}
 		pares = append(pares, par{id, kv.v})
 	}

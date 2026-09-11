@@ -508,14 +508,14 @@ func TestCallParenthesesDoNotSplitTheQualifiedCitation(t *testing.T) {
 	m := citationMapping()
 	m.addIdentRow("internal/protocol", "type", "Leitor", "Reader")
 	m.addIdentRow("internal/protocol", "method", "Leitor.Linha", "Line")
-	casos := []struct{ nome, src, want string }{
+	casos := []struct{ name, src, want string }{
 		{"metodo com o tipo renomeado", "o `Leitor.Linha()` do Go", "o `Reader.Line()` do Go"},
 		{"chamada com argumento", "como `Leitor.Linha(x)` entrega", "como `Reader.Line(x)` entrega"},
 		{"receptor minusculo", "`l.Linha()` devolve", "`l.Line()` devolve"},
 		{"qualificado fora de crase", "chame Leitor.Linha() antes", "chame Reader.Line() antes"},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			out, _ := RewriteText([]byte(c.src), ".md", m)
 			if string(out) != c.want {
 				t.Fatalf("saída: %q\nquer:  %q", out, c.want)

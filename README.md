@@ -1019,7 +1019,7 @@ todo o travamento, e é o que torna este watchdog construível. Se um dia os
 dois travarem juntos, o watchdog se abstém: agir sobre o que não se sabe seria
 recriar o consumidor por causa de uma consulta que falhou.
 
-**A recriação passa pelo mesmo `kafka.Abre` da subida.** O §49 põe o
+**A recriação passa pelo mesmo `kafka.Open` da subida.** O §49 põe o
 checkpoint local como autoritativo e lista quatro situações que recusam subir
 a ingestão; um caminho de reconexão que redescobrisse a posição por conta
 própria seria um segundo boot, menos testado, que divergiria do primeiro no

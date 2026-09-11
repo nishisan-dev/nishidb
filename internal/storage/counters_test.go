@@ -283,13 +283,13 @@ func TestContadorSobreviveAoCheckpointEReabertura(t *testing.T) {
 // uma instância que nunca caiu.
 func TestContadorRecuperaDoTailSemCheckpoint(t *testing.T) {
 	for _, variante := range []struct {
-		nome    string
+		name    string
 		parcial bool
 	}{
 		{"sem checkpoint depois do tail", false},
 		{"checkpoint interrompido antes do manifest", true},
 	} {
-		t.Run(variante.nome, func(t *testing.T) {
+		t.Run(variante.name, func(t *testing.T) {
 			dir := t.TempDir()
 			s, rel := storeComContadores(t, dir, porOLT("aut", true))
 			chaves := make([]string, 100)

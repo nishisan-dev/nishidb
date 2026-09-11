@@ -159,7 +159,7 @@ func TestEventoRuimContaOQueOParseAlcancou(t *testing.T) {
 func TestDecodeSerialContaSoOsEventosDeDescoberta(t *testing.T) {
 	h := newHarness(t, descobreYAML)
 	corpus := []struct {
-		evento     string
+		event      string
 		descobriu  bool
 		porqueNota string
 	}{
@@ -173,14 +173,14 @@ func TestDecodeSerialContaSoOsEventosDeDescoberta(t *testing.T) {
 	var querSerial int64
 	for _, c := range corpus {
 		antes := h.m.Metrics().DecodeSerialTotal
-		h.apply(c.evento)
+		h.apply(c.event)
 		depois := h.m.Metrics().DecodeSerialTotal
 		if c.descobriu {
 			querSerial++
 		}
 		if subiu := depois > antes; subiu != c.descobriu {
 			t.Errorf("%s (%s): reprocessou=%v, quero %v",
-				c.evento, c.porqueNota, subiu, c.descobriu)
+				c.event, c.porqueNota, subiu, c.descobriu)
 		}
 	}
 	if got := h.m.Metrics().DecodeSerialTotal; got != querSerial {

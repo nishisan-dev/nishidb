@@ -305,7 +305,7 @@ func TestTopicoInexistenteRecusaASubida(t *testing.T) {
 
 	b.cfg.Topic = "topico-que-nao-existe"
 	_, err := b.abreConsumidor()
-	if !errors.Is(err, kafka.ErrTopicoAusente) {
+	if !errors.Is(err, kafka.Open) {
 		t.Fatalf("erro = %v, quer ErrTopicoAusente", err)
 	}
 	if !strings.Contains(err.Error(), "topico-que-nao-existe") {

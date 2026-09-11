@@ -52,17 +52,17 @@ func TestAppendReadRoundTrip(t *testing.T) {
 		makeRecord(t, 2, 20, "key-b", 100),
 		makeRecord(t, 3, 30, "key-c", 500),
 	}
-	type loc struct{ seg, off uint32 }
+	type loc struct{ sec, off uint32 }
 	var locs []loc
 	for _, rec := range recs {
-		seg, off, err := w.Append(rec)
+		sec, off, err := w.Append(rec)
 		if err != nil {
 			t.Fatalf("Append: %v", err)
 		}
-		locs = append(locs, loc{seg, off})
+		locs = append(locs, loc{sec, off})
 	}
-	if locs[0].seg != 1 || locs[0].off != HeaderSize {
-		t.Fatalf("primeiro record: esperado seg=1 off=%d, obtido seg=%d off=%d", HeaderSize, locs[0].seg, locs[0].off)
+	if locs[0].sec != 1 || locs[0].off != HeaderSize {
+		t.Fatalf("primeiro record: esperado seg=1 off=%d, obtido seg=%d off=%d", HeaderSize, locs[0].sec, locs[0].off)
 	}
 
 	r, err := OpenReader(dir)
@@ -73,7 +73,7 @@ func TestAppendReadRoundTrip(t *testing.T) {
 	var buf []byte
 	for i, l := range locs {
 		var rec types.Record
-		rec, buf, err = r.ReadRecord(l.seg, l.off, buf)
+		rec, buf, err = r.ReadRecord(l.sec, l.off, buf)
 		if err != nil {
 			t.Fatalf("ReadRecord %d: %v", i, err)
 		}

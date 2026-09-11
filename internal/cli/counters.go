@@ -109,11 +109,11 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Conte
 		return writeOutputWithContext("counters", amb, func(w io.Writer) { writeReconstruction(w, dataset, linhas) })
 	default:
 		ests := st.EstatisticasDeContadores()
-		linhas := make([]linhaDeContador, 0, len(ests))
+		rows := make([]linhaDeContador, 0, len(ests))
 		for _, e := range ests {
-			linhas = append(linhas, storageCounter(e))
+			rows = append(rows, storageCounter(e))
 		}
-		return writeOutputWithContext("counters", amb, func(w io.Writer) { writeCounters(w, dataset, linhas) })
+		return writeOutputWithContext("counters", amb, func(w io.Writer) { writeCounters(w, dataset, rows) })
 	}
 }
 
@@ -137,13 +137,13 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred remo
 		if code := postMutation("counters", servidor, "/v1/counters/rebuild", dataset, cred, &resp, amb); code != ExitOK {
 			return code
 		}
-		var linhas []linhaDeReconstrucao
+		var rows []linhaDeReconstrucao
 		for _, d := range resp.Datasets {
 			for _, c := range d.Counters {
-				linhas = append(linhas, linhaDeReconstrucao{nome: c.Name, linhas: c.Rows, grupos: c.Groups, duracaoMs: c.DurationMs})
+				rows = append(rows, linhaDeReconstrucao{nome: c.Name, linhas: c.Rows, grupos: c.Groups, duracaoMs: c.DurationMs})
 			}
 		}
-		return writeOutputWithContext("counters", amb, func(w io.Writer) { writeReconstruction(w, dataset, linhas) })
+		return writeOutputWithContext("counters", amb, func(w io.Writer) { writeReconstruction(w, dataset, rows) })
 	default:
 		// A listagem é leitura, e sai do /v1/stats — a MESMA estrutura que
 		// alimenta as séries nishidb_counter_*.

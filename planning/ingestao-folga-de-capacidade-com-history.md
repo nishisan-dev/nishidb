@@ -46,7 +46,7 @@ Profile de CPU de 45 s em produção (13,64 s de amostras):
 | Componente | % do CPU | µs/evento |
 |---|---:|---:|
 | `PatchBuffer.Parse` (parse JSON + descoberta) | 33% | 298 |
-| `Store.ExpiraUmaPassada` (varredura de TTL, fundo) | **19%** | 171 |
+| `Store.ExpiraOnePass` (varredura de TTL, fundo) | **19%** | 171 |
 | `Store.Put` (tabela base) | 16% | 144 |
 | `apendaNoHistorico` → `Store.Apenda` | **11%** | 99 |
 | Kafka, métricas, GC, resto | 21% | 190 |

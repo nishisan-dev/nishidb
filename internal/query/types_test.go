@@ -87,7 +87,7 @@ func (h *tiposHarness) achaIDs(sql string) []string {
 // ingerido é encontrado pelo literal equivalente.
 func TestIngestaoEQueryConcordamPorTipo(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		// campo e valor como aparecem no evento JSON.
 		fieldJSON string
 		valueJSON string
@@ -132,7 +132,7 @@ func TestIngestaoEQueryConcordamPorTipo(t *testing.T) {
 	}
 
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			h := novoTiposHarness(t)
 			h.ingere(fmt.Sprintf(`{"id":"K1","_SEQ":1,%q:%s}`, tc.fieldJSON, tc.valueJSON))
 
@@ -282,7 +282,7 @@ func TestIngestaoEQueryConcordamNosTiposOpacos(t *testing.T) {
 // que não existe valor "ingerível mas não consultável" (nem o contrário).
 func TestValorInvalidoEhRecusadoNosDoisLados(t *testing.T) {
 	casos := []struct {
-		nome      string
+		name      string
 		fieldJSON string
 		value     string // literal, sem aspas JSON
 		where     string
@@ -295,7 +295,7 @@ func TestValorInvalidoEhRecusadoNosDoisLados(t *testing.T) {
 		{"timestamp sem timezone", "quando", "2026-08-13T12:00:00", `quando = '2026-08-13T12:00:00'`},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			h := novoTiposHarness(t)
 
 			r := h.mat.Apply([]byte(fmt.Sprintf(`{"id":"K1","_SEQ":1,%q:%q}`, tc.fieldJSON, tc.value)))
@@ -388,14 +388,14 @@ func TestLiteralNoFormatoErradoNaoAchaEmSilencio(t *testing.T) {
 	h := novoTiposHarness(t)
 	h.ingere(`{"id":"K1","_SEQ":1,"momento":"Aug 22, 2026 08:54:02 PM","hora":"08:54:02 PM"}`)
 
-	casos := []struct{ nome, where string }{
+	casos := []struct{ name, where string }{
 		{"rfc3339 em campo java medium", `momento = '2026-08-22T20:54:02Z'`},
 		{"iso local em campo java medium", `momento_iso = 'Aug 22, 2026 08:54:02 PM'`},
 		{"texto de hora em campo de data", `momento = '08:54:02 PM'`},
 		{"epoch millis em campo time", `hora = 1786568400000`},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := h.engine.Execute(context.Background(), "todos_os_tipos",
 				`SELECT id FROM todos_os_tipos WHERE `+tc.where, nil)
 			if err == nil {

@@ -67,7 +67,7 @@ func BenchmarkDecodeWorkers(b *testing.B) {
 			pool := newDecodePool(workers, fila, w.est, mat, met, w.limiarDeEncolhimento)
 			esperaDecode := pool.Sobe(ctx)
 			pronto := make(chan error, 1)
-			go func() { pronto <- w.Roda(ctx) }()
+			go func() { pronto <- w.Run(ctx) }()
 
 			// Aquece fora da medição: a primeira passagem cria as colunas, e
 			// medir a descoberta junto mediria a Fase 4.2 no lugar desta.

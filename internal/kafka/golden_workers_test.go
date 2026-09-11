@@ -154,7 +154,7 @@ func rodaPipeline(t *testing.T, workers int, eventos []string) retratoDoDataset 
 	pool := newDecodePool(workers, fila, w.est, mat, met, w.limiarDeEncolhimento)
 	esperaDecode := pool.Sobe(ctx)
 	writerPronto := make(chan error, 1)
-	go func() { writerPronto <- w.Roda(ctx) }()
+	go func() { writerPronto <- w.Run(ctx) }()
 
 	for i, ev := range eventos {
 		r := &kgo.Record{Partition: 0, Offset: int64(i), Value: []byte(ev)}

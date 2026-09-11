@@ -18,7 +18,7 @@ import (
 // travaDeLinha é um io.Writer de log que trava a goroutine gravando na
 // PRIMEIRA linha que contém `alvo`, e só a solta quando `libera` fecha.
 //
-// Existe porque storage.SetAposentadoriaTraceForTest — o gate que a suíte de
+// Existe porque storage.SetRetirementTraceForTest — o gate que a suíte de
 // internal/storage usa para travar uma passada de compaction no meio — mora
 // num arquivo _test.go do PACOTE storage (export_test.go), e por isso é
 // invisível para quem só o IMPORTA (internal/server): arquivos de teste

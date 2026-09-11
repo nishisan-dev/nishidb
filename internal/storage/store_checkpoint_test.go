@@ -130,12 +130,12 @@ func TestCheckpointComLeitoresConcorrentes(t *testing.T) {
 				return
 			default:
 			}
-			if _, b, ok, err := s.GetByKey(s.presente(), key, buf); err != nil || !ok {
+			_, b, ok, err := s.GetByKey(s.presente(), key, buf)
+			if err != nil || !ok {
 				t.Errorf("leitura durante checkpoint: (%v,%v)", ok, err)
 				return
-			} else {
-				buf = b
 			}
+			buf = b
 		}
 	}()
 	var prev types.Record

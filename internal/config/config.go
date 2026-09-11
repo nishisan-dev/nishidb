@@ -117,7 +117,7 @@ type Config struct {
 		// KnownFields GLOBAL continua desligado, ver comentário em
 		// Load) e as recusas cruzadas do §75/§77 que dependem só do
 		// arquivo. A resolução de segredos e a matriz de recusa "auth sem TLS
-		// com bind exposto" (§77) são ativação — B2, em server.Novo.
+		// com bind exposto" (§77) são ativação — B2, em server.New.
 		TLS            TLSSpec            `yaml:"tls"`
 		Authentication AuthenticationSpec `yaml:"authentication"`
 		Loopback       LoopbackSpec       `yaml:"loopback"`

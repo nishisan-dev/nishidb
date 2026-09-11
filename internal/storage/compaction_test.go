@@ -1552,7 +1552,7 @@ func TestAposentadoriaSaiDosMapasNoMesmoInstanteEmQueSaiDoDiretorio(t *testing.T
 		aposentado bool
 		listado    bool
 		segmentos  uint32
-		disco      int64
+		disk       int64
 	}
 	var fotos []foto
 	s.SetAposentadoriaTraceForTest(func(passo string) {
@@ -1575,7 +1575,7 @@ func TestAposentadoriaSaiDosMapasNoMesmoInstanteEmQueSaiDoDiretorio(t *testing.T
 			aposentado: errAposentado == nil,
 			listado:    listado,
 			segmentos:  st.SegmentsTotal,
-			disco:      st.StorageBytes,
+			disk:       st.StorageBytes,
 		})
 	})
 	defer s.SetAposentadoriaTraceForTest(nil)
@@ -1885,7 +1885,7 @@ func TestAposentadoriaTornaAsLocationsDuraveisAntesDoRename(t *testing.T) {
 	// existe para fechar — se ela não existisse aqui, o teste seria vacuidade
 	// com outro nome.
 	for _, rid := range migradas {
-		if seg, _ := localizacaoDaRow(t, s, rid); seg == alvo {
+		if sec, _ := localizacaoDaRow(t, s, rid); sec == alvo {
 			t.Fatalf("a row %d continua no segmento %d depois da varredura: o copy-forward não republicou nada", rid, alvo)
 		}
 	}
@@ -2707,12 +2707,12 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 	registrados := make([]uint32, 0, len(linhas))
 	var copiadosNoTotal, escritosNoTotal, devolvidoNoTotal int64
 	for _, linha := range linhas {
-		seg := uint32(campoNumerico(t, linha, "segmento"))
+		sec := uint32(campoNumerico(t, linha, "segmento"))
 		copiados := campoNumerico(t, linha, "records_copiados")
 		lidos := campoNumerico(t, linha, "bytes_lidos")
 		escritos := campoNumerico(t, linha, "bytes_escritos")
 		devolvidos := campoNumerico(t, linha, "bytes_devolvidos")
-		registrados = append(registrados, seg)
+		registrados = append(registrados, sec)
 		copiadosNoTotal += copiados
 		escritosNoTotal += escritos
 		devolvidoNoTotal += devolvidos
@@ -2721,21 +2721,21 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 			t.Errorf("o segmento %d registrou bytes_devolvidos=%d com bytes_lidos=%d e bytes_escritos=%d: "+
 				"o disco que a aposentadoria devolveu é a DISTÂNCIA entre o que a varredura leu e o que copiou para frente (§86), "+
 				"e um campo que não é essa conta responde errado a única pergunta que este milestone existe para responder",
-				seg, devolvidos, lidos, escritos)
+				sec, devolvidos, lidos, escritos)
 		}
-		if querido := tamanhos[seg] - segment.HeaderSize; lidos != querido {
+		if querido := tamanhos[sec] - segment.HeaderSize; lidos != querido {
 			t.Errorf("o segmento %d registrou bytes_lidos=%d num arquivo de %d bytes cujo header ocupa %d: "+
 				"a varredura começa DEPOIS do header, e viés constante em número publicado não se distingue de medida no gráfico",
-				seg, lidos, tamanhos[seg], int64(segment.HeaderSize))
+				sec, lidos, tamanhos[sec], int64(segment.HeaderSize))
 		}
-		if querido := vivas[seg]; copiados != querido {
+		if querido := vivas[sec]; copiados != querido {
 			t.Errorf("o segmento %d registrou records_copiados=%d, mas o índice nomeava %d row(s) dentro dele antes da passada: "+
 				"vivo é a location apontar para o record (decisão D2), e é essa contagem que o copy-forward move",
-				seg, copiados, querido)
+				sec, copiados, querido)
 		}
 		if (copiados == 0) != (escritos == 0) {
 			t.Errorf("o segmento %d registrou records_copiados=%d com bytes_escritos=%d: "+
-				"os dois contam a MESMA cópia, então um zerado com o outro não é aritmética possível", seg, copiados, escritos)
+				"os dois contam a MESMA cópia, então um zerado com o outro não é aritmética possível", sec, copiados, escritos)
 		}
 	}
 	if !slices.Equal(registrados, eleitos) {

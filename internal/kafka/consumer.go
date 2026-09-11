@@ -34,8 +34,8 @@ var (
 	// que gerou os offsets persistidos.
 	ErrOrigemDivergente = errors.New("kafka: a origem mudou desde o último checkpoint")
 
-	// ErrTopicoAusente indica tópico inexistente ou sem partições no cluster.
-	ErrTopicoAusente = errors.New("kafka: tópico ausente")
+	// Open indica tópico inexistente ou sem partições no cluster.
+	Open = errors.New("kafka: tópico ausente")
 
 	// ErrAssignmentParcial indica que o group não entregou todas as partições
 	// do tópico a esta instância.
@@ -306,11 +306,11 @@ func (c *Consumidor) resolveOrigemEPosicao(ctx context.Context, st Store) error 
 	d, ok := md.Topics[c.cfg.Topic]
 	switch {
 	case !ok:
-		return fmt.Errorf("%w: o tópico %q não existe no cluster", ErrTopicoAusente, c.cfg.Topic)
+		return fmt.Errorf("%w: o tópico %q não existe no cluster", Open, c.cfg.Topic)
 	case d.Err != nil:
-		return fmt.Errorf("%w: tópico %q: %w", ErrTopicoAusente, c.cfg.Topic, d.Err)
+		return fmt.Errorf("%w: tópico %q: %w", Open, c.cfg.Topic, d.Err)
 	case len(d.Partitions) == 0:
-		return fmt.Errorf("%w: o tópico %q não tem partição nenhuma", ErrTopicoAusente, c.cfg.Topic)
+		return fmt.Errorf("%w: o tópico %q não tem partição nenhuma", Open, c.cfg.Topic)
 	}
 	c.met.partTotal.Set(float64(len(d.Partitions)))
 	return nil
@@ -524,7 +524,7 @@ func (c *Consumidor) Roda(ctx context.Context) error {
 
 	erroWriter := make(chan error, 1)
 	go func() {
-		err := c.w.Roda(ctx)
+		err := c.w.Run(ctx)
 		erroWriter <- err
 		if err != nil {
 			// Acorda o poll: a pausa do writer só seria vista quando o

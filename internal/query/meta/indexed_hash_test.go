@@ -54,10 +54,10 @@ func TestIndexedRefleteACapacidadeDoMotor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := func(nome string) types.FieldID {
-		f, ok := c.FieldByName([]byte(nome))
+	id := func(name string) types.FieldID {
+		f, ok := c.FieldByName([]byte(name))
 		if !ok {
-			t.Fatalf("campo %q não compilou", nome)
+			t.Fatalf("campo %q não compilou", name)
 		}
 		return f.ID
 	}
@@ -70,7 +70,7 @@ func TestIndexedRefleteACapacidadeDoMotor(t *testing.T) {
 		visto[l["name"]] = [2]string{l["index"], l["indexed"]}
 	}
 
-	casos := []struct{ nome, index, indexed string }{
+	casos := []struct{ name, index, indexed string }{
 		{"status", "bitmap", "true"},
 		{"node", "bitmap", "true"},
 		{"livre", "none", "false"},
@@ -80,14 +80,14 @@ func TestIndexedRefleteACapacidadeDoMotor(t *testing.T) {
 		{"id", "none", "false"},
 	}
 	for _, caso := range casos {
-		got, ok := visto[caso.nome]
+		got, ok := visto[caso.name]
 		if !ok {
-			t.Errorf("coluna %q não apareceu em _meta.fields", caso.nome)
+			t.Errorf("coluna %q não apareceu em _meta.fields", caso.name)
 			continue
 		}
 		if got[0] != caso.index || got[1] != caso.indexed {
 			t.Errorf("%s: index=%q indexed=%q, esperado index=%q indexed=%q",
-				caso.nome, got[0], got[1], caso.index, caso.indexed)
+				caso.name, got[0], got[1], caso.index, caso.indexed)
 		}
 	}
 }

@@ -22,7 +22,7 @@ func TestOUsoAnunciaCounters(t *testing.T) {
 func TestCountersValidaAsFlags(t *testing.T) {
 	a := novoAmbiente(t)
 	casos := []struct {
-		nome string
+		name string
 		args []string
 		quer string
 	}{
@@ -33,7 +33,7 @@ func TestCountersValidaAsFlags(t *testing.T) {
 		{"posicional", []string{"counters", "--config", a.config, "--dataset", "servicos", "extra"}, "posicional"},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			if code := a.roda(c.args...); code != cli.ExitUsageError {
 				t.Fatalf("exit = %d, quer %d\n%s", code, cli.ExitUsageError, a.stderr.String())
 			}

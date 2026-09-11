@@ -438,7 +438,7 @@ func TestStatsEMetricsLeemAMesmaEstrutura(t *testing.T) {
 func exigeDezNumerosDistintos(t *testing.T, idx protocol.IndexStats) {
 	t.Helper()
 	numeros := []struct {
-		nome string
+		name string
 		v    int64
 	}{
 		{"Sealed", idx.Sealed},
@@ -454,7 +454,7 @@ func exigeDezNumerosDistintos(t *testing.T, idx protocol.IndexStats) {
 	for _, n := range numeros {
 		if n.v == 0 {
 			t.Fatalf("o bloco index saiu com %s = 0 (%+v): um campo zerado transforma a comparação com o /metrics "+
-				"em 0 == 0, e um fio congelado em constante zero passa por ela", n.nome, idx)
+				"em 0 == 0, e um fio congelado em constante zero passa por ela", n.name, idx)
 		}
 	}
 	for i := range numeros {
@@ -462,7 +462,7 @@ func exigeDezNumerosDistintos(t *testing.T, idx protocol.IndexStats) {
 			if numeros[i].v == numeros[j].v {
 				t.Fatalf("o bloco index saiu com %s == %s == %d (%+v): com dois números iguais, trocar um fio pelo "+
 					"outro fica invisível. Retune a bancada — nunca afrouxe esta asserção",
-					numeros[i].nome, numeros[j].nome, numeros[i].v, idx)
+					numeros[i].name, numeros[j].name, numeros[i].v, idx)
 			}
 		}
 	}
@@ -573,8 +573,8 @@ func bancadaDeIndice(t *testing.T) (*server.Servidor, string, string) {
 			t.Fatalf("montagem: apagar o índice do segmento %d: %v", seg, err)
 		}
 	}
-	for _, seg := range segmentosCorrompidos {
-		corrompeOFimDoIndice(t, segindex.SealedPath(dir, seg))
+	for _, sec := range segmentosCorrompidos {
+		corrompeOFimDoIndice(t, segindex.SealedPath(dir, sec))
 	}
 
 	srv, err := server.Novo(a.carrega(), server.Opcoes{})
@@ -789,7 +789,7 @@ func TestOsBytesDeIndiceVivemNoRotuloDaIrma(t *testing.T) {
 			"o bloco `history` descreve a tabela irmã, e lê-lo do Store do base publica o dataset errado sob o "+
 			"rótulo certo", hist.IndexBytes, quer)
 	}
-	if doBase := deDisco(dirBase); hist.IndexBytes == int64(doBase) {
+	if ofBase := deDisco(dirBase); hist.IndexBytes == int64(ofBase) {
 		t.Errorf("/v1/stats: history.indexBytes = %d é igual ao índice em disco do PRÓPRIO base: com os dois iguais "+
 			"este oráculo não distingue de qual Store o número veio", hist.IndexBytes)
 	}

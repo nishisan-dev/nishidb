@@ -776,25 +776,25 @@ func TestInterfaceMethodRenamesAreChargedLikeAnyOtherLeaf(t *testing.T) {
 			"e as citações dos métodos renomeados pelo ifacerename ficam fora do gate (%d linhas lidas)", len(renamed))
 	}
 	casos := []struct {
-		nome   string
+		name   string
 		chunk  citationChunk
 		cobra  bool
 		porque string
 	}{
 		{
-			nome:   "folha com maiúscula interna em prosa nua",
+			name:   "folha com maiúscula interna em prosa nua",
 			chunk:  citationChunk{file: "internal/outro/o.go", pkg: "internal/outro", line: 7, kind: chunkGoComment, text: "// A leitura chama AbreSnapshot antes de varrer."},
 			cobra:  true,
 			porque: "AbreSnapshot não é palavra de prosa em nenhuma das duas línguas do repositório",
 		},
 		{
-			nome:   "folha de uma maiúscula em prosa nua",
+			name:   "folha de uma maiúscula em prosa nua",
 			chunk:  citationChunk{file: "internal/outro/o.go", pkg: "internal/outro", line: 3, kind: chunkGoComment, text: "// Estado corrente da entidade, mantido na escrita."},
 			cobra:  false,
 			porque: "Estado abre frase em PT-BR, e cobrá-la nua encheria o gate de prosa legítima",
 		},
 		{
-			nome:   "folha de uma maiúscula qualificada pelo dono",
+			name:   "folha de uma maiúscula qualificada pelo dono",
 			chunk:  citationChunk{file: "docs/debitos.md", line: 230, kind: chunkMarkup, text: "O materializador expõe Store.Estado para o executor."},
 			cobra:  true,
 			porque: "a forma qualificada diz de quem está falando",
@@ -804,7 +804,7 @@ func TestInterfaceMethodRenamesAreChargedLikeAnyOtherLeaf(t *testing.T) {
 	for _, c := range casos {
 		hits := danglingHits([]citationChunk{c.chunk}, vazio, byOldName, surviving)
 		if got := len(hits) > 0; got != c.cobra {
-			t.Errorf("%s: cobrada = %v, esperado %v (%s): %q", c.nome, got, c.cobra, c.porque, c.chunk.text)
+			t.Errorf("%s: cobrada = %v, esperado %v (%s): %q", c.name, got, c.cobra, c.porque, c.chunk.text)
 		}
 	}
 }

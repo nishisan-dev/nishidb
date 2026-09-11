@@ -73,7 +73,7 @@ func TestResolveSenhaComPasswordFileInexistenteNomeiaOCaminho(t *testing.T) {
 // pública; senha não. group/world-readable recusa nomeando caminho E modo.
 func TestResolveSenhaComPasswordFileGroupOuWorldReadableRecusaNomeandoCaminhoEModo(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		modo os.FileMode
 	}{
 		{"legível pelo group", 0o640},
@@ -82,7 +82,7 @@ func TestResolveSenhaComPasswordFileGroupOuWorldReadableRecusaNomeandoCaminhoEMo
 		{"legível por outros sem group", 0o604},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			caminho := filepath.Join(dir, "senha.txt")
 			if err := os.WriteFile(caminho, []byte("segredo\n"), c.modo); err != nil {
@@ -150,14 +150,14 @@ func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 	}
 
 	casos := []struct {
-		nome string
+		name string
 		path string
 	}{
 		{"LF", comLF},
 		{"CRLF", comCRLF},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			digest, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: c.path, Role: config.RoleRead})
 			if err != nil {
 				t.Fatal(err)
@@ -165,7 +165,7 @@ func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 			if digest != base {
 				t.Errorf("digest com quebra de linha final diverge do digest sem quebra: "+
 					"a mesma senha 'autenticaria' diferente dependendo de como o operador a escreveu no arquivo (base=%x, %s=%x)",
-					base, c.nome, digest)
+					base, c.name, digest)
 			}
 		})
 	}
@@ -180,7 +180,7 @@ func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 // da recusa de passwordEnv vazia, aplicada ao vizinho de baixo.
 func TestResolveSenhaComPasswordFileVazioOuSoNewlineRecusaNomeandoOCaminho(t *testing.T) {
 	casos := []struct {
-		nome      string
+		name      string
 		conteudo  string
 		descricao string
 	}{
@@ -189,7 +189,7 @@ func TestResolveSenhaComPasswordFileVazioOuSoNewlineRecusaNomeandoOCaminho(t *te
 		{"só CRLF", "\r\n", "arquivo que só contém um CRLF"},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			caminho := filepath.Join(dir, "senha.txt")
 			if err := os.WriteFile(caminho, []byte(c.conteudo), 0o600); err != nil {
@@ -348,7 +348,7 @@ func certificadoDeTesteComValidade(t *testing.T, notBefore, notAfter time.Time) 
 }
 
 // O ramo central do brief: certificado JÁ expirado loga ERRO (nunca recusa
-// a subida — isso é provado à parte, em tls_test.go, com server.Novo de
+// a subida — isso é provado à parte, em tls_test.go, com server.New de
 // verdade) e publica a gauge de expiração com o NotAfter exato, epoch
 // segundos.
 func TestAvisaValidadeDoCertificadoJaExpiradoLogaErroEPublicaGauge(t *testing.T) {

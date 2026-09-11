@@ -221,16 +221,16 @@ func TestSemCredencialEmQualquerRotaProtegidaEh401(t *testing.T) {
 func TestPapelReadEAdminAlcancamTodasAsRotasDeLeitura(t *testing.T) {
 	srv := servidorComAutenticacao(t, 3, "")
 
-	for _, cred := range []struct{ nome, usuario, senha string }{
+	for _, cred := range []struct{ name, usuario, password string }{
 		{"leitor(READ)", "leitor", senhaLeitorAuth},
 		{"chefe(ADMIN)", "chefe", senhaChefeAuth},
 	} {
-		t.Run(cred.nome, func(t *testing.T) {
+		t.Run(cred.name, func(t *testing.T) {
 			for _, rota := range []string{"/v1/health", "/metrics", "/v1/metadata", "/v1/stats"} {
-				assertStatusFechando(t, pegaComAuth(t, srv, rota, cred.usuario, cred.senha), http.StatusOK, rota)
+				assertStatusFechando(t, pegaComAuth(t, srv, rota, cred.usuario, cred.password), http.StatusOK, rota)
 			}
 
-			respQ := consultaComAuth(t, srv, `{"dataset":"d","sql":"SELECT id FROM d LIMIT 1"}`, cred.usuario, cred.senha)
+			respQ := consultaComAuth(t, srv, `{"dataset":"d","sql":"SELECT id FROM d LIMIT 1"}`, cred.usuario, cred.password)
 			if respQ.StatusCode != http.StatusOK {
 				t.Errorf("/v1/query: status = %d", respQ.StatusCode)
 				fecha(t, respQ)

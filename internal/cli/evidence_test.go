@@ -95,7 +95,7 @@ func testesDoRepositorio(t *testing.T) map[string]bool {
 			// pular é economia de varredura — mas é também o que impede um
 			// arquivo COPIADO para dentro de target de virar oráculo: o
 			// documento poderia citar um teste que não existe mais na fonte.
-			if nome := d.Name(); nome == ".git" || nome == ".claude" || nome == "target" {
+			if name := d.Name(); name == ".git" || name == ".claude" || name == "target" {
 				return fs.SkipDir
 			}
 			return nil

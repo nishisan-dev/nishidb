@@ -77,7 +77,7 @@ var ErrCompactionBusy = errors.New("storage: compaction já em voo")
 // emptySegmentDirectory informa se nenhum segmento do diretório tem record algum (só
 // header): é o que distingue um dataset recém-criado de um dataset com
 // dados cujo manifest se perdeu.
-func emptySegmentDirectory(refs []segment.SegmentRef) bool {
+func emptySegmentDirectory(refs []segment.Ref) bool {
 	for _, ref := range refs {
 		if ref.SizeBytes > segment.HeaderSize {
 			return false

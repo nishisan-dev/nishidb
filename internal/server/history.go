@@ -29,22 +29,22 @@ func validateHistoryNames(specs map[string]*schema.DatasetSpec) error {
 	// Ordem alfabética para que a mensagem de um conjunto com dois defeitos
 	// seja sempre a mesma — o laço de um mapa não tem ordem.
 	sort.Strings(nomes)
-	for _, nome := range nomes {
-		h := specs[nome].History
+	for _, name := range nomes {
+		h := specs[name].History
 		if h == nil {
 			continue
 		}
-		derivado := h.TableName(nome)
+		derivado := h.TableName(name)
 		if _, declarado := specs[derivado]; declarado {
 			return fmt.Errorf("o dataset %q declara history com sufixo %q, e a tabela irmã %q colide com um dataset declarado em datasets.directory: "+
 				"os dois disputariam o mesmo diretório; mude o sufixo ou renomeie o dataset",
-				nome, h.Suffix, derivado)
+				name, h.Suffix, derivado)
 		}
 		if dono, repetido := derivados[derivado]; repetido {
 			return fmt.Errorf("os datasets %q e %q derivam a mesma tabela irmã %q; mude o sufixo de um deles",
-				dono, nome, derivado)
+				dono, name, derivado)
 		}
-		derivados[derivado] = nome
+		derivados[derivado] = name
 	}
 	return nil
 }

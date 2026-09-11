@@ -1,0 +1,7 @@
+pacote	especie	endereco	novo	motivo
+internal/gates	local	readIdentMappings.novo	new	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/gates	local	goFenceRanges.fim	end	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/gates	local	goFenceRanges.linha	row	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/gates	local	underTestdata.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/gates	field#gopls	TestInterfaceMethodRenamesAreChargedLikeAnyOtherLeaf.casos.nome	name	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/gates	local	TestTheLiveDeclarationOracleIgnoresTestdata.nome	name	tradução abrangente de funções/tipos/métodos via script automatizado

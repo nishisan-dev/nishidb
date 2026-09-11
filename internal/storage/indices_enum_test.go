@@ -369,14 +369,14 @@ func todasAsRowsComLocation(t *testing.T, s *Store) []types.RowID {
 // MESMO conjunto, indexado ou enumerado. A diferença é só de custo.
 func TestOResultadoNaoMudaComOSegmentoIndexadoOuNao(t *testing.T) {
 	for _, caso := range []struct {
-		nome      string
-		historico bool
+		name    string
+		history bool
 	}{{"materializado", false}, {"historico", true}} {
-		t.Run(caso.nome, func(t *testing.T) {
+		t.Run(caso.name, func(t *testing.T) {
 			base := openStore(t, Options{})
 			dir := t.TempDir()
 			abre := func() *Store {
-				if caso.historico {
+				if caso.history {
 					return abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
 				}
 				return openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})

@@ -443,7 +443,7 @@ func Run(cfg Config) (*Report, error) {
 	defer st.Close()
 
 	// A compaction sobe ANTES da primeira fase, pela mesma razão que o servidor
-	// a liga antes do consumidor (server.ligaCompaction): quem produz o garbage
+	// a liga antes do consumidor (server.turnonCompaction): quem produz o garbage
 	// é a ingestão, e ligá-la depois abriria uma janela em que o dataset cresce
 	// sem ninguém devolvendo nada — janela que cairia inteira dentro da série
 	// que o gate lê. Quem a cancela e aguarda é o Close (decisão D7).

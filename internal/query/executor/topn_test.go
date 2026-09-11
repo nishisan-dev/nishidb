@@ -247,7 +247,7 @@ func TestTopNDaOMesmoResultadoQueOSortCompleto(t *testing.T) {
 	st := semeiaTopN(t, c, linhas)
 
 	casos := []struct {
-		nome          string
+		name          string
 		keys          []binder.BoundOrderKey
 		limit, offset int64
 		rowsEsperadas int
@@ -261,7 +261,7 @@ func TestTopNDaOMesmoResultadoQueOSortCompleto(t *testing.T) {
 	}
 
 	for _, cs := range casos {
-		t.Run(cs.nome, func(t *testing.T) {
+		t.Run(cs.name, func(t *testing.T) {
 			rapido := executa(t, st, bqTopN(t, c, cs.keys, cs.limit, cs.offset), executor.Options{})
 			completo := executa(t, st, bqTopN(t, c, cs.keys, cs.limit, cs.offset), desligaTopN)
 
@@ -403,7 +403,7 @@ func TestTopNPoeAusentePorUltimoNasDuasDirecoes(t *testing.T) {
 	}
 
 	for _, cs := range []struct {
-		nome              string
+		name              string
 		desc, nullsFirst  bool
 		primeirosAusentes bool
 	}{
@@ -412,7 +412,7 @@ func TestTopNPoeAusentePorUltimoNasDuasDirecoes(t *testing.T) {
 		{"asc nulls first", false, true, true},
 		{"desc nulls first", true, true, true},
 	} {
-		t.Run(cs.nome, func(t *testing.T) {
+		t.Run(cs.name, func(t *testing.T) {
 			chaves := []binder.BoundOrderKey{chaveNome(t, c, cs.desc, cs.nullsFirst)}
 			rapido := executa(t, st, bqTopN(t, c, chaves, 10, 0), executor.Options{})
 			completo := executa(t, st, bqTopN(t, c, chaves, 10, 0), desligaTopN)

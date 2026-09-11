@@ -138,8 +138,8 @@ func registerMetrics(r *metrics.Registry, dataset string) *metricas {
 	contador := func(nome, ajuda string) *metrics.CounterSeries {
 		return r.Counter(nome, ajuda, metrics.LabelDataset).With(dataset)
 	}
-	medidor := func(nome, ajuda string) *metrics.GaugeSeries {
-		return r.Gauge(nome, ajuda, metrics.LabelDataset).With(dataset)
+	medidor := func(name, ajuda string) *metrics.GaugeSeries {
+		return r.Gauge(name, ajuda, metrics.LabelDataset).With(dataset)
 	}
 	famInvalidos := r.Counter(metrics.MetIngestInvalidTotal,
 		"Eventos descartados por serem ruins (§101), por motivo (categoria §101; Task A5/issue #15).",

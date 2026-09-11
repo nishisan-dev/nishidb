@@ -1124,14 +1124,14 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 // pediu, sob o nome que ele pediu.
 func TestInspectRecusaMetadataQueNaoTrazExatamenteUmDataset(t *testing.T) {
 	casos := []struct {
-		nome     string
+		name     string
 		datasets []protocol.DatasetMeta
 	}{
 		{"nenhum", nil},
 		{"dois", []protocol.DatasetMeta{{Name: "radius_sessions"}, {Name: "outro"}}},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 				if err := json.NewEncoder(w).Encode(protocol.Metadata{Datasets: c.datasets}); err != nil {

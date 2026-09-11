@@ -327,12 +327,12 @@ func TestIntegracaoFimAFim(t *testing.T) {
 	// dos dois campos era `index: hash` — e o comportamento que ele prova
 	// (união correta entre dois termos indexados quaisquer) não mudou.
 	t.Run("uniao mistura hash e bitmap", func(t *testing.T) {
-		alvo := algumValor(t, ig.oracle, "NAS-Identifier")
+		target := algumValor(t, ig.oracle, "NAS-Identifier")
 		want := ig.oracle.keysOnde(func(e map[string]any) bool {
-			return campoIgual(e, "NAS-Identifier", alvo) || campoIgual(e, "Acct-Status-Type", "Stop")
+			return campoIgual(e, "NAS-Identifier", target) || campoIgual(e, "Acct-Status-Type", "Stop")
 		})
 		got := ig.ids(`SELECT id FROM radius_sessions WHERE nas = ? OR status = 'Stop'`,
-			types.Value{Type: types.TypeString, Bytes: []byte(alvo)})
+			types.Value{Type: types.TypeString, Bytes: []byte(target)})
 		comparaConjuntos(t, "união hash+bitmap", got, want)
 	})
 

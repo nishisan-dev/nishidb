@@ -32,7 +32,7 @@ const (
 // que o resultado dele deveria ser comparado.
 func TestRowNascidaDepoisDoOpenNaoApareceEmPlanoNenhum(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		sql  string
 	}{
 		// Acct-Status-Type é indexado no fixture: fonte por índice.
@@ -41,7 +41,7 @@ func TestRowNascidaDepoisDoOpenNaoApareceEmPlanoNenhum(t *testing.T) {
 		{"varredura completa", `SELECT id FROM radius_sessions WHERE "User-Name" LIKE '%a%'`},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			ig := &integracao{t: t, dir: filepath.Join(t.TempDir(), "radius"), oracle: oraculo{}}
 			ig.abre()
 			defer ig.fecha()

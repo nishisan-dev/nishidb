@@ -46,64 +46,64 @@ func TestFlagsRemotasResolveRegrasDePrecedencia(t *testing.T) {
 	}
 
 	casos := []struct {
-		nome        string
-		args        []string
-		env         string // "" = não seta a variável
-		querErr     bool
-		querUsuario string
-		querSenha   string
-		querTLSCA   string
+		name         string
+		args         []string
+		env          string // "" = não seta a variável
+		querErr      bool
+		querUsuario  string
+		querPassword string
+		querTLSCA    string
 	}{
 		{
-			nome: "nenhuma flag nem env: sem credencial, sem erro",
+			name: "nenhuma flag nem env: sem credencial, sem erro",
 		},
 		{
-			nome:    "user sem nenhuma fonte de senha: erro",
+			name:    "user sem nenhuma fonte de senha: erro",
 			args:    []string{"--user", "chefe"},
 			querErr: true,
 		},
 		{
-			nome:    "password-file sem user: erro",
+			name:    "password-file sem user: erro",
 			args:    []string{"--password-file", arq},
 			querErr: true,
 		},
 		{
-			nome:    "env sem user: erro",
+			name:    "env sem user: erro",
 			env:     "abc",
 			querErr: true,
 		},
 		{
-			nome:        "user + env: ok",
-			args:        []string{"--user", "chefe"},
-			env:         "abc",
-			querUsuario: "chefe",
-			querSenha:   "abc",
+			name:         "user + env: ok",
+			args:         []string{"--user", "chefe"},
+			env:          "abc",
+			querUsuario:  "chefe",
+			querPassword: "abc",
 		},
 		{
-			nome:        "user + password-file: ok, apara \\r\\n",
-			args:        []string{"--user", "chefe", "--password-file", arq},
-			querUsuario: "chefe",
-			querSenha:   "abc",
+			name:         "user + password-file: ok, apara \\r\\n",
+			args:         []string{"--user", "chefe", "--password-file", arq},
+			querUsuario:  "chefe",
+			querPassword: "abc",
 		},
 		{
-			nome:    "user + as duas fontes ao mesmo tempo: erro",
+			name:    "user + as duas fontes ao mesmo tempo: erro",
 			args:    []string{"--user", "chefe", "--password-file", arq},
 			env:     "abc",
 			querErr: true,
 		},
 		{
-			nome:    "user + password-file vazio (só quebra de linha): erro",
+			name:    "user + password-file vazio (só quebra de linha): erro",
 			args:    []string{"--user", "chefe", "--password-file", arqVazio},
 			querErr: true,
 		},
 		{
-			nome:      "--tls-ca sozinho, sem user: ok, tlsCA preenchido",
+			name:      "--tls-ca sozinho, sem user: ok, tlsCA preenchido",
 			args:      []string{"--tls-ca", "/algum/caminho.pem"},
 			querTLSCA: "/algum/caminho.pem",
 		},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			if c.env != "" {
 				t.Setenv(envPass, c.env)
 			}
@@ -118,9 +118,9 @@ func TestFlagsRemotasResolveRegrasDePrecedencia(t *testing.T) {
 			if err != nil {
 				t.Fatalf("erro inesperado: %v", err)
 			}
-			if cred.user != c.querUsuario || cred.pass != c.querSenha || cred.tlsCA != c.querTLSCA {
+			if cred.user != c.querUsuario || cred.pass != c.querPassword || cred.tlsCA != c.querTLSCA {
 				t.Fatalf("cred = %+v, queria usuario=%q senha=%q tlsCA=%q",
-					cred, c.querUsuario, c.querSenha, c.querTLSCA)
+					cred, c.querUsuario, c.querPassword, c.querTLSCA)
 			}
 		})
 	}

@@ -463,15 +463,15 @@ func TestCaminhoEListaDoWIP(t *testing.T) {
 func TestSegmentosComWIPEnumeraODiretorioInteiro(t *testing.T) {
 	dir := t.TempDir()
 	for _, pair := range []struct {
-		seg   uint32
+		sec   uint32
 		field types.FieldID
 	}{{7, 3}, {7, 9}, {2, 1}} {
-		w, err := segindex.OpenWIP(dir, pair.seg, pair.field, 16)
+		w, err := segindex.OpenWIP(dir, pair.sec, pair.field, 16)
 		if err != nil {
-			t.Fatalf("OpenWIP(%d, %d): %v", pair.seg, pair.field, err)
+			t.Fatalf("OpenWIP(%d, %d): %v", pair.sec, pair.field, err)
 		}
 		if err := w.Close(); err != nil {
-			t.Fatalf("Close(%d, %d): %v", pair.seg, pair.field, err)
+			t.Fatalf("Close(%d, %d): %v", pair.sec, pair.field, err)
 		}
 	}
 	// Vizinhos que NÃO são .widx: o diretório de dados é compartilhado com os

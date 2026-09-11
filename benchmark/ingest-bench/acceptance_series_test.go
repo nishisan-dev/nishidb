@@ -140,7 +140,7 @@ func TestOPlateauDoAceiteM4TambemReprovaPorMinimosQuadrados(t *testing.T) {
 	rep := leArtefato(t, artefatoDoAceiteM4)
 	serie := serieDeDiscoDoSteady(rep.Samples)
 	for _, caso := range []struct {
-		nome  string
+		name  string
 		serie []int64
 	}{
 		{"com a amostra pós-bloqueio", serie},
@@ -153,10 +153,10 @@ func TestOPlateauDoAceiteM4TambemReprovaPorMinimosQuadrados(t *testing.T) {
 		if razao < fracaoDeCrescimentoTolerada {
 			t.Errorf("%s: razão por mínimos quadrados = %.3f, abaixo do teto %.2f — "+
 				"o estimador robusto passou a APROVAR, e o texto de docs/aceite-m4.md "+
-				"precisa ser reescrito", caso.nome, razao, fracaoDeCrescimentoTolerada)
+				"precisa ser reescrito", caso.name, razao, fracaoDeCrescimentoTolerada)
 		}
 		t.Logf("%s: 1ª %.0f B/amostra, 2ª %.0f B/amostra, razão %.3f",
-			caso.nome, primeira, segunda, razao)
+			caso.name, primeira, segunda, razao)
 	}
 }
 

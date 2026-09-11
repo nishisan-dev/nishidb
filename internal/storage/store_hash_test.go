@@ -372,9 +372,9 @@ func TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco(t *testing.T) {
 		t.Errorf("IndexBytes = %d contra %d que o indexes/ ocupava com o lixo: os arquivos legados continuam contados",
 			idx, antes)
 	}
-	for _, motor := range []string{"bitmap", "hash"} {
-		if _, err := os.Stat(filepath.Join(idxDir, motor)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("indexes/%s sobreviveu à abertura: %v", motor, err)
+	for _, engine := range []string{"bitmap", "hash"} {
+		if _, err := os.Stat(filepath.Join(idxDir, engine)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("indexes/%s sobreviveu à abertura: %v", engine, err)
 		}
 	}
 

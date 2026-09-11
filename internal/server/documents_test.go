@@ -49,11 +49,11 @@ func TestMetadataDescreveOQueODriverPrecisa(t *testing.T) {
 		porNome[c.Name] = c
 	}
 	casos := []struct {
-		nome   string
-		tipo   string
-		jdbc   string
-		indice string
-		alias  string
+		name  string
+		tipo  string
+		jdbc  string
+		index string
+		alias string
 	}{
 		{"id", "string", protocol.JDBCVarchar, "none", ""},
 		{"status", "string", protocol.JDBCVarchar, "bitmap", "estado"},
@@ -61,18 +61,18 @@ func TestMetadataDescreveOQueODriverPrecisa(t *testing.T) {
 		{"ip", "ipv4", protocol.JDBCVarchar, "none", ""},
 	}
 	for _, c := range casos {
-		got, ok := porNome[c.nome]
+		got, ok := porNome[c.name]
 		if !ok {
-			t.Fatalf("coluna %q ausente do metadata", c.nome)
+			t.Fatalf("coluna %q ausente do metadata", c.name)
 		}
-		if got.Type != c.tipo || got.JDBC != c.jdbc || got.Index != c.indice {
-			t.Fatalf("coluna %q = %+v, quer tipo %s / %s / índice %s", c.nome, got, c.tipo, c.jdbc, c.indice)
+		if got.Type != c.tipo || got.JDBC != c.jdbc || got.Index != c.index {
+			t.Fatalf("coluna %q = %+v, quer tipo %s / %s / índice %s", c.name, got, c.tipo, c.jdbc, c.index)
 		}
 		switch {
 		case c.alias == "" && got.Alias != nil:
-			t.Fatalf("coluna %q tem alias %q, quer nenhum", c.nome, *got.Alias)
+			t.Fatalf("coluna %q tem alias %q, quer nenhum", c.name, *got.Alias)
 		case c.alias != "" && (got.Alias == nil || *got.Alias != c.alias):
-			t.Fatalf("coluna %q com alias %v, quer %q", c.nome, got.Alias, c.alias)
+			t.Fatalf("coluna %q com alias %v, quer %q", c.name, got.Alias, c.alias)
 		}
 	}
 }
@@ -243,9 +243,9 @@ func TestDatasetInexistenteNaoCriaSerie(t *testing.T) {
 		consulta(t, srv, `{"dataset":"`+nome+`","sql":"SELECT id FROM x"}`).Body.Close() //nolint:errcheck // corpo já lido; o erro do fecho não muda o teste
 	}
 	scrape := pega(t, srv, "/metrics")
-	for _, nome := range []string{"a1", "a2", "a3"} {
-		if strings.Contains(scrape, `dataset="`+nome+`"`) {
-			t.Fatalf("o nome %q vindo do request virou label:\n%s", nome, scrape)
+	for _, name := range []string{"a1", "a2", "a3"} {
+		if strings.Contains(scrape, `dataset="`+name+`"`) {
+			t.Fatalf("o nome %q vindo do request virou label:\n%s", name, scrape)
 		}
 	}
 	if !strings.Contains(scrape, `dataset="?"`) {

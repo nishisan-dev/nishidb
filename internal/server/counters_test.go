@@ -195,7 +195,7 @@ func TestCountersTabelaDesconhecidaNomeiaAsQueExistem(t *testing.T) {
 func TestTabelaVirtualDesconhecidaSaiComoErroDoCliente(t *testing.T) {
 	srv := servidorComServicos(t, 4)
 	casos := []struct {
-		nome  string
+		name  string
 		sql   string
 		naMsg string
 	}{
@@ -203,7 +203,7 @@ func TestTabelaVirtualDesconhecidaSaiComoErroDoCliente(t *testing.T) {
 		{"namespace", "SELECT a FROM _outro.coisa", "_counters"},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			resp := consulta(t, srv, `{"dataset":"servicos","sql":"`+c.sql+`"}`)
 			defer fecha(t, resp)
 			if resp.StatusCode != http.StatusBadRequest {

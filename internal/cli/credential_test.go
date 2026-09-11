@@ -394,10 +394,10 @@ func TestRegrasDePrecedenciaDeFontesDeSenha(t *testing.T) {
 	}
 
 	casos := []struct {
-		nome   string
-		args   []string
-		comEnv bool
-		querEm string
+		name    string
+		args    []string
+		withEnv bool
+		querIn  string
 	}{
 		{"user sem fonte de senha", []string{"status", "--server", a.endereco(), "--user", "chefe"}, false, "--user"},
 		{"password-file sem user", []string{"status", "--server", a.endereco(), "--password-file", arq}, false, "--user"},
@@ -405,16 +405,16 @@ func TestRegrasDePrecedenciaDeFontesDeSenha(t *testing.T) {
 		{"duas fontes com user", []string{"status", "--server", a.endereco(), "--user", "chefe", "--password-file", arq}, true, "exclus"},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
-			if c.comEnv {
+		t.Run(c.name, func(t *testing.T) {
+			if c.withEnv {
 				t.Setenv("NISHIDB_PASSWORD", "abc")
 			}
 			code := a.roda(c.args...)
 			if code != 1 {
 				t.Fatalf("exit = %d, quer 1: %s", code, a.stderr.String())
 			}
-			if !strings.Contains(a.stderr.String(), c.querEm) {
-				t.Fatalf("mensagem não contém %q:\n%s", c.querEm, a.stderr.String())
+			if !strings.Contains(a.stderr.String(), c.querIn) {
+				t.Fatalf("mensagem não contém %q:\n%s", c.querIn, a.stderr.String())
 			}
 		})
 	}

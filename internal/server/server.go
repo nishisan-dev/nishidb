@@ -351,8 +351,8 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		}
 	}
 
-	for _, nome := range nomes {
-		d, err := s.abreDataset(specs[nome], log)
+	for _, name := range nomes {
+		d, err := s.abreDataset(specs[name], log)
 		if err != nil {
 			return nil, err
 		}

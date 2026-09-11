@@ -212,7 +212,7 @@ Se um dia os dois travarem juntos, o watchdog **se abstém**, porque agir sobre
 o que não se sabe seria recriar o consumidor por causa de uma consulta que
 falhou.
 
-**A recriação passa pelo MESMO `kafka.Abre` da subida.** O §49 põe o
+**A recriação passa pelo MESMO `kafka.Open` da subida.** O §49 põe o
 checkpoint local como autoritativo e lista quatro situações que recusam subir
 a ingestão; um caminho de reconexão que redescobrisse a posição por conta
 própria seria um segundo boot, menos testado, que divergiria do primeiro no
@@ -472,7 +472,7 @@ remoto](#o-protocolo-remoto) e a rodada em [`aceite-fase6.md`](aceite-fase6.md).
 
 ## Compaction
 
-![Compaction de segmento: eleição, varredura streaming, republicação condicional sob o mutex do writer, os quatro passos da aposentadoria e os dois pontos de reparo do Open](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/compaction_flow.puml)
+![Compaction de segmento: eleição, varredura streaming, republicação condicional sob o mutex do writer, os quatro passos da aposentadoria e os dois pontos de reparo do Abre](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/compaction_flow.puml)
 
 Append-only sem compaction é disco que cresce para sempre: todo update apenda um
 record novo e deixa o anterior como garbage. O §86 projeta **30-43 GB escritos
@@ -1126,7 +1126,7 @@ opcional (`server.loopback`, default desligado), serve o MESMO conjunto de
 rotas sem TLS nem autenticação, só em `127.0.0.1`: é o que mantém painel,
 script de atualização e cron locais funcionando sem credencial mesmo com o
 listener principal fechado a cadeado. Os dois listeners compartilham a
-mesma FUNÇÃO de definição de rota (`Servidor.montaMux`,
+mesma FUNÇÃO de definição de rota (`Servidor.buildMux`,
 `internal/server/auth.go`), chamada uma vez por listener — nunca
 duas listas que poderiam divergir.
 

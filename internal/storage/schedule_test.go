@@ -515,8 +515,8 @@ func TestOColetorDormeAteOProximoVencimento(t *testing.T) {
 	// Sem nada agendado, o teto: dormir para sempre deixaria a primeira linha
 	// escrita depois disso sem coletor nenhum.
 	s2, _ := storeComExpiracao(t, t.TempDir(), time.Hour)
-	if espera := s2.esperaAteOProximoVencimento(ResultadoDaExpiracao{}); espera != tetoDeEspera {
-		t.Fatalf("agenda vazia esperou %v; quer o teto de %v", espera, tetoDeEspera)
+	if wait := s2.esperaAteOProximoVencimento(ResultadoDaExpiracao{}); wait != tetoDeEspera {
+		t.Fatalf("agenda vazia esperou %v; quer o teto de %v", wait, tetoDeEspera)
 	}
 }
 

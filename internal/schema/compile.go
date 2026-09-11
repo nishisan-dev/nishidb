@@ -30,16 +30,20 @@ var ErrFieldCeiling = errors.New("teto de campos do dataset alcançado")
 // com segurança contra o dicionário existente.
 var ErrDerivedColumn = errors.New("coluna derivada inválida")
 
+// Mode ...
 type Mode uint8
 
 const (
+	// ModeMerge ...
 	ModeMerge Mode = iota
 	ModeReplace
 )
 
+// UnknownPolicy ...
 type UnknownPolicy uint8
 
 const (
+	// UnknownIgnore ...
 	UnknownIgnore UnknownPolicy = iota
 	UnknownInclude
 	UnknownReject

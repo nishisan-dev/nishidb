@@ -20,28 +20,28 @@ const invalidUTF8 = "\x80\x81"
 // checagem precisa ser explícita.
 func TestConvertRecusaUTF8Invalido(t *testing.T) {
 	casos := []struct {
-		nome   string
+		name   string
 		field  jsonp.Field
 		target types.FieldType
 	}{
 		{
-			nome:   "string",
+			name:   "string",
 			field:  jsonp.Field{Kind: jsonp.KindString, Raw: []byte("ok" + invalidUTF8)},
 			target: types.TypeString,
 		},
 		{
-			nome:   "json objeto",
+			name:   "json objeto",
 			field:  jsonp.Field{Kind: jsonp.KindObject, Raw: []byte(`{"a":"` + invalidUTF8 + `"}`)},
 			target: types.TypeJSON,
 		},
 		{
-			nome:   "json array",
+			name:   "json array",
 			field:  jsonp.Field{Kind: jsonp.KindArray, Raw: []byte(`["` + invalidUTF8 + `"]`)},
 			target: types.TypeJSON,
 		},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			// Pré-condição do teste: o JSON é sintaticamente VÁLIDO. Sem isso
 			// o caso provaria só que json.Valid funciona.
 			if tc.target == types.TypeJSON && !json.Valid(tc.field.Raw) {
@@ -86,7 +86,7 @@ func TestUTF8InvalidoNaoSujaOArena(t *testing.T) {
 // (acentos) e emoji fora do BMP.
 func TestConvertAceitaUTF8Valido(t *testing.T) {
 	casos := []struct {
-		nome   string
+		name   string
 		raw    string
 		kind   jsonp.Kind
 		target types.FieldType
@@ -97,7 +97,7 @@ func TestConvertAceitaUTF8Valido(t *testing.T) {
 		{"json com acento", `{"nome":"José"}`, jsonp.KindObject, types.TypeJSON},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			v, _, err := Convert(jsonp.Field{Kind: tc.kind, Raw: []byte(tc.raw)}, tc.target, nil, nil)
 			if err != nil {
 				t.Fatalf("Convert(%q): %v", tc.raw, err)

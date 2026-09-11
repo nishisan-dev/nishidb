@@ -75,7 +75,7 @@ func TestGoldenLinha(t *testing.T) {
 func TestFormatacaoPorTipo(t *testing.T) {
 	v6 := netip.MustParseAddr("2001:db8::1").AsSlice()
 	casos := []struct {
-		nome string
+		name string
 		v    types.Value
 		want string
 	}{
@@ -148,7 +148,7 @@ func TestFormatacaoPorTipo(t *testing.T) {
 		{"tipo nulo", types.Value{}, "null"},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			if got := string(AppendValue(nil, tc.v)); got != tc.want {
 				t.Errorf("AppendValue = %s, want %s", got, tc.want)
 			}
@@ -190,7 +190,7 @@ func TestJSONInvalidoNaoQuebraOFraming(t *testing.T) {
 
 func TestEscapingDeString(t *testing.T) {
 	casos := []struct {
-		nome, in, want string
+		name, in, want string
 	}{
 		{"vazia", "", `""`},
 		{"ascii", "abc", `"abc"`},
@@ -211,7 +211,7 @@ func TestEscapingDeString(t *testing.T) {
 		{"surrogate encodado", "\xed\xa0\x80", `"\ufffd\ufffd\ufffd"`},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			got := string(AppendJSONString(nil, []byte(tc.in)))
 			if got != tc.want {
 				t.Errorf("AppendJSONString(%q) = %s, want %s", tc.in, got, tc.want)

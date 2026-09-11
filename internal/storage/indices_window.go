@@ -276,7 +276,7 @@ func (s *Store) exigeJanelaAplicavel(j JanelaDeIndice) error {
 //   - "O MAIOR JÁ OBSERVADO", guardado uma vez: mesma simplicidade do
 //     tamanhoExpulso, mas infla PERMANENTEMENTE a estimativa de TODO segmento
 //     por causa de um único atípico, em vez de só a dele.
-func (s *Store) janelaDeSegmentos(j JanelaDeIndice, refs []segment.SegmentRef) (janelaDeSegmentos, error) {
+func (s *Store) janelaDeSegmentos(j JanelaDeIndice, refs []segment.Ref) (janelaDeSegmentos, error) {
 	corrente := s.curSegID.Load()
 	// Candidatos são os SELADOS, do mais novo para o mais antigo. O corrente
 	// fica de fora porque o índice dele é o WIP, que não é .sidx e que a
@@ -426,7 +426,7 @@ func (s *Store) bytesDoIndiceDoSegmento(seg uint32) int64 {
 // que impede o descritor do segmento de fechar no meio do pread. O buffer é
 // PARÂMETRO e não o s.retBuf: aquele é reutilizado sob o retPassadaMu, e esta
 // função também é chamada pela pendência, que roda fora dele.
-func (s *Store) instanteDoRecordMaisNovo(refs []segment.SegmentRef, i int, buf []byte) (int64, []byte, bool, error) {
+func (s *Store) instanteDoRecordMaisNovo(refs []segment.Ref, i int, buf []byte) (int64, []byte, bool, error) {
 	s.aposMu.RLock()
 	defer s.aposMu.RUnlock()
 	var (
@@ -545,7 +545,7 @@ func (s *Store) JanelaEfetiva() time.Duration {
 //
 // Sob o aposMu pela razão do primeiroRowIDDe: ele impede o descritor de fechar
 // entre o pread e a leitura dos bytes.
-func (s *Store) instanteVisivelDe(ref segment.SegmentRef, buf []byte) (int64, []byte, bool) {
+func (s *Store) instanteVisivelDe(ref segment.Ref, buf []byte) (int64, []byte, bool) {
 	if ref.SizeBytes <= segment.HeaderSize {
 		return 0, buf, false
 	}

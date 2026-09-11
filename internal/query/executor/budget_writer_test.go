@@ -130,23 +130,23 @@ func TestLinhaRecusadaNaoDescartaAsLinhasJaEscritas(t *testing.T) {
 // apertado em "nenhuma consulta funciona".
 func TestBufferInicialNaoNasceMaiorQueOOrcamento(t *testing.T) {
 	casos := []struct {
-		teto    int64
+		ceiling int64
 		querCap int
 	}{
-		{teto: 4 << 20, querCap: DefaultBufSize}, // folgado: o alvo do stream vale
-		{teto: 64 << 10, querCap: 32 << 10},      // igual ao alvo: metade
-		{teto: 8 << 10, querCap: 4 << 10},        // apertado: metade
+		{ceiling: 4 << 20, querCap: DefaultBufSize}, // folgado: o alvo do stream vale
+		{ceiling: 64 << 10, querCap: 32 << 10},      // igual ao alvo: metade
+		{ceiling: 8 << 10, querCap: 4 << 10},        // apertado: metade
 	}
 	for _, c := range casos {
 		g := budget.NewGlobal(1 << 30)
-		s := NewStreamWriter(io.Discard, DefaultBufSize, admitido(t, g.Query(c.teto)))
+		s := NewStreamWriter(io.Discard, DefaultBufSize, admitido(t, g.Query(c.ceiling)))
 		if cap(s.buf) != c.querCap {
-			t.Errorf("teto %d: cap(buf) = %d, quer %d", c.teto, cap(s.buf), c.querCap)
+			t.Errorf("teto %d: cap(buf) = %d, quer %d", c.ceiling, cap(s.buf), c.querCap)
 		}
 		// E ele funciona: um writer que nasce estourado devolveria erro na
 		// primeira linha, que é o modo de falha que o cap veio impedir.
 		if err := s.WriteRow(rowDeBytes(64)); err != nil {
-			t.Errorf("teto %d: o writer nasceu inútil: %v", c.teto, err)
+			t.Errorf("teto %d: o writer nasceu inútil: %v", c.ceiling, err)
 		}
 	}
 }

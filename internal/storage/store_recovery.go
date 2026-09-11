@@ -17,7 +17,7 @@ import (
 // válido: seeds (§14.15), verificação da cadeia de segmentos (com adoção de
 // órfão de rotação), tail scan com replay e writer posicionado no fim
 // válido (truncando o lixo). Roda sem leitores ativos.
-func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, dataDir string) error {
+func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.Ref, dataDir string) error {
 	// Seeds do manifest (§14.15).
 	s.epoch = m.Epoch
 	s.nextRowID.Store(m.NextRowID)
@@ -99,7 +99,7 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 	// diretório; segmentos além do manifest (criados por rotação
 	// pós-checkpoint, inclusive o órfão de uma rotação interrompida) são
 	// ADOTADOS para o tail scan.
-	byID := make(map[uint32]segment.SegmentRef, len(refs))
+	byID := make(map[uint32]segment.Ref, len(refs))
 	maxID := m.CurrentSegment
 	for _, ref := range refs {
 		byID[ref.ID] = ref

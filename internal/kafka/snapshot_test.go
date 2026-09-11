@@ -81,7 +81,7 @@ func TestOInstantaneoEAsSeriesDaPosicaoConcordam(t *testing.T) {
 		t.Fatalf("o broker respondeu no Instantaneo, o fim do log tinha de estar lá: %+v", p)
 	}
 	for _, c := range []struct {
-		nome  string
+		name  string
 		serie string
 		quer  float64
 	}{
@@ -94,7 +94,7 @@ func TestOInstantaneoEAsSeriesDaPosicaoConcordam(t *testing.T) {
 			t.Fatalf("%s ausente do scrape:\n%s", c.serie, texto)
 		}
 		if got != c.quer {
-			t.Fatalf("%s: scrape %v, instantâneo %v — as duas leituras deixaram de sair da mesma regra", c.nome, got, c.quer)
+			t.Fatalf("%s: scrape %v, instantâneo %v — as duas leituras deixaram de sair da mesma regra", c.name, got, c.quer)
 		}
 	}
 	if p.Aplicado != n {

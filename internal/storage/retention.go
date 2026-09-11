@@ -480,7 +480,7 @@ func (s *Store) bytesDosSegmentos() (int64, error) {
 	return total, nil
 }
 
-func (s *Store) listaSegmentos() ([]segment.SegmentRef, error) {
+func (s *Store) listaSegmentos() ([]segment.Ref, error) {
 	return segment.ListSegments(filepath.Join(s.opts.Dir, "data"))
 }
 

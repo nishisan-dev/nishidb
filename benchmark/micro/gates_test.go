@@ -17,23 +17,23 @@ import (
 // Fora do build com -race, onde a instrumentação altera a contagem.
 func TestGateAllocsApply(t *testing.T) {
 	casos := []struct {
-		nome   string
-		build  func(t *testing.T) (*materializer.Materializer, [][]byte)
-		want   materializer.Action
-		teto   float64
-		porque string
+		name    string
+		build   func(t *testing.T) (*materializer.Materializer, [][]byte)
+		want    materializer.Action
+		ceiling float64
+		porque  string
 	}{
 		{
-			nome: "create",
+			name: "create",
 			build: func(t *testing.T) (*materializer.Materializer, [][]byte) {
 				ev := corpusCheio(t, 7, 512)
 				return mustNew(t, compiledSetup(t), &voidStore{rowID: 1}), ev
 			},
-			want: materializer.ActionCreated,
-			teto: 0,
+			want:    materializer.ActionCreated,
+			ceiling: 0,
 		},
 		{
-			nome: "merge",
+			name: "merge",
 			build: func(t *testing.T) (*materializer.Materializer, [][]byte) {
 				ev := corpusPatch(t, 8, 512)
 				key, payload := estadoDeReferenciaT(t, corpusCheio(t, 8, 1))
@@ -41,11 +41,11 @@ func TestGateAllocsApply(t *testing.T) {
 					rowID: 42, seq: 1, key: key, payload: payload, found: true,
 				}), ev
 			},
-			want: materializer.ActionUpdated,
-			teto: 0,
+			want:    materializer.ActionUpdated,
+			ceiling: 0,
 		},
 		{
-			nome: "stale",
+			name: "stale",
 			build: func(t *testing.T) (*materializer.Materializer, [][]byte) {
 				ev := corpusPatch(t, 9, 512)
 				key, payload := estadoDeReferenciaT(t, corpusCheio(t, 9, 1))
@@ -53,13 +53,13 @@ func TestGateAllocsApply(t *testing.T) {
 					rowID: 42, seq: 1 << 40, key: key, payload: payload, found: true,
 				}), ev
 			},
-			want: materializer.ActionStale,
-			teto: 0,
+			want:    materializer.ActionStale,
+			ceiling: 0,
 		},
 	}
 
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			m, events := tc.build(t)
 			// Warm-up: registra os campos do corpus no dicionário e faz os
 			// buffers chegarem ao tamanho de regime.
@@ -79,8 +79,8 @@ func TestGateAllocsApply(t *testing.T) {
 				}
 				i++
 			})
-			if got > tc.teto {
-				t.Errorf("Apply alocou %.1f objetos/evento, teto %.0f", got, tc.teto)
+			if got > tc.ceiling {
+				t.Errorf("Apply alocou %.1f objetos/evento, teto %.0f", got, tc.ceiling)
 			}
 		})
 	}

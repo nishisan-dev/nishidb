@@ -103,7 +103,7 @@ func TestLoopbackRespondeSemCredencialComPrincipalAutenticadoSimultaneamente(t *
 			t.Fatal("EnderecoLoopback() vazio com server.loopback.enabled: true")
 		}
 		// Client com Timeout, e não http.Get cru: se uma regressão futura
-		// deixar o listener ACEITO mas sem ninguém servindo (Novo bindou,
+		// deixar o listener ACEITO mas sem ninguém servindo (New bindou,
 		// Roda não subiu o http.Server), a conexão fica aberta esperando
 		// resposta que nunca chega — sem teto aqui, o teste travaria a
 		// suíte inteira em vez de falhar rápido e nomeado.

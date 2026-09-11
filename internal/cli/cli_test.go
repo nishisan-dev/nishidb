@@ -301,7 +301,7 @@ func TestEventosInvalidosSaoContabilizadosSemPararAIngestao(t *testing.T) {
 func TestErrosDeUso(t *testing.T) {
 	a := novoAmbiente(t)
 	casos := []struct {
-		nome string
+		name string
 		args []string
 		msg  string
 	}{
@@ -316,7 +316,7 @@ func TestErrosDeUso(t *testing.T) {
 			"--dataset", "fantasma", "SELECT id FROM fantasma"}, "fantasma"},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			if code := a.roda(tc.args...); code != cli.ExitUsageError {
 				t.Errorf("code = %d, want %d\n%s", code, cli.ExitUsageError, a.stderr.String())
 			}

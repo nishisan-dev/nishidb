@@ -57,9 +57,9 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, falha, status := s.leRequisicao(w, r)
-	if falha != nil {
-		s.recusa(w, r, status, datasetDesconhecido, *falha)
+	req, fail, status := s.leRequisicao(w, r)
+	if fail != nil {
+		s.recusa(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
 
@@ -82,14 +82,14 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tetoDoRequest, falha := rowCeiling(req, d.sch.MaxRows)
-	if falha != nil {
-		s.recusa(w, r, http.StatusBadRequest, d.nome, *falha)
+	tetoDoRequest, fail := rowCeiling(req, d.sch.MaxRows)
+	if fail != nil {
+		s.recusa(w, r, http.StatusBadRequest, d.nome, *fail)
 		return
 	}
-	ctx, cancela, prazo, falha := s.contextoDaConsulta(r, req, d.sch)
-	if falha != nil {
-		s.recusa(w, r, http.StatusBadRequest, d.nome, *falha)
+	ctx, cancela, prazo, fail := s.contextoDaConsulta(r, req, d.sch)
+	if fail != nil {
+		s.recusa(w, r, http.StatusBadRequest, d.nome, *fail)
 		return
 	}
 	defer cancela()

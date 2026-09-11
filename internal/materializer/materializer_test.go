@@ -334,13 +334,13 @@ func TestApplySequenceGreaterAplica(t *testing.T) {
 
 func TestApplySequenceEqualEMenorDescartam(t *testing.T) {
 	for _, tc := range []struct {
-		nome string
+		name string
 		seq  int64
 	}{
 		{"equal", 100},
 		{"lower", 99},
 	} {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, patchYAML)
 			created := h.apply(`{"id":"CMP-001","_SEQ":100,"Acct-Input-Octets":10}`)
 			putsAntes := len(h.st.PutCalls)
@@ -550,7 +550,7 @@ func TestApplyIncludeExplicitoFechaOUniverso(t *testing.T) {
 
 func TestApplyCategoriasDeEventoRuim(t *testing.T) {
 	cases := []struct {
-		nome  string
+		name  string
 		yaml  string
 		event string
 		cat   ErrorCategory
@@ -558,7 +558,7 @@ func TestApplyCategoriasDeEventoRuim(t *testing.T) {
 		msg   string
 	}{
 		{
-			nome:  "invalid_json",
+			name:  "invalid_json",
 			yaml:  patchYAML,
 			event: `{"id":"A", "_SEQ":`,
 			cat:   CategoryInvalidJSON,
@@ -568,7 +568,7 @@ func TestApplyCategoriasDeEventoRuim(t *testing.T) {
 			msg: "posição",
 		},
 		{
-			nome:  "schema_validation",
+			name:  "schema_validation",
 			yaml:  fmt.Sprintf(unknownYAMLTmpl, "reject", "reject"),
 			event: `{"id":"A","novo":1}`,
 			cat:   CategorySchemaValidation,
@@ -576,7 +576,7 @@ func TestApplyCategoriasDeEventoRuim(t *testing.T) {
 			msg:   "novo",
 		},
 		{
-			nome:  "invalid_key_ausente",
+			name:  "invalid_key_ausente",
 			yaml:  patchYAML,
 			event: `{"_SEQ":1,"Acct-Input-Octets":3}`,
 			cat:   CategoryInvalidKey,
@@ -584,7 +584,7 @@ func TestApplyCategoriasDeEventoRuim(t *testing.T) {
 			msg:   "ausente no evento",
 		},
 		{
-			nome:  "invalid_key_nula",
+			name:  "invalid_key_nula",
 			yaml:  patchYAML,
 			event: `{"id":null,"_SEQ":1}`,
 			cat:   CategoryInvalidKey,
@@ -592,7 +592,7 @@ func TestApplyCategoriasDeEventoRuim(t *testing.T) {
 			msg:   "nulo",
 		},
 		{
-			nome:  "invalid_key_vazia",
+			name:  "invalid_key_vazia",
 			yaml:  patchYAML,
 			event: `{"id":"","_SEQ":1}`,
 			cat:   CategoryInvalidKey,
@@ -600,7 +600,7 @@ func TestApplyCategoriasDeEventoRuim(t *testing.T) {
 			msg:   "vazio",
 		},
 		{
-			nome:  "invalid_sequence_ausente",
+			name:  "invalid_sequence_ausente",
 			yaml:  patchYAML,
 			event: `{"id":"A","Acct-Input-Octets":3}`,
 			cat:   CategoryInvalidSequence,
@@ -608,7 +608,7 @@ func TestApplyCategoriasDeEventoRuim(t *testing.T) {
 			msg:   "ausente no evento",
 		},
 		{
-			nome:  "invalid_sequence_nula",
+			name:  "invalid_sequence_nula",
 			yaml:  patchYAML,
 			event: `{"id":"A","_SEQ":null}`,
 			cat:   CategoryInvalidSequence,
@@ -616,7 +616,7 @@ func TestApplyCategoriasDeEventoRuim(t *testing.T) {
 			msg:   "nulo",
 		},
 		{
-			nome:  "type_conversion",
+			name:  "type_conversion",
 			yaml:  patchYAML,
 			event: `{"id":"A","_SEQ":1,"Acct-Input-Octets":"não é número"}`,
 			cat:   CategoryTypeConversion,
@@ -626,7 +626,7 @@ func TestApplyCategoriasDeEventoRuim(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, tc.yaml)
 			r := h.m.Apply([]byte(tc.event))
 

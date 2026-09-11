@@ -164,7 +164,7 @@ func exigeAssimetriaSegura(t *testing.T, momento string, obtido, certo checkpoin
 			momento, obtido, certo)
 	}
 	esperado := certo
-	esperado.LiveRecords += 1
+	esperado.LiveRecords++
 	esperado.LiveBytes += bytesDoOrfao
 	if obtido.LiveRecords != esperado.LiveRecords || obtido.LiveBytes != esperado.LiveBytes {
 		t.Fatalf("%s: liveness = %d records / %d bytes; o resíduo medido do replay é de "+

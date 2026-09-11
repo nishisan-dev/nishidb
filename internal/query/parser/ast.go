@@ -143,13 +143,16 @@ type Operand struct {
 type LogicalOp uint8
 
 const (
+	// LogicalAnd ...
 	LogicalAnd LogicalOp = iota + 1
 	LogicalOr
 )
 
+// CmpOp ...
 type CmpOp uint8
 
 const (
+	// CmpEq ...
 	CmpEq CmpOp = iota + 1
 	CmpNe
 	CmpGt
@@ -158,9 +161,11 @@ const (
 	CmpLte
 )
 
+// OperandKind ...
 type OperandKind uint8
 
 const (
+	// OperandString ...
 	OperandString OperandKind = iota + 1
 	OperandInt
 	OperandFloat

@@ -140,7 +140,7 @@ func TestDespertadorNaoEEngolidoPelaFilaCheia(t *testing.T) {
 // Enfileirar numa fila JÁ FECHADA é erro, não panic.
 //
 // A barreira de quiesce é enfileirada por uma goroutine que não é o poller:
-// aoRevogar roda na do group do franz-go e pode chegar depois de Roda ter
+// aoRevogar roda na do group do franz-go e pode chegar depois de Run ter
 // fechado a fila — o encerramento é justamente a janela em que uma revogação é
 // mais provável, porque sair do group a provoca.
 //
@@ -172,7 +172,7 @@ func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
 	w := NewWriter(cfg, nil, st, fila, nil, registerMetrics(nil, "eventos"),
 		map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
 
-	// O writer é marcado como INICIADO sem que Roda rode: é a precondição que
+	// O writer é marcado como INICIADO sem que Run rode: é a precondição que
 	// torna a afirmação deste teste possível de fazer. O Quiesce ganhou um
 	// quarto caso — writer que nunca subiu devolve nil na hora, porque nada foi
 	// aplicado e não há quem drene —, e sem esta marca o teste passaria por
@@ -222,9 +222,9 @@ func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
 //
 // É o quarto caso, e o que faltava. O plano nomeou três — barreira pronta,
 // writer que já saiu, contexto —, e o group do franz-go pode revogar partições
-// durante o próprio Abre, antes de o Consumidor.Roda ter lançado goroutine
+// durante o próprio Abre, antes de o Consumidor.Run ter lançado goroutine
 // nenhuma. Nesse instante a fila aceita a barreira, ninguém a consome, `parado`
-// não está fechado porque Roda não retornou, e o contexto do callback não está
+// não está fechado porque Run não retornou, e o contexto do callback não está
 // cancelado: o Quiesce espera para sempre DENTRO de um callback do franz-go, o
 // group cai atrás dele e o Close do cliente trava.
 //

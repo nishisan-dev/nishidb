@@ -1573,7 +1573,7 @@ func TestAAposentadoriaLevaOIndiceJunto(t *testing.T) {
 	if _, err := os.Stat(caminho); err != nil {
 		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
 	}
-	if _, err := s.RetencaoUmaPassada(t.Context(), storage.LimitesDeRetencao{MaxBytes: 1}); err != nil {
+	if _, err := s.RetencaoUmaPassada(t.Context(), storage.LimitesOfRetention{MaxBytes: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(caminho); !os.IsNotExist(err) {

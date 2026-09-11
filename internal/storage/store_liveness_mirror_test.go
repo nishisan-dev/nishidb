@@ -175,8 +175,8 @@ func TestEspelhoDescontaABaixaClampadaENaoOOldLenCru(t *testing.T) {
 	prev := mustGetAud(t, s, alvo)
 	novo := statusPayload(t, s, alvo, "Stop", 999)
 	mustPut(t, s, alvo, 999, novo, &prev)
-	if seg := s.Stats().CurrentSegmentID; seg == alvoSeg {
-		t.Fatalf("o record novo caiu no segmento %d do record antigo: a montagem não exercita o clamp", seg)
+	if sec := s.Stats().CurrentSegmentID; sec == alvoSeg {
+		t.Fatalf("o record novo caiu no segmento %d do record antigo: a montagem não exercita o clamp", sec)
 	}
 
 	// A baixa vale min(oldLen, 0) = 0, então nada sai do espelho e o record
@@ -263,14 +263,14 @@ func TestRecoverySemeiaOEspelhoQueOStatsPublica(t *testing.T) {
 // certo nas duas implementações.
 func TestConferenciaDeEspelhosAcusaCadaEspelhoDivergente(t *testing.T) {
 	for _, c := range []struct {
-		nome     string
-		corrompe func(*Store)
+		name    string
+		corrupt func(*Store)
 	}{
 		{"segCount", func(s *Store) { s.segCount.Add(1) }},
 		{"liveBytesAll", func(s *Store) { s.liveBytesAll.Add(4096) }},
 		{"diskBytesAll", func(s *Store) { s.diskBytesAll.Add(4096) }},
 	} {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			s := openStore(t, Options{})
 			const n = 20
 			for i := 0; i < n; i++ {
@@ -287,13 +287,13 @@ func TestConferenciaDeEspelhosAcusaCadaEspelhoDivergente(t *testing.T) {
 			if antes != 0 {
 				t.Fatalf("o dataset já nasceu com %d divergência(s): a montagem não isola o que o teste planta", antes)
 			}
-			s.CorrompeEspelhoParaTeste(c.corrompe)
+			s.CorrompeEspelhoParaTeste(c.corrupt)
 			if err := s.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint: %v", err)
 			}
 			if got := s.EspelhosDivergentesForTest(); got != antes+1 {
 				t.Errorf("divergências = %d, queria %d: o checkpoint não acusou o espelho %s fora do mapa, "+
-					"e um detector que ninguém prova disparando lê-se como proteção sem proteger", got, antes+1, c.nome)
+					"e um detector que ninguém prova disparando lê-se como proteção sem proteger", got, antes+1, c.name)
 			}
 		})
 	}

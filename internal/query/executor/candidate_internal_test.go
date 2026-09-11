@@ -54,7 +54,7 @@ func lista(ids ...types.RowID) *listaIter { return &listaIter{ids: ids} }
 
 func TestIntersecaoKWay(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		its  []types.RowIDIterator
 		want []types.RowID
 	}{
@@ -71,7 +71,7 @@ func TestIntersecaoKWay(t *testing.T) {
 			[]types.RowID{1000}},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			it := &intersectIter{its: tc.its, cur: make([]types.RowID, len(tc.its))}
 			if got := drena(t, it); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("interseção = %v, want %v", got, tc.want)
@@ -82,7 +82,7 @@ func TestIntersecaoKWay(t *testing.T) {
 
 func TestUniaoComDedupKWay(t *testing.T) {
 	casos := []struct {
-		nome string
+		name string
 		its  []types.RowIDIterator
 		want []types.RowID
 	}{
@@ -99,7 +99,7 @@ func TestUniaoComDedupKWay(t *testing.T) {
 			[]types.RowID{1, 2}},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			it := &unionIter{its: tc.its, cur: make([]types.RowID, len(tc.its)),
 				vivo: make([]bool, len(tc.its))}
 			if got := drena(t, it); !reflect.DeepEqual(got, tc.want) {

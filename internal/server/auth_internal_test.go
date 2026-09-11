@@ -22,7 +22,7 @@ import (
 
 // Testes de caixa branca do middleware (auth.go): tudo aqui exercita
 // comAutenticacao/autentica diretamente, contra um *Servidor mínimo e um
-// *roteador com handlers de teste — sem passar por server.Novo, config.Config
+// *roteador com handlers de teste — sem passar por server.New, config.Config
 // nem por um listener de verdade. É deliberado: a lógica de autenticação e
 // papel não depende de dataset, Store nem Engine nenhum, e montar tudo isso só
 // para testar um compare de credencial seria o disfarce de integração que
@@ -502,7 +502,7 @@ func TestAtrasoFixoDeAproximadamente100msEmTodaFalhaDeAutenticacao(t *testing.T)
 
 	const pisoSeguro = 80 * time.Millisecond
 
-	medeFalha := func(nome string, ajusta func(*http.Request)) time.Duration {
+	medeFalha := func(name string, ajusta func(*http.Request)) time.Duration {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
 		ajusta(req)
@@ -511,13 +511,13 @@ func TestAtrasoFixoDeAproximadamente100msEmTodaFalhaDeAutenticacao(t *testing.T)
 		h.ServeHTTP(rec, req)
 		decorrido := time.Since(inicio)
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("%s: status = %d, quer 401 para medir o atraso de falha", nome, rec.Code)
+			t.Fatalf("%s: status = %d, quer 401 para medir o atraso de falha", name, rec.Code)
 		}
 		return decorrido
 	}
 
 	casos := []struct {
-		nome   string
+		name   string
 		ajusta func(*http.Request)
 	}{
 		{"header ausente", func(_ *http.Request) {}},
@@ -525,9 +525,9 @@ func TestAtrasoFixoDeAproximadamente100msEmTodaFalhaDeAutenticacao(t *testing.T)
 		{"usuario inexistente", func(r *http.Request) { r.SetBasicAuth("nao-existe", "qualquer-coisa") }},
 	}
 	for _, c := range casos {
-		if d := medeFalha(c.nome, c.ajusta); d < pisoSeguro {
+		if d := medeFalha(c.name, c.ajusta); d < pisoSeguro {
 			t.Errorf("%s respondeu em %s, quer >= %s: o atraso tem de valer para TODA falha, não só senha errada",
-				c.nome, d, pisoSeguro)
+				c.name, d, pisoSeguro)
 		}
 	}
 

@@ -20,7 +20,7 @@ import (
 func TestExtracaoNaoAloca(t *testing.T) {
 	c := compileYAML(t, extractYAML)
 	casos := []struct {
-		nome  string
+		name  string
 		event string
 	}{
 		{"sem o pai", `{"id":"A","outro":"x"}`},
@@ -43,7 +43,7 @@ func TestExtracaoNaoAloca(t *testing.T) {
 		{"coercao nas duas direcoes", `{"id":"A","doc":{"probeIpNode":10,"tally":"7"}}`},
 	}
 	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			var b PatchBuffer
 			ev := []byte(tc.event)
 			// Aquece: a primeira passagem aloca os buffers que as seguintes

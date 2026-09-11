@@ -164,7 +164,7 @@ func TestBindExpostoComAuthenticationSecaoVaziaSobeComAviso(t *testing.T) {
 
 // Violações simultâneas: bind exposto, autenticação ligada, TLS desligado, E
 // a variável de senha ausente do ambiente. A ORDEM documentada em
-// avaliaExposicaoEAutenticacao/Novo (matriz antes de segredos, porque a
+// avaliaExposicaoEAutenticacao/New (matriz antes de segredos, porque a
 // matriz é só leitura de config) diz que a recusa da matriz (célula "auth
 // sem TLS") tem de sair PRIMEIRO — nomeando as três chaves — sem que
 // resolveCredenciais chegue a tocar o ambiente. Este teste pega uma
@@ -222,10 +222,10 @@ func TestCertificadoOuChaveInvalidosRecusamASubidaNomeandoOCaminho(t *testing.T)
 	t.Run("chave inexistente", func(t *testing.T) {
 		certPath, _ := geraCertificadoDeTeste(t)
 		keyPath := filepath.Join(t.TempDir(), "nao-existe.pem")
-		bloco := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
+		block := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
 			"  tls:\n    enabled: true\n    certificateFile: %s\n    privateKeyFile: %s\n",
 			certPath, keyPath)
-		a := novoAmbienteCom(t, bloco)
+		a := novoAmbienteCom(t, block)
 		a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
 
 		_, err := server.Novo(a.carrega(), server.Opcoes{})

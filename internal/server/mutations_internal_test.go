@@ -19,7 +19,7 @@ import (
 // mapeamento não pode ser exclusivo de /v1/checkpoint.
 func TestErroDeMutacaoTraduzATabelaInteira(t *testing.T) {
 	casos := []struct {
-		nome       string
+		name       string
 		err        error
 		querStatus int
 		querCodigo string
@@ -42,7 +42,7 @@ func TestErroDeMutacaoTraduzATabelaInteira(t *testing.T) {
 		},
 	}
 	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			status, falha := mutationError(c.err)
 			if status != c.querStatus {
 				t.Errorf("status = %d, quer %d", status, c.querStatus)

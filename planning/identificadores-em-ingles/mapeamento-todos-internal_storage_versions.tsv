@@ -1,0 +1,4 @@
+pacote	especie	endereco	novo	motivo
+internal/storage/versions	local	Journal.Prune.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/versions	param	Journal.Pinned.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado
+internal/storage/versions	local	Journal.Retain.seg	sec	tradução abrangente de funções/tipos/métodos via script automatizado

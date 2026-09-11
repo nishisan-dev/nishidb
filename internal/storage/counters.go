@@ -149,13 +149,13 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 		sobras = append(sobras, nome)
 	}
 	slices.Sort(sobras)
-	for _, nome := range sobras {
-		if err := os.RemoveAll(filepath.Join(dir, nome)); err != nil {
-			return fmt.Errorf("storage: apagar o contador %q removido da configuração: %w", nome, err)
+	for _, name := range sobras {
+		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
+			return fmt.Errorf("storage: apagar o contador %q removido da configuração: %w", name, err)
 		}
 		s.opts.Log.Info("contador.removido",
 			"o contador saiu da configuração do dataset e os arquivos dele foram apagados",
-			"contador", nome)
+			"contador", name)
 	}
 	return nil
 }

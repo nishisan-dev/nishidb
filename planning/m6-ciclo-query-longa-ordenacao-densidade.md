@@ -734,7 +734,7 @@ A palavra mais barata primeiro: prova a máquina de reconhecimento contextual em
    bitmap de `status`** e revalida o LIKE.
 
 **Entrega:** `LIKE`/`NOT LIKE` respondem, em varredura, com **zero alocação por
-linha**. E `_meta.fields` ganha o operador de graça — `meta.Abre` reusa o mesmo
+linha**. E `_meta.fields` ganha o operador de graça — `meta.Open` reusa o mesmo
 binder, planner e executor ([meta.go:60-81](internal/query/meta/meta.go:60)).
 **Testes:** `TestSublinhadoCasaUmCaractereEhNaoUmByte` (com `'ç'` e com byte UTF-8
 inválido), `TestNotLikeSobreCampoAusenteEhFalso`,

@@ -105,7 +105,7 @@ tabelas". A regra: **um dicionário, dois `Compiled`.**
 - **Colunas descobertas em runtime são espelhadas.** `ResolveUnknown` e
   `ResolveNested` (`compile.go:1044` e `:815`) ganham um callback
   `AoDescobrirCampo`, no mesmo molde de `OnFieldDiscarded` /
-  `OnIncompatibleValue` que `server.abreDataset` já instala. Sem isso, uma
+  `OnIncompatibleValue` que `server.openDataset` já instala. Sem isso, uma
   chave promovida a coluna depois da subida seria consultável em `events` e
   invisível em `events_history` até o restart — exatamente a divergência que a
   feature existe para não ter. O mesmo callback propaga `FixAutoType`.
@@ -326,7 +326,7 @@ de colisão de nome na subida. Testes no molde de `ttl_rule_test.go` e
 `storage.Options.DictCompartilhado`; `Open` deixa de criar `fields.dict` no
 modo histórico. Callback `AoDescobrirCampo` em `Compiled`, disparado por
 `ResolveUnknown`/`ResolveNested`/`FixAutoType`, instalado em
-`server.abreDataset`. Teste de paridade: descobrir campo em runtime e consultar
+`server.openDataset`. Teste de paridade: descobrir campo em runtime e consultar
 a coluna nas **duas** tabelas sem restart.
 
 **Fase C — modo histórico no storage**
