@@ -184,6 +184,73 @@ func TestResumoQuebraSubstituidos(t *testing.T) {
 	}
 }
 
+// TestOffsetsRecusaDiretorioComSchemaRepetido amarra que o `offsets` entra
+// pela MESMA porta do servidor e do `query` — o config.LoadDatasetSpecs — e
+// não por um schema.Load de um arquivo só.
+//
+// Sem este caso o comando reverte em silêncio: trocar o corpo por um
+// `schema.Load(cfg.DatasetSpecPath(dataset))` deixa a suíte inteira verde,
+// enquanto o README promete que a recusa vale aqui também. E o `offsets` é
+// justamente o comando em que a omissão dói: ele grava no checkpoint de um
+// dataset que o servidor depois recusa subir, o que é reposicionar às cegas.
+//
+// O dataset pedido NÃO é o duplicado, de propósito: o defeito está na
+// configuração do diretório, não na tabela que se quis mexer.
+func TestOffsetsRecusaDiretorioComSchemaRepetido(t *testing.T) {
+	a := newEnv(t)
+	// O `radius_sessions` do harness declara `schemaName: telecom`; este
+	// segundo dataset repete o schema de propósito.
+	yml := `version: 1
+name: colidente
+schemaName: telecom
+materialization:
+  key:
+    field: id
+schema:
+  fields:
+    id:
+      type: string
+`
+	if err := os.WriteFile(filepath.Join(a.dir, "datasets", "colidente.yaml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code := a.run("offsets", "--config", a.config, "--dataset", "radius_sessions", "--show")
+	if code != cli.ExitUsageError {
+		t.Fatalf("code = %d, quer %d: schema repetido no diretório tem de barrar o offsets\nstdout:%s\nstderr:%s",
+			code, cli.ExitUsageError, a.stdout.String(), a.stderr.String())
+	}
+	for _, quero := range []string{"schemaName", "telecom", "radius_sessions", "colidente"} {
+		if !strings.Contains(a.stderr.String(), quero) {
+			t.Errorf("a recusa não nomeia %q — ela precisa do schema E dos DOIS datasets: %s", quero, a.stderr.String())
+		}
+	}
+	if _, err := os.Stat(a.pathOffsets()); !os.IsNotExist(err) {
+		t.Error("o dataset foi aberto apesar da recusa")
+	}
+}
+
+// TestOffsetsRecusaDatasetNaoDeclaradoNoDiretorio cobre a mensagem PRÓPRIA do
+// caminho: o LoadDatasetSpecs devolve o diretório inteiro e quem diz que o
+// dataset pedido não está lá é o `offsets`.
+//
+// Sem ela a mensagem não tem dono: uma implementação que carregasse o mapa e
+// nunca consultasse a chave seguiria para o storage.Open e criaria o diretório
+// de dados de um dataset que ninguém declarou.
+func TestOffsetsRecusaDatasetNaoDeclaradoNoDiretorio(t *testing.T) {
+	a := newEnv(t)
+	code := a.run("offsets", "--config", a.config, "--dataset", "inexistente", "--show")
+	if code != cli.ExitUsageError {
+		t.Fatalf("code = %d, quer %d\nstdout:%s\nstderr:%s",
+			code, cli.ExitUsageError, a.stdout.String(), a.stderr.String())
+	}
+	for _, quero := range []string{"não há", "inexistente.yaml", "em datasets.directory"} {
+		if !strings.Contains(a.stderr.String(), quero) {
+			t.Errorf("a recusa não traz %q — ela precisa dizer QUAL arquivo falta e ONDE: %s", quero, a.stderr.String())
+		}
+	}
+}
+
 func (a *env) pathOffsets() string {
 	return filepath.Join(a.dir, "dados", "radius_sessions", "checkpoint", "kafka.offsets")
 }
