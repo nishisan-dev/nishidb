@@ -302,22 +302,22 @@ func TestCompactDuasChamadasSimultaneasPeloHTTPUmaGanhaUmaRecebe409(t *testing.T
 	srv, _, _, _ := benchOfCompaction(t, "false")
 
 	partida := make(chan struct{})
-	resultados := make(chan int, 2)
+	results := make(chan int, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
 			<-partida
 			resp, err := http.Post("http://"+srv.Endereco()+"/v1/compact", "", nil)
 			if err != nil {
-				resultados <- -1
+				results <- -1
 				return
 			}
 			defer func() { _ = resp.Body.Close() }()
-			resultados <- resp.StatusCode
+			results <- resp.StatusCode
 		}()
 	}
 	close(partida) // as duas goroutines partem juntas
 
-	a, b := <-resultados, <-resultados
+	a, b := <-results, <-results
 	oks, conflitos := 0, 0
 	for _, status := range []int{a, b} {
 		switch status {

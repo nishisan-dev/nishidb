@@ -460,11 +460,11 @@ type Store struct {
 	// vida do Store. É ele que responde Indexed e FieldsIndexados, e a
 	// imutabilidade é o que permite responder aos dois sem lock.
 	fieldsIndexados []types.FieldID
-	// keyIndexBuf é o buffer da chave canônica do índice por segmento,
+	// keyIndiceBuf é o buffer da chave canônica do índice por segmento,
 	// reusado a cada campo de cada evento. É do Store, e writer-only, pelo
 	// mesmo motivo dos outros buffers do caminho quente: uma alocação por campo
 	// por evento é o que separa o gate de zero alocação de uma regressão.
-	keyIndexBuf []byte
+	keyIndiceBuf []byte
 
 	nextRowID atomic.Uint64
 	rowCount  atomic.Uint64
@@ -612,12 +612,12 @@ type Store struct {
 	// rótulo que separe a causa. O sinal é o WARN indice.selado_corrompido; esta
 	// série diz "quantos foram pegos desde a subida".
 	crcFalhas atomic.Int64
-	// secByIndex e secByEnumeration contam os segmentos que cada Lookup
+	// segByIndice e secByEnumeration contam os segmentos que cada Lookup
 	// resolveu por cada caminho (§3.4). São a ÚNICA coisa que o chamador enxerga
 	// da degradação: planner, executor e driver veem um iterador ascendente e
 	// nada mais.
-	secByIndex       atomic.Int64
-	secByEnumeration atomic.Int64
+	segByIndice     atomic.Int64
+	segByEnumeracao atomic.Int64
 	// recPontoFixo é o que impede o MOINHO da fila-superconjunto.
 	//
 	// A fila é derivada do disco e é um superconjunto do trabalho real: um
@@ -647,13 +647,13 @@ type Store struct {
 	// está moendo" contando quantas ele fez. É também o que prova que os campos
 	// pendentes de um segmento são resolvidos numa leitura só.
 	varreduras atomic.Int64
-	// retByTempo e retBySize contam os segmentos aposentados por cada
+	// retByTime e retBySize contam os segmentos aposentados por cada
 	// política desde a subida. Duas séries e não uma: qual das duas está
 	// decidindo é a pergunta que separa "o prazo está sendo honrado" de "o
 	// teto está engolindo o prazo".
-	retByTempo atomic.Int64
-	retBySize  atomic.Int64
-	epoch      uint64 // último epoch de manifest gravado (writer-only)
+	retByTime atomic.Int64
+	retBySize atomic.Int64
+	epoch     uint64 // último epoch de manifest gravado (writer-only)
 
 	// curSecID espelha o segmento corrente para leitura concorrente em
 	// Stats (segment.Writer não é thread-safe).
@@ -1052,7 +1052,7 @@ func Open(opts Options) (*Store, error) {
 	if opts.Metrics != nil {
 		s.cpDuration = opts.Metrics.Histogram(metrics.MetCheckpointDurationSeconds,
 			"Duração do checkpoint em segundos, da chamada ao manifest durável (inclui a espera pelo mutex do writer, que é stall real).",
-			limitesOfCheckpoint, metrics.LabelDataset).With(opts.Dataset)
+			limitsDeCheckpoint, metrics.LabelDataset).With(opts.Dataset)
 		s.cpUltimo = opts.Metrics.Gauge(metrics.MetCheckpointLastSuccessTimestmp,
 			"Unix timestamp do último checkpoint bem-sucedido. Fica em 0 até o primeiro.",
 			metrics.LabelDataset).With(opts.Dataset)

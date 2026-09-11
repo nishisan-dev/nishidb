@@ -161,7 +161,7 @@ func requiresServer(cmd, endereco string, amb Context) int {
 // cred entra pelo MESMO remoteClient/aplicaCredencial que consultaRemota e
 // postaMutacao usam (Task B6) — o client HTTP compartilhado com Proxy: nil e
 // o CertPool de --tls-ca, e o Authorization quando --user foi dado.
-func searchDocument(cmd, endereco, path string, cred remoteCredential, dest any, amb Context) int {
+func searchDocument(cmd, endereco, path string, cred remoteCredential, destination any, amb Context) int {
 	client, err := remoteClient(cred)
 	if err != nil {
 		notify(amb, "%s: %v\n", cmd, err)
@@ -187,7 +187,7 @@ func searchDocument(cmd, endereco, path string, cred remoteCredential, dest any,
 	if resp.StatusCode != http.StatusOK {
 		return remoteRefusal(cmd, resp, amb)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(destination); err != nil {
 		// Corpo 200 que não decodifica é falha de TRANSPORTE, não de uso: o
 		// comando estava certo e a resposta veio quebrada. É a mesma distinção
 		// que o leStream faz, e o mesmo código.

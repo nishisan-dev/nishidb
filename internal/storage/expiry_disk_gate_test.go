@@ -79,7 +79,7 @@ func TestGateDiscoCaiQuandoOKeySetEhAbandonado(t *testing.T) {
 
 	// Regime: o coletor marca em passadas limitadas e a compaction recolhe.
 	// As duas rodam alternadas, como no processo real.
-	lim := LimitesOfExpiration{MaxByPass: 100, TempoByPass: time.Minute}
+	lim := LimitesOfExpiration{MaxByPassada: 100, TimeByPassada: time.Minute}
 	for i := 0; i < 30; i++ {
 		if _, err := s.ExpiraOnePass(context.Background(), lim); err != nil {
 			t.Fatal(err)

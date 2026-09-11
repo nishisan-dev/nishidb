@@ -69,10 +69,10 @@ type EstatisticasOfIndex struct {
 	// segmento por processo — e nenhum outro campo deste retrato distingue um
 	// índice podre de um segmento fora da janela. Ver o godoc do campo crcFalhas.
 	CRCFalhas int64
-	// ByIndex e ByEnumeration contam os segmentos que os Lookups resolveram por
+	// ByIndice e ByEnumeracao contam os segmentos que os Lookups resolveram por
 	// cada caminho (§3.4). São o único observável da degradação — para o planner,
 	// o executor e o driver, os dois caminhos são o mesmo iterador ascendente.
-	ByIndex, ByEnumeration int64
+	ByIndice, ByEnumeracao int64
 }
 
 // EstatisticasOfIndex lê o retrato sem tomar lock nenhum do dataset.
@@ -100,8 +100,8 @@ func (s *Store) EstatisticasOfIndex() EstatisticasOfIndex {
 		Reconstrucoes: s.recFeitas.Load(),
 		RebuildActive: s.RebuildActive(),
 		CRCFalhas:     s.crcFalhas.Load(),
-		ByIndex:       s.secByIndex.Load(),
-		ByEnumeration: s.secByEnumeration.Load(),
+		ByIndice:      s.segByIndice.Load(),
+		ByEnumeracao:  s.segByEnumeracao.Load(),
 	}
 }
 

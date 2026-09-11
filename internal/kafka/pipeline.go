@@ -166,9 +166,9 @@ func (e *esteira) publica(seq int64, rec *kgo.Record, b *barreira) {
 
 	e.mu.Lock()
 	s.rec, s.barreira, s.pronto = rec, b, true
-	acorda := seq == e.proxima
+	wake := seq == e.proxima
 	e.mu.Unlock()
-	if acorda {
+	if wake {
 		select {
 		case e.pronto <- struct{}{}:
 		default:
@@ -185,7 +185,7 @@ func (e *esteira) publica(seq int64, rec *kgo.Record, b *barreira) {
 //
 // O slot devolvido continua sendo do anel: só é liberado por Avanca, o que dá
 // ao writer o tempo do Aplica inteiro sobre buffers que ninguém mais toca.
-func (e *esteira) consome(ctx context.Context, acorda <-chan time.Time) (*slot, bool, bool) {
+func (e *esteira) consome(ctx context.Context, wake <-chan time.Time) (*slot, bool, bool) {
 	for {
 		e.mu.Lock()
 		s := &e.slots[e.proxima&e.mask]
@@ -209,7 +209,7 @@ func (e *esteira) consome(ctx context.Context, acorda <-chan time.Time) (*slot, 
 		select {
 		case <-e.pronto:
 			close()
-		case <-acorda:
+		case <-wake:
 			close()
 			return nil, false, true
 		case <-ctx.Done():

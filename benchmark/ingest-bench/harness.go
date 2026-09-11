@@ -573,11 +573,11 @@ func Run(cfg Config) (*Report, error) {
 			rep.FullScanBytes = bytes
 			fmt.Fprintf(cfg.Out, "STEADY: varredura completa em %s\n", dur.Round(time.Millisecond))
 		}
-		statsSQL, errosSQL := sqlReaders.stop()
+		statsSQL, errorsSQL := sqlReaders.stop()
 		rep.Queries = append(rep.Queries, statsSQL...)
-		rep.SQLErrors = errosSQL
+		rep.SQLErrors = errorsSQL
 		fmt.Fprintf(cfg.Out, "STEADY: %d eventos, RSS max %s, %d erros de query\n",
-			rep.Steady.Events, humanBytes(rep.Steady.MaxRSSBytes), errosSQL)
+			rep.Steady.Events, humanBytes(rep.Steady.MaxRSSBytes), errorsSQL)
 	}
 
 	// §125 manda medir o restart time, e nenhum relatório do M1 o tinha. É
@@ -729,9 +729,9 @@ func runPhase(a phaseArgs) (PhaseReport, error) {
 		// Amostra por TEMPO ou por CONTAGEM, o que vier primeiro: o tempo
 		// cobre a fase lenta (checkpoint, fsync), a contagem garante
 		// resolução na curva independentemente de quanto a rodada durou.
-		byTempo := time.Now().After(próxima)
+		byTime := time.Now().After(próxima)
 		byEventos := rep.Events%int64(a.cfg.SampleEveryEvents) == 0
-		if byTempo || byEventos {
+		if byTime || byEventos {
 			próxima = time.Now().Add(a.cfg.SampleInterval)
 			if err := a.col.sample(a.name, rep.Events, &rep); err != nil {
 				return rep, err
@@ -1085,9 +1085,9 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 			heapGate.Detail = fmt.Sprintf("baseline tem %d entidades, esta rodada %d: a referência precisa ser MENOR",
 				base.Config.Entities, cfg.Entities)
 		default:
-			heapAtual := rep.Steady.HeapStable
-			if heapAtual == 0 {
-				heapAtual = rep.Load.HeapStable
+			heapCurrent := rep.Steady.HeapStable
+			if heapCurrent == 0 {
+				heapCurrent = rep.Load.HeapStable
 			}
 			heapBase := base.Steady.HeapStable
 			if heapBase == 0 {
@@ -1095,7 +1095,7 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 			}
 			var passouHeap bool
 			passouHeap, heapGate.Detail = evaluateHeap(
-				heapAtual, heapBase, cfg.Entities, base.Config.Entities)
+				heapCurrent, heapBase, cfg.Entities, base.Config.Entities)
 			heapGate.Status = statusOf(passouHeap)
 		}
 	}
@@ -1375,11 +1375,11 @@ func evaluateGateOfDisk(serie []int64) GateResult {
 			primeira, window)
 		return g
 	}
-	razao := segunda / primeira
-	g.Status = statusOf(razao < fractionOfGrowthTolerada)
+	ratio := segunda / primeira
+	g.Status = statusOf(ratio < fractionOfGrowthTolerada)
 	g.Detail = fmt.Sprintf("crescimento de %.0f B/amostra na 1ª metade contra %.0f B/amostra na 2ª "+
 		"(razão %.3f, teto %.2f) — %s",
-		primeira, segunda, razao, fractionOfGrowthTolerada, window)
+		primeira, segunda, ratio, fractionOfGrowthTolerada, window)
 	if g.Status == GateReprovou {
 		// A dica manda o operador ao artefato antes de mandá-lo ao produto,
 		// porque as duas hipóteses pedem ações opostas e o relatório já sabe
@@ -1442,11 +1442,11 @@ func taxaByAmostra(of, until int64, variacoes int) float64 {
 // rodada cujo heap é 0,1% do orçamento de RSS. O que a §110 quer garantir é
 // que o heap NÃO acompanhe o dataset, e o valor absoluto desprezível prova
 // isso com mais força do que qualquer razão.
-func evaluateHeap(heapAtual, heapBase uint64, entAtual, entBase int) (bool, string) {
-	razãoData := float64(entAtual) / float64(entBase)
-	razão := math.Inf(1)
+func evaluateHeap(heapCurrent, heapBase uint64, entCurrent, entBase int) (bool, string) {
+	ratioData := float64(entCurrent) / float64(entBase)
+	ratio := math.Inf(1)
 	if heapBase > 0 {
-		razão = float64(heapAtual) / float64(heapBase)
+		ratio = float64(heapCurrent) / float64(heapBase)
 	}
 	// A razão e os valores absolutos entram no detalhe nos DOIS regimes,
 	// inclusive quando o piso decide. Passar não pode significar esconder: um
@@ -1454,14 +1454,14 @@ func evaluateHeap(heapAtual, heapBase uint64, entAtual, entBase int) (bool, stri
 	// neste gate — 15 MiB é 1,5% do orçamento, e o RSS tem gate próprio —,
 	// mas quem comparar duas rodadas precisa VER a regressão.
 	medida := fmt.Sprintf("heap %s (%d entidades) vs %s (%d entidades): %.2fx de heap para %.1fx de dados",
-		humanBytes(heapAtual), entAtual, humanBytes(heapBase), entBase, razão, razãoData)
+		humanBytes(heapCurrent), entCurrent, humanBytes(heapBase), entBase, ratio, ratioData)
 
-	if heapAtual <= heapNegligibleBytes {
+	if heapCurrent <= heapNegligibleBytes {
 		return true, fmt.Sprintf("%s — abaixo do piso de %s, onde a razão vira ruído de GC "+
 			"e o desacoplamento está provado pela grandeza absoluta",
 			medida, humanBytes(heapNegligibleBytes))
 	}
-	return razão < 2, medida + ", teto 2x"
+	return ratio < 2, medida + ", teto 2x"
 }
 
 func loadReport(path string) (*Report, error) {

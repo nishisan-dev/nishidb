@@ -215,16 +215,16 @@ func TestOsSegmentosConsultadosSeparamIndiceDeEnumeracao(t *testing.T) {
 	candidatosCrus(t, hist, field, strVal("a"))
 	depois := hist.EstatisticasOfIndex()
 
-	byIndex := depois.ByIndex - before.ByIndex
-	byEnum := depois.ByEnumeration - before.ByEnumeration
-	if byIndex+byEnum != total {
+	byIndice := depois.ByIndice - before.ByIndice
+	byEnum := depois.ByEnumeracao - before.ByEnumeracao
+	if byIndice+byEnum != total {
 		t.Errorf("um Lookup contou %d por índice + %d por enumeração = %d, e o dataset tem %d segmentos: "+
-			"cada segmento responde por exatamente um caminho", byIndex, byEnum, byIndex+byEnum, total)
+			"cada segmento responde por exatamente um caminho", byIndice, byEnum, byIndice+byEnum, total)
 	}
 	// O corrente responde pelo WIP, que conta como índice — daí o +1.
-	if byIndex != withIndex+1 {
+	if byIndice != withIndex+1 {
 		t.Errorf("modo=indice contou %d, e há %d selados com .sidx mais o corrente pelo WIP: "+
-			"o contador não está seguindo a decisão real do fontesOfField", byIndex, withIndex)
+			"o contador não está seguindo a decisão real do fontesOfField", byIndice, withIndex)
 	}
 	if byEnum != total-withIndex-1 {
 		t.Errorf("modo=enumeracao contou %d, e %d segmentos estão sem índice: um dataset degradado que reporta "+
@@ -276,7 +276,7 @@ func TestOCrcDivergenteContaUmDegrauEEnumeraSempre(t *testing.T) {
 		}
 		depois := s.EstatisticasOfIndex()
 		deltasCrc = append(deltasCrc, depois.CRCFalhas-before.CRCFalhas)
-		deltasEnum = append(deltasEnum, depois.ByEnumeration-before.ByEnumeration)
+		deltasEnum = append(deltasEnum, depois.ByEnumeracao-before.ByEnumeracao)
 		before = depois
 	}
 
@@ -565,7 +565,7 @@ func TestOGaugeDeEstadosEhCegoAIndicePodre(t *testing.T) {
 	// A outra metade: a enumeração sobe exatamente como subiria com mais dois
 	// segmentos sem índice por qualquer outra causa. O número é o mesmo; a causa
 	// não viaja com ele.
-	if delta := podre.ByEnumeration - saudavel.ByEnumeration; delta != podres {
+	if delta := podre.ByEnumeracao - saudavel.ByEnumeracao; delta != podres {
 		t.Errorf("a enumeração subiu %d com %d índices podres, queria %d: o incremento é o de um segmento sem "+
 			"índice, e é por isso que ele não distingue corrupção de segmento fora da janela", delta, podres, podres)
 	}

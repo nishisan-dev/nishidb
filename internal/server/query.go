@@ -63,7 +63,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	d, ok := s.byName[req.Dataset]
+	d, ok := s.byNome[req.Dataset]
 	if !ok {
 		// O nome NÃO entra na métrica: ele é entrada do cliente, e um label
 		// alimentado por entrada do cliente é uma série nova por requisição.
@@ -179,8 +179,8 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// prazo longo virando padrão, "há 3 consultas ativas" deixou de ser
 	// resposta — o operador precisa saber se são três point lookups ou um
 	// full scan de oito minutos.
-	saiOfRecord := s.registerInVoo(d.nome, req.SQL, longa, start)
-	defer saiOfRecord()
+	saiDoRecord := s.registerInVoo(d.nome, req.SQL, longa, start)
+	defer saiDoRecord()
 	defer func() { s.met.observa(d.nome, time.Since(start).Seconds()) }()
 
 	it, err := s.eng.Execute(ctx, d.nome, req.SQL, params)

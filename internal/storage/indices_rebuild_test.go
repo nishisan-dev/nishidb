@@ -474,23 +474,23 @@ func TestOMapeamentoAbertoAntesDaReescritaNaoEhPublicado(t *testing.T) {
 	s2.selMu.RLock()
 	generation := s2.selGeneration
 	s2.selMu.RUnlock()
-	velho, err := segindex.OpenSealed(segindex.SealedPath(dir+"/data", target))
+	old, err := segindex.OpenSealed(segindex.SealedPath(dir+"/data", target))
 	if err != nil {
 		t.Fatalf("OpenSealed do índice antigo: %v", err)
 	}
-	if fields := velho.Fields(); len(fields) != 1 {
+	if fields := old.Fields(); len(fields) != 1 {
 		t.Fatalf("montagem: o mapeamento antigo cobre %v; o teste precisa dele SEM a seção do campo novo", fields)
 	}
 
 	if feitos := passOfRebuild(t, s2); feitos != 1 {
 		t.Fatalf("a passada reconstruiu %d segmentos, quero 1", feitos)
 	}
-	s2.publicaSealed(target, velho, generation)
+	s2.publicaSealed(target, old, generation)
 
 	s2.selMu.RLock()
 	publicado := s2.selados[target]
 	s2.selMu.RUnlock()
-	if publicado == velho {
+	if publicado == old {
 		t.Fatal("o mapeamento aberto ANTES da reescrita foi publicado DEPOIS dela: o segmento responde pelo índice " +
 			"velho — sem a seção do campo novo, portanto enumerando — até a próxima abertura do dataset, e ainda " +
 			"prende o inode substituído")

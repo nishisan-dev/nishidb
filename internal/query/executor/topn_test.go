@@ -91,21 +91,21 @@ func seedTopN(tb testing.TB, c *schema.Compiled, rows []rowTopN) *fakestorage.St
 	tb.Helper()
 	st := fakestorage.New(fakestorage.Indexes{})
 	id, name, num := field(tb, c, "id"), field(tb, c, "nome"), field(tb, c, "n")
-	type fieldOfRow struct {
+	type fieldDaRow struct {
 		id  types.FieldID
 		val types.Value
 	}
 	for _, l := range rows {
-		fields := []fieldOfRow{
+		fields := []fieldDaRow{
 			{id.ID, types.Value{Type: types.TypeString, Bytes: []byte(l.id)}},
 			{num.ID, types.Value{Type: types.TypeInt64, I64: l.n}},
 		}
 		if l.hasName {
-			fields = append(fields, fieldOfRow{name.ID, types.Value{Type: types.TypeString, Bytes: []byte(l.name)}})
+			fields = append(fields, fieldDaRow{name.ID, types.Value{Type: types.TypeString, Bytes: []byte(l.name)}})
 		}
 		// AppendField exige FieldID crescente: é a mesma invariante que o
 		// payload real honra, e sem ela o encoding recusa.
-		slices.SortFunc(fields, func(a, b fieldOfRow) int { return int(a.id) - int(b.id) })
+		slices.SortFunc(fields, func(a, b fieldDaRow) int { return int(a.id) - int(b.id) })
 		var p []byte
 		var err error
 		for _, cp := range fields {
@@ -151,7 +151,7 @@ func slotOf(tb testing.TB, c *schema.Compiled, name string) int {
 // bqTopN monta a query ligada: projeta `id`, ordena pelas chaves dadas, e
 // carrega LIMIT explícito e OFFSET — que juntos são o que faz o Open escolher o
 // caminho rápido.
-func bqTopN(tb testing.TB, c *schema.Compiled, chaves []binder.BoundOrderKey, limit, offset int64) *binder.BoundQuery {
+func bqTopN(tb testing.TB, c *schema.Compiled, keys []binder.BoundOrderKey, limit, offset int64) *binder.BoundQuery {
 	tb.Helper()
 	const maxRows = 10_000
 	efetivo := limit
@@ -166,7 +166,7 @@ func bqTopN(tb testing.TB, c *schema.Compiled, chaves []binder.BoundOrderKey, li
 		// tratá-lo diferente do caminho completo.
 		Columns:        []binder.BoundColumn{{Field: field(tb, c, "id"), Name: "id", Slot: slotOf(tb, c, "id")}},
 		Slots:          binder.Slots{IDs: idsOfSlots(tb, c)},
-		OrderBy:        chaves,
+		OrderBy:        keys,
 		HasLimit:       true,
 		Limit:          limit,
 		MaxRows:        maxRows,
@@ -306,10 +306,10 @@ func TestTopNDaOMesmoResultadoQueOSortCompleto(t *testing.T) {
 func TestTopNComOffsetPulaDepoisDeOrdenar(t *testing.T) {
 	c := compileSchemaTopN(t)
 	st := seedTopN(t, c, corpusTopN(300))
-	chaves := []binder.BoundOrderKey{keyName(t, c, false, false)}
+	keys := []binder.BoundOrderKey{keyName(t, c, false, false)}
 
-	inteira := executa(t, st, bqTopN(t, c, chaves, 40, 0), executor.Options{})
-	segunda := executa(t, st, bqTopN(t, c, chaves, 20, 20), executor.Options{})
+	inteira := executa(t, st, bqTopN(t, c, keys, 40, 0), executor.Options{})
+	segunda := executa(t, st, bqTopN(t, c, keys, 20, 20), executor.Options{})
 
 	if inteira.usouTopN != 1 || segunda.usouTopN != 1 {
 		t.Fatalf("um dos lados não usou o top-N (%d, %d)", inteira.usouTopN, segunda.usouTopN)
@@ -341,8 +341,8 @@ func TestTopNOrdenaPorVariasChaves(t *testing.T) {
 		byID[l.id] = l
 	}
 
-	chaves := []binder.BoundOrderKey{keyN(t, c, true), keyName(t, c, false, false)}
-	r := executa(t, st, bqTopN(t, c, chaves, 60, 0), executor.Options{})
+	keys := []binder.BoundOrderKey{keyN(t, c, true), keyName(t, c, false, false)}
+	r := executa(t, st, bqTopN(t, c, keys, 60, 0), executor.Options{})
 	if r.usouTopN != 1 {
 		t.Fatalf("não usou o top-N (TopN=%d)", r.usouTopN)
 	}
@@ -413,9 +413,9 @@ func TestTopNPoeAusentePorUltimoNasDuasDirecoes(t *testing.T) {
 		{"desc nulls first", true, true, true},
 	} {
 		t.Run(cs.name, func(t *testing.T) {
-			chaves := []binder.BoundOrderKey{keyName(t, c, cs.desc, cs.nullsFirst)}
-			rapido := executa(t, st, bqTopN(t, c, chaves, 10, 0), executor.Options{})
-			completo := executa(t, st, bqTopN(t, c, chaves, 10, 0), turnoffTopN)
+			keys := []binder.BoundOrderKey{keyName(t, c, cs.desc, cs.nullsFirst)}
+			rapido := executa(t, st, bqTopN(t, c, keys, 10, 0), executor.Options{})
+			completo := executa(t, st, bqTopN(t, c, keys, 10, 0), turnoffTopN)
 			if rapido.usouTopN != 1 || completo.usouTopN != 0 {
 				t.Fatalf("modos iguais nos dois lados (%d, %d)", rapido.usouTopN, completo.usouTopN)
 			}
@@ -449,13 +449,13 @@ func TestTopNPoeAusentePorUltimoNasDuasDirecoes(t *testing.T) {
 func TestTopNDegradaEmVezDeRecusarQuandoOOrcamentoEstoura(t *testing.T) {
 	c := compileSchemaTopN(t)
 	st := seedTopN(t, c, corpusTopN(300))
-	chaves := []binder.BoundOrderKey{keyName(t, c, false, false), keyN(t, c, true)}
+	keys := []binder.BoundOrderKey{keyName(t, c, false, false), keyN(t, c, true)}
 	withSpill := storeWithSpill{Store: st, dir: t.TempDir()}
 
 	// Teto de 256 bytes: não cabem nem as 30 entradas do heap, então a
 	// degradação acontece cedo, com a maior parte do corpus ainda por varrer.
-	degradado := executa(t, withSpill, bqTopN(t, c, chaves, 30, 5), executor.Options{SortMemory: 256})
-	completo := executa(t, withSpill, bqTopN(t, c, chaves, 30, 5), turnoffTopN)
+	degradado := executa(t, withSpill, bqTopN(t, c, keys, 30, 5), executor.Options{SortMemory: 256})
+	completo := executa(t, withSpill, bqTopN(t, c, keys, 30, 5), turnoffTopN)
 
 	if degradado.usouTopN != 1 {
 		t.Fatalf("a query não começou no top-N (TopN=%d)", degradado.usouTopN)
@@ -483,10 +483,10 @@ func TestTopNDegradaEmVezDeRecusarQuandoOOrcamentoEstoura(t *testing.T) {
 func TestTopNDegradadoRecusaQuandoNaoHaOndeTransbordar(t *testing.T) {
 	c := compileSchemaTopN(t)
 	st := seedTopN(t, c, corpusTopN(300))
-	chaves := []binder.BoundOrderKey{keyName(t, c, false, false)}
+	keys := []binder.BoundOrderKey{keyName(t, c, false, false)}
 
 	var m executor.Metrics
-	it, err := executor.Open(context.Background(), bqTopN(t, c, chaves, 30, 0), planner.FullScan(),
+	it, err := executor.Open(context.Background(), bqTopN(t, c, keys, 30, 0), planner.FullScan(),
 		executor.Options{Store: st, Metrics: &m, SortMemory: 256})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -515,9 +515,9 @@ func TestTopNDegradadoRecusaQuandoNaoHaOndeTransbordar(t *testing.T) {
 func TestTopNSoValeDentroDoTetoDeLinhas(t *testing.T) {
 	c := compileSchemaTopN(t)
 	st := seedTopN(t, c, corpusTopN(60))
-	chaves := []binder.BoundOrderKey{keyName(t, c, false, false)}
+	keys := []binder.BoundOrderKey{keyName(t, c, false, false)}
 
-	withoutLimit := bqTopN(t, c, chaves, 10, 0)
+	withoutLimit := bqTopN(t, c, keys, 10, 0)
 	withoutLimit.HasLimit = false
 	withoutLimit.EffectiveLimit = withoutLimit.MaxRows // 10.000, acima do teto padrão
 	if r := executa(t, st, withoutLimit, executor.Options{}); r.usouTopN != 0 {
@@ -527,10 +527,10 @@ func TestTopNSoValeDentroDoTetoDeLinhas(t *testing.T) {
 
 	// O teto conta OFFSET + limite, e não só o limite: as linhas puladas também
 	// precisam ser as certas, então elas ocupam lugar no heap.
-	if r := executa(t, st, bqTopN(t, c, chaves, 10, 0), executor.Options{TopNMax: 10}); r.usouTopN != 1 {
+	if r := executa(t, st, bqTopN(t, c, keys, 10, 0), executor.Options{TopNMax: 10}); r.usouTopN != 1 {
 		t.Errorf("com teto 10 e LIMIT 10 o top-N não foi escolhido")
 	}
-	if r := executa(t, st, bqTopN(t, c, chaves, 10, 1), executor.Options{TopNMax: 10}); r.usouTopN != 0 {
+	if r := executa(t, st, bqTopN(t, c, keys, 10, 1), executor.Options{TopNMax: 10}); r.usouTopN != 0 {
 		t.Errorf("com teto 10, LIMIT 10 e OFFSET 1 o top-N foi escolhido: o OFFSET não entrou " +
 			"na conta do tamanho do heap")
 	}
@@ -549,10 +549,10 @@ func TestTopNSoValeDentroDoTetoDeLinhas(t *testing.T) {
 func TestTopNValeSemLimiteEscritoQuandoOMaxRowsCabe(t *testing.T) {
 	c := compileSchemaTopN(t)
 	st := seedTopN(t, c, corpusTopN(300))
-	chaves := []binder.BoundOrderKey{keyName(t, c, false, false), keyN(t, c, true)}
+	keys := []binder.BoundOrderKey{keyName(t, c, false, false), keyN(t, c, true)}
 
 	withoutLimit := func() *binder.BoundQuery {
-		bq := bqTopN(t, c, chaves, 40, 0)
+		bq := bqTopN(t, c, keys, 40, 0)
 		bq.HasLimit, bq.Limit = false, 0
 		bq.MaxRows, bq.EffectiveLimit = 40, 40
 		return bq

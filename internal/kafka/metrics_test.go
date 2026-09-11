@@ -87,16 +87,16 @@ func TestCadaEsperaSaiDaSuaFonteEUmaVezSo(t *testing.T) {
 	m.OlhaOsTempos(func() (time.Duration, time.Duration) { return 0, waitOfDecodificadores })
 	m.OlhaAEsteira(func() int64 { return 0 }, func() time.Duration { return waitOfWriter })
 
-	valores := map[string][]float64{}
+	values := map[string][]float64{}
 	for _, a := range append(m.samplesOfFila(), m.samplesOfEsteira()...) {
-		valores[a.Name] = append(valores[a.Name], a.Value)
+		values[a.Name] = append(values[a.Name], a.Value)
 	}
 
 	for name, quero := range map[string]float64{
 		metrics.MetKafkaWriterIDleSeconds: waitOfWriter.Seconds(),
 		metrics.MetKafkaDecodeIDleSeconds: waitOfDecodificadores.Seconds(),
 	} {
-		got, ok := valores[name]
+		got, ok := values[name]
 		if !ok {
 			t.Errorf("%s não foi emitida", name)
 			continue

@@ -84,9 +84,9 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 		return fmt.Errorf("%w: ModoHistorico não aceita counters: a tabela histórica não tem estado corrente a contar", ErrInvalidArgument)
 	}
 	dir := filepath.Join(idxDir, diretorioOfCounters)
-	byName := make(map[string]checkpoint.CounterInfo, len(declarados))
+	byNome := make(map[string]checkpoint.CounterInfo, len(declarados))
 	for _, info := range declarados {
-		byName[info.Name] = info
+		byNome[info.Name] = info
 	}
 	vistos := make(map[string]struct{}, len(defs))
 	for _, def := range defs {
@@ -94,8 +94,8 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 			return fmt.Errorf("%w: contador %q declarado duas vezes", ErrInvalidArgument, def.Name)
 		}
 		vistos[def.Name] = struct{}{}
-		info, tinha := byName[def.Name]
-		delete(byName, def.Name)
+		info, tinha := byNome[def.Name]
+		delete(byNome, def.Name)
 
 		recria, motivo := false, ""
 		switch {
@@ -144,8 +144,8 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 		}
 	}
 	// Sobras do manifest: contadores que o YAML já não declara.
-	sobras := make([]string, 0, len(byName))
-	for name := range byName {
+	sobras := make([]string, 0, len(byNome))
+	for name := range byNome {
 		sobras = append(sobras, name)
 	}
 	slices.Sort(sobras)

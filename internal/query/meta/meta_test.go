@@ -113,19 +113,19 @@ func text(v types.Value) string {
 // SQL nenhuma. O campo declarado sai com o tipo declarado e auto=false.
 func TestFieldsListaOsCamposDoDataset(t *testing.T) {
 	got := rows(t, "SELECT name, type, auto FROM _meta.fields", target(t))
-	byName := map[string]map[string]string{}
+	byNome := map[string]map[string]string{}
 	for _, l := range got {
-		byName[l["name"]] = l
+		byNome[l["name"]] = l
 	}
 	for _, name := range []string{"id", "status", "doc", "livre"} {
-		if _, ok := byName[name]; !ok {
-			t.Fatalf("campo %q ausente; veio %v", name, byName)
+		if _, ok := byNome[name]; !ok {
+			t.Fatalf("campo %q ausente; veio %v", name, byNome)
 		}
 	}
-	if got := byName["status"]["type"]; got != "string" {
+	if got := byNome["status"]["type"]; got != "string" {
 		t.Errorf("status.type = %q, quer string", got)
 	}
-	if got := byName["status"]["auto"]; got != "false" {
+	if got := byNome["status"]["auto"]; got != "false" {
 		t.Errorf("status.auto = %q, quer false", got)
 	}
 }

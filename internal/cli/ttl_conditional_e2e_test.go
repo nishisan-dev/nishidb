@@ -105,7 +105,7 @@ func (b *benchTTL) visivel(key string) bool {
 func (b *benchTTL) coleta() storage.ResultOfExpiration {
 	b.t.Helper()
 	r, err := b.st.ExpiraOnePass(context.Background(), storage.LimitesOfExpiration{
-		MaxByPass: 100, TempoByPass: time.Second,
+		MaxByPassada: 100, TimeByPassada: time.Second,
 	})
 	if err != nil {
 		b.t.Fatal(err)

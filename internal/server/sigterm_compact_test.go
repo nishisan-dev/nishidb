@@ -95,8 +95,8 @@ func TestSIGTERMDuranteCompactacaoManualCancelaAPassadaEEncerraRapido(t *testing
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	endRun := make(chan error, 1)
-	go func() { endRun <- srv.Run(ctx, "") }()
+	endRoda := make(chan error, 1)
+	go func() { endRoda <- srv.Run(ctx, "") }()
 	waitListenerAceitar(t, srv.Endereco())
 
 	respCh := make(chan *http.Response, 1)
@@ -126,7 +126,7 @@ func TestSIGTERMDuranteCompactacaoManualCancelaAPassadaEEncerraRapido(t *testing
 	close(lock.release)
 
 	select {
-	case err := <-endRun:
+	case err := <-endRoda:
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}

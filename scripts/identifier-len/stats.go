@@ -17,7 +17,7 @@ import (
 type Histograma struct {
 	comprimentos map[int]int64
 	totalLido    int64
-	withField    int64
+	comField     int64
 	withoutField int64
 	invalidos    int64
 }
@@ -34,7 +34,7 @@ func (h *Histograma) Register(result ResultExtracao, size int) {
 	h.totalLido++
 	switch result {
 	case ExtraidoOK:
-		h.withField++
+		h.comField++
 		h.comprimentos[size]++
 	case ExtraidoWithoutField:
 		h.withoutField++
@@ -48,7 +48,7 @@ func (h *Histograma) TotalLido() int64 { return h.totalLido }
 
 // WithField é o total de mensagens em que o campo foi extraído com sucesso —
 // o denominador dos buckets e dos percentis.
-func (h *Histograma) WithField() int64 { return h.withField }
+func (h *Histograma) WithField() int64 { return h.comField }
 
 // WithoutField é o total de mensagens cujo JSON parseou mas não tinha o campo.
 func (h *Histograma) WithoutField() int64 { return h.withoutField }
@@ -64,10 +64,10 @@ type Bucket struct {
 	Percentual float64
 }
 
-// limitesOfBuckets são os tetos EXATOS do brief: as três frações do teto de
+// limitsDosBuckets são os tetos EXATOS do brief: as três frações do teto de
 // formato MaxKeySize (1024 = encoding.MaxKeySize) mais o próprio teto — a
 // quinta faixa (>1024) é o que a issue #15 existe para medir.
-var limitesOfBuckets = [4]int{256, 512, 768, 1024}
+var limitsDosBuckets = [4]int{256, 512, 768, 1024}
 
 var rotulosOfBuckets = [5]string{"≤256", "≤512", "≤768", "≤1024", ">1024"}
 
@@ -77,7 +77,7 @@ var rotulosOfBuckets = [5]string{"≤256", "≤512", "≤768", "≤1024", ">1024
 func (h *Histograma) Buckets() []Bucket {
 	contagens := make([]int64, len(rotulosOfBuckets))
 	for comprimento, n := range h.comprimentos {
-		i := sort.SearchInts(limitesOfBuckets[:], comprimento)
+		i := sort.SearchInts(limitsDosBuckets[:], comprimento)
 		// SearchInts devolve o primeiro índice cujo limite é >= comprimento
 		// só quando o limite bate exatamente por cima; um comprimento IGUAL
 		// a um limite (256, 512, 768, 1024) tem de cair no balde "≤", e
@@ -89,8 +89,8 @@ func (h *Histograma) Buckets() []Bucket {
 	buckets := make([]Bucket, len(rotulosOfBuckets))
 	for i, rotulo := range rotulosOfBuckets {
 		var pct float64
-		if h.withField > 0 {
-			pct = float64(contagens[i]) / float64(h.withField) * 100
+		if h.comField > 0 {
+			pct = float64(contagens[i]) / float64(h.comField) * 100
 		}
 		buckets[i] = Bucket{Rotulo: rotulo, Count: contagens[i], Percentual: pct}
 	}
@@ -100,12 +100,12 @@ func (h *Histograma) Buckets() []Bucket {
 // chavesOrdenadas devolve os comprimentos distintos observados, em ordem
 // crescente — a base de Percentil, Maximo e TopN.
 func (h *Histograma) chavesOrdenadas() []int {
-	chaves := make([]int, 0, len(h.comprimentos))
+	keys := make([]int, 0, len(h.comprimentos))
 	for c := range h.comprimentos {
-		chaves = append(chaves, c)
+		keys = append(keys, c)
 	}
-	sort.Ints(chaves)
-	return chaves
+	sort.Ints(keys)
+	return keys
 }
 
 // Percentil devolve o comprimento EXATO no percentil p (0–100), pelo método
@@ -113,10 +113,10 @@ func (h *Histograma) chavesOrdenadas() []int {
 // inventaria um comprimento que nenhuma mensagem tem; o brief pede exatos, e
 // map[int]int64 é o que permite isso sem custo, dada a cardinalidade baixa.
 func (h *Histograma) Percentil(p float64) int {
-	if h.withField == 0 {
+	if h.comField == 0 {
 		return 0
 	}
-	posto := int64(math.Ceil(p / 100 * float64(h.withField)))
+	posto := int64(math.Ceil(p / 100 * float64(h.comField)))
 	if posto < 1 {
 		posto = 1
 	}
@@ -134,11 +134,11 @@ func (h *Histograma) Percentil(p float64) int {
 
 // Maximo é o maior comprimento observado, ou 0 se nada foi registrado.
 func (h *Histograma) Maximo() int {
-	chaves := h.chavesOrdenadas()
-	if len(chaves) == 0 {
+	keys := h.chavesOrdenadas()
+	if len(keys) == 0 {
 		return 0
 	}
-	return chaves[len(chaves)-1]
+	return keys[len(keys)-1]
 }
 
 // TopN devolve os N maiores comprimentos observados, maior primeiro,
@@ -148,10 +148,10 @@ func (h *Histograma) TopN(n int) []int {
 	if n <= 0 {
 		return nil
 	}
-	chaves := h.chavesOrdenadas()
+	keys := h.chavesOrdenadas()
 	out := make([]int, 0, n)
-	for i := len(chaves) - 1; i >= 0 && len(out) < n; i-- {
-		c := chaves[i]
+	for i := len(keys) - 1; i >= 0 && len(out) < n; i-- {
+		c := keys[i]
 		for k := int64(0); k < h.comprimentos[c] && len(out) < n; k++ {
 			out = append(out, c)
 		}

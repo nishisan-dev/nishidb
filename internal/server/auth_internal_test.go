@@ -411,17 +411,17 @@ func TestRazaoDeFalhaFechaOEnumHeaderUsuarioSenha(t *testing.T) {
 		ajusta(req)
 		h.ServeHTTP(httptest.NewRecorder(), req)
 	}
-	dispara(func(_ *http.Request) {})                                                         // razaoHeader
-	dispara(func(r *http.Request) { r.SetBasicAuth("nao-existe", "qualquer") })               // razaoUsuario
-	dispara(func(r *http.Request) { r.SetBasicAuth("leitor", "senha-completamente-errada") }) // razaoPassword
+	dispara(func(_ *http.Request) {})                                                         // reasonHeader
+	dispara(func(r *http.Request) { r.SetBasicAuth("nao-existe", "qualquer") })               // reasonUser
+	dispara(func(r *http.Request) { r.SetBasicAuth("leitor", "senha-completamente-errada") }) // reasonPassword
 
 	var sb strings.Builder
 	if _, err := reg.WriteTo(&sb); err != nil {
 		t.Fatal(err)
 	}
 	saida := sb.String()
-	for _, razao := range []string{razaoHeader, razaoUsuario, razaoPassword} {
-		row := fmt.Sprintf(`nishidb_auth_failures_total{reason=%q} 1`, razao)
+	for _, ratio := range []string{reasonHeader, reasonUser, reasonPassword} {
+		row := fmt.Sprintf(`nishidb_auth_failures_total{reason=%q} 1`, ratio)
 		if !strings.Contains(saida, row) {
 			t.Errorf("scrape não tem %q:\n%s", row, saida)
 		}

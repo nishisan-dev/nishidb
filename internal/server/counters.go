@@ -43,7 +43,7 @@ func (s *Server) handleAuditOfCounters(w http.ResponseWriter, r *http.Request) {
 		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
-	alvos, fail, status := s.datasetsTarget(req.Dataset)
+	targets, fail, status := s.datasetsTarget(req.Dataset)
 	if fail != nil {
 		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
@@ -51,7 +51,7 @@ func (s *Server) handleAuditOfCounters(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := s.ctxOfMutacao(r)
 	defer cancel()
 
-	resultados, parcial := processDatasets(alvos, func(d *dataset) (protocol.DatasetAudit, error) {
+	results, parcial := processDatasets(targets, func(d *dataset) (protocol.DatasetAudit, error) {
 		relatorios, err := d.st.AuditaCounters(ctx)
 		if err != nil {
 			return protocol.DatasetAudit{}, err
@@ -72,7 +72,7 @@ func (s *Server) handleAuditOfCounters(w http.ResponseWriter, r *http.Request) {
 		s.reject(w, r, status, parcial.Dataset, f)
 		return
 	}
-	s.respondeJSON(w, protocol.CountersAuditResponse{Datasets: resultados})
+	s.respondeJSON(w, protocol.CountersAuditResponse{Datasets: results})
 }
 
 // handleRebuildOfCounters serve o POST /v1/counters/rebuild (ADMIN).
@@ -94,7 +94,7 @@ func (s *Server) handleRebuildOfCounters(w http.ResponseWriter, r *http.Request)
 		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
-	alvos, fail, status := s.datasetsTarget(req.Dataset)
+	targets, fail, status := s.datasetsTarget(req.Dataset)
 	if fail != nil {
 		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
@@ -102,7 +102,7 @@ func (s *Server) handleRebuildOfCounters(w http.ResponseWriter, r *http.Request)
 	ctx, cancel := s.ctxOfMutacao(r)
 	defer cancel()
 
-	resultados, parcial := processDatasets(alvos, func(d *dataset) (protocol.DatasetRebuild, error) {
+	results, parcial := processDatasets(targets, func(d *dataset) (protocol.DatasetRebuild, error) {
 		recs, err := d.st.ReconstroiCounters(ctx)
 		if err != nil {
 			return protocol.DatasetRebuild{}, err
@@ -121,7 +121,7 @@ func (s *Server) handleRebuildOfCounters(w http.ResponseWriter, r *http.Request)
 		s.reject(w, r, status, parcial.Dataset, f)
 		return
 	}
-	s.respondeJSON(w, protocol.CountersRebuildResponse{Datasets: resultados})
+	s.respondeJSON(w, protocol.CountersRebuildResponse{Datasets: results})
 }
 
 // erroDeContadores traduz o erro do storage para as duas rotas. Além dos casos

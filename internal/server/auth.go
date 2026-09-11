@@ -1,7 +1,7 @@
 // O middleware HTTP Basic e o mecanismo de papéis do §74-77 (Fase 11).
 //
 // A costura central deste arquivo é a que a B4 e a B5 herdam: buildMux
-// constrói o mux CRU — só rotas, papel exigido por rota, ZERO autenticação —
+// constrói o mux CRU — só rotas, papel required por rota, ZERO autenticação —
 // e withAuth é o WRAPPER ÚNICO que a Fase 11 pede em torno dele no
 // listener EXPOSTO. A B5 registra as duas rotas ADMIN-only do §96 (POST
 // /v1/compact e POST /v1/checkpoint) chamando roteador.registra com
@@ -40,7 +40,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
-// router é o mux cru mais o papel exigido por rota.
+// router é o mux cru mais o papel required por rota.
 //
 // O campo mux é privado ao pacote de propósito (revisão pós-implementação):
 // expor o *http.ServeMux em si daria a qualquer código dentro de
@@ -57,29 +57,29 @@ import (
 // mesmo que aconteça.
 type router struct {
 	mux *http.ServeMux
-	// papeis mapeia o PADRÃO do mux (o texto exato passado a
+	// roles mapeia o PADRÃO do mux (o texto exato passado a
 	// http.ServeMux.HandleFunc, ex. "GET /metrics" ou "/v1/query") para o
-	// papel mínimo exigido. http.ServeMux.Handler(r) devolve esse mesmo texto
+	// papel mínimo required. http.ServeMux.Handler(r) devolve esse mesmo texto
 	// de padrão para um request já roteado, o que permite ao wrapper
 	// perguntar "que papel esta rota exige?" sem duplicar a lógica de match
 	// do mux.
-	papeis map[string]string
+	roles map[string]string
 }
 
 func newRouter() *router {
-	return &router{mux: http.NewServeMux(), papeis: make(map[string]string)}
+	return &router{mux: http.NewServeMux(), roles: make(map[string]string)}
 }
 
 // register é a ÚNICA via correta para acrescentar rota — a B5 a chama para as
-// rotas ADMIN-only que ainda não existem: basta rt.register(padrao,
+// rotas ADMIN-only que ainda não existem: basta rt.register(pattern,
 // config.RoleAdmin, handler). O padrão aceita a mesma sintaxe de
 // http.ServeMux.HandleFunc, incluindo o prefixo de método do Go 1.22
 // ("GET /metrics"). É a única função do pacote que grava em rt.papeis, e é
 // essa gravação — não o HandleFunc em si — que faz uma rota ser reconhecida
 // pelo fail-closed de withAuth.
-func (rt *router) register(padrao, role string, h http.HandlerFunc) {
-	rt.mux.HandleFunc(padrao, h)
-	rt.papeis[padrao] = role
+func (rt *router) register(pattern, role string, h http.HandlerFunc) {
+	rt.mux.HandleFunc(pattern, h)
+	rt.roles[pattern] = role
 }
 
 // Raw devolve o mux como http.Handler PURO — só ServeHTTP, sem acesso a
@@ -89,7 +89,7 @@ func (rt *router) Raw() http.Handler {
 	return rt.mux
 }
 
-// roleOfRota resolve, para um request já roteado, o papel mínimo que a rota
+// roleOfRoute resolve, para um request já roteado, o papel mínimo que a rota
 // CASADA exige — a pergunta "que papel isto precisa?" que os DOIS pontos do
 // pacote que decidem sobre papel fazem: withAuth (papel insuficiente
 // → 403, revisão da B3) e o wrapper do plano loopback (papel ADMIN → 403,
@@ -107,13 +107,13 @@ func (rt *router) Raw() http.Handler {
 // os dois chamadores tratam papel=="" com existe=true como recusa, nunca
 // como ausência legítima de restrição.
 //
-// padrao também volta (revisão da B5, Minor 5): os dois chamadores
+// pattern também volta (revisão da B5, Minor 5): os dois chamadores
 // precisam dele só nos ramos de recusa, para nomear a rota na mensagem de
 // log/erro — devolvê-lo aqui evita que os dois repitam rt.mux.Handler(r),
 // que já rodou dentro desta função.
-func (rt *router) roleOfRota(r *http.Request) (role, padrao string, exists bool) {
-	_, padrao = rt.mux.Handler(r)
-	return rt.papeis[padrao], padrao, padrao != ""
+func (rt *router) roleOfRoute(r *http.Request) (role, pattern string, exists bool) {
+	_, pattern = rt.mux.Handler(r)
+	return rt.roles[pattern], pattern, pattern != ""
 }
 
 // buildMux constrói o mux CRU do servidor: as cinco rotas de LEITURA (READ) e
@@ -166,7 +166,7 @@ func (s *Server) buildMux() *router {
 // checagem, nunca na frente dela.
 //
 // A decisão de papel é FAIL-CLOSED (revisão pós-implementação): um padrão que
-// CASOU (padrao != "") mas não tem entrada em rt.papeis só pode significar
+// CASOU (pattern != "") mas não tem entrada em rt.papeis só pode significar
 // que algum código registrou rota direto em rt.mux, por fora de
 // roteador.registra — a única via que grava papel junto com o handler. Isso é
 // bug de REGISTRO, não ausência legítima de restrição, e por isso não cai em
@@ -178,7 +178,7 @@ func (s *Server) withAuth(rt *router) http.Handler {
 		return rt.Raw()
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		role, ok := s.autentica(w, r)
+		role, ok := s.authenticate(w, r)
 		if !ok {
 			return // 401 já escrito por s.autentica (via rejectAuth)
 		}
@@ -186,14 +186,14 @@ func (s *Server) withAuth(rt *router) http.Handler {
 		// decisão que rt.mux.ServeHTTP tomaria a seguir, só que aqui só
 		// precisamos saber que papel a rota CASADA exige (exists==false para
 		// rota desconhecida ou método não aceito).
-		exigido, padrao, exists := rt.roleOfRota(r)
+		required, pattern, exists := rt.roleOfRoute(r)
 		if exists {
 			switch {
-			case exigido == "":
-				s.rejectRecordWithoutRole(w, r, padrao)
+			case required == "":
+				s.rejectRecordWithoutRole(w, r, pattern)
 				return
-			case !roleAuthorized(role, exigido):
-				s.rejectAuthorization(w, r, padrao, role, exigido)
+			case !roleAuthorized(role, required):
+				s.rejectAuthorization(w, r, pattern, role, required)
 				return
 			}
 		}
@@ -222,11 +222,11 @@ func (s *Server) withAuth(rt *router) http.Handler {
 // READ conhecidas, nunca uma licença para bug de registro passar batido.
 func (s *Server) muxLoopback(rt *router) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		role, padrao, exists := rt.roleOfRota(r)
+		role, pattern, exists := rt.roleOfRoute(r)
 		if exists {
 			switch role {
 			case "":
-				s.rejectRecordWithoutRole(w, r, padrao)
+				s.rejectRecordWithoutRole(w, r, pattern)
 				return
 			case config.RoleAdmin:
 				s.rejectLoopbackAdmin(w, r)
@@ -241,14 +241,14 @@ func (s *Server) muxLoopback(rt *router) http.Handler {
 // READ só alcança rota READ. O enum de papel é fechado em {RoleRead,
 // RoleAdmin} desde a B1 — um terceiro papel exigiria um caso novo aqui, não
 // uma extensão silenciosa desta função.
-func roleAuthorized(roleUsuario, roleExigido string) bool {
-	if roleUsuario == config.RoleAdmin {
+func roleAuthorized(userRole, requiredRole string) bool {
+	if userRole == config.RoleAdmin {
 		return true
 	}
-	return roleUsuario == roleExigido
+	return userRole == requiredRole
 }
 
-// atrasoOfFail é o atraso FIXO aplicado a TODA falha de autenticação, sempre
+// delayOfFail é o atraso FIXO aplicado a TODA falha de autenticação, sempre
 // o mesmo valor, sem relação com qual foi a falha nem com quantas vieram
 // antes deste request. Mitiga o timing attack de enumeração de usuário
 // (responder mais rápido para "usuário não existe" do que para "senha
@@ -256,25 +256,25 @@ func roleAuthorized(roleUsuario, roleExigido string) bool {
 // fecha pelo corpo). Não é lockout: não há contador por IP nem por usuário
 // aqui — isso abriria a porta para auto-DoS contra um username conhecido, e
 // o plano nomeia rate-limit por IP como débito separado (B7).
-const atrasoOfFail = 100 * time.Millisecond
+const delayOfFail = 100 * time.Millisecond
 
 // O enum FECHADO do label `reason` de nishidb_auth_failures_total. Fechado
 // pela mesma razão de datasetDesconhecido (metrics_query.go): um label
 // alimentado pelo texto que o cliente digitou seria uma série nova a cada
 // tentativa, sem teto contra qualquer varredura de credencial.
 const (
-	razaoHeader   = "header"  // Authorization ausente, mal formado, ou sem "usuario:senha" decodificável
-	razaoUsuario  = "usuario" // o usuário do request não está em server.authentication.users
-	razaoPassword = "senha"   // o usuário existe; a senha não confere
+	reasonHeader   = "header"   // Authorization ausente, mal formado, ou sem "usuario:senha" decodificável
+	reasonUser     = "user"     // o usuário do request não está em server.authentication.users
+	reasonPassword = "password" // o usuário existe; a senha não confere
 )
 
-// usuarioDesconhecidoInLog é o valor do campo `user` do evento auth.recusada
+// unknownUserInLog é o valor do campo `user` do evento auth.recusada
 // quando o username do request não casa com nenhum usuário CONFIGURADO. O
 // dedo gordo mais comum neste formulário é digitar a SENHA no campo de
 // usuário; ecoar esse valor cru no log vazaria a senha sob o rótulo "user".
-const usuarioDesconhecidoInLog = "desconhecido"
+const unknownUserInLog = "desconhecido"
 
-// credencialFantasma é o digest comparado contra um usuário INEXISTENTE, para
+// ghostCredential é o digest comparado contra um usuário INEXISTENTE, para
 // que o caminho de código de "usuário não existe" seja O MESMO de "senha
 // errada" até o ConstantTimeCompare — nenhum `if` a mais entre os dois casos
 // além do que decide QUAL digest é o alvo da comparação. O texto de origem
@@ -282,26 +282,26 @@ const usuarioDesconhecidoInLog = "desconhecido"
 // igual a ele, ela só autenticaria contra um username que, por definição,
 // também não existe em s.credenciais — o resultado observável (401) seria o
 // mesmo de qualquer forma.
-var credencialFantasma = sha256.Sum256([]byte("nishidb-credencial-fantasma-nunca-configurada-por-um-operador-de-verdade"))
+var ghostCredential = sha256.Sum256([]byte("nishidb-credencial-fantasma-nunca-configurada-por-um-operador-de-verdade"))
 
-// autentica resolve o HTTP Basic do request contra s.credenciais.
+// authenticate resolve o HTTP Basic do request contra s.credenciais.
 //
 // Devolve o papel do usuário autenticado e true quando a credencial confere.
 // Em qualquer outro caso já escreveu o 401 inteiro (atraso, métrica, log e
 // corpo) através de rejectAuth, e devolve false — o chamador só
 // precisa `return` sem tocar em w de novo.
-func (s *Server) autentica(w http.ResponseWriter, r *http.Request) (role string, ok bool) {
-	usuario, password, hasCredencial := r.BasicAuth()
-	if !hasCredencial {
+func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (role string, ok bool) {
+	username, password, hasCredential := r.BasicAuth()
+	if !hasCredential {
 		// Cobre header ausente, "Basic" sem payload, base64 inválido e
 		// payload decodificado sem ':' — r.BasicAuth devolve ok==false para
 		// todas as quatro formas, sem sequer expor um username candidato.
-		s.rejectAuth(w, r, razaoHeader, usuarioDesconhecidoInLog)
+		s.rejectAuth(w, r, reasonHeader, unknownUserInLog)
 		return "", false
 	}
 
-	cred, exists := s.credenciais[usuario]
-	target := credencialFantasma
+	cred, exists := s.credenciais[username]
+	target := ghostCredential
 	if exists {
 		target = cred.digestPassword
 	}
@@ -319,16 +319,16 @@ func (s *Server) autentica(w http.ResponseWriter, r *http.Request) (role string,
 	combine := subtle.ConstantTimeCompare(digest[:], target[:]) == 1
 
 	if !exists || !combine {
-		razao := razaoUsuario
-		usuarioInLog := usuarioDesconhecidoInLog
+		reason := reasonUser
+		userInLog := unknownUserInLog
 		if exists {
 			// Só entra no log quando CASA com um usuário configurado (o
 			// dedo gordo mais comum é digitar a senha no campo de usuário; ecoar
 			// esse valor cru vazaria a senha sob o rótulo "user").
-			razao = razaoPassword
-			usuarioInLog = usuario
+			reason = reasonPassword
+			userInLog = username
 		}
-		s.rejectAuth(w, r, razao, usuarioInLog)
+		s.rejectAuth(w, r, reason, userInLog)
 		return "", false
 	}
 	return cred.role, true
@@ -338,15 +338,15 @@ func (s *Server) autentica(w http.ResponseWriter, r *http.Request) (role string,
 // atraso fixo, métrica, log e o 401 em si, sempre nesta ordem, sempre o MESMO
 // corpo — é o que faz "usuário não existe" e "senha errada" serem
 // indistinguíveis para quem só vê a resposta HTTP.
-func (s *Server) rejectAuth(w http.ResponseWriter, r *http.Request, razao, usuarioInLog string) {
-	s.authFalhas.With(razao).Inc()
+func (s *Server) rejectAuth(w http.ResponseWriter, r *http.Request, reason, userInLog string) {
+	s.authFalhas.With(reason).Inc()
 
 	// ANTES de responder, cobrindo TODA falha — inclusive header ausente, que
 	// nem chega a comparar senha nenhuma. Sem isso, essas falhas sairiam mais
 	// rápido que as de senha errada, e a diferença de tempo reabriria pelo
 	// header a mesma pergunta ("existe caminho mais curto para alguma
 	// resposta?") que o digest fantasma fecha para "o usuário existe?".
-	time.Sleep(atrasoOfFail)
+	time.Sleep(delayOfFail)
 
 	w.Header().Set("WWW-Authenticate", `Basic realm="nishidb"`)
 	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
@@ -366,25 +366,25 @@ func (s *Server) rejectAuth(w http.ResponseWriter, r *http.Request, razao, usuar
 	// Authorization em si NUNCA é logado, em nível nenhum — nenhum caminho
 	// acima passa r.Header adiante para o logger.
 	s.log.Warn("auth.recusada", "requisição recusada por falha de autenticação",
-		"remoto", r.RemoteAddr, "user", usuarioInLog, "motivo", razao)
+		"remote", r.RemoteAddr, "user", userInLog, "reason", reason)
 }
 
 // rejectAuthorization é o 403 de papel insuficiente. Diferente do 401, aqui não
 // há preocupação de byte-identidade: o cliente já provou identidade com uma
 // credencial válida, e dizer que papel falta não revela nada que ele já não
-// soubesse (o papel exigido pela rota não é segredo, e o papel dele é o dele
+// soubesse (o papel required pela rota não é segredo, e o papel dele é o dele
 // mesmo).
-func (s *Server) rejectAuthorization(w http.ResponseWriter, r *http.Request, rota, roleUsuario, roleExigido string) {
+func (s *Server) rejectAuthorization(w http.ResponseWriter, r *http.Request, route, userRole, requiredRole string) {
 	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	w.WriteHeader(http.StatusForbidden)
 	if err := json.NewEncoder(w).Encode(protocol.ErrorBody{Error: protocol.ErrorDetail{
 		Code:    protocol.CodeForbidden,
-		Message: fmt.Sprintf("papel %s não alcança esta rota; requer %s", roleUsuario, roleExigido),
+		Message: fmt.Sprintf("papel %s não alcança esta rota; requer %s", userRole, requiredRole),
 	}}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 403 de autorização", "erro", err.Error())
 	}
 	s.log.Warn("auth.negada", "requisição autenticada sem papel suficiente para a rota",
-		"remoto", r.RemoteAddr, "rota", rota, "papel", roleUsuario, "exigido", roleExigido)
+		"remote", r.RemoteAddr, "route", route, "role", userRole, "required", requiredRole)
 }
 
 // rejectLoopbackAdmin é o 403 do RULING do §77b: rota ADMIN batida pelo
@@ -403,11 +403,11 @@ func (s *Server) rejectLoopbackAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Warn("auth.loopback_admin_recusado",
 		"requisição ADMIN recusada no plano loopback: o loopback é READ-only por construção (§77b)",
-		"remoto", r.RemoteAddr)
+		"remote", r.RemoteAddr)
 }
 
 // rejectRecordWithoutRole é o fail-closed do mecanismo de papel (revisão
-// pós-implementação): uma rota CASOU no mux (padrao != "") mas não tem
+// pós-implementação): uma rota CASOU no mux (pattern != "") mas não tem
 // entrada em rt.papeis. Isso só acontece se algum código dentro do pacote
 // chamou rt.mux.HandleFunc/Handle diretamente, por fora de roteador.registra
 // — a única via que grava em rt.papeis junto com o handler. Não é erro de
@@ -422,7 +422,7 @@ func (s *Server) rejectLoopbackAdmin(w http.ResponseWriter, r *http.Request) {
 // tem uma credencial válida, sem relação com quem opera o servidor. O
 // detalhe inteiro — rota e a dica de correção — vai SÓ para s.log.Error, que
 // é quem o operador lê.
-func (s *Server) rejectRecordWithoutRole(w http.ResponseWriter, r *http.Request, padrao string) {
+func (s *Server) rejectRecordWithoutRole(w http.ResponseWriter, r *http.Request, pattern string) {
 	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	w.WriteHeader(http.StatusInternalServerError)
 	if err := json.NewEncoder(w).Encode(protocol.ErrorBody{Error: protocol.ErrorDetail{
@@ -432,8 +432,8 @@ func (s *Server) rejectRecordWithoutRole(w http.ResponseWriter, r *http.Request,
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 500 de registro sem papel", "erro", err.Error())
 	}
 	s.log.Error("auth.rota_sem_papel",
-		"rota registrada sem papel exigido — bug de registro, use roteador.registra, nunca HandleFunc direto",
-		"remoto", r.RemoteAddr, "rota", padrao)
+		"rota registrada sem papel required — bug de registro, use roteador.registra, nunca HandleFunc direto",
+		"remote", r.RemoteAddr, "route", pattern)
 }
 
 // registerMetricsOfAuth instala a série de falha de autenticação. Fica fora

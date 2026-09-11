@@ -105,7 +105,7 @@ type sqlPool struct {
 	wg     sync.WaitGroup
 	lat    []*latencyRec
 	eng    *query.Engine
-	erros  int64
+	errors int64
 	mu     sync.Mutex
 	// violacoes conta, POR ROTA, quantas consultas devolveram um número de
 	// linhas diferente do oráculo. Atômico porque os leitores são N goroutines.
@@ -156,7 +156,7 @@ func startSQLReaders(cfg Config, st *storage.Store, c *schema.Compiled, keys [][
 				p.lat[rota].add(time.Since(início))
 				if err != nil {
 					p.mu.Lock()
-					p.erros++
+					p.errors++
 					p.mu.Unlock()
 				} else if rows != rotasSQL[rota].linhas {
 					// O ORÁCULO. Contado, e não abortado: uma rodada de
@@ -205,7 +205,7 @@ func (p *sqlPool) stop() ([]QueryStats, int64) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return out, p.erros
+	return out, p.errors
 }
 
 // counter descarta os bytes e conta: o custo do io.Writer não pode entrar na

@@ -252,11 +252,11 @@ func confereConjuntoFechado(t *testing.T, samples []amostraExposta, familia, rot
 // checagem, e por isso ele também é recusado abaixo.
 func confereSourceFechadaOfLabels(t *testing.T) {
 	t.Helper()
-	const arquivo = "metrics_index.go"
+	const file = "metrics_index.go"
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, arquivo, nil, parser.SkipObjectResolution)
+	f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
 	if err != nil {
-		t.Fatalf("parse de %s: %v", arquivo, err)
+		t.Fatalf("parse de %s: %v", file, err)
 	}
 
 	// Primeiro passo: as variáveis de laço ligadas a um range sobre a enumeração
@@ -285,7 +285,7 @@ func confereSourceFechadaOfLabels(t *testing.T) {
 	})
 	if len(fechadas) != 2 {
 		t.Fatalf("%s tem %d laço(s) sobre as enumerações exportadas, esperava 2 (estados e modos): "+
-			"sem eles esta conferência aprovaria qualquer coisa por vacuidade", arquivo, len(fechadas))
+			"sem eles esta conferência aprovaria qualquer coisa por vacuidade", file, len(fechadas))
 	}
 
 	var conferidas int
@@ -297,7 +297,7 @@ func confereSourceFechadaOfLabels(t *testing.T) {
 				(sel.Sel.Name == "LabelState" || sel.Sel.Name == "LabelMode") {
 				if !dentroOfWithRotulo(f, sel) {
 					t.Errorf("%s usa metrics.%s fora de uma chamada a withLabel: uma segunda porta para o rótulo "+
-						"é uma porta que esta conferência não enxerga", arquivo, sel.Sel.Name)
+						"é uma porta que esta conferência não enxerga", file, sel.Sel.Name)
 				}
 			}
 		}
@@ -312,26 +312,26 @@ func confereSourceFechadaOfLabels(t *testing.T) {
 		conferidas++
 		name, ok := chamada.Args[1].(*ast.SelectorExpr)
 		if !ok || name.Sel.Name != "LabelState" && name.Sel.Name != "LabelMode" {
-			t.Errorf("%s: withLabel recebeu um nome de rótulo que não é constante do pacote de métricas", arquivo)
+			t.Errorf("%s: withLabel recebeu um nome de rótulo que não é constante do pacote de métricas", file)
 			return true
 		}
 		value, ok := chamada.Args[2].(*ast.Ident)
 		if !ok {
 			t.Errorf("%s: o VALOR de %s não é identificador — só a variável de um range sobre a enumeração exportada "+
 				"pode alimentá-lo, e qualquer outra expressão é uma fonte que ninguém auditou",
-				arquivo, name.Sel.Name)
+				file, name.Sel.Name)
 			return true
 		}
 		if _, fechado := fechadas[value.Name]; !fechado {
 			t.Errorf("%s: o valor de %s vem de %q, que não é a variável de um range sobre metrics.IndexStates "+
 				"nem sobre metrics.IndexLookupModes; label nunca vem de entrada do cliente",
-				arquivo, name.Sel.Name, value.Name)
+				file, name.Sel.Name, value.Name)
 		}
 		return true
 	})
 	if conferidas != 2 {
 		t.Fatalf("%s tem %d chamada(s) a withLabel, esperava 2: se a publicação mudou de forma, esta conferência "+
-			"parou de olhar o caminho real", arquivo, conferidas)
+			"parou de olhar o caminho real", file, conferidas)
 	}
 }
 
@@ -539,9 +539,9 @@ const (
 )
 
 var (
-	// segmentosWithoutIndex têm o .sidx APAGADO antes da subida: eles entram na fila
+	// segmentosWithoutIndice têm o .sidx APAGADO antes da subida: eles entram na fila
 	// por ausência e a reconstrução os publica de volta — é daí que sai Rebuilds.
-	segmentosWithoutIndex = []uint32{6, 7, 8, 9, 10, 11, 12}
+	segmentosWithoutIndice = []uint32{6, 7, 8, 9, 10, 11, 12}
 	// segmentosCorrompidos têm o ÚLTIMO byte trocado, que é onde o crc32c mora.
 	//
 	// É deliberadamente o FIM do arquivo, e não o começo: a tabela de seções
@@ -568,7 +568,7 @@ func benchOfIndex(t *testing.T) (*server.Server, string, string) {
 	dirIrma := seedHistory(t, a, "eventos", eventosWithNode, eventosWithoutNode)
 	dir := filepath.Join(dirIrma, "data")
 
-	for _, sec := range segmentosWithoutIndex {
+	for _, sec := range segmentosWithoutIndice {
 		if err := os.Remove(segindex.SealedPath(dir, sec)); err != nil {
 			t.Fatalf("montagem: apagar o índice do segmento %d: %v", sec, err)
 		}
@@ -615,10 +615,10 @@ func waitOsStatesAssentarem(t *testing.T, srv *server.Server) {
 		prazo    = time.Now().Add(90 * time.Second)
 	)
 	for time.Now().Before(prazo) {
-		atual := indexOfDataset(t, srv, tableOfBench)
+		current := indexOfDataset(t, srv, tableOfBench)
 		switch {
-		case atual != anterior:
-			anterior, desde = atual, time.Now()
+		case current != anterior:
+			anterior, desde = current, time.Now()
 		case time.Since(desde) > 6*time.Second:
 			return
 		}

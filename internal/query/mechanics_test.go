@@ -27,8 +27,8 @@ type stub struct {
 	keys     map[string]types.RowID
 	mortas   map[types.RowID]bool
 
-	errIn       types.RowID // GetByRowID falha nesta row
-	hasErr      bool
+	errEm       types.RowID // GetByRowID falha nesta row
+	temErr      bool
 	lentidao    time.Duration // atraso por candidato (teste de timeout)
 	aoAvancar   func(n int)   // gancho: chamado a cada candidato consumido
 	avancos     int
@@ -40,7 +40,7 @@ type stub struct {
 
 func (s *stub) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	s.gets++
-	if s.hasErr && id == s.errIn {
+	if s.temErr && id == s.errEm {
 		return types.Record{}, buf, false, fmt.Errorf("disco caiu na row %d", id)
 	}
 	if s.mortas[id] {
@@ -528,7 +528,7 @@ func TestCloseIdempotenteEFechaUpstream(t *testing.T) {
 // resultado silenciosamente incompleto.
 func TestErroDeLeituraAbortaQuery(t *testing.T) {
 	h := newStubHarness(t, 10, 100000, "30s")
-	h.store.hasErr, h.store.errIn = true, types.RowID(3)
+	h.store.temErr, h.store.errEm = true, types.RowID(3)
 
 	it := h.open(context.Background(), `SELECT id FROM linhas`)
 	defer it.Close()
@@ -594,11 +594,11 @@ func TestOrdemDeSaidaEhRowIDCrescente(t *testing.T) {
 
 	anterior := ""
 	for it.Next() {
-		atual := string(it.Row().Col(0).Val.Bytes)
-		if atual <= anterior {
-			t.Fatalf("ordem quebrada: %q após %q", atual, anterior)
+		current := string(it.Row().Col(0).Val.Bytes)
+		if current <= anterior {
+			t.Fatalf("ordem quebrada: %q após %q", current, anterior)
 		}
-		anterior = atual
+		anterior = current
 	}
 }
 

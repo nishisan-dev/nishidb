@@ -186,7 +186,7 @@ func Table(f Source) (*schema.Compiled, query.Store, error) {
 type comum struct {
 	state, detalhe    string
 	hasConsumidor     bool
-	filaRegistros     int
+	filaRecords       int
 	filaBytes         int64
 	ultimoLote        time.Time
 	desfecho          kafka.Desfecho
@@ -345,7 +345,7 @@ func (f *source) colheComum(hasConsumidor bool, inst kafka.Instantaneo) comum {
 		c.state, c.detalhe = DeclaredState(f.f.Declarada)
 	}
 	if hasConsumidor {
-		c.filaRegistros, c.filaBytes = inst.FilaRegistros, inst.FilaBytes
+		c.filaRecords, c.filaBytes = inst.FilaRecords, inst.FilaBytes
 		c.ultimoLote = inst.UltimoLote
 		c.desfecho = inst.Desfecho
 		c.partitionsAtrib, c.partitionsOfTopic = inst.PartitionsAtribuidas, inst.PartitionsOfTopic
@@ -539,17 +539,17 @@ func (f *source) record(row types.RowID, r *retrato, l row, buf []byte) (types.R
 			}
 			v = types.Value{Type: types.TypeInt64, I64: l.Duravel}
 		case colEndOfLog:
-			if l.Summary || !l.Position.HasEnd {
+			if l.Summary || !l.Position.TemEnd {
 				continue
 			}
-			v = types.Value{Type: types.TypeInt64, I64: l.Position.EndOfLog}
+			v = types.Value{Type: types.TypeInt64, I64: l.Position.EndDoLog}
 		case colLag:
-			if l.Summary || !l.Position.HasEnd {
+			if l.Summary || !l.Position.TemEnd {
 				continue
 			}
 			v = types.Value{Type: types.TypeInt64, I64: l.Position.Atraso}
 		case colMarkIn:
-			if l.Summary || !l.Position.HasEnd || l.MarkIn.IsZero() {
+			if l.Summary || !l.Position.TemEnd || l.MarkIn.IsZero() {
 				continue
 			}
 			v = types.Value{Type: types.TypeTimestamp, I64: l.MarkIn.UnixMilli()}
@@ -562,7 +562,7 @@ func (f *source) record(row types.RowID, r *retrato, l row, buf []byte) (types.R
 			if !r.comum.hasConsumidor {
 				continue
 			}
-			v = types.Value{Type: types.TypeInt64, I64: int64(r.comum.filaRegistros)}
+			v = types.Value{Type: types.TypeInt64, I64: int64(r.comum.filaRecords)}
 		case colFilaBytes:
 			if !r.comum.hasConsumidor {
 				continue

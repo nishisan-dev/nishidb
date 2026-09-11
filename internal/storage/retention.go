@@ -57,8 +57,8 @@ func (l LimitesOfRetention) Active() bool {
 type ResultOfRetention struct {
 	// MarkAvancou é quantos rowIds saíram da visibilidade nesta passada.
 	MarkAvancou uint64
-	// ByTempo e BySize contam os segmentos aposentados por cada política.
-	ByTempo, BySize int
+	// ByTime e BySize contam os segmentos aposentados por cada política.
+	ByTime, BySize int
 	// BytesDevolvidos é a soma dos tamanhos dos segmentos removidos.
 	BytesDevolvidos int64
 	// IndicesExpulsos são os .sidx que saíram por terem ficado FORA DA JANELA
@@ -136,7 +136,7 @@ func (s *Store) runRetention(ctx context.Context, lim LimitesOfRetention) {
 				"dataset", s.opts.Dataset, "erro", err)
 			return
 		}
-		if res.ByTempo+res.BySize+res.IndicesExpulsos > 0 {
+		if res.ByTime+res.BySize+res.IndicesExpulsos > 0 {
 			// A mensagem NÃO diz "segmentos aposentados": uma passada em que só
 			// a janela agiu não tirou linha nenhuma da consulta, e afirmar
 			// aposentadoria ali é exatamente o que o godoc do IndicesExpulsos diz
@@ -145,7 +145,7 @@ func (s *Store) runRetention(ctx context.Context, lim LimitesOfRetention) {
 			s.opts.Log.Info("retencao.passada",
 				"a passada de retenção do histórico devolveu disco",
 				"dataset", s.opts.Dataset,
-				"porTempo", res.ByTempo, "porTamanho", res.BySize,
+				"porTempo", res.ByTime, "porTamanho", res.BySize,
 				"indicesExpulsos", res.IndicesExpulsos,
 				"bytes", res.BytesDevolvidos, "markDagua", s.rowIDBase.Load())
 		}
@@ -305,8 +305,8 @@ func (s *Store) aposentaOQueVenceu(ctx context.Context, res *ResultOfRetention) 
 		if err := s.aposentaOfHistory(target, nil); err != nil {
 			return err
 		}
-		res.ByTempo++
-		s.retByTempo.Add(1)
+		res.ByTime++
+		s.retByTime.Add(1)
 		res.BytesDevolvidos += bytes
 	}
 }
@@ -366,9 +366,9 @@ func (s *Store) aposentaUntilCaber(ctx context.Context, maxBytes int64, res *Res
 // rowId está acima da marca-d'água" e não "a location nomeia este record". O
 // primeiro dos quatro passos é um Checkpoint, e é ele que torna a marca
 // durável ANTES de qualquer byte sair do disco.
-func (s *Store) aposentaOfHistory(sec uint32, newMark *uint64) error {
-	if newMark != nil && *newMark > s.rowIDBase.Load() {
-		s.rowIDBase.Store(*newMark)
+func (s *Store) aposentaOfHistory(sec uint32, newMarca *uint64) error {
+	if newMarca != nil && *newMarca > s.rowIDBase.Load() {
+		s.rowIDBase.Store(*newMarca)
 	}
 	if err := s.aposentaSegment(sec); err != nil {
 		return err
@@ -507,7 +507,7 @@ type EstatisticasOfRetention struct {
 // EstatisticasOfRetention lê o estado sem tomar o lock do writer.
 func (s *Store) EstatisticasOfRetention() EstatisticasOfRetention {
 	e := EstatisticasOfRetention{
-		PurgadosByTTL:  s.retByTempo.Load(),
+		PurgadosByTTL:  s.retByTime.Load(),
 		PurgadosBySize: s.retBySize.Load(),
 		MarkDagua:      s.RowIDBase(),
 	}

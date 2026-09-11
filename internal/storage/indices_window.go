@@ -308,10 +308,10 @@ func (s *Store) windowOfSegmentos(j WindowOfIndex, refs []segment.Ref) (windowOf
 		}
 	}
 
-	dentroByTempo := cand
+	dentroByTime := cand
 	if j.Duration > 0 {
 		corte := s.now().Add(-j.Duration).UnixMilli()
-		dentroByTempo = nil
+		dentroByTime = nil
 		var buf []byte
 		for _, i := range cand {
 			ms, out, conhecido, err := s.instantOfRecordMaisNew(refs, i, buf)
@@ -322,18 +322,18 @@ func (s *Store) windowOfSegmentos(j WindowOfIndex, refs []segment.Ref) (windowOf
 			if conhecido && ms < corte {
 				break
 			}
-			dentroByTempo = append(dentroByTempo, i)
+			dentroByTime = append(dentroByTime, i)
 		}
 	}
 
 	if j.MaxBytes <= 0 {
-		for _, i := range dentroByTempo {
+		for _, i := range dentroByTime {
 			est.dentro[refs[i].ID] = struct{}{}
 		}
 		return est, nil
 	}
 	var acumulado int64
-	for k, i := range dentroByTempo {
+	for k, i := range dentroByTime {
 		id := refs[i].ID
 		custo := size[id]
 		if custo == 0 {

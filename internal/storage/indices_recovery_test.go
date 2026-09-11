@@ -114,13 +114,13 @@ func TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP(t *testing.T) {
 	if err := s2.ConstroiIndexOfSegment(t.Context(), target, s2.FieldsIndexados()); err != nil {
 		t.Fatalf("ConstroiIndexOfSegment(%d): %v", target, err)
 	}
-	byRebuild, err := os.ReadFile(path)
+	byReconstrucao, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("a reconstrução não gravou o índice do segmento %d: %v", target, err)
 	}
-	if !bytes.Equal(bySelagem, byRebuild) {
+	if !bytes.Equal(bySelagem, byReconstrucao) {
 		t.Errorf("selagem e reconstrução produziram arquivos diferentes: %d bytes contra %d",
-			len(bySelagem), len(byRebuild))
+			len(bySelagem), len(byReconstrucao))
 	}
 }
 
@@ -180,15 +180,15 @@ func TestOsWIPsQueNaoSaoDoCorrenteSaemNaAberturaESoQuemTemDadoEntraNaFila(t *tes
 	if err := os.Remove(segindex.SealedPath(data, target)); err != nil {
 		t.Fatal(err)
 	}
-	withDado := segindex.WIPPath(data, target, field)
-	if err := os.WriteFile(withDado, garbage, 0o644); err != nil {
+	comData := segindex.WIPPath(data, target, field)
+	if err := os.WriteFile(comData, garbage, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Caso 3: .widx de um segmento que já não tem .dat. Sem esta regra ele
 	// ficaria em disco para sempre, e o IndexBytes o contaria como disco que
 	// nada explica.
-	withoutDado := segindex.WIPPath(data, 9999, field)
-	if err := os.WriteFile(withoutDado, garbage, 0o644); err != nil {
+	withoutData := segindex.WIPPath(data, 9999, field)
+	if err := os.WriteFile(withoutData, garbage, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -196,7 +196,7 @@ func TestOsWIPsQueNaoSaoDoCorrenteSaemNaAberturaESoQuemTemDadoEntraNaFila(t *tes
 		Dir: dir, SegmentSize: 64 << 10,
 		IndexedFieldsByName: fields,
 	})
-	for _, path := range []string{withDado, withoutDado} {
+	for _, path := range []string{comData, withoutData} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("Stat(%s) = %v, quero IsNotExist: o .widx de um segmento que não é o corrente tem de sair na abertura",
 				filepath.Base(path), err)

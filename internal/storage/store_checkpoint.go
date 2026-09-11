@@ -53,10 +53,10 @@ func (s *Store) Checkpoint() error {
 	return nil
 }
 
-// limitesOfCheckpoint cobre a faixa observada no M1 (checkpoint de dataset de
+// limitsDeCheckpoint cobre a faixa observada no M1 (checkpoint de dataset de
 // 8M com msync de índices) e vai até 30s, que é o intervalo padrão do §78: um
 // checkpoint que leve mais que o próprio intervalo é a definição de saturação.
-var limitesOfCheckpoint = []float64{
+var limitsDeCheckpoint = []float64{
 	0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
 }
 

@@ -258,7 +258,7 @@ func historyStats(base *dataset) *protocol.HistoryStats {
 	e := base.irma.st.EstatisticasOfRetention()
 	out := &protocol.HistoryStats{
 		Table:           base.irma.nome,
-		Rows:            snap.HistoryRows,
+		Rows:            snap.HistoricoRows,
 		Dropped:         snap.HistoryDescartadas,
 		Degraded:        snap.HistoryDegradado,
 		DataBytes:       e.DataBytes,
@@ -317,7 +317,7 @@ func samplesOfHistory(base *dataset) []metrics.Sample {
 		rodando = 1
 	}
 	return []metrics.Sample{
-		{Family: metrics.MetHistoryRows, Name: metrics.MetHistoryRows, Type: metrics.TypeCounter, Value: float64(snap.HistoryRows),
+		{Family: metrics.MetHistoryRows, Name: metrics.MetHistoryRows, Type: metrics.TypeCounter, Value: float64(snap.HistoricoRows),
 			Help: "Linhas gravadas na tabela histórica.", Labels: rotulo},
 		{Family: metrics.MetHistoryDropped, Name: metrics.MetHistoryDropped, Type: metrics.TypeCounter, Value: float64(snap.HistoryDescartadas),
 			Help: "Eventos que não viraram linha na tabela histórica.", Labels: rotulo},

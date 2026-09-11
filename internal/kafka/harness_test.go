@@ -296,12 +296,12 @@ func (b *bench) deleteOffsets() {
 	b.open()
 }
 
-func replaceUm(s, velho, nw string) string {
-	i := indexOf(s, velho)
+func replaceUm(s, old, nw string) string {
+	i := indexOf(s, old)
 	if i < 0 {
 		return s
 	}
-	return s[:i] + nw + s[i+len(velho):]
+	return s[:i] + nw + s[i+len(old):]
 }
 
 func indexOf(s, sub string) int {

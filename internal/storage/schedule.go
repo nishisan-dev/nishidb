@@ -49,27 +49,27 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 		return nil
 	}
 	querido := s.infoOfAgenda()
-	var atual *checkpoint.ScheduleInfo
+	var current *checkpoint.ScheduleInfo
 	if m != nil {
-		atual = m.Schedule
+		current = m.Schedule
 	}
 	limit := types.RowID(s.nextRowID.Load())
-	withoutArquivos := s.schedule.NeedsRebuild(limit)
-	if atual != nil && *atual == *querido && !withoutArquivos {
+	withoutFiles := s.schedule.NeedsRebuild(limit)
+	if current != nil && *current == *querido && !withoutFiles {
 		return nil
 	}
 
 	var motivo string
 	switch {
-	case atual == nil:
+	case current == nil:
 		motivo = "o dataset não tinha agenda de vencimentos"
-	case withoutArquivos:
+	case withoutFiles:
 		motivo = "os arquivos da agenda não descrevem as linhas do dataset"
 	default:
 		motivo = fmt.Sprintf("os parâmetros mudaram (duração de fundo %s → %s, geometria %d/%d → %d/%d)",
-			time.Duration(atual.FallbackDurationMs)*time.Millisecond,
+			time.Duration(current.FallbackDurationMs)*time.Millisecond,
 			time.Duration(querido.FallbackDurationMs)*time.Millisecond,
-			atual.BlockShift, atual.Levels, querido.BlockShift, querido.Levels)
+			current.BlockShift, current.Levels, querido.BlockShift, querido.Levels)
 	}
 
 	start := time.Now()

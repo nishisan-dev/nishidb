@@ -120,10 +120,10 @@ type Server struct {
 	reg      *metrics.Registry
 	eng      *query.Engine
 	datasets []*dataset
-	// byName resolve o dataset de uma requisição. É construído na subida e
+	// byNome resolve o dataset de uma requisição. É construído na subida e
 	// só lido depois: nenhum dataset entra ou sai com o processo de pé, então
 	// não precisa de lock.
-	byName map[string]*dataset
+	byNome map[string]*dataset
 	met    *metricsOfQuery
 	// vagas é o teto de consultas simultâneas do §80. Um canal com capacidade
 	// fixa, e não um contador: a aquisição não-bloqueante é o que permite
@@ -304,7 +304,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		log:         log,
 		reg:         reg,
 		eng:         query.NewEngine(),
-		byName:      make(map[string]*dataset, len(nomes)),
+		byNome:      make(map[string]*dataset, len(nomes)),
 		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
 		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
 		inVoo:       newInVoo(),
@@ -357,14 +357,14 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 			return nil, err
 		}
 		s.datasets = append(s.datasets, d)
-		s.byName[d.nome] = d
+		s.byNome[d.nome] = d
 		// A irmã entra na lista logo depois do base, e não numa lista à parte:
 		// /v1/metadata, /v1/health e as métricas por dataset a tratam como
 		// qualquer outra, e é isso que a faz aparecer na árvore do DBeaver sem
 		// nenhuma mudança no driver.
 		if d.irma != nil {
 			s.datasets = append(s.datasets, d.irma)
-			s.byName[d.irma.nome] = d.irma
+			s.byNome[d.irma.nome] = d.irma
 		}
 	}
 	// Depois do loop: o coletor percorre a lista pronta, e registrá-lo antes
@@ -762,15 +762,15 @@ func (s *Server) turnonRetirementOfGroups(ctx context.Context) {
 }
 
 func (s *Server) turnonExpiration(ctx context.Context) {
-	maxByPass, tempoByPass := s.cfg.Expiry()
+	maxByPassada, timeByPassada := s.cfg.Expiry()
 	var withExpiration []string
 	for _, d := range s.datasets {
 		if !d.st.HasExpiration() {
 			continue
 		}
 		d.st.StartExpiration(ctx, storage.LimitesOfExpiration{
-			MaxByPass:   maxByPass,
-			TempoByPass: tempoByPass,
+			MaxByPassada:  maxByPassada,
+			TimeByPassada: timeByPassada,
 		})
 		withExpiration = append(withExpiration, d.nome)
 	}
@@ -781,7 +781,7 @@ func (s *Server) turnonExpiration(ctx context.Context) {
 	s.log.Info("expiracao.ligada",
 		"o coletor do idle timeout está de pé",
 		"datasets", withExpiration,
-		"maxPorPassada", maxByPass, "tempoPorPassada", tempoByPass)
+		"maxPorPassada", maxByPassada, "tempoPorPassada", timeByPassada)
 }
 
 // checkpointEventosPadrao é a mesma constante do `nishidb ingest`: o custo de

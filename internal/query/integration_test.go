@@ -50,7 +50,7 @@ func (o oraculo) aplica(t *testing.T, event []byte) {
 	}
 	// Sequence: evento mais velho é descartado inteiro (strategy greater).
 	if seqNew, ok := numero(m["_SEQ"]); ok {
-		if seqAtual, ok := numero(state["_SEQ"]); ok && seqNew <= seqAtual {
+		if seqCurrent, ok := numero(state["_SEQ"]); ok && seqNew <= seqCurrent {
 			return
 		}
 	}

@@ -150,10 +150,10 @@ func TestEspelhoDescontaABaixaClampadaENaoOOldLenCru(t *testing.T) {
 	// novo em segmentos diferentes.
 	s := openStore(t, Options{SegmentSize: 400})
 	const n = 12
-	bySegment := make(map[uint32]uint64)
+	bySegmento := make(map[uint32]uint64)
 	var total uint64
 	var target string
-	var targetSec uint32
+	var targetSeg uint32
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("clm-%03d", i)
 		p := statusPayload(t, s, k, "Start", int64(i))
@@ -161,21 +161,21 @@ func TestEspelhoDescontaABaixaClampadaENaoOOldLenCru(t *testing.T) {
 		// O segmento em que o record caiu é o corrente DEPOIS do Put: a
 		// rotação acontece dentro do Append, antes da escrita.
 		sec := s.Stats().CurrentSegmentID
-		bySegment[sec] += bytesOfRecord(k, p)
+		bySegmento[sec] += bytesOfRecord(k, p)
 		total += bytesOfRecord(k, p)
 		if i == 0 {
-			target, targetSec = k, sec
+			target, targetSeg = k, sec
 		}
 	}
-	if len(bySegment) < 2 {
-		t.Fatalf("o teste precisa de mais de um segmento; obtido %d", len(bySegment))
+	if len(bySegmento) < 2 {
+		t.Fatalf("o teste precisa de mais de um segmento; obtido %d", len(bySegmento))
 	}
-	zeraTallyOfSegment(t, s, targetSec)
+	zeraTallyOfSegment(t, s, targetSeg)
 
 	prev := mustGetAud(t, s, target)
 	nw := statusPayload(t, s, target, "Stop", 999)
 	mustPut(t, s, target, 999, nw, &prev)
-	if sec := s.Stats().CurrentSegmentID; sec == targetSec {
+	if sec := s.Stats().CurrentSegmentID; sec == targetSeg {
 		t.Fatalf("o record novo caiu no segmento %d do record antigo: a montagem não exercita o clamp", sec)
 	}
 
@@ -183,7 +183,7 @@ func TestEspelhoDescontaABaixaClampadaENaoOOldLenCru(t *testing.T) {
 	// novo entra inteiro. Descontar o oldLen cru daria este total MENOS o
 	// tamanho do record antigo — e, quando o tally de um segmento pequeno é
 	// o único que resta, o wrap do uint64.
-	expected := total - bySegment[targetSec] + bytesOfRecord(target, nw)
+	expected := total - bySegmento[targetSeg] + bytesOfRecord(target, nw)
 	if got := s.Stats().LiveBytesUpperBound; got != expected {
 		t.Fatalf("LiveBytesUpperBound = %d após o update sobre tally zerado; o certo é %d — "+
 			"a diferença é o oldLen cru descontado no lugar da baixa clampada", got, expected)

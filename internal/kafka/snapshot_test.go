@@ -77,7 +77,7 @@ func TestOInstantaneoEAsSeriesDaPosicaoConcordam(t *testing.T) {
 		t.Fatalf("%d partições no instantâneo, quero 1: %+v", len(inst.Partitions), inst.Partitions)
 	}
 	p := inst.Partitions[0]
-	if !p.HasEnd {
+	if !p.TemEnd {
 		t.Fatalf("o broker respondeu no Instantaneo, o fim do log tinha de estar lá: %+v", p)
 	}
 	for _, c := range []struct {
@@ -86,7 +86,7 @@ func TestOInstantaneoEAsSeriesDaPosicaoConcordam(t *testing.T) {
 		quer  float64
 	}{
 		{"offset", "nishidb_kafka_offset", float64(p.Aplicado)},
-		{"high watermark", "nishidb_kafka_high_watermark", float64(p.EndOfLog)},
+		{"high watermark", "nishidb_kafka_high_watermark", float64(p.EndDoLog)},
 		{"lag", "nishidb_kafka_lag", float64(p.Atraso)},
 	} {
 		got, ok := serie(t, text, c.serie, p.Partition)
@@ -101,8 +101,8 @@ func TestOInstantaneoEAsSeriesDaPosicaoConcordam(t *testing.T) {
 		t.Fatalf("offset aplicado %d, quer %d", p.Aplicado, n)
 	}
 	// A invariante que o coletor único sustenta vale também aqui dentro.
-	if p.EndOfLog-p.Aplicado != p.Atraso {
-		t.Fatalf("lag %d, mas fim-aplicado %d", p.Atraso, p.EndOfLog-p.Aplicado)
+	if p.EndDoLog-p.Aplicado != p.Atraso {
+		t.Fatalf("lag %d, mas fim-aplicado %d", p.Atraso, p.EndDoLog-p.Aplicado)
 	}
 	if inst.MarkIn.IsZero() {
 		t.Fatal("com fim do log presente, o instante da leitura tem de carimbá-lo")
@@ -128,7 +128,7 @@ func TestInstantaneoOmiteMarcaDaguaVencida(t *testing.T) {
 	if len(inst.Partitions) != 1 {
 		t.Fatalf("a posição aplicada não depende do broker e tinha de sair: %+v", inst.Partitions)
 	}
-	if p := inst.Partitions[0]; p.HasEnd || p.EndOfLog != 0 || p.Atraso != 0 {
+	if p := inst.Partitions[0]; p.TemEnd || p.EndDoLog != 0 || p.Atraso != 0 {
 		t.Fatalf("marca vencida não pode virar fim do log nem lag: %+v", p)
 	}
 	if !inst.MarkIn.IsZero() {
@@ -153,7 +153,7 @@ func TestInstantaneoNaoVaiAoBrokerComMarcaValida(t *testing.T) {
 	inst := cons.Instantaneo(context.Background())
 
 	p := inst.Partitions[0]
-	if !p.HasEnd || p.EndOfLog != fabricado {
+	if !p.TemEnd || p.EndDoLog != fabricado {
 		t.Fatalf("a marca válida foi substituída por uma ida ao broker: %+v", p)
 	}
 	if p.Atraso != fabricado-p.Aplicado {
@@ -171,13 +171,13 @@ func TestInstantaneoNaoTemLagNegativo(t *testing.T) {
 
 	cons.PublicaMarkForTest(map[int32]int64{0: 1}, time.Now())
 	p := cons.Instantaneo(context.Background()).Partitions[0]
-	if p.Aplicado <= p.EndOfLog {
-		t.Fatalf("a bancada não exercita o caso: aplicado %d, fim %d", p.Aplicado, p.EndOfLog)
+	if p.Aplicado <= p.EndDoLog {
+		t.Fatalf("a bancada não exercita o caso: aplicado %d, fim %d", p.Aplicado, p.EndDoLog)
 	}
 	if p.Atraso != 0 {
 		t.Fatalf("atraso %d, quer 0", p.Atraso)
 	}
-	if !p.HasEnd || p.EndOfLog != 1 {
+	if !p.TemEnd || p.EndDoLog != 1 {
 		t.Fatalf("o fim do log tem de sair como foi lido: %+v", p)
 	}
 }
@@ -195,8 +195,8 @@ func TestInstantaneoTrazAFilaEOsContadores(t *testing.T) {
 	if inst.Desfecho.Eventos != n || inst.Desfecho.Aplicados != n {
 		t.Fatalf("desfecho = %+v, quero %d eventos aplicados", inst.Desfecho, n)
 	}
-	if inst.FilaRegistros != 0 {
-		t.Fatalf("com tudo aplicado a fila tinha de estar vazia: %d", inst.FilaRegistros)
+	if inst.FilaRecords != 0 {
+		t.Fatalf("com tudo aplicado a fila tinha de estar vazia: %d", inst.FilaRecords)
 	}
 	if inst.PartitionsAtribuidas != 1 || inst.PartitionsOfTopic != 1 {
 		t.Fatalf("partições atribuídas %d de %d, quero 1 de 1", inst.PartitionsAtribuidas, inst.PartitionsOfTopic)

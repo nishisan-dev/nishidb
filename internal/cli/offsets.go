@@ -104,11 +104,11 @@ func runOffsets(args []string, amb Context) int {
 	}
 	defer st.Close()
 
-	atual, exists, errLeitura := st.SourceOffsets()
+	current, exists, errLeitura := st.SourceOffsets()
 
 	switch {
 	case *mostrar:
-		return printOffsets(amb, *dataset, st.RowCount(), atual, exists, errLeitura)
+		return printOffsets(amb, *dataset, st.RowCount(), current, exists, errLeitura)
 
 	case *reiniciar != "":
 		if *reiniciar != schema.AutoOffsetResetEarliest && *reiniciar != schema.AutoOffsetResetLatest {

@@ -125,7 +125,7 @@ func TestOHistoricoRecebeUmaLinhaPorEvento(t *testing.T) {
 	if len(h.rows) != 2 {
 		t.Fatalf("%d linhas no histórico, quer 2", len(h.rows))
 	}
-	if got := m.Metrics().HistoryRows; got != 2 {
+	if got := m.Metrics().HistoricoRows; got != 2 {
 		t.Fatalf("HistoryRows = %d, quer 2", got)
 	}
 }
@@ -277,7 +277,7 @@ func TestSemHistoricoNadaEhGravado(t *testing.T) {
 	if res := m.Apply([]byte(`{"id":"a","severity":1}`)); res.Category != CategoryNone {
 		t.Fatalf("Apply = %v", res.Category)
 	}
-	if snap := m.Metrics(); snap.HistoryRows != 0 || snap.HistoryDescartadas != 0 {
+	if snap := m.Metrics(); snap.HistoricoRows != 0 || snap.HistoryDescartadas != 0 {
 		t.Fatalf("contadores do histórico se moveram sem histórico: %+v", snap)
 	}
 }

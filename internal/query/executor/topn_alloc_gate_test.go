@@ -35,7 +35,7 @@ import (
 // por aceitação.
 func TestTopNReaproveitaOBufferDaEntradaDespejada(t *testing.T) {
 	c := compileSchemaTopN(t)
-	chaves := []binder.BoundOrderKey{keyName(t, c, false, false), keyN(t, c, false)}
+	keys := []binder.BoundOrderKey{keyName(t, c, false, false), keyN(t, c, false)}
 
 	varre := func(rows int) func() {
 		corpus := make([]rowTopN, 0, rows)
@@ -48,7 +48,7 @@ func TestTopNReaproveitaOBufferDaEntradaDespejada(t *testing.T) {
 			})
 		}
 		st := seedTopN(t, c, corpus)
-		bq := bqTopN(t, c, chaves, 32, 0)
+		bq := bqTopN(t, c, keys, 32, 0)
 		return func() {
 			it, err := executor.Open(context.Background(), bq, planner.FullScan(),
 				executor.Options{Store: st})

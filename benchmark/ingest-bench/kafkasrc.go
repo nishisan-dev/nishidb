@@ -62,8 +62,8 @@ type sourceKafka struct {
 
 	// Picos, para o relatório. São máximos e não instantâneos porque o que
 	// interessa ao orçamento de memória é o pior momento, não o último.
-	picoRegistros atomic.Int64
-	picoBytes     atomic.Int64
+	picoRecords atomic.Int64
+	picoBytes   atomic.Int64
 }
 
 type optionsKafka struct {
@@ -125,8 +125,8 @@ func (f *sourceKafka) poll(ctx context.Context, maxPoll int) {
 				return
 			}
 			reg, bytes := f.fila.Profundidade()
-			if int64(reg) > f.picoRegistros.Load() {
-				f.picoRegistros.Store(int64(reg))
+			if int64(reg) > f.picoRecords.Load() {
+				f.picoRecords.Store(int64(reg))
 			}
 			if bytes > f.picoBytes.Load() {
 				f.picoBytes.Store(bytes)
@@ -145,8 +145,8 @@ func (f *sourceKafka) Next(ctx context.Context, dst []byte) []byte {
 }
 
 // Picos devolve os máximos observados nos dois gates da fila (§79).
-func (f *sourceKafka) Picos() (registros int, bytes int64) {
-	return int(f.picoRegistros.Load()), f.picoBytes.Load()
+func (f *sourceKafka) Picos() (records int, bytes int64) {
+	return int(f.picoRecords.Load()), f.picoBytes.Load()
 }
 
 // Lag consulta o lag do group no broker (§92, §125).

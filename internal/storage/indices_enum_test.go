@@ -305,8 +305,8 @@ func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testi
 	}
 	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})
 
-	inTarget := rowsWithLocationInSegment(t, s2, target)
-	if len(inTarget) == 0 {
+	noTarget := rowsWithLocationInSegment(t, s2, target)
+	if len(noTarget) == 0 {
 		t.Fatal("pré-condição: nenhuma location aponta para o segmento sem índice")
 	}
 	expected := todasAsRowsWithLocation(t, s2)
@@ -314,7 +314,7 @@ func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testi
 	if err != nil {
 		t.Fatalf("listaSegmentos: %v", err)
 	}
-	beforeEnum, beforeIDx := s2.secByEnumeration.Load(), s2.secByIndex.Load()
+	beforeEnum, beforeIDx := s2.segByEnumeracao.Load(), s2.segByIndice.Load()
 	crus := candidatosCrus(t, s2, field, strVal("valor-que-nunca-existiu"))
 	if !slices.Equal(crus, expected) {
 		t.Errorf("a enumeração colapsada deu %d candidatos, quero as %d rows com location publicada",
@@ -324,10 +324,10 @@ func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testi
 	// única visão da degradação, e contar os que "teriam" respondido por
 	// índice a esconderia. Sem esta asserção, trocar o Add(len(refs)) por
 	// Add(1) (ou por nada) passava pela suíte inteira.
-	if got := s2.secByEnumeration.Load() - beforeEnum; got != int64(len(refs)) {
+	if got := s2.segByEnumeracao.Load() - beforeEnum; got != int64(len(refs)) {
 		t.Errorf("secByEnumeration subiu %d no colapso, quero %d (todos os segmentos)", got, len(refs))
 	}
-	if got := s2.secByIndex.Load() - beforeIDx; got != 0 {
+	if got := s2.segByIndice.Load() - beforeIDx; got != 0 {
 		t.Errorf("secByIndex subiu %d no colapso, quero 0", got)
 	}
 }
@@ -387,9 +387,9 @@ func TestOResultadoNaoMudaComOSegmentoIndexadoOuNao(t *testing.T) {
 			poeRows(t, s, 30)
 			field := fieldOfDicionario(t, s, "node")
 
-			valores := []string{"n0", "n1", "n2", "n3", "nunca-visto"}
-			withIndex := make([][]types.RowID, len(valores))
-			for i, v := range valores {
+			values := []string{"n0", "n1", "n2", "n3", "nunca-visto"}
+			withIndex := make([][]types.RowID, len(values))
+			for i, v := range values {
 				withIndex[i] = lookupRevalidado(t, s, field, strVal(v))
 			}
 			if err := s.Close(); err != nil {
@@ -400,10 +400,10 @@ func TestOResultadoNaoMudaComOSegmentoIndexadoOuNao(t *testing.T) {
 			// anterior, que a migração precisa responder sem recriar nada.
 			deleteTodosOsSelados(t, filepath.Join(dir, "data"))
 			s2 := open()
-			for i, v := range valores {
-				withoutIndex := lookupRevalidado(t, s2, field, strVal(v))
-				if !slices.Equal(withoutIndex, withIndex[i]) {
-					t.Errorf("node=%s: sem índice deu %v, com índice deu %v", v, withoutIndex, withIndex[i])
+			for i, v := range values {
+				withoutIndice := lookupRevalidado(t, s2, field, strVal(v))
+				if !slices.Equal(withoutIndice, withIndex[i]) {
+					t.Errorf("node=%s: sem índice deu %v, com índice deu %v", v, withoutIndice, withIndex[i])
 				}
 			}
 			// E o corpus tem de exercitar alguma coisa: um dataset em que toda
@@ -465,8 +465,8 @@ func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 	row, _ := mustPut(t, s, "viajante", 1, rowIndexada(t, s, "viajante", "estavel", 1), nil)
 	source := s.curSecID.Load()
 	poeRowsUntilRotacionar(t, s, source)
-	dest := s.curSecID.Load()
-	if dest == source {
+	destination := s.curSecID.Load()
+	if destination == source {
 		t.Fatal("pré-condição: o segmento não rotacionou, o update não cruza fronteira nenhuma")
 	}
 
@@ -479,7 +479,7 @@ func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 	if criado || nw != row {
 		t.Fatalf("o update criou row nova (%d → %d, criado=%v)", row, nw, criado)
 	}
-	if s.curSecID.Load() != dest {
+	if s.curSecID.Load() != destination {
 		t.Fatalf("o update rotacionou de novo (%d), o teste perdeu o alvo", s.curSecID.Load())
 	}
 
@@ -488,7 +488,7 @@ func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 	postings := s.wips[fieldNode].Lookup(hashIndexed(t, strVal("estavel")))
 	if !slices.Contains(postings, row) {
 		t.Errorf("o índice do segmento de destino %d não tem a row %d por node=estavel: %v — a posting do campo inalterado não migrou com o record",
-			dest, row, postings)
+			destination, row, postings)
 	}
 	// E de ponta a ponta, que é o que o produto devolve.
 	if rows := lookupRevalidado(t, s, fieldNode, strVal("estavel")); !slices.Contains(rows, row) {
@@ -512,31 +512,31 @@ func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 	row, _ := mustPut(t, s, "viajante", 1, rowIndexada(t, s, "viajante", "estavel", 1), nil)
 	origem := s.curSecID.Load()
 	poeRowsUntilRotacionar(t, s, origem)
-	dest := s.curSecID.Load()
+	destination := s.curSecID.Load()
 
 	prev, _, ok, err := s.GetByKey(s.presente(), []byte("viajante"), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: %v (ok=%v)", err, ok)
 	}
 	mustPut(t, s, "viajante", 2, rowIndexada(t, s, "viajante", "estavel", 9), &prev)
-	if s.curSecID.Load() != dest {
+	if s.curSecID.Load() != destination {
 		t.Fatalf("o update rotacionou de novo (%d), o teste perdeu o alvo", s.curSecID.Load())
 	}
 
 	// Rotaciona de novo: agora o segmento de destino está SELADO.
-	poeRowsUntilRotacionar(t, s, dest)
+	poeRowsUntilRotacionar(t, s, destination)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	sel, err := segindex.OpenSealed(segindex.SealedPath(filepath.Join(dir, "data"), dest))
+	sel, err := segindex.OpenSealed(segindex.SealedPath(filepath.Join(dir, "data"), destination))
 	if err != nil {
-		t.Fatalf("o segmento de destino %d não ficou selado: %v", dest, err)
+		t.Fatalf("o segmento de destino %d não ficou selado: %v", destination, err)
 	}
 	defer func() { _ = sel.Close() }()
 	source, respondeu := sel.Lookup(fieldNode, hashIndexed(t, strVal("estavel")))
 	if !respondeu {
-		t.Fatalf("o .sidx do segmento %d não responde por node: %v", dest, sel.IntegrityErr())
+		t.Fatalf("o .sidx do segmento %d não responde por node: %v", destination, sel.IntegrityErr())
 	}
 	var achou bool
 	for source.Next() {
@@ -549,7 +549,7 @@ func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 	}
 	if !achou {
 		t.Errorf("o .sidx do segmento de destino %d não tem a row %d por node=estavel: a posting do campo inalterado não sobreviveu à selagem",
-			dest, row)
+			destination, row)
 	}
 
 	// E o dataset reaberto continua devolvendo a linha.

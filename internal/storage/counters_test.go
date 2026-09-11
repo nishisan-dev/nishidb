@@ -292,24 +292,24 @@ func TestContadorRecuperaDoTailSemCheckpoint(t *testing.T) {
 		t.Run(variante.name, func(t *testing.T) {
 			dir := t.TempDir()
 			s, rel := storeWithCounters(t, dir, byOLT("aut", true))
-			chaves := make([]string, 100)
-			for i := range chaves {
-				chaves[i] = "c-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-				mustPut(t, s, chaves[i], 1, payloadServico(t, s, chaves[i], "A", true, rel.agora()), nil)
+			keys := make([]string, 100)
+			for i := range keys {
+				keys[i] = "c-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+				mustPut(t, s, keys[i], 1, payloadServico(t, s, keys[i], "A", true, rel.agora()), nil)
 			}
 			if err := s.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
 			// A ponta: migrações de grupo, condições que caem, e lápides.
 			for i := 0; i < 50; i++ {
-				prev, _, _, _ := s.GetByKey(s.presente(), []byte(chaves[i]), nil)
+				prev, _, _, _ := s.GetByKey(s.presente(), []byte(keys[i]), nil)
 				switch i % 3 {
 				case 0:
-					mustPut(t, s, chaves[i], 2, payloadServico(t, s, chaves[i], "B", true, rel.agora()), &prev)
+					mustPut(t, s, keys[i], 2, payloadServico(t, s, keys[i], "B", true, rel.agora()), &prev)
 				case 1:
-					mustPut(t, s, chaves[i], 2, payloadServico(t, s, chaves[i], "A", false, rel.agora()), &prev)
+					mustPut(t, s, keys[i], 2, payloadServico(t, s, keys[i], "A", false, rel.agora()), &prev)
 				case 2:
-					if _, _, err := s.Put([]byte(chaves[i]), 2, types.FlagTombstone, payloadServico(t, s, chaves[i], "", false, rel.agora()), &prev); err != nil {
+					if _, _, err := s.Put([]byte(keys[i]), 2, types.FlagTombstone, payloadServico(t, s, keys[i], "", false, rel.agora()), &prev); err != nil {
 						t.Fatal(err)
 					}
 				}

@@ -137,7 +137,7 @@ func TableMeta(cs []Contado) (*schema.Compiled, query.Store, error) {
 	}
 	f := &sourceMeta{
 		rows:    make([]rowMeta, 0, len(cs)),
-		byName:  make(map[string]int, len(cs)),
+		byNome:  make(map[string]int, len(cs)),
 		columns: make([]columnWithID, 0, len(nomesDasColumnsMeta)),
 	}
 	for k, name := range nomesDasColumnsMeta {
@@ -152,10 +152,10 @@ func TableMeta(cs []Contado) (*schema.Compiled, query.Store, error) {
 	sort.Slice(f.columns, func(i, j int) bool { return f.columns[i].id < f.columns[j].id })
 	for _, c := range cs {
 		def := c.Def()
-		if _, exists := f.byName[def.Name]; exists {
+		if _, exists := f.byNome[def.Name]; exists {
 			return nil, nil, fmt.Errorf("contadores: dois contadores chamados %q", def.Name)
 		}
-		f.byName[def.Name] = len(f.rows)
+		f.byNome[def.Name] = len(f.rows)
 		f.rows = append(f.rows, rowMeta{
 			c:       c,
 			name:    []byte(def.Name),
@@ -183,7 +183,7 @@ type rowMeta struct {
 // sourceMeta é o Store virtual de `_meta.counters`.
 type sourceMeta struct {
 	rows    []rowMeta
-	byName  map[string]int
+	byNome  map[string]int
 	columns []columnWithID // em ordem crescente de FieldID
 }
 
@@ -208,7 +208,7 @@ func (f *sourceMeta) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte)
 }
 
 func (f *sourceMeta) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
-	i, ok := f.byName[string(key)]
+	i, ok := f.byNome[string(key)]
 	if !ok {
 		return types.Record{}, buf, false, nil
 	}

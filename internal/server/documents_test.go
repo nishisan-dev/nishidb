@@ -44,9 +44,9 @@ func TestMetadataDescreveOQueODriverPrecisa(t *testing.T) {
 		t.Fatalf("limites = %d linhas, %d ms", d.MaxRows, d.TimeoutMs)
 	}
 
-	byName := map[string]protocol.ColumnMeta{}
+	byNome := map[string]protocol.ColumnMeta{}
 	for _, c := range d.Columns {
-		byName[c.Name] = c
+		byNome[c.Name] = c
 	}
 	casos := []struct {
 		name  string
@@ -61,7 +61,7 @@ func TestMetadataDescreveOQueODriverPrecisa(t *testing.T) {
 		{"ip", "ipv4", protocol.JDBCVarchar, "none", ""},
 	}
 	for _, c := range casos {
-		got, ok := byName[c.name]
+		got, ok := byNome[c.name]
 		if !ok {
 			t.Fatalf("coluna %q ausente do metadata", c.name)
 		}

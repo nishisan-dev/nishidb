@@ -48,7 +48,7 @@ var ErrBudgetOfOrdenacao = fmt.Errorf("orçamento de ordenação excedido")
 // regras de ordenação divergiriam no primeiro empate, e o resultado passaria a
 // depender de qual modo o Open escolheu.
 type ordenador struct {
-	chaves []binder.BoundOrderKey
+	keys   []binder.BoundOrderKey
 	arena  []byte
 	tuplas []tupla
 	// vals é achatado: nKeys entradas por tupla, contíguas. Um slice por tupla
@@ -138,9 +138,9 @@ type keyVal struct {
 	direct []byte
 }
 
-func newOrdenador(chaves []binder.BoundOrderKey, budget int64, area *spill.Area, ids []types.FieldID) *ordenador {
+func newOrdenador(keys []binder.BoundOrderKey, budget int64, area *spill.Area, ids []types.FieldID) *ordenador {
 	return &ordenador{
-		chaves: chaves, nKeys: len(chaves), budget: budget,
+		keys: keys, nKeys: len(keys), budget: budget,
 		area: area, slotsModelo: ids, pendente: -1}
 }
 
@@ -167,7 +167,7 @@ func (o *ordenador) acrescenta(slots []slot, rowID types.RowID) error {
 		rowID: rowID, payIni: ini, payEnd: int32(len(o.arena)),
 		keyIDx: int32(len(o.vals))})
 
-	for _, k := range o.chaves {
+	for _, k := range o.keys {
 		s := &slots[k.Slot]
 		cv := keyVal{presente: s.Present && s.Val.Type == k.Want}
 		if cv.presente {
@@ -352,8 +352,8 @@ func (o *ordenador) proximaOfMerge(slots []slot) (types.RowID, bool, error) {
 // operador divergiriam no primeiro empate, e o resultado dependeria de ter
 // transbordado ou não.
 func (o *ordenador) comparaCabecas(a, b *cabeca) int {
-	for i := range o.chaves {
-		k := &o.chaves[i]
+	for i := range o.keys {
+		k := &o.keys[i]
 		va := ofSlot(&a.slots[k.Slot], k)
 		vb := ofSlot(&b.slots[k.Slot], k)
 		if c := o.comparaKey(k, &va, &vb); c != 0 {
@@ -383,8 +383,8 @@ func ofSlot(s *slot, k *binder.BoundOrderKey) keyVal {
 // rowID como última chave, a ordem é determinística e a paginação fecha.
 func (o *ordenador) compara(a, b *tupla) int {
 	ia, ib := int(a.keyIDx), int(b.keyIDx)
-	for i := range o.chaves {
-		k := &o.chaves[i]
+	for i := range o.keys {
+		k := &o.keys[i]
 		va, vb := &o.vals[ia+i], &o.vals[ib+i]
 		if c := o.comparaKey(k, va, vb); c != 0 {
 			return c

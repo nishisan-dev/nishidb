@@ -32,10 +32,10 @@ import (
 
 // postingsOfStatus devolve as rows presentes nas postings de cada valor de
 // status pedido, na ordem em que os valores foram pedidos.
-func postingsOfStatus(t *testing.T, s *Store, valores ...string) map[string][]types.RowID {
+func postingsOfStatus(t *testing.T, s *Store, values ...string) map[string][]types.RowID {
 	t.Helper()
-	out := make(map[string][]types.RowID, len(valores))
-	for _, v := range valores {
+	out := make(map[string][]types.RowID, len(values))
+	for _, v := range values {
 		it, err := s.Lookup(fldStatus, strVal(v))
 		if err != nil {
 			t.Fatalf("Lookup(status=%q): %v", v, err)

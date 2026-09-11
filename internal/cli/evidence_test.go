@@ -23,9 +23,9 @@ import (
 // Mora aqui, junto do teste que executa o README, porque este pacote é onde a
 // documentação é tratada como código.
 
-var reNameOfTest = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
+var reNomeDeTest = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 
-// reNameOfTestPython casa o nome de um teste Python (`test_algo_assim`).
+// reNomeDeTestPython casa o nome de um teste Python (`test_algo_assim`).
 //
 // A segunda grafia existe porque o client Python é código de produção com
 // suíte própria, e um documento de aceite que só pudesse citar teste Go teria
@@ -35,7 +35,7 @@ var reNameOfTest = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 // O `\b` antes de `test_` é o que impede um NOME DE ARQUIVO (`sql_test.py`,
 // `integracao_test.py`) de ser lido como citação: ali o "test" vem precedido
 // de `_`, que é caractere de palavra, e a fronteira não casa.
-var reNameOfTestPython = regexp.MustCompile(`\btest_[a-z0-9_]+`)
+var reNomeDeTestPython = regexp.MustCompile(`\btest_[a-z0-9_]+`)
 
 func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
 	// mutacoes-indice-por-segmento.md entra aqui porque ele é FEITO de citações:
@@ -65,8 +65,8 @@ func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
 			t.Fatal(err)
 		}
 		vistos := map[string]bool{}
-		nomes := reNameOfTest.FindAllString(string(conteudo), -1)
-		nomes = append(nomes, reNameOfTestPython.FindAllString(string(conteudo), -1)...)
+		nomes := reNomeDeTest.FindAllString(string(conteudo), -1)
+		nomes = append(nomes, reNomeDeTestPython.FindAllString(string(conteudo), -1)...)
 		for _, name := range nomes {
 			if vistos[name] {
 				continue

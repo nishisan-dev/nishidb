@@ -53,11 +53,11 @@ func (s *Store) lookupIndexed(field types.FieldID, v types.Value) (types.RowIDIt
 	}
 	// primary.HashKey é a MESMA função da ingestão e da reconstrução. Trocá-la
 	// aqui daria um hash bem formado que não casa com posting nenhuma.
-	fontes, err := s.fontesOfField(field, primary.HashKey(key))
+	sources, err := s.fontesOfField(field, primary.HashKey(key))
 	if err != nil {
 		return nil, err
 	}
-	return &hashIterator{s: s, it: segindex.Union(fontes)}, nil
+	return &hashIterator{s: s, it: segindex.Union(sources)}, nil
 }
 
 // fontesOfField monta as fontes da consulta, em ordem crescente de segmento
@@ -90,12 +90,12 @@ func (s *Store) fontesOfField(field types.FieldID, h uint64) ([]segindex.Source,
 		return nil, err
 	}
 	current := s.curSecID.Load()
-	fontes := make([]segindex.Source, 0, len(refs))
+	sources := make([]segindex.Source, 0, len(refs))
 	// desiste fecha o que já foi montado. Sem isto, uma falha no meio da
 	// montagem vazaria as fontes anteriores — e vazar iterador de índice só
 	// aparece como descritor esgotado em produção.
 	desiste := func(err error) ([]segindex.Source, error) {
-		for _, f := range fontes {
+		for _, f := range sources {
 			_ = f.Close()
 		}
 		return nil, err
@@ -105,11 +105,11 @@ func (s *Store) fontesOfField(field types.FieldID, h uint64) ([]segindex.Source,
 	// mesma linha de cache por Lookup, e é justamente contenção de atômico que a
 	// medição pré-ciclo do piloto encontrou consumindo 64% do CPU. Duas somas por
 	// consulta não aparecem em gate nenhum — os gates medem por LINHA varrida.
-	var byIndex, byEnumeration int64
+	var byIndice, byEnumeracao int64
 	for i, ref := range refs {
 		if f, ok := s.sourceIndexada(ref.ID, current, field, h); ok {
-			fontes = append(fontes, f)
-			byIndex++
+			sources = append(sources, f)
+			byIndice++
 			continue
 		}
 		// NO MATERIALIZADO, um único segmento sem índice COLAPSA a consulta
@@ -128,30 +128,30 @@ func (s *Store) fontesOfField(field types.FieldID, h uint64) ([]segindex.Source,
 		// rowId são estáticas e a enumeração por faixa não consulta estado
 		// concorrente nenhum.
 		if !s.EhHistory() {
-			for _, f := range fontes {
+			for _, f := range sources {
 				_ = f.Close()
 			}
 			// O colapso É a degradação, e a métrica diz isso: todos os
 			// segmentos responderam pela enumeração única. Contar os que
 			// "teriam" respondido por índice esconderia exatamente o que a
 			// série existe para mostrar.
-			s.secByEnumeration.Add(int64(len(refs)))
+			s.segByEnumeracao.Add(int64(len(refs)))
 			return []segindex.Source{s.sourceOfTodasAsLocations()}, nil
 		}
 		f, err := s.sourceOfFaixa(refs, i)
 		if err != nil {
 			return desiste(err)
 		}
-		fontes = append(fontes, f)
-		byEnumeration++
+		sources = append(sources, f)
+		byEnumeracao++
 	}
 	// Publicadas mesmo com a montagem tendo falhado? Não: o desiste() acima
 	// retorna antes, e o que ele desfaz são as fontes, não o trabalho de decidir
 	// por qual caminho cada segmento responderia. Contar uma montagem abortada
 	// diria que houve consulta onde não houve.
-	s.secByIndex.Add(byIndex)
-	s.secByEnumeration.Add(byEnumeration)
-	return fontes, nil
+	s.segByIndice.Add(byIndice)
+	s.segByEnumeracao.Add(byEnumeracao)
+	return sources, nil
 }
 
 // sourceIndexada devolve a fonte do índice do segmento, ou ok=false quando este

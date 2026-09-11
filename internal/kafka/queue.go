@@ -155,9 +155,9 @@ func inProgress(start *atomic.Int64) int64 {
 }
 
 // NewQueue constrói a fila com os dois tetos.
-func NewQueue(registros int, maxBytes int64) *Fila {
+func NewQueue(records int, maxBytes int64) *Fila {
 	return &Fila{
-		ch:       make(chan Item, registros),
+		ch:       make(chan Item, records),
 		maxBytes: maxBytes,
 		wait:     make(chan struct{}, 1),
 	}
@@ -284,7 +284,7 @@ func (f *Fila) Recebe(ctx context.Context) (Item, bool) {
 // que o writer está processando não está mais nela. Contar o evento em voo
 // tornaria a contabilidade mais conservadora e a API mais fácil de errar (o
 // chamador teria de devolver os bytes em todos os caminhos de erro).
-func (f *Fila) recebeOuAcorda(ctx context.Context, acorda <-chan time.Time) (Item, bool, bool) {
+func (f *Fila) recebeOuAcorda(ctx context.Context, wake <-chan time.Time) (Item, bool, bool) {
 	if ctx.Err() != nil {
 		return Item{}, false, false
 	}
@@ -302,7 +302,7 @@ func (f *Fila) recebeOuAcorda(ctx context.Context, acorda <-chan time.Time) (Ite
 		}
 		f.release(it.bytes)
 		return it, true, false
-	case <-acorda:
+	case <-wake:
 		return Item{}, false, true
 	default:
 	}
@@ -316,7 +316,7 @@ func (f *Fila) recebeOuAcorda(ctx context.Context, acorda <-chan time.Time) (Ite
 		}
 		f.release(it.bytes)
 		return it, true, false
-	case <-acorda:
+	case <-wake:
 		close()
 		return Item{}, false, true
 	case <-ctx.Done():
@@ -347,7 +347,7 @@ func (f *Fila) Close() {
 }
 
 // Profundidade devolve o ocupado nos dois gates, para o §79.
-func (f *Fila) Profundidade() (registros int, bytes int64) {
+func (f *Fila) Profundidade() (records int, bytes int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.ch), f.bytes

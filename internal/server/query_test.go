@@ -564,7 +564,7 @@ func TestConsultasSimultaneasDentroDoTeto(t *testing.T) {
 	srv := serverWithData(t, 500, blockPadrao+"runtime:\n  query:\n    maxConcurrent: 8\n")
 
 	var wg sync.WaitGroup
-	erros := make(chan error, 8)
+	errors := make(chan error, 8)
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
@@ -572,7 +572,7 @@ func TestConsultasSimultaneasDentroDoTeto(t *testing.T) {
 			resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id, porta FROM d"}`)
 			defer fecha(t, resp)
 			if resp.StatusCode != http.StatusOK {
-				erros <- fmt.Errorf("status = %d", resp.StatusCode)
+				errors <- fmt.Errorf("status = %d", resp.StatusCode)
 				return
 			}
 			l := protocol.NewReader(resp.Body)
@@ -581,17 +581,17 @@ func TestConsultasSimultaneasDentroDoTeto(t *testing.T) {
 				n++
 			}
 			if l.Err() != nil {
-				erros <- l.Err()
+				errors <- l.Err()
 				return
 			}
 			if n != 500 {
-				erros <- fmt.Errorf("rows = %d, quer 500", n)
+				errors <- fmt.Errorf("rows = %d, quer 500", n)
 			}
 		}()
 	}
 	wg.Wait()
-	close(erros)
-	for err := range erros {
+	close(errors)
+	for err := range errors {
 		t.Error(err)
 	}
 }

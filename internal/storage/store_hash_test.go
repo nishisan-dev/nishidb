@@ -332,14 +332,14 @@ func TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco(t *testing.T) {
 
 	// O dataset legado: os arquivos dos dois motores que este binário não sabe
 	// mais criar, e o manifest na versão que ele não sabe mais gravar.
-	const byEngine = 2 << 20
+	const byMotor = 2 << 20
 	idxDir := filepath.Join(dir, "indexes")
 	for _, engine := range []string{"bitmap", "hash"} {
 		target := filepath.Join(idxDir, engine, "00003")
 		if err := os.MkdirAll(target, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(target, "legado.bin"), make([]byte, byEngine), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(target, "legado.bin"), make([]byte, byMotor), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -362,9 +362,9 @@ func TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco(t *testing.T) {
 
 	// 2. O disco voltou, e a medida é a diferença.
 	depois := blocosOfDiretorio(idxDir)
-	if queda := before - depois; queda < 2*byEngine {
+	if queda := before - depois; queda < 2*byMotor {
 		t.Errorf("o indexes/ caiu %d bytes com %d plantados nos dois motores: a limpeza não devolveu o disco",
-			queda, 2*byEngine)
+			queda, 2*byMotor)
 	}
 	// 3. E os bytes que voltaram não são mais contados por ninguém: o IndexBytes
 	// de agora tem de ser menor que o que o indexes/ sozinho ocupava antes.

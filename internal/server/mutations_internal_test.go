@@ -66,14 +66,14 @@ func TestErroDeMutacaoTraduzATabelaInteira(t *testing.T) {
 // O dublê (não um *dataset real) prova a ORDEM: "a" processa, "b" falha,
 // "c" NUNCA é tentado — stop-no-primeiro-erro continua valendo.
 func TestProcessaDatasetsParaNoPrimeiroErroENomeiaOsJaProcessados(t *testing.T) {
-	alvos := []*dataset{{nome: "a"}, {nome: "b"}, {nome: "c"}}
-	errFake := errors.New("falha simulada no dataset b")
+	targets := []*dataset{{nome: "a"}, {nome: "b"}, {nome: "c"}}
+	errFalso := errors.New("falha simulada no dataset b")
 	var tentados []string
 
-	processados, parcial := processDatasets(alvos, func(d *dataset) (string, error) {
+	processados, parcial := processDatasets(targets, func(d *dataset) (string, error) {
 		tentados = append(tentados, d.nome)
 		if d.nome == "b" {
-			return "", errFake
+			return "", errFalso
 		}
 		return "ok:" + d.nome, nil
 	})
@@ -84,8 +84,8 @@ func TestProcessaDatasetsParaNoPrimeiroErroENomeiaOsJaProcessados(t *testing.T) 
 	if parcial.Dataset != "b" {
 		t.Errorf("Dataset = %q, quer %q", parcial.Dataset, "b")
 	}
-	if !errors.Is(parcial.Err, errFake) {
-		t.Errorf("Err = %v, quer %v", parcial.Err, errFake)
+	if !errors.Is(parcial.Err, errFalso) {
+		t.Errorf("Err = %v, quer %v", parcial.Err, errFalso)
 	}
 	if len(parcial.Processados) != 1 || parcial.Processados[0] != "a" {
 		t.Errorf("Processados = %v, quer [a] (só o que rodou COM SUCESSO antes do que falhou)", parcial.Processados)
@@ -101,8 +101,8 @@ func TestProcessaDatasetsParaNoPrimeiroErroENomeiaOsJaProcessados(t *testing.T) 
 // TestProcessaDatasetsSemErroDevolveTodosNaOrdem é o caminho feliz: nenhum
 // erro, todos os resultados voltam na MESMA ordem de alvos.
 func TestProcessaDatasetsSemErroDevolveTodosNaOrdem(t *testing.T) {
-	alvos := []*dataset{{nome: "x"}, {nome: "y"}}
-	processados, parcial := processDatasets(alvos, func(d *dataset) (string, error) {
+	targets := []*dataset{{nome: "x"}, {nome: "y"}}
+	processados, parcial := processDatasets(targets, func(d *dataset) (string, error) {
 		return d.nome, nil
 	})
 	if parcial != nil {
@@ -122,14 +122,14 @@ func TestProcessaDatasetsSemErroDevolveTodosNaOrdem(t *testing.T) {
 // "nenhum". Substitui o teste anterior, que montava um *ErrParcial à mão
 // em vez de produzi-lo pelo caminho real.
 func TestProcessaDatasetsFalhaNoPrimeiroItemDevolveProcessadosVazio(t *testing.T) {
-	alvos := []*dataset{{nome: "a"}, {nome: "b"}, {nome: "c"}}
-	errFake := errors.New("falha simulada no dataset a")
+	targets := []*dataset{{nome: "a"}, {nome: "b"}, {nome: "c"}}
+	errFalso := errors.New("falha simulada no dataset a")
 	var tentados []string
 
-	processados, parcial := processDatasets(alvos, func(d *dataset) (string, error) {
+	processados, parcial := processDatasets(targets, func(d *dataset) (string, error) {
 		tentados = append(tentados, d.nome)
 		if d.nome == "a" {
-			return "", errFake
+			return "", errFalso
 		}
 		return "ok:" + d.nome, nil
 	})
@@ -140,8 +140,8 @@ func TestProcessaDatasetsFalhaNoPrimeiroItemDevolveProcessadosVazio(t *testing.T
 	if parcial.Dataset != "a" {
 		t.Errorf("Dataset = %q, quer %q", parcial.Dataset, "a")
 	}
-	if !errors.Is(parcial.Err, errFake) {
-		t.Errorf("Err = %v, quer %v", parcial.Err, errFake)
+	if !errors.Is(parcial.Err, errFalso) {
+		t.Errorf("Err = %v, quer %v", parcial.Err, errFalso)
 	}
 	if len(parcial.Processados) != 0 {
 		t.Errorf("Processados = %v, quer vazio: nada rodou com sucesso antes do primeiro item falhar", parcial.Processados)
@@ -167,14 +167,14 @@ func TestProcessaDatasetsFalhaNoPrimeiroItemDevolveProcessadosVazio(t *testing.T
 // os anteriores já tinham sido processados com sucesso — Processados tem
 // de nomeá-los todos, na ordem, e o resultado parcial devolvido também.
 func TestProcessaDatasetsFalhaNoUltimoItemNomeiaTodosOsAnteriores(t *testing.T) {
-	alvos := []*dataset{{nome: "a"}, {nome: "b"}, {nome: "c"}}
-	errFake := errors.New("falha simulada no dataset c")
+	targets := []*dataset{{nome: "a"}, {nome: "b"}, {nome: "c"}}
+	errFalso := errors.New("falha simulada no dataset c")
 	var tentados []string
 
-	processados, parcial := processDatasets(alvos, func(d *dataset) (string, error) {
+	processados, parcial := processDatasets(targets, func(d *dataset) (string, error) {
 		tentados = append(tentados, d.nome)
 		if d.nome == "c" {
-			return "", errFake
+			return "", errFalso
 		}
 		return "ok:" + d.nome, nil
 	})
@@ -185,8 +185,8 @@ func TestProcessaDatasetsFalhaNoUltimoItemNomeiaTodosOsAnteriores(t *testing.T) 
 	if parcial.Dataset != "c" {
 		t.Errorf("Dataset = %q, quer %q", parcial.Dataset, "c")
 	}
-	if !errors.Is(parcial.Err, errFake) {
-		t.Errorf("Err = %v, quer %v", parcial.Err, errFake)
+	if !errors.Is(parcial.Err, errFalso) {
+		t.Errorf("Err = %v, quer %v", parcial.Err, errFalso)
 	}
 	if len(parcial.Processados) != 2 || parcial.Processados[0] != "a" || parcial.Processados[1] != "b" {
 		t.Errorf("Processados = %v, quer [a b] (os DOIS anteriores, na ordem)", parcial.Processados)

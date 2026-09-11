@@ -389,28 +389,28 @@ func (c *Consumidor) ajustaOffsets(_ context.Context, ofGroup map[string]map[int
 	if len(c.offsetsIniciais) == 0 {
 		return ofGroup, nil
 	}
-	byPartition, ok := ofGroup[c.cfg.Topic]
+	byParticao, ok := ofGroup[c.cfg.Topic]
 	if !ok {
 		return ofGroup, nil
 	}
-	ajustado := make(map[int32]kgo.Offset, len(byPartition))
-	usados := make([]int32, 0, len(byPartition))
-	for p, o := range byPartition {
+	adjusted := make(map[int32]kgo.Offset, len(byParticao))
+	usados := make([]int32, 0, len(byParticao))
+	for p, o := range byParticao {
 		local, hasLocal := c.offsetsIniciais[p]
 		if !hasLocal {
 			// Partição sem posição local (tópico cresceu depois do último
 			// checkpoint): vale o que o group diz, ou o autoOffsetReset.
-			ajustado[p] = o
+			adjusted[p] = o
 			continue
 		}
-		ajustado[p] = kgo.NewOffset().At(local).WithEpoch(-1)
+		adjusted[p] = kgo.NewOffset().At(local).WithEpoch(-1)
 		usados = append(usados, p)
 	}
 	saida := make(map[string]map[int32]kgo.Offset, len(ofGroup))
 	for t, v := range ofGroup {
 		saida[t] = v
 	}
-	saida[c.cfg.Topic] = ajustado
+	saida[c.cfg.Topic] = adjusted
 
 	sort.Slice(usados, func(i, j int) bool { return usados[i] < usados[j] })
 	for _, p := range usados {

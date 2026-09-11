@@ -131,7 +131,7 @@ func instantaneoWith(parts ...kafka.PositionOfPartition) kafka.Instantaneo {
 	return kafka.Instantaneo{
 		Partitions:           parts,
 		MarkIn:               time.Unix(1_757_000_000, 0),
-		FilaRegistros:        3,
+		FilaRecords:          3,
 		FilaBytes:            4096,
 		UltimoLote:           time.Unix(1_757_000_001, 0),
 		Desfecho:             kafka.Desfecho{Eventos: 100, Aplicados: 97, Stale: 2, Descartados: 1, Falhas: 0},
@@ -145,7 +145,7 @@ func pos(p int32, aplicado, end int64) kafka.PositionOfPartition {
 	if atraso < 0 {
 		atraso = 0
 	}
-	return kafka.PositionOfPartition{Partition: p, Aplicado: aplicado, EndOfLog: end, Atraso: atraso, HasEnd: true}
+	return kafka.PositionOfPartition{Partition: p, Aplicado: aplicado, EndDoLog: end, Atraso: atraso, TemEnd: true}
 }
 
 // duraveisWith devolve o closure do tri-estado com os offsets dados.

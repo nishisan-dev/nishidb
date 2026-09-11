@@ -210,7 +210,7 @@ func (w *Writer) Run(ctx context.Context) error {
 	// esperar. Fechá-lo depois deixaria uma janela — estreita, e já basta — em
 	// que a revogação vê o writer como "não iniciado" enquanto ele está subindo.
 	close(w.iniciado)
-	acorda, paraDespertador := w.despertador()
+	wake, paraDespertador := w.despertador()
 	defer paraDespertador()
 	// Fechar isto é o que destrava um Quiesce que chegou tarde demais.
 	defer close(w.parado)
@@ -220,7 +220,7 @@ func (w *Writer) Run(ctx context.Context) error {
 	defer w.est.abandona()
 
 	for {
-		s, ok, acordou := w.est.consome(ctx, acorda)
+		s, ok, acordou := w.est.consome(ctx, wake)
 		switch {
 		case acordou:
 			// Débito 56: sem evento novo o disparo por CONTAGEM nunca vem, e

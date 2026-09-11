@@ -41,8 +41,8 @@ type Instantaneo struct {
 	// válida — e então nenhuma partição tem HasEnd.
 	MarkIn time.Time
 
-	FilaRegistros int
-	FilaBytes     int64
+	FilaRecords int
+	FilaBytes   int64
 
 	// UltimoLote é o instante do último lote NÃO VAZIO entregue pelo poller.
 	// Zero enquanto nenhum chegou nesta subida.
@@ -70,11 +70,11 @@ func (c *Consumidor) Instantaneo(ctx context.Context) Instantaneo {
 		c.AtualizaMarkDagua(ctx)
 	}
 	ps, in := c.met.posicoesOfInstant()
-	registros, bytes := c.fila.Profundidade()
+	records, bytes := c.fila.Profundidade()
 	return Instantaneo{
 		Partitions:           ps,
 		MarkIn:               in,
-		FilaRegistros:        registros,
+		FilaRecords:          records,
 		FilaBytes:            bytes,
 		UltimoLote:           c.met.ultimoLoteIn(),
 		Desfecho:             c.w.Desfecho(),

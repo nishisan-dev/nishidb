@@ -108,8 +108,8 @@ func TestALinhaVencidaSomeAntesDeOSegmentoSerPurgado(t *testing.T) {
 	if n := countVivas(t, hist); n != 2 {
 		t.Fatalf("%d linhas depois da retenção, quer 2", n)
 	}
-	if res.ByTempo != 0 {
-		t.Fatalf("aposentou %d segmentos com um só no disco", res.ByTempo)
+	if res.ByTime != 0 {
+		t.Fatalf("aposentou %d segmentos com um só no disco", res.ByTime)
 	}
 }
 
@@ -163,7 +163,7 @@ func TestSegmentoInteiramenteVencidoEhAposentado(t *testing.T) {
 	}
 	rel.advance(10 * time.Hour)
 	res := pass(t, hist, LimitesOfRetention{ExpireAfterWrite: time.Hour})
-	if res.ByTempo == 0 {
+	if res.ByTime == 0 {
 		t.Fatal("nenhum segmento foi aposentado")
 	}
 	depois := countArquivosOfSegment(t, hist)
@@ -269,7 +269,7 @@ func TestAMarcaEhDuravelDepoisDaPurga(t *testing.T) {
 		rel.advance(time.Minute)
 	}
 	rel.advance(10 * time.Hour)
-	if res := pass(t, hist, LimitesOfRetention{ExpireAfterWrite: time.Hour}); res.ByTempo == 0 {
+	if res := pass(t, hist, LimitesOfRetention{ExpireAfterWrite: time.Hour}); res.ByTime == 0 {
 		t.Fatal("nada foi aposentado")
 	}
 	mark := hist.RowIDBase()

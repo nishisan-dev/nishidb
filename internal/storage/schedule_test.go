@@ -231,11 +231,11 @@ func optionsWithExpiration(dir string, d time.Duration) Options {
 // exercitar um estado impossível em vez da migração real.
 func simulaDatasetAnteriorAAgenda(t *testing.T, dir string) {
 	t.Helper()
-	arquivos, err := filepath.Glob(filepath.Join(dir, "indexes", "vencimentos*.idx"))
-	if err != nil || len(arquivos) == 0 {
+	files, err := filepath.Glob(filepath.Join(dir, "indexes", "vencimentos*.idx"))
+	if err != nil || len(files) == 0 {
 		t.Fatalf("nenhum arquivo de agenda encontrado em %s (glob: %v)", dir, err)
 	}
-	for _, p := range arquivos {
+	for _, p := range files {
 		if err := os.Remove(p); err != nil {
 			t.Fatal(err)
 		}
@@ -403,13 +403,13 @@ func TestAgendaQueNaoCobreODatasetEhReconstruida(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Só os arquivos: o manifest continua declarando a agenda, com os mesmos
+	// Só os files: o manifest continua declarando a agenda, com os mesmos
 	// parâmetros desta abertura.
-	arquivos, err := filepath.Glob(filepath.Join(dir, "indexes", "vencimentos*.idx"))
-	if err != nil || len(arquivos) == 0 {
+	files, err := filepath.Glob(filepath.Join(dir, "indexes", "vencimentos*.idx"))
+	if err != nil || len(files) == 0 {
 		t.Fatalf("nenhum arquivo de agenda encontrado (glob: %v)", err)
 	}
-	for _, p := range arquivos {
+	for _, p := range files {
 		if err := os.Remove(p); err != nil {
 			t.Fatal(err)
 		}

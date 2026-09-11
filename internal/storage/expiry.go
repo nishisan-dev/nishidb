@@ -117,11 +117,11 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	newSec, newOff, err := s.secW.Append(buf)
+	newSeg, newOff, err := s.secW.Append(buf)
 	if err != nil {
 		return false, s.failWriter(err)
 	}
-	if err := s.aposAppend(newSec); err != nil {
+	if err := s.aposAppend(newSeg); err != nil {
 		return false, s.failWriter(err)
 	}
 
@@ -143,7 +143,7 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 		// de expiração apagaria do meio do resultado a linha que o relógio
 		// congelado acabou de preservar — os dois mecanismos se anulariam.
 		versiona: true,
-		sec:      newSec,
+		sec:      newSeg,
 		off:      newOff,
 		recLen:   len(buf),
 		mode:     applyWrite,
@@ -196,8 +196,8 @@ func (s *Store) buildLapide(payloadAnterior []byte) ([]byte, error) {
 // milhões de entradas sem achar nada que vença não escreve nada, mas seguraria
 // a goroutine numa passada longa.
 type LimitesOfExpiration struct {
-	MaxByPass   int
-	TempoByPass time.Duration
+	MaxByPassada  int
+	TimeByPassada time.Duration
 }
 
 // ResultOfExpiration descreve o que uma passada fez.
@@ -247,7 +247,7 @@ func (s *Store) ExpiraOnePass(ctx context.Context, lim LimitesOfExpiration) (Res
 	if s.writes == nil {
 		return r, nil
 	}
-	if lim.MaxByPass <= 0 || lim.TempoByPass <= 0 {
+	if lim.MaxByPassada <= 0 || lim.TimeByPassada <= 0 {
 		return r, fmt.Errorf("%w: limites de expiração devem ser positivos", ErrInvalidArgument)
 	}
 	if err := s.entra(); err != nil {
@@ -255,7 +255,7 @@ func (s *Store) ExpiraOnePass(ctx context.Context, lim LimitesOfExpiration) (Res
 	}
 	defer s.sai()
 
-	end := s.now().Add(lim.TempoByPass)
+	end := s.now().Add(lim.TimeByPassada)
 	var fail error
 	r.Examinadas = s.schedule.VisitExpired(uint64(s.now().UnixMilli()), func(id types.RowID) bool {
 		// O ctx é checado a cada linha, e não só entre marcas: uma descida que
@@ -264,7 +264,7 @@ func (s *Store) ExpiraOnePass(ctx context.Context, lim LimitesOfExpiration) (Res
 		if ctx.Err() != nil {
 			return false
 		}
-		if r.Expiradas >= lim.MaxByPass || !s.now().Before(end) {
+		if r.Expiradas >= lim.MaxByPassada || !s.now().Before(end) {
 			r.BateuCeiling = true
 			return false
 		}

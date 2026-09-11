@@ -49,9 +49,9 @@ func blocosOfCodigo(t *testing.T, md, lang string) []string {
 
 // A duração e a taxa mudam a cada execução: são o único trecho da saída
 // documentada que não pode ser comparado literalmente.
-var reTempo = regexp.MustCompile(`em \d+(\.\d+)?[a-zµ]+ \(\d+ ev/s\)`)
+var reTime = regexp.MustCompile(`em \d+(\.\d+)?[a-zµ]+ \(\d+ ev/s\)`)
 
-func normalizaTempos(s string) string { return reTempo.ReplaceAllString(s, "em T (R ev/s)") }
+func normalizaTempos(s string) string { return reTime.ReplaceAllString(s, "em T (R ev/s)") }
 
 // comandoESaida separa um bloco ```console em (comando, saída esperada). O
 // comando continua na line seguinte por dois motivos: '\' no fim (quebra de
@@ -117,13 +117,13 @@ func TestQuickstartDoREADMEExecuta(t *testing.T) {
 
 	// Bloco 1: `cat eventos.ndjson` seguido do ingest. O conteúdo exibido pelo
 	// cat É o corpus — é ele que vai para o stdin do ingest.
-	eventos, summaryExpected := eventosESummary(t, consoles[0])
+	eventos, resumoExpected := eventosESummary(t, consoles[0])
 	a := &env{dir: raiz, config: cfg}
 	if code := a.runWithEntry(eventos, "ingest", "--config", cfg,
 		"--dataset", "radius_sessions", "--input", "-"); code != cli.ExitOK {
 		t.Fatalf("o ingest do README saiu com %d:\n%s", code, a.stderr.String())
 	}
-	if got, want := normalizaTempos(strings.TrimSpace(a.stderr.String())), normalizaTempos(summaryExpected); got != want {
+	if got, want := normalizaTempos(strings.TrimSpace(a.stderr.String())), normalizaTempos(resumoExpected); got != want {
 		t.Errorf("resumo do ingest:\n  obtido:   %s\n  no README: %s", got, want)
 	}
 

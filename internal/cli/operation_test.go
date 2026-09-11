@@ -277,7 +277,7 @@ func metadados(t *testing.T, a *envRemote, consulta string) protocol.Metadata {
 	return m
 }
 
-func readJSONOfPorta(t *testing.T, a *envRemote, path string, dest any) {
+func readJSONOfPorta(t *testing.T, a *envRemote, path string, destination any) {
 	t.Helper()
 	resp, err := http.Get("http://" + a.endereco() + path)
 	if err != nil {
@@ -292,7 +292,7 @@ func readJSONOfPorta(t *testing.T, a *envRemote, path string, dest any) {
 	if err != nil {
 		t.Fatalf("lendo %s: %v", path, err)
 	}
-	if err := json.Unmarshal(corpo, dest); err != nil {
+	if err := json.Unmarshal(corpo, destination); err != nil {
 		t.Fatalf("decodificando %s: %v\n%s", path, err, corpo)
 	}
 }

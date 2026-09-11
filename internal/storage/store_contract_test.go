@@ -124,11 +124,11 @@ func TestIndexadoEhCapabilityCheck(t *testing.T) {
 		t.Fatalf("Lookup de campo indexado: %v", err)
 	}
 
-	withoutIndex := openStore(t, Options{})
-	if withoutIndex.Indexed(fldStatus) {
+	withoutIndice := openStore(t, Options{})
+	if withoutIndice.Indexed(fldStatus) {
 		t.Fatal("store sem campos indexados não pode reportar capability")
 	}
-	if got := withoutIndex.FieldsIndexados(); len(got) != 0 {
+	if got := withoutIndice.FieldsIndexados(); len(got) != 0 {
 		t.Fatalf("FieldsIndexados sem índices: %v", got)
 	}
 }

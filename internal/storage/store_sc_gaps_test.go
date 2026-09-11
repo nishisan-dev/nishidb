@@ -65,12 +65,12 @@ func TestTetoDoValorIndexavelNaFronteira(t *testing.T) {
 	// só com "70000 falha" ficaria verde com o limite em qualquer lugar.
 	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 
-	inLimit := strings.Repeat("v", types.MaxIndexedValueBytes)
-	if _, _, err := s.Put([]byte("limite"), 1, 0, statusPayload(t, s, "limite", inLimit, 1), nil); err != nil {
+	noLimit := strings.Repeat("v", types.MaxIndexedValueBytes)
+	if _, _, err := s.Put([]byte("limite"), 1, 0, statusPayload(t, s, "limite", noLimit, 1), nil); err != nil {
 		t.Fatalf("valor de exatamente %d bytes deveria ser aceito: %v", types.MaxIndexedValueBytes, err)
 	}
 	// E fica de fato indexado: aceitar sem indexar seria falso negativo.
-	it, err := s.Lookup(fldStatus, strVal(inLimit))
+	it, err := s.Lookup(fldStatus, strVal(noLimit))
 	if err != nil {
 		t.Fatal(err)
 	}

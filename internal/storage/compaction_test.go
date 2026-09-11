@@ -342,8 +342,8 @@ func TestCopyForwardGravaAsFlagsDaLocationENaoAsDoRecord(t *testing.T) {
 	if !copiado {
 		t.Fatal("a location ainda nomeava o record e a cópia foi recusada")
 	}
-	newSec, newOff := localizacaoOfRow(t, s, rowID)
-	if cpy := recordIn(t, s, newSec, newOff); cpy.Flags != 0 {
+	newSeg, newOff := localizacaoOfRow(t, s, rowID)
+	if cpy := recordIn(t, s, newSeg, newOff); cpy.Flags != 0 {
 		t.Errorf("flags do record copiado = %#x, queria %#x — a cópia veio do record, não da location, e a compaction passou a publicar no segmento um bit que o índice nunca validou",
 			cpy.Flags, 0)
 	}
@@ -387,8 +387,8 @@ func TestCopyForwardCopiaORecordTombstonadoSemRessuscitarARow(t *testing.T) {
 	if want := bytesOfRecord(key, morto); uint64(n) != want {
 		t.Errorf("bytes copiados = %d, queria %d — a Task 5 soma este número para medir o progresso da varredura", n, want)
 	}
-	newSec, newOff := localizacaoOfRow(t, s, rowID)
-	if newSec == tumSec && newOff == tumOff {
+	newSeg, newOff := localizacaoOfRow(t, s, rowID)
+	if newSeg == tumSec && newOff == tumOff {
 		t.Fatalf("a location continua em (%d, %d): o segmento de origem nunca ficaria elegível à aposentadoria", tumSec, tumOff)
 	}
 	if _, _, ok, err := s.GetByKey(s.presente(), []byte(key), nil); err != nil || ok {
@@ -397,7 +397,7 @@ func TestCopyForwardCopiaORecordTombstonadoSemRessuscitarARow(t *testing.T) {
 	if f := flagsOfLocation(t, s, rowID); f&types.FlagTombstone == 0 {
 		t.Errorf("a location republicada perdeu o FlagTombstone (flags=%#x): a row voltaria a ser visível", f)
 	}
-	if cpy := recordIn(t, s, newSec, newOff); cpy.Flags&types.FlagTombstone == 0 {
+	if cpy := recordIn(t, s, newSeg, newOff); cpy.Flags&types.FlagTombstone == 0 {
 		t.Errorf("o record copiado perdeu o FlagTombstone (flags=%#x): o replay da recovery republicaria a row VIVA", cpy.Flags)
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após copiar um record tombstonado")
@@ -1193,7 +1193,7 @@ func TestZeramentoDoTallyRecusaDepoisDoCloseSemRecordParaCopiar(t *testing.T) {
 	// A precondição é o teste inteiro: se houvesse UM record, o erro viria do
 	// entra() do reapendaSeVivo e esta função não estaria medindo nada.
 	var visitados int
-	endValid, err := s.secR.ScanFrom(sec, segment.HeaderSize, func(uint32, types.Record) error {
+	endValido, err := s.secR.ScanFrom(sec, segment.HeaderSize, func(uint32, types.Record) error {
 		visitados++
 		return nil
 	})
@@ -1207,9 +1207,9 @@ func TestZeramentoDoTallyRecusaDepoisDoCloseSemRecordParaCopiar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("montagem: tamanho do segmento %d: %v", sec, err)
 	}
-	if endValid != size {
+	if endValido != size {
 		t.Fatalf("montagem: prefixo válido de %d bytes contra arquivo de %d — assim o gate de corrupção responderia antes do guard",
-			endValid, size)
+			endValido, size)
 	}
 
 	if err := s.Close(); err != nil {
@@ -1360,9 +1360,9 @@ func TestSomaDosSegmentosTrataArquivoSumidoEntreOGlobEOStatComoDiscoDevolvido(t 
 	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
 		t.Fatalf("criar o diretório de dados: %v", err)
 	}
-	const bytesBySegment = 128
+	const bytesBySegmento = 128
 	for _, id := range []uint32{1, 2} {
-		if err := os.WriteFile(audSecPath(dir, id), make([]byte, bytesBySegment), 0o644); err != nil {
+		if err := os.WriteFile(audSecPath(dir, id), make([]byte, bytesBySegmento), 0o644); err != nil {
 			t.Fatalf("escrever o segmento %d: %v", id, err)
 		}
 	}
@@ -1376,9 +1376,9 @@ func TestSomaDosSegmentosTrataArquivoSumidoEntreOGlobEOStatComoDiscoDevolvido(t 
 			"a remoção é o disco voltando ao filesystem (§86), e um instrumento que a trata como erro "+
 			"falha justamente na passada em que a compaction fez o seu trabalho", err)
 	}
-	if querido := int64(2 * bytesBySegment); total != querido {
+	if querido := int64(2 * bytesBySegmento); total != querido {
 		t.Errorf("a soma devolveu %d bytes com dois segmentos de %d em disco e um removido: querido %d — "+
-			"o arquivo que sumiu sai da conta, os que ficaram continuam nela", total, bytesBySegment, querido)
+			"o arquivo que sumiu sai da conta, os que ficaram continuam nela", total, bytesBySegmento, querido)
 	}
 }
 
@@ -1643,13 +1643,13 @@ func TestCompactionDevolveDiscoSemPerderNenhumaRow(t *testing.T) {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 
-	alvos := seladosInDisk(t, dir, s.Stats().CurrentSegmentID)
-	if len(alvos) < 3 {
-		t.Fatalf("o corpus selou %d segmento(s): sem uma pilha de selados o teste não mede compaction nenhuma", len(alvos))
+	targets := seladosInDisk(t, dir, s.Stats().CurrentSegmentID)
+	if len(targets) < 3 {
+		t.Fatalf("o corpus selou %d segmento(s): sem uma pilha de selados o teste não mede compaction nenhuma", len(targets))
 	}
 	before := diskOfSegmentosByOsStat(t, dir)
 	beforeOfDataset := diskOfDatasetInteiroByOsStat(t, dir)
-	for _, sec := range alvos {
+	for _, sec := range targets {
 		if _, _, _, err := s.compactaSegment(context.Background(), sec); err != nil {
 			t.Fatalf("compactaSegment(%d): %v", sec, err)
 		}
@@ -1660,7 +1660,7 @@ func TestCompactionDevolveDiscoSemPerderNenhumaRow(t *testing.T) {
 	depois := diskOfSegmentosByOsStat(t, dir)
 	depoisOfDataset := diskOfDatasetInteiroByOsStat(t, dir)
 	t.Logf("disco em segment-*.dat: %d bytes antes, %d depois — %d devolvidos ao filesystem em %d segmentos aposentados",
-		before, depois, before-depois, len(alvos))
+		before, depois, before-depois, len(targets))
 	t.Logf("diretório do dataset INTEIRO (item 1 do critério de aceite, ao pé da letra): %d bytes antes, %d depois — %d devolvidos",
 		beforeOfDataset, depoisOfDataset, beforeOfDataset-depoisOfDataset)
 
@@ -2608,8 +2608,8 @@ func tamanhosOfSegmentosByArquivo(t *testing.T, dir string) map[string]int64 {
 func bytesApendadosInDest(before, depois map[string]int64) int64 {
 	var total int64
 	for path, sizeDepois := range depois {
-		if sizeBefore, existia := before[path]; existia {
-			total += sizeDepois - sizeBefore
+		if sizeAntes, existia := before[path]; existia {
+			total += sizeDepois - sizeAntes
 			continue
 		}
 		total += sizeDepois - segment.HeaderSize
@@ -2690,17 +2690,17 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 		t.Fatalf("nenhum candidato com %d rodadas de update sobre %d keys: sem aposentadoria não há linha a conferir, "+
 			"e todas as asserções abaixo passariam por vacuidade", rodadas, keys)
 	}
-	tamanhos := make(map[uint32]int64, len(eleitos))
+	sizes := make(map[uint32]int64, len(eleitos))
 	for _, sec := range eleitos {
-		tamanhos[sec] = fileSizeAud(t, audSecPath(dir, sec))
+		sizes[sec] = fileSizeAud(t, audSecPath(dir, sec))
 	}
 	vivas := rowsVivasBySegment(t, s, keys)
-	arquivosBefore := tamanhosOfSegmentosByArquivo(t, dir)
+	filesAntes := tamanhosOfSegmentosByArquivo(t, dir)
 
 	if _, err := s.passOfCompaction(context.Background(), 0.5); err != nil {
 		t.Fatalf("passOfCompaction: %v", err)
 	}
-	arquivosDepois := tamanhosOfSegmentosByArquivo(t, dir)
+	filesDepois := tamanhosOfSegmentosByArquivo(t, dir)
 
 	saida := record.String()
 	rows := rowsOfEvent(t, saida, eventSegmentAposentado)
@@ -2723,10 +2723,10 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 				"e um campo que não é essa conta responde errado a única pergunta que este milestone existe para responder",
 				sec, devolvidos, lidos, escritos)
 		}
-		if querido := tamanhos[sec] - segment.HeaderSize; lidos != querido {
+		if querido := sizes[sec] - segment.HeaderSize; lidos != querido {
 			t.Errorf("o segmento %d registrou bytes_lidos=%d num arquivo de %d bytes cujo header ocupa %d: "+
 				"a varredura começa DEPOIS do header, e viés constante em número publicado não se distingue de medida no gráfico",
-				sec, lidos, tamanhos[sec], int64(segment.HeaderSize))
+				sec, lidos, sizes[sec], int64(segment.HeaderSize))
 		}
 		if querido := vivas[sec]; copiados != querido {
 			t.Errorf("o segmento %d registrou records_copiados=%d, mas o índice nomeava %d row(s) dentro dele antes da passada: "+
@@ -2755,7 +2755,7 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 	// cima leem o valor logado dos dois lados da conta, e um `escritos` errado
 	// que chegue coerente à linha passa por elas — o que sobra é uma métrica de
 	// volume de escrita que ninguém confere contra a escrita.
-	if apendado := bytesApendadosInDest(arquivosBefore, arquivosDepois); escritosInTotal != apendado {
+	if apendado := bytesApendadosInDest(filesAntes, filesDepois); escritosInTotal != apendado {
 		t.Errorf("a passada registrou bytes_escritos somando %d, mas os arquivos de destino cresceram %d bytes nela: "+
 			"o campo mede o que o cpy-forward gravou, e é contra o filesystem que ele responde — "+
 			"viés que não se cancele entre os %d segmento(s) eleitos aparece exatamente aqui",
@@ -2875,19 +2875,19 @@ func TestContadoresDaCompactionAcumulamOQueAVarreduraLeuEEscreveu(t *testing.T) 
 	// (D6 nunca elege o corrente) e varrê-lo é o que produz a SEGUNDA parcela
 	// de bytes escritos.
 	rec := mustGetAud(t, s, "lv")
-	dest, _ := localizacaoOfRow(t, s, rec.RowID)
-	if dest == 1 {
+	destination, _ := localizacaoOfRow(t, s, rec.RowID)
+	if destination == 1 {
 		t.Fatalf("a cópia continua no segmento 1: o cpy-forward não moveu nada e a segunda varredura releria a mesma origem")
 	}
-	rotacionaAlemOf(t, s, dest)
+	rotacionaAlemOf(t, s, destination)
 
-	_, lidos2, escritos2, err := s.compactaSegment(context.Background(), dest)
+	_, lidos2, escritos2, err := s.compactaSegment(context.Background(), destination)
 	if err != nil {
-		t.Fatalf("compactaSegment(%d): %v", dest, err)
+		t.Fatalf("compactaSegment(%d): %v", destination, err)
 	}
 	if lidos2 <= 0 || escritos2 <= 0 {
 		t.Fatalf("montagem: a varredura do segmento %d leu %d e escreveu %d bytes; sem segunda parcela não há acumulação a provar",
-			dest, lidos2, escritos2)
+			destination, lidos2, escritos2)
 	}
 	if lidos, escritos := s.compBytesLidos.Load(), s.compBytesEscritos.Load(); lidos != lidos1+lidos2 || escritos != escritos1+escritos2 {
 		t.Errorf("depois de duas varreduras os contadores valem %d/%d, e as parcelas somam %d/%d: "+

@@ -307,13 +307,13 @@ func (s *Store) closeWIPs() error {
 // falhado seria afirmar uma durabilidade que não aconteceu.
 //
 // Chamado sob wmu, como os curSecID.Store que substitui.
-func (s *Store) aposAppend(newSec uint32) error {
-	anterior := s.curSecID.Swap(newSec)
+func (s *Store) aposAppend(newSeg uint32) error {
+	anterior := s.curSecID.Swap(newSeg)
 	// anterior == 0 é o Store que ainda não adotou segmento nenhum, e não
 	// acontece depois do Open — os dois ramos dele publicam um segID >= 1. A
 	// guarda fica porque o preço dela é uma comparação e o preço de faltar é
 	// selar o "segmento 0", que não existe.
-	if anterior == newSec || anterior == 0 || len(s.fieldsIndexados) == 0 {
+	if anterior == newSeg || anterior == 0 || len(s.fieldsIndexados) == 0 {
 		return nil
 	}
 	if err := s.closeWIPs(); err != nil {
@@ -366,11 +366,11 @@ func (s *Store) aplicaIndexSets(row types.RowID, payload []byte) error {
 		if w == nil {
 			continue
 		}
-		key, err := valuekey.Append(s.keyIndexBuf[:0], v)
+		key, err := valuekey.Append(s.keyIndiceBuf[:0], v)
 		if err != nil {
 			return err
 		}
-		s.keyIndexBuf = key
+		s.keyIndiceBuf = key
 		// O seam de erro fica ANTES do Set, e é o único ponto do produto que
 		// produz o phantom commit do §14.12 sob demanda: um erro daqui é
 		// posterior ao Append e anterior à publicação da location, que é

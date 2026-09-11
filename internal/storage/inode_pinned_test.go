@@ -200,11 +200,11 @@ func TestLeituraConcorrenteSobreviveAUmaCompactionInteira(t *testing.T) {
 		ids = append(ids, rec.RowID)
 	}
 
-	const leitores = 8
+	const readers = 8
 	var wg sync.WaitGroup
 	pare := make(chan struct{})
-	falhas := make(chan error, leitores)
-	for l := 0; l < leitores; l++ {
+	falhas := make(chan error, readers)
+	for l := 0; l < readers; l++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

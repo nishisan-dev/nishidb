@@ -199,11 +199,11 @@ func (s *Store) reapendaSeVivo(sec, off uint32, rec types.Record) (copiado bool,
 	if err != nil {
 		return false, 0, err
 	}
-	newSec, newOff, err := s.secW.Append(buf)
+	newSeg, newOff, err := s.secW.Append(buf)
 	if err != nil {
 		return false, 0, s.failWriter(err)
 	}
-	if err := s.aposAppend(newSec); err != nil {
+	if err := s.aposAppend(newSeg); err != nil {
 		return false, 0, s.failWriter(err)
 	}
 	// prevPayload é o PRÓPRIO payload, e hadPrevious é true, porque o "estado
@@ -223,7 +223,7 @@ func (s *Store) reapendaSeVivo(sec, off uint32, rec types.Record) (copiado bool,
 		prevPayload: rec.Payload,
 		hadPrevious: true,
 		countsAsNew: false,
-		sec:         newSec,
+		sec:         newSeg,
 		off:         newOff,
 		recLen:      len(buf),
 	}); err != nil {
@@ -286,7 +286,7 @@ func (s *Store) compactaSegment(ctx context.Context, sec uint32) (copiados uint6
 		s.compBytesLidos.Add(lidos)
 		s.compBytesEscritos.Add(escritos)
 	}()
-	endValid, err := s.secR.ScanFrom(sec, segment.HeaderSize, func(off uint32, rec types.Record) error {
+	endValido, err := s.secR.ScanFrom(sec, segment.HeaderSize, func(off uint32, rec types.Record) error {
 		// O cancelamento é a PRIMEIRA coisa do callback, e sai pelo erro que
 		// o ScanFrom propaga: é assim que a goroutine da Task 7 desiste no
 		// Close sem que ninguém precise esperar um segmento inteiro terminar
@@ -330,10 +330,10 @@ func (s *Store) compactaSegment(ctx context.Context, sec uint32) (copiados uint6
 	if err != nil {
 		return copiados, lidos, escritos, err
 	}
-	if endValid != size {
+	if endValido != size {
 		return copiados, lidos, escritos, fmt.Errorf(
 			"%w: a varredura do segmento %d parou em %d de %d bytes; o tally não é zerado por varredura incompleta (§53-55, D4)",
-			ErrDatasetCorrupt, sec, endValid, size)
+			ErrDatasetCorrupt, sec, endValido, size)
 	}
 
 	// O entra() é a MESMA recusa do reapendaSeVivo aplicada ao único trecho da

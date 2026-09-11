@@ -65,7 +65,7 @@ func (s *Server) datasetsTarget(name string) ([]*dataset, *protocol.ErrorDetail,
 	if name == "" {
 		return s.datasets, nil, http.StatusOK
 	}
-	d, ok := s.byName[name]
+	d, ok := s.byNome[name]
 	if !ok {
 		return nil, &protocol.ErrorDetail{
 			Code:    protocol.CodeUnknownDataset,
@@ -125,9 +125,9 @@ type ErrParcial struct {
 // fn devolve o erro CRU do storage — processaDatasets não traduz status HTTP
 // nem código de protocolo, só agrega ordem e nomes; a tradução continua em
 // erroDeMutacao, chamada pelo handler com ErrParcial.Err.
-func processDatasets[T any](alvos []*dataset, fn func(*dataset) (T, error)) (processados []T, parcial *ErrParcial) {
-	nomes := make([]string, 0, len(alvos))
-	for _, d := range alvos {
+func processDatasets[T any](targets []*dataset, fn func(*dataset) (T, error)) (processados []T, parcial *ErrParcial) {
+	nomes := make([]string, 0, len(targets))
+	for _, d := range targets {
 		v, err := fn(d)
 		if err != nil {
 			return processados, &ErrParcial{Dataset: d.nome, Processados: nomes, Err: err}
@@ -172,13 +172,13 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
-	alvos, fail, status := s.datasetsTarget(req.Dataset)
+	targets, fail, status := s.datasetsTarget(req.Dataset)
 	if fail != nil {
 		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
 
-	resultados, parcial := processDatasets(alvos, func(d *dataset) (protocol.CheckpointDataset, error) {
+	results, parcial := processDatasets(targets, func(d *dataset) (protocol.CheckpointDataset, error) {
 		start := time.Now()
 		if err := d.st.Checkpoint(); err != nil {
 			return protocol.CheckpointDataset{}, err
@@ -194,7 +194,7 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 		s.reject(w, r, status, parcial.Dataset, f)
 		return
 	}
-	s.respondeJSON(w, protocol.CheckpointResponse{Datasets: resultados})
+	s.respondeJSON(w, protocol.CheckpointResponse{Datasets: results})
 }
 
 // handleCompact serve o POST /v1/compact do §96 (ADMIN).
@@ -221,7 +221,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
-	alvos, fail, status := s.datasetsTarget(req.Dataset)
+	targets, fail, status := s.datasetsTarget(req.Dataset)
 	if fail != nil {
 		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
@@ -230,7 +230,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := s.ctxOfMutacao(r)
 	defer cancel()
 
-	resultados, parcial := processDatasets(alvos, func(d *dataset) (protocol.CompactDataset, error) {
+	results, parcial := processDatasets(targets, func(d *dataset) (protocol.CompactDataset, error) {
 		start := time.Now()
 		res, err := d.st.CompactaUmaVez(ctx, ratio)
 		if err != nil {
@@ -256,5 +256,5 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		s.reject(w, r, status, parcial.Dataset, f)
 		return
 	}
-	s.respondeJSON(w, protocol.CompactResponse{Datasets: resultados})
+	s.respondeJSON(w, protocol.CompactResponse{Datasets: results})
 }

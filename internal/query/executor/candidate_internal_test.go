@@ -18,12 +18,12 @@ type listaIter struct {
 	ids     []types.RowID
 	pos     int
 	err     error
-	errIn   int // devolve err ao chegar neste índice (0 = nunca)
+	errEm   int // devolve err ao chegar neste índice (0 = nunca)
 	fechado int
 }
 
 func (l *listaIter) Next() bool {
-	if l.errIn > 0 && l.pos >= l.errIn {
+	if l.errEm > 0 && l.pos >= l.errEm {
 		l.err = errors.New("iterador falhou")
 		return false
 	}
@@ -112,7 +112,7 @@ func TestUniaoComDedupKWay(t *testing.T) {
 // Erro no meio de uma fonte não pode virar resultado silenciosamente
 // incompleto: ele sobe pelo Err().
 func TestErroDeFonteSobeNaUniaoEInterseccao(t *testing.T) {
-	fail := func() *listaIter { return &listaIter{ids: []types.RowID{1, 2, 3}, errIn: 2} }
+	fail := func() *listaIter { return &listaIter{ids: []types.RowID{1, 2, 3}, errEm: 2} }
 
 	u := &unionIter{its: []types.RowIDIterator{fail(), lista(9)},
 		cur: make([]types.RowID, 2), vivo: make([]bool, 2)}

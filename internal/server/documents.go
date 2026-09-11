@@ -29,7 +29,7 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	filtro := r.URL.Query().Get("dataset")
 	if filtro != "" {
-		d, ok := s.byName[filtro]
+		d, ok := s.byNome[filtro]
 		if !ok {
 			s.reject(w, r, http.StatusNotFound, datasetDesconhecido, protocol.ErrorDetail{
 				Code:    protocol.CodeUnknownDataset,
@@ -263,7 +263,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 // categoria nova esquecesse de somar nele, os dois discordariam.
 func (s *Server) errosOfDataset(name string) uint64 {
 	var total uint64
-	for _, a := range s.met.erros.Collect() {
+	for _, a := range s.met.errors.Collect() {
 		for _, l := range a.Labels {
 			if l.Name == metrics.LabelDataset && l.Value == name {
 				total += uint64(a.Value)

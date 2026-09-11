@@ -86,12 +86,12 @@ func TestOpenComSegmentoDeZeroBytes(t *testing.T) {
 		if err := os.WriteFile(audSecPath(dir, 2), nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		tamanhos := map[uint32]int64{1: fileSizeAud(t, audSecPath(dir, 1)), 3: fileSizeAud(t, audSecPath(dir, 3))}
+		sizes := map[uint32]int64{1: fileSizeAud(t, audSecPath(dir, 1)), 3: fileSizeAud(t, audSecPath(dir, 3))}
 
 		if _, err := Open(opts); !errors.Is(err, ErrDatasetCorrupt) {
 			t.Fatalf("segmento intermediário sem header deveria ser fatal, obtido %v", err)
 		}
-		for id, want := range tamanhos {
+		for id, want := range sizes {
 			if got := fileSizeAud(t, audSecPath(dir, id)); got != want {
 				t.Fatalf("o Open recusado não pode truncar nada: segmento %d %d → %d", id, want, got)
 			}

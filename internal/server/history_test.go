@@ -418,7 +418,7 @@ schema:
 // caírem entre os segmentos mais novos, que é onde a janela os mantém dentro.
 //
 // Devolve o diretório da irmã, que é onde moram os .sidx que os testes sabotam.
-func seedHistory(t *testing.T, a *env, name string, withField, withoutField int) string {
+func seedHistory(t *testing.T, a *env, name string, comField, withoutField int) string {
 	t.Helper()
 	cfg := a.load()
 	spec, err := schema.Load(cfg.DatasetSpecPath(name), cfg.QueryDefaults())
@@ -481,7 +481,7 @@ func seedHistory(t *testing.T, a *env, name string, withField, withoutField int)
 			t.Fatalf("evento %q: %v", ev, r.Err)
 		}
 	}
-	for i := range withField {
+	for i := range comField {
 		aplica(fmt.Sprintf(`{"id":"E-%06d","node":"n%d","severity":%d}`, i, i%3, i%7))
 	}
 	for i := range withoutField {

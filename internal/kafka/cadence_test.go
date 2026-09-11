@@ -109,9 +109,9 @@ func TestDespertadorDesligaORelogioSemCadenciaPorTempo(t *testing.T) {
 	for _, caso := range casos {
 		t.Run(caso.name, func(t *testing.T) {
 			w := &Writer{cad: caso.cad}
-			acorda, para := w.despertador()
+			wake, para := w.despertador()
 			defer para()
-			if acorda != nil {
+			if wake != nil {
 				t.Errorf("despertador criou relógio para %+v: sem cadência por tempo o select passa a acordar sozinho, e o NewTicker de intervalo não positivo panica", caso.cad)
 			}
 		})

@@ -110,13 +110,13 @@ type markDagua struct {
 	in  time.Time
 }
 
-// limitesOfApply são os buckets do histograma do Apply.
+// limitsDoApply são os buckets do histograma do Apply.
 //
 // Próprios, e não os DefaultBuckets: aqueles começam em 50 µs, e a mediana
 // medida no piloto é da ordem de 8 µs — o primeiro bucket engoliria quase
 // tudo e o histograma não distinguiria nada abaixo dele. O topo em 1 s é o que
 // torna os stalls de segundos ATRIBUÍVEIS ao Apply, em vez de a "algo".
-var limitesOfApply = []float64{
+var limitsDoApply = []float64{
 	0.000005, 0.00001, 0.000025, 0.00005, 0.0001, 0.00025, 0.0005,
 	0.001, 0.005, 0.01, 0.05, 0.1, 1,
 }
@@ -178,7 +178,7 @@ func registerMetrics(r *metrics.Registry, dataset string) *metricas {
 
 		aplicaSec: r.Histogram(metrics.MetIngestApplySeconds,
 			"Latência de um evento pelo Apply: parse, estado, merge, Put e o Apenda do histórico. O checkpoint fica fora — ele tem histograma próprio.",
-			limitesOfApply, metrics.LabelDataset).With(dataset),
+			limitsDoApply, metrics.LabelDataset).With(dataset),
 		dataset: dataset,
 	}
 
@@ -359,12 +359,12 @@ func (m *metricas) samplesOfPosition() []metrics.Sample {
 			Help:   "Próximo offset a consumir, por partição: a posição APLICADA pelo writer.",
 			Labels: rot,
 		})
-		if !p.HasEnd {
+		if !p.TemEnd {
 			continue
 		}
 		out = append(out,
 			metrics.Sample{
-				Family: metrics.MetKafkaHighWatermark, Name: metrics.MetKafkaHighWatermark, Type: metrics.TypeGauge, Value: float64(p.EndOfLog),
+				Family: metrics.MetKafkaHighWatermark, Name: metrics.MetKafkaHighWatermark, Type: metrics.TypeGauge, Value: float64(p.EndDoLog),
 				Help:   "Fim do log por partição, como o broker respondeu no instante desta raspagem.",
 				Labels: rot,
 			},
@@ -388,9 +388,9 @@ func (m *metricas) samplesOfPosition() []metrics.Sample {
 type PositionOfPartition struct {
 	Partition int32
 	Aplicado  int64
-	EndOfLog  int64
+	EndDoLog  int64
 	Atraso    int64
-	HasEnd    bool
+	TemEnd    bool
 }
 
 // posicoesOfInstant colhe TODAS as partições de UMA leitura da marca d'água.
@@ -427,7 +427,7 @@ func (m *metricas) posicoesOfInstant() (ps []PositionOfPartition, markIn time.Ti
 		pos := PositionOfPartition{Partition: p, Aplicado: (*mp)[p].Load()}
 		if validate {
 			if end, ok := md.end[p]; ok {
-				pos.EndOfLog, pos.HasEnd = end, true
+				pos.EndDoLog, pos.TemEnd = end, true
 				if pos.Atraso = end - pos.Aplicado; pos.Atraso < 0 {
 					// O fim do log é anterior à posição aplicada: leitura do
 					// broker mais velha que o consumo. Não é lag negativo, é

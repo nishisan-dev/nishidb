@@ -112,9 +112,9 @@ func TestCloseConcorrenteComIteradoresDeBitmap(t *testing.T) {
 	povoa(t, st, field, "Stop", 4096)
 	value := types.Value{Type: types.TypeString, Bytes: []byte("Stop")}
 
-	const leitores = 6
+	const readers = 6
 	var wg sync.WaitGroup
-	for range leitores {
+	for range readers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

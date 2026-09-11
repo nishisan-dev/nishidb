@@ -130,11 +130,11 @@ func TestResolveSenhaComPasswordFileModo600EhAceito(t *testing.T) {
 // quebra de linha, tem de resolver para o mesmo hash.
 func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 	dir := t.TempDir()
-	withoutBreak := filepath.Join(dir, "sem-quebra.txt")
+	withoutQuebra := filepath.Join(dir, "sem-quebra.txt")
 	withLF := filepath.Join(dir, "com-lf.txt")
 	withCRLF := filepath.Join(dir, "com-crlf.txt")
 
-	if err := os.WriteFile(withoutBreak, []byte("segredo123"), 0o600); err != nil {
+	if err := os.WriteFile(withoutQuebra, []byte("segredo123"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(withLF, []byte("segredo123\n"), 0o600); err != nil {
@@ -144,7 +144,7 @@ func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	base, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: withoutBreak, Role: config.RoleRead})
+	base, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: withoutQuebra, Role: config.RoleRead})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestResolveSenhaPasswordEnvNaoEhAparada(t *testing.T) {
 	if err := os.WriteFile(path, []byte("segredo123\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	digestArquivo, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: path, Role: config.RoleRead})
+	digestFile, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: path, Role: config.RoleRead})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestResolveSenhaPasswordEnvNaoEhAparada(t *testing.T) {
 	// O arquivo com o MESMO newline literal apara para "segredo123"; a env
 	// var não apara, então os dois digests têm de DIVERGIR — a prova de que
 	// só passwordFile é aparado.
-	if digestEnv == digestArquivo {
+	if digestEnv == digestFile {
 		t.Error("passwordEnv com newline literal não deveria coincidir com passwordFile aparado: a env var não deveria ser aparada")
 	}
 }
@@ -265,8 +265,8 @@ func TestResolveCredenciaisMapeiaUsernameParaDigestEPapel(t *testing.T) {
 	t.Setenv(variavelAdmin, "senha-do-admin")
 
 	dir := t.TempDir()
-	arquivoReader := filepath.Join(dir, "leitor.txt")
-	if err := os.WriteFile(arquivoReader, []byte("senha-do-leitor\n"), 0o600); err != nil {
+	fileReader := filepath.Join(dir, "leitor.txt")
+	if err := os.WriteFile(fileReader, []byte("senha-do-leitor\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -275,7 +275,7 @@ func TestResolveCredenciaisMapeiaUsernameParaDigestEPapel(t *testing.T) {
 	cfg.Server.Authentication.Enabled = &ligado
 	cfg.Server.Authentication.Users = []config.UserSpec{
 		{Username: "admin", PasswordEnv: variavelAdmin, Role: config.RoleAdmin},
-		{Username: "leitor", PasswordFile: arquivoReader, Role: config.RoleRead},
+		{Username: "leitor", PasswordFile: fileReader, Role: config.RoleRead},
 	}
 
 	out, err := resolveCredentials(cfg)

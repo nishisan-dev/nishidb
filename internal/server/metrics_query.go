@@ -18,7 +18,7 @@ import (
 type metricsOfQuery struct {
 	total    *metrics.CounterFamily
 	ativas   *metrics.GaugeFamily
-	erros    *metrics.CounterFamily
+	errors   *metrics.CounterFamily
 	latencia *metrics.HistogramFamily
 	// longasRecusadas é o contador do SUB-POOL de consulta longa. Sai SEM o
 	// label dataset porque o recurso que ele mede é do PROCESSO — o sub-pool é
@@ -49,7 +49,7 @@ func registerMetricsOfQuery(
 			"consultas admitidas pelo protocolo remoto", metrics.LabelDataset),
 		ativas: reg.Gauge(metrics.MetQueryActive,
 			"consultas em execução neste instante", metrics.LabelDataset),
-		erros: reg.Counter(metrics.MetQueryErrors,
+		errors: reg.Counter(metrics.MetQueryErrors,
 			"consultas que terminaram em erro, por categoria", metrics.LabelDataset, metrics.LabelCategory),
 		latencia: reg.Histogram(metrics.MetQueryLatencySeconds,
 			"duração da consulta, do request ao último byte", metrics.DefaultBuckets, metrics.LabelDataset),
@@ -147,7 +147,7 @@ func (m *metricsOfQuery) admite(dataset string) func() {
 // err conta uma falha na categoria dada, que é sempre um código do protocolo
 // — conjunto FECHADO, e por isso seguro como label.
 func (m *metricsOfQuery) err(dataset, categoria string) {
-	m.erros.With(dataset, categoria).Inc()
+	m.errors.With(dataset, categoria).Inc()
 }
 
 // rejectLonga conta uma consulta longa barrada pelo sub-pool.

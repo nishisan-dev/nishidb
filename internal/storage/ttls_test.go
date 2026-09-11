@@ -176,7 +176,7 @@ func TestCompactionDescartaRecordVencidoPorRegraCondicional(t *testing.T) {
 
 	rel.advance(4 * time.Minute)
 	r, err := s.ExpiraOnePass(context.Background(), LimitesOfExpiration{
-		MaxByPass: 10, TempoByPass: time.Second,
+		MaxByPassada: 10, TimeByPassada: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ func TestColetorNaoTentaExpirarLinhaJaTombstonada(t *testing.T) {
 	mustPut(t, s, "A", 1, payloadWithPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
 	rel.advance(4 * time.Minute)
-	lim := LimitesOfExpiration{MaxByPass: 10, TempoByPass: time.Second}
+	lim := LimitesOfExpiration{MaxByPassada: 10, TimeByPassada: time.Second}
 	primeira, err := s.ExpiraOnePass(context.Background(), lim)
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestLinhaTombstonadaNaoEhEntreguePelaAgenda(t *testing.T) {
 		mustPut(t, s, k, 1, payloadWithPrazo(t, s, k, rel.t, 3*time.Minute), nil)
 	}
 	rel.advance(4 * time.Minute)
-	lim := LimitesOfExpiration{MaxByPass: 10, TempoByPass: 2 * time.Second}
+	lim := LimitesOfExpiration{MaxByPassada: 10, TimeByPassada: 2 * time.Second}
 	if r, err := s.ExpiraOnePass(context.Background(), lim); err != nil || r.Expiradas != 3 {
 		t.Fatalf("primeira passada: %+v (err=%v)", r, err)
 	}

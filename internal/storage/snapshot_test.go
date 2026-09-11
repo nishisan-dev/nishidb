@@ -233,13 +233,13 @@ func TestSegmentoComVersaoRetidaNaoEhEleitoPelaCompaction(t *testing.T) {
 	defer s.CloseSnapshot(snap)
 	corpusOfSegmentosSelados(t, s, keys, 1)
 
-	withReader := s.candidatos(0.5)
-	for _, sec := range withReader {
+	comReader := s.candidatos(0.5)
+	for _, sec := range comReader {
 		if s.vers.Pinned(sec) {
 			t.Errorf("o segmento %d guarda versão retida e foi eleito para aposentadoria", sec)
 		}
 	}
-	if len(withReader) == len(withoutReader) {
+	if len(comReader) == len(withoutReader) {
 		t.Error("a eleição não mudou com um leitor vivo: nenhum segmento ficou pinado, então o teste acima passou por vacuidade")
 	}
 }

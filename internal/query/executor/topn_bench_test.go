@@ -227,15 +227,15 @@ func BenchmarkOrdenaCorpusCurto(b *testing.B) {
 		[]int64{1_024, 4_096, 16_384})
 }
 
-func medeOsDoisCaminhos(b *testing.B, rows int, formas []string, tamanhos []int64) {
+func medeOsDoisCaminhos(b *testing.B, rows int, formas []string, sizes []int64) {
 	b.Helper()
 	c := compileSchemaTopN(b)
-	chaves := []binder.BoundOrderKey{keyName(b, c, false, false), keyN(b, c, true)}
+	keys := []binder.BoundOrderKey{keyName(b, c, false, false), keyN(b, c, true)}
 
 	for _, forma := range formas {
 		source := buildSource(b, c, corpusOfBench(forma, rows))
-		for _, n := range tamanhos {
-			bq := bqTopN(b, c, chaves, n, 0)
+		for _, n := range sizes {
+			bq := bqTopN(b, c, keys, n, 0)
 			// bqTopN corta o limite efetivo em maxRows; a bancada precisa do N
 			// pedido inteiro para medir o heap desse tamanho.
 			bq.MaxRows, bq.EffectiveLimit = 1_000_000, n

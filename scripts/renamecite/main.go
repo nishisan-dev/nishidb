@@ -366,15 +366,15 @@ func collectDeclarations(dir string, m *Mapping) error {
 		if filepath.Ext(p) != ".go" {
 			return nil
 		}
-		dirOfArquivo := filepath.Dir(p)
-		m.PackageDirs[filepath.Base(dirOfArquivo)] = true
+		dirDoFile := filepath.Dir(p)
+		m.PackageDirs[filepath.Base(dirDoFile)] = true
 		fset := token.NewFileSet()
 		f, parseErr := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
 		if parseErr != nil {
 			return nil
 		}
-		pkg := filepath.Base(dirOfArquivo)
-		if rel, relErr := filepath.Rel(dir, dirOfArquivo); relErr == nil {
+		pkg := filepath.Base(dirDoFile)
+		if rel, relErr := filepath.Rel(dir, dirDoFile); relErr == nil {
 			pkg = filepath.ToSlash(rel)
 		}
 		declara := func(name string) {

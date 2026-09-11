@@ -122,9 +122,9 @@ func TestCloseConcorrenteComLeiturasNaoEntraEmPanic(t *testing.T) {
 		}
 	}
 
-	const leitores = 6
+	const readers = 6
 	var wg sync.WaitGroup
-	for l := 0; l < leitores; l++ {
+	for l := 0; l < readers; l++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

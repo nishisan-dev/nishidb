@@ -170,7 +170,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 	}
 
 	cols := make([]ColView, len(bq.Columns))
-	slotOfColumn := make([]int32, len(bq.Columns))
+	slotDaColumn := make([]int32, len(bq.Columns))
 	for i, c := range bq.Columns {
 		if c.Field == nil {
 			return nil, fmt.Errorf("%w: coluna %d com campo nulo", ErrInvalidPlan, i)
@@ -189,9 +189,9 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 			// ausentes ou nulas.
 			Nullable: !c.Field.IsKey && !c.Field.IsSequence,
 		}
-		slotOfColumn[i] = int32(c.Slot)
+		slotDaColumn[i] = int32(c.Slot)
 	}
-	it.cols, it.slotOfColumn = cols, slotOfColumn
+	it.cols, it.slotDaColumn = cols, slotDaColumn
 
 	pred, err := compile(bq.Where, len(it.slots))
 	if err != nil {
@@ -276,7 +276,7 @@ type iterador struct {
 
 	slots        []slot
 	cols         []ColView
-	slotOfColumn []int32
+	slotDaColumn []int32
 	pred         *programa
 	fr           encoding.FieldReader
 
@@ -466,7 +466,7 @@ func (it *iterador) drena() bool {
 
 // projeta copia os valores dos slots para as colunas de saída.
 func (it *iterador) projeta() {
-	for j, s := range it.slotOfColumn {
+	for j, s := range it.slotDaColumn {
 		sl := &it.slots[s]
 		if sl.Present {
 			it.cols[j].Null, it.cols[j].Val = false, sl.Val

@@ -259,10 +259,10 @@ type MetricsSnapshot struct {
 	Acumuladas int64
 	Saturadas  int64
 
-	// HistoryRows e HistoryDescartadas contam as duas metades da tabela
+	// HistoricoRows e HistoryDescartadas contam as duas metades da tabela
 	// irmã; HistoryDegradado diz se ela parou de receber. Zeradas no dataset
 	// que não declara `history`.
-	HistoryRows        int64
+	HistoricoRows      int64
 	HistoryDescartadas int64
 	HistoryDegradado   bool
 
@@ -385,7 +385,7 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 	s.CongeladasPreservadas = m.metrics.efeitos.congeladas.Load()
 	s.Acumuladas = m.metrics.efeitos.acumuladas.Load()
 	s.Saturadas = m.metrics.efeitos.saturadas.Load()
-	s.HistoryRows = m.metrics.histRows.Load()
+	s.HistoricoRows = m.metrics.histRows.Load()
 	s.HistoryDescartadas = m.metrics.histDescartadas.Load()
 	s.HistoryDegradado = m.metrics.histDegradado.Load()
 	s.DecodeSerialTotal = m.metrics.decodeSerial.Load()

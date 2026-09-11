@@ -355,20 +355,20 @@ func TestBytesRoundTrip(t *testing.T) {
 // O gate de alocação depende de não haver reflexão nem formatação genérica no
 // caminho quente. O teste torna a regra executável em vez de convencional.
 func TestNdjsonSemFmtNemEncodingJSON(t *testing.T) {
-	for _, arquivo := range []string{"ndjson.go", "ndjson_writer.go"} {
-		b, err := os.ReadFile(arquivo)
+	for _, file := range []string{"ndjson.go", "ndjson_writer.go"} {
+		b, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
 		src := string(b)
 		end := strings.Index(src, "\n)")
 		if end < 0 {
-			t.Fatalf("%s: bloco de imports não encontrado", arquivo)
+			t.Fatalf("%s: bloco de imports não encontrado", file)
 		}
 		imports := src[:end]
 		for _, proibido := range []string{`"fmt"`, `"encoding/json"`, `"reflect"`} {
 			if strings.Contains(imports, proibido) {
-				t.Errorf("%s importa %s no caminho quente", arquivo, proibido)
+				t.Errorf("%s importa %s no caminho quente", file, proibido)
 			}
 		}
 	}

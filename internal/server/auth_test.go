@@ -251,15 +251,15 @@ func TestPapelReadEAdminAlcancamTodasAsRotasDeLeitura(t *testing.T) {
 func TestAuthFailuresTotalApareceNoScrapePorRazao(t *testing.T) {
 	srv := serverWithAuth(t, 1, "")
 
-	fecha(t, consultaWithAuth(t, srv, `{}`, "", ""))                                // razaoHeader
+	fecha(t, consultaWithAuth(t, srv, `{}`, "", ""))                                // reasonHeader
 	fecha(t, consultaWithAuth(t, srv, `{}`, "usuario-nao-configurado", "qualquer")) // razaoUsuario
 	fecha(t, consultaWithAuth(t, srv, `{}`, "leitor", "senha-errada-de-verdade"))   // razaoPassword
 
 	corpo := fetchCorpoWithAuth(t, srv, "/metrics", "chefe", passwordChefeAuth)
 	for _, row := range []string{
 		`nishidb_auth_failures_total{reason="header"} 1`,
-		`nishidb_auth_failures_total{reason="usuario"} 1`,
-		`nishidb_auth_failures_total{reason="senha"} 1`,
+		`nishidb_auth_failures_total{reason="user"} 1`,
+		`nishidb_auth_failures_total{reason="password"} 1`,
 	} {
 		if !strings.Contains(corpo, row) {
 			t.Errorf("scrape não tem %q:\n%s", row, corpo)

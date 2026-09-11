@@ -301,12 +301,12 @@ func TestGateHeapPisoAbsolutoEncerraPelaGrandeza(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	heapAtual := rep.Steady.HeapStable
-	if heapAtual == 0 {
-		heapAtual = rep.Load.HeapStable
+	heapCurrent := rep.Steady.HeapStable
+	if heapCurrent == 0 {
+		heapCurrent = rep.Load.HeapStable
 	}
-	if heapAtual > 16*1024*1024 {
-		t.Skipf("heap de %d B acima do piso: o teste não exercita o caminho", heapAtual)
+	if heapCurrent > 16*1024*1024 {
+		t.Skipf("heap de %d B acima do piso: o teste não exercita o caminho", heapCurrent)
 	}
 	g := gateByName(t, rep, "heap_decoupled")
 	if g.Status != GatePassou {
@@ -722,9 +722,9 @@ func TestDirBytesSomaSubdiretorios(t *testing.T) {
 // de bytes ficam em zero por medida, e é por isso que o oráculo aqui é o
 // medidor de atividade.
 func TestCompactionLigadaSobeAGoroutineEChegaVivaAoFim(t *testing.T) {
-	const razao = 0.50
+	const ratio = 0.50
 	cfg := baseConfig(t, 300)
-	cfg.CompactionRatio = razao
+	cfg.CompactionRatio = ratio
 
 	rep, err := Run(cfg)
 	if err != nil {
@@ -738,9 +738,9 @@ func TestCompactionLigadaSobeAGoroutineEChegaVivaAoFim(t *testing.T) {
 	if !art.Rodando {
 		t.Error("o artefato publica compaction_running = false: quem lê o JSON meses depois não tem outra evidência")
 	}
-	if art.Ratio != razao {
+	if art.Ratio != ratio {
 		t.Errorf("compaction_min_live_ratio = %v no artefato, want %v: o JSON tem de dizer com que política a rodada mediu",
-			art.Ratio, razao)
+			art.Ratio, ratio)
 	}
 }
 
@@ -1165,7 +1165,7 @@ func TestSomaDasEntradasSoIgnoraOQueSumiu(t *testing.T) {
 	}{
 		{
 			name:  "arquivo aposentado entre o ReadDir e o stat",
-			entry: entryDescrita{name: "seg-9.retired", errOfInfo: fs.ErrNotExist},
+			entry: entryDescrita{name: "seg-9.retired", errDoInfo: fs.ErrNotExist},
 			want:  77,
 		},
 		{
@@ -1175,7 +1175,7 @@ func TestSomaDasEntradasSoIgnoraOQueSumiu(t *testing.T) {
 		},
 		{
 			name:    "entrada ilegível: instrumento cego aborta",
-			entry:   entryDescrita{name: "seg-10.dat", errOfInfo: fs.ErrPermission},
+			entry:   entryDescrita{name: "seg-10.dat", errDoInfo: fs.ErrPermission},
 			wantErr: true,
 		},
 		{
@@ -1220,7 +1220,7 @@ func TestSomaDasEntradasSoIgnoraOQueSumiu(t *testing.T) {
 type entryDescrita struct {
 	name      string
 	diretorio bool
-	errOfInfo error
+	errDoInfo error
 }
 
 func (e entryDescrita) Name() string { return e.name }
@@ -1233,7 +1233,7 @@ func (e entryDescrita) Type() fs.FileMode {
 	return 0
 }
 
-func (e entryDescrita) Info() (fs.FileInfo, error) { return nil, e.errOfInfo }
+func (e entryDescrita) Info() (fs.FileInfo, error) { return nil, e.errDoInfo }
 
 func gateByName(t *testing.T, rep *Report, name string) GateResult {
 	t.Helper()

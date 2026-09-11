@@ -50,8 +50,8 @@ func samplesOfIndex(name string, e storage.EstatisticasOfIndex) []metrics.Sample
 		})
 	}
 	byModo := map[string]int64{
-		metrics.ModeIndex:       e.ByIndex,
-		metrics.ModeEnumeration: e.ByEnumeration,
+		metrics.ModeIndex:       e.ByIndice,
+		metrics.ModeEnumeration: e.ByEnumeracao,
 	}
 	for _, modo := range metrics.IndexLookupModes {
 		out = append(out, metrics.Sample{
@@ -137,7 +137,7 @@ func indexStats(e storage.EstatisticasOfIndex) protocol.IndexStats {
 		Rebuilds:        e.Reconstrucoes,
 		RebuildRunning:  e.RebuildActive,
 		CRCFailures:     e.CRCFalhas,
-		SegmentsByIndex: e.ByIndex,
-		SegmentsByScan:  e.ByEnumeration,
+		SegmentsByIndex: e.ByIndice,
+		SegmentsByScan:  e.ByEnumeracao,
 	}
 }

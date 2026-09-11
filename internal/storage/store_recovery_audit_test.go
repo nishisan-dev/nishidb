@@ -283,7 +283,7 @@ func TestReplayUsaOMesmoCodePathDoWritePath(t *testing.T) {
 	// senão as duas divergem em silêncio. O observável é a igualdade dos
 	// tallies: gravar N records e replayá-los tem que produzir a mesma
 	// contabilidade de liveness que gravá-los com checkpoint no fim.
-	build := func(t *testing.T, withCheckpointInEnd bool) []checkpoint.SegmentInfo {
+	build := func(t *testing.T, comCheckpointNoEnd bool) []checkpoint.SegmentInfo {
 		t.Helper()
 		dir := t.TempDir()
 		opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
@@ -300,7 +300,7 @@ func TestReplayUsaOMesmoCodePathDoWritePath(t *testing.T) {
 			}
 			mustPut(t, s, k, 2, statusPayload(t, s, k, "Stop", 2), &prev)
 		}
-		if withCheckpointInEnd {
+		if comCheckpointNoEnd {
 			if err := s.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
@@ -361,15 +361,15 @@ func TestCorrupcaoNoMeioDaCadeiaEhFatalENaoTrunca(t *testing.T) {
 	if err := os.WriteFile(audSecPath(dir, 1), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tamanhos := map[uint32]int64{}
+	sizes := map[uint32]int64{}
 	for id := uint32(1); id <= 3; id++ {
-		tamanhos[id] = fileSizeAud(t, audSecPath(dir, id))
+		sizes[id] = fileSizeAud(t, audSecPath(dir, id))
 	}
 
 	if _, err := Open(opts); !errors.Is(err, ErrDatasetCorrupt) {
 		t.Fatalf("corrupção antes do último segmento deveria ser fatal, obtido %v", err)
 	}
-	for id, want := range tamanhos {
+	for id, want := range sizes {
 		if got := fileSizeAud(t, audSecPath(dir, id)); got != want {
 			t.Fatalf("o Open recusado não pode truncar nada: segmento %d %d → %d", id, want, got)
 		}

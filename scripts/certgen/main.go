@@ -93,13 +93,13 @@ func generate(pathCert, pathKey string, validade time.Duration) error {
 }
 
 func writePEM(path string, modo os.FileMode, block *pem.Block) error {
-	arquivo, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, modo)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, modo)
 	if err != nil {
 		return fmt.Errorf("abrindo %s: %w", path, err)
 	}
-	if err := pem.Encode(arquivo, block); err != nil {
-		_ = arquivo.Close()
+	if err := pem.Encode(file, block); err != nil {
+		_ = file.Close()
 		return fmt.Errorf("escrevendo %s: %w", path, err)
 	}
-	return arquivo.Close()
+	return file.Close()
 }

@@ -109,7 +109,7 @@ func runCheckpoint(args []string, amb Context) int {
 // cred entra pelo MESMO remoteClient/aplicaCredencial que consultaRemota e
 // searchDocument usam (Task B6) — este É o ponto de costura único que a B5
 // já apontava para a credencial entrar.
-func postMutation(cmd, endereco, path, dataset string, cred remoteCredential, dest any, amb Context) int {
+func postMutation(cmd, endereco, path, dataset string, cred remoteCredential, destination any, amb Context) int {
 	var corpo io.Reader
 	if dataset != "" {
 		b, err := json.Marshal(protocol.DatasetRequest{Dataset: dataset})
@@ -149,7 +149,7 @@ func postMutation(cmd, endereco, path, dataset string, cred remoteCredential, de
 	if resp.StatusCode != http.StatusOK {
 		return remoteRefusal(cmd, resp, amb)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(destination); err != nil {
 		notify(amb, "%s: resposta ilegível de %s: %v\n", cmd, endereco, err)
 		return ExitDataset
 	}

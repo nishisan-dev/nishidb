@@ -183,8 +183,8 @@ func (o *ordenador) writeEntryTopN(e *entryTopN, slots []slot, rowID types.RowID
 	e.payEnd = int32(len(buf))
 
 	vals := o.valsTN[e.keyIDx : int(e.keyIDx)+o.nKeys]
-	for i := range o.chaves {
-		k := &o.chaves[i]
+	for i := range o.keys {
+		k := &o.keys[i]
 		s := &slots[k.Slot]
 		cv := keyVal{presente: s.Present && s.Val.Type == k.Want}
 		if cv.presente {
@@ -216,7 +216,7 @@ func (o *ordenador) writeEntryTopN(e *entryTopN, slots []slot, rowID types.RowID
 	// passo disso — leria um array diferente do que o comparador lê. Uma
 	// passada de nKeys por linha aceita compra as duas.
 	for i := range vals {
-		if vals[i].presente && o.chaves[i].Kind == binder.CompareBytes {
+		if vals[i].presente && o.keys[i].Kind == binder.CompareBytes {
 			vals[i].direct = e.buf[vals[i].ini:vals[i].end]
 			continue
 		}
@@ -235,8 +235,8 @@ func (o *ordenador) writeEntryTopN(e *entryTopN, slots []slot, rowID types.RowID
 // pode introduzir.
 func (o *ordenador) comparaSlotsWithEntry(slots []slot, rowID types.RowID, e *entryTopN) int {
 	base := int(e.keyIDx)
-	for i := range o.chaves {
-		k := &o.chaves[i]
+	for i := range o.keys {
+		k := &o.keys[i]
 		va := ofSlot(&slots[k.Slot], k)
 		if c := o.comparaKey(k, &va, &o.valsTN[base+i]); c != 0 {
 			return c
@@ -248,8 +248,8 @@ func (o *ordenador) comparaSlotsWithEntry(slots []slot, rowID types.RowID, e *en
 // comparaEntradasTopN é a mesma comparação entre duas entradas retidas.
 func (o *ordenador) comparaEntradasTopN(a, b *entryTopN) int {
 	ia, ib := int(a.keyIDx), int(b.keyIDx)
-	for i := range o.chaves {
-		k := &o.chaves[i]
+	for i := range o.keys {
+		k := &o.keys[i]
 		if c := o.comparaKey(k, &o.valsTN[ia+i], &o.valsTN[ib+i]); c != 0 {
 			return c
 		}

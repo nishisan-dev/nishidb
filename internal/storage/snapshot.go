@@ -128,8 +128,8 @@ func (r *recordOfSnapshots) recalculaLocked() {
 // `epoca`. Monotônico: a fronteira nunca desce.
 func (r *recordOfSnapshots) invalidaUntil(epoca uint64) {
 	for {
-		atual := r.epocaMinimaValidate.Load()
-		if epoca <= atual || r.epocaMinimaValidate.CompareAndSwap(atual, epoca) {
+		current := r.epocaMinimaValidate.Load()
+		if epoca <= current || r.epocaMinimaValidate.CompareAndSwap(current, epoca) {
 			return
 		}
 	}

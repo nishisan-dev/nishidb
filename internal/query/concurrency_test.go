@@ -29,7 +29,7 @@ func TestConcorrenciaWriterELeitoresPeloSQL(t *testing.T) {
 	const (
 		entidades = 400
 		rodadas   = 6
-		leitores  = 4
+		readers   = 4
 	)
 	// Combinações válidas: o writer só escreve pares coerentes, então uma
 	// leitura que devolva um par fora desta lista viu estado parcial.
@@ -85,7 +85,7 @@ func TestConcorrenciaWriterELeitoresPeloSQL(t *testing.T) {
 		return false
 	}
 
-	for l := 0; l < leitores; l++ {
+	for l := 0; l < readers; l++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -129,7 +129,7 @@ func TestConcorrenciaWriterELeitoresPeloSQL(t *testing.T) {
 		t.Fatal("nenhuma linha foi lida durante a ingestão: o teste não exercitou concorrência")
 	}
 	t.Logf("%d linhas lidas por %d leitores durante %d rodadas de ingestão",
-		lidas.Load(), leitores, rodadas)
+		lidas.Load(), readers, rodadas)
 
 	// Estado final coerente: todas as entidades no último par escrito.
 	ultimo := pares[rodadas%len(pares)]

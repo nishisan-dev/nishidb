@@ -9,13 +9,13 @@ import (
 )
 
 func limitesOfTest() LimitesOfExpiration {
-	return LimitesOfExpiration{MaxByPass: 1000, TempoByPass: 5 * time.Second}
+	return LimitesOfExpiration{MaxByPassada: 1000, TimeByPassada: 5 * time.Second}
 }
 
 // O caminho principal: quem passou do prazo é marcado, quem não passou fica.
 func TestPassadaMarcaSoQuemVenceu(t *testing.T) {
 	s, rel := storeWithExpiration(t, t.TempDir(), time.Hour)
-	velha, _ := mustPut(t, s, "velha", 1, payloadWithWrite(t, s, "velha", "Start", rel.t), nil)
+	old, _ := mustPut(t, s, "velha", 1, payloadWithWrite(t, s, "velha", "Start", rel.t), nil)
 
 	rel.advance(90 * time.Minute)
 	nw, _ := mustPut(t, s, "nova", 1, payloadWithWrite(t, s, "nova", "Start", rel.t), nil)
@@ -27,7 +27,7 @@ func TestPassadaMarcaSoQuemVenceu(t *testing.T) {
 	if r.Expiradas != 1 {
 		t.Fatalf("expiradas=%d, quer 1 (só a velha): %+v", r.Expiradas, r)
 	}
-	if _, _, ok, _ := s.GetByRowID(s.presente(), velha, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.presente(), old, nil); ok {
 		t.Error("a entidade vencida continua visível")
 	}
 	if _, _, ok, _ := s.GetByRowID(s.presente(), nw, nil); !ok {
@@ -44,7 +44,7 @@ func TestPassadaParaNoLimiteDeQuantidade(t *testing.T) {
 	}
 	rel.advance(2 * time.Hour)
 
-	r, err := s.ExpiraOnePass(context.Background(), LimitesOfExpiration{MaxByPass: 2, TempoByPass: time.Minute})
+	r, err := s.ExpiraOnePass(context.Background(), LimitesOfExpiration{MaxByPassada: 2, TimeByPassada: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestPassadaParaNoLimiteDeQuantidade(t *testing.T) {
 		t.Fatalf("expiradas=%d bateuTeto=%v; quer 2 e true", r.Expiradas, r.BateuCeiling)
 	}
 	// A passada seguinte retoma de onde parou, sem reexaminar as já marcadas.
-	r2, err := s.ExpiraOnePass(context.Background(), LimitesOfExpiration{MaxByPass: 2, TempoByPass: time.Minute})
+	r2, err := s.ExpiraOnePass(context.Background(), LimitesOfExpiration{MaxByPassada: 2, TimeByPassada: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestPassadaParaNoLimiteDeTempo(t *testing.T) {
 		passos++
 		return base.Add(time.Duration(passos) * time.Second)
 	})
-	r, err := s.ExpiraOnePass(context.Background(), LimitesOfExpiration{MaxByPass: 1000, TempoByPass: 2 * time.Second})
+	r, err := s.ExpiraOnePass(context.Background(), LimitesOfExpiration{MaxByPassada: 1000, TimeByPassada: 2 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,9 +269,9 @@ func TestSemExpiracaoNaoHaColetor(t *testing.T) {
 func TestLimitesInvalidosSaoRecusados(t *testing.T) {
 	s, _ := storeWithExpiration(t, t.TempDir(), time.Hour)
 	for _, lim := range []LimitesOfExpiration{
-		{MaxByPass: 0, TempoByPass: time.Second},
-		{MaxByPass: 10, TempoByPass: 0},
-		{MaxByPass: -1, TempoByPass: time.Second},
+		{MaxByPassada: 0, TimeByPassada: time.Second},
+		{MaxByPassada: 10, TimeByPassada: 0},
+		{MaxByPassada: -1, TimeByPassada: time.Second},
 	} {
 		if _, err := s.ExpiraOnePass(context.Background(), lim); err == nil {
 			t.Errorf("limite inválido aceito: %+v", lim)
@@ -394,14 +394,14 @@ func TestColetorEIngestaoRodamJuntosSemQuebrar(t *testing.T) {
 	}
 
 	pronto := make(chan struct{})
-	erros := make(chan error, 2)
+	errors := make(chan error, 2)
 	go func() {
 		defer close(pronto)
 		for i := 0; i < 200; i++ {
 			k := "n" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 			p := payloadWithWrite(t, s, k, "Start", rel.t)
 			if _, _, err := s.Put([]byte(k), 1, 0, p, nil); err != nil {
-				erros <- err
+				errors <- err
 				return
 			}
 		}
@@ -409,13 +409,13 @@ func TestColetorEIngestaoRodamJuntosSemQuebrar(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		if _, err := s.ExpiraOnePass(context.Background(), limitesOfTest()); err != nil {
-			erros <- err
+			errors <- err
 			break
 		}
 	}
 	<-pronto
-	close(erros)
-	for err := range erros {
+	close(errors)
+	for err := range errors {
 		t.Fatal(err)
 	}
 }

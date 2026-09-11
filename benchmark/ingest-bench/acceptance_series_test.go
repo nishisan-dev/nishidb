@@ -149,14 +149,14 @@ func TestOPlateauDoAceiteM4TambemReprovaPorMinimosQuadrados(t *testing.T) {
 		meio := len(caso.serie) / 2
 		primeira := inclinacaoByMinimosQuadrados(caso.serie[:meio+1])
 		segunda := inclinacaoByMinimosQuadrados(caso.serie[meio:])
-		razao := segunda / primeira
-		if razao < fractionOfGrowthTolerada {
+		ratio := segunda / primeira
+		if ratio < fractionOfGrowthTolerada {
 			t.Errorf("%s: razão por mínimos quadrados = %.3f, abaixo do teto %.2f — "+
 				"o estimador robusto passou a APROVAR, e o texto de docs/aceite-m4.md "+
-				"precisa ser reescrito", caso.name, razao, fractionOfGrowthTolerada)
+				"precisa ser reescrito", caso.name, ratio, fractionOfGrowthTolerada)
 		}
 		t.Logf("%s: 1ª %.0f B/amostra, 2ª %.0f B/amostra, razão %.3f",
-			caso.name, primeira, segunda, razao)
+			caso.name, primeira, segunda, ratio)
 	}
 }
 
@@ -178,7 +178,7 @@ func TestODiscoDoAceiteM4CresceEmTodaJanelaDeSessentaSegundos(t *testing.T) {
 	var medias []float64
 	var soma float64
 	var n int
-	windowAtual := 0
+	windowCurrent := 0
 	close := func() {
 		if n > 0 {
 			medias = append(medias, soma/float64(n)/(1<<20))
@@ -186,9 +186,9 @@ func TestODiscoDoAceiteM4CresceEmTodaJanelaDeSessentaSegundos(t *testing.T) {
 		soma, n = 0, 0
 	}
 	for _, a := range sobCarga {
-		if j := int((a.ElapsedSec - start) / 60); j != windowAtual {
+		if j := int((a.ElapsedSec - start) / 60); j != windowCurrent {
 			close()
-			windowAtual = j
+			windowCurrent = j
 		}
 		soma += float64(a.DiskBytes)
 		n++

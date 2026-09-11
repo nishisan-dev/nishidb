@@ -39,15 +39,15 @@ type Progresso func(lidos, alvo int64, decorrido time.Duration)
 // nenhuma para commitar — a leitura é estritamente somativa, sem side
 // effect no cluster.
 func Coleta(ctx context.Context, cfg ConfigColeta, prog Progresso) (*Histograma, error) {
-	alvos, err := capturaAlvos(ctx, cfg.Brokers, cfg.Topic)
+	targets, err := capturaAlvos(ctx, cfg.Brokers, cfg.Topic)
 	if err != nil {
 		return nil, err
 	}
 
-	partOffsets := make(map[int32]kgo.Offset, len(alvos))
-	restante := make(map[int32]int64, len(alvos))
+	partOffsets := make(map[int32]kgo.Offset, len(targets))
+	restante := make(map[int32]int64, len(targets))
 	var targetTotal int64
-	for p, a := range alvos {
+	for p, a := range targets {
 		partOffsets[p] = kgo.NewOffset().At(a.start)
 		restante[p] = a.end - a.start
 		targetTotal += restante[p]
@@ -169,13 +169,13 @@ func capturaAlvos(ctx context.Context, brokers []string, topic string) (map[int3
 	}
 	byEnd := end[topic]
 
-	alvos := make(map[int32]window, len(byStart))
+	targets := make(map[int32]window, len(byStart))
 	for p, ini := range byStart {
 		f, ok := byEnd[p]
 		if !ok {
 			return nil, fmt.Errorf("identifier-len: partição %d sem high-watermark", p)
 		}
-		alvos[p] = window{start: ini.Offset, end: f.Offset}
+		targets[p] = window{start: ini.Offset, end: f.Offset}
 	}
-	return alvos, nil
+	return targets, nil
 }

@@ -317,11 +317,11 @@ func (s *Store) inPontoFixo(sec uint32) (bool, error) {
 	if !has {
 		return false, nil
 	}
-	atual, err := s.secoesOfSealed(sec)
+	current, err := s.secoesOfSealed(sec)
 	if err != nil {
 		return false, err
 	}
-	return slices.Equal(atual, anotado), nil
+	return slices.Equal(current, anotado), nil
 }
 
 // anotaOPontoFixo registra o que o arquivo cobre DEPOIS da reconstrução.
@@ -330,14 +330,14 @@ func (s *Store) inPontoFixo(sec uint32) (bool, error) {
 // sai da fila sozinho —, mas anotar os dois custa uma entrada que a poda da
 // passada seguinte remove, e é menos código do que a distinção.
 func (s *Store) anotaOPontoFixo(sec uint32) error {
-	atual, err := s.secoesOfSealed(sec)
+	current, err := s.secoesOfSealed(sec)
 	if err != nil {
 		return err
 	}
 	if s.recPontoFixo == nil {
 		s.recPontoFixo = make(map[uint32][]types.FieldID, 1)
 	}
-	s.recPontoFixo[sec] = atual
+	s.recPontoFixo[sec] = current
 	return nil
 }
 
@@ -507,7 +507,7 @@ func (s *Store) constroiIndexOfSegment(ctx context.Context, sec uint32, fields [
 		return false, err
 	}
 	e := segindex.NewWriter()
-	endValid, err := s.varreOsRecordsOfSegment(ctx, sec, cobertura,
+	endValido, err := s.varreOsRecordsOfSegment(ctx, sec, cobertura,
 		func(field types.FieldID, h uint64, row types.RowID) error {
 			e.Add(field, h, row)
 			return nil
@@ -525,11 +525,11 @@ func (s *Store) constroiIndexOfSegment(ctx context.Context, sec uint32, fields [
 	// servindo-as. Falso negativo permanente. `<` e não `!=`: fimValido acima
 	// do tamanho medido é o segmento pré-swap que cresceu durante a varredura,
 	// e isso é a corrida benigna acima, não corrupção.
-	if endValid < size {
+	if endValido < size {
 		return false, fmt.Errorf(
 			"%w: a varredura de reconstrução do segmento %d parou em %d de %d bytes; "+
 				"um .sidx desta varredura declararia completo um índice sem as rows posteriores à corrupção",
-			ErrDatasetCorrupt, sec, endValid, size)
+			ErrDatasetCorrupt, sec, endValido, size)
 	}
 	if e.IsEmpty() {
 		// Nenhuma posting sob a cobertura inteira: o índice CORRETO deste
@@ -958,7 +958,7 @@ func (s *Store) varreOsRecordsOfSegment(
 		key    []byte
 		reader encoding.FieldReader
 	)
-	endValid, err := s.secR.ScanFrom(sec, int64(segment.HeaderSize), func(_ uint32, rec types.Record) error {
+	endValido, err := s.secR.ScanFrom(sec, int64(segment.HeaderSize), func(_ uint32, rec types.Record) error {
 		// O cancelamento é conferido por RECORD, e não por segmento: um
 		// segmento de 512 MiB é a unidade que se quer poder abandonar no meio,
 		// e conferir só na entrada tornaria o ctx decorativo.
@@ -988,5 +988,5 @@ func (s *Store) varreOsRecordsOfSegment(
 			}
 		}
 	})
-	return endValid, err
+	return endValido, err
 }

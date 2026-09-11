@@ -119,12 +119,12 @@ func apendaWithStatus(t *testing.T, hist *Store, status string, quando time.Time
 // cada rowId.
 func povoaHistory(t *testing.T, hist *Store, rel *relogioFake, n int, passo time.Duration) map[types.RowID]time.Time {
 	t.Helper()
-	tempos := map[types.RowID]time.Time{}
+	times := map[types.RowID]time.Time{}
 	for range n {
-		tempos[apenda(t, hist, "a", rel.t)] = rel.t
+		times[apenda(t, hist, "a", rel.t)] = rel.t
 		rel.advance(passo)
 	}
-	return tempos
+	return times
 }
 
 // aplicaWindow roda uma expulsão e falha o teste no erro.
@@ -176,7 +176,7 @@ func selados(t *testing.T, s *Store) []uint32 {
 // INTEIRAMENTE coberto pela marca-d'água (candidatoOfRetention).
 func TestFronteiraDaJanelaUsaORecordMaisNovoDoSegmento(t *testing.T) {
 	hist, rel := histIndexed(t, 512)
-	tempos := povoaHistory(t, hist, rel, 40, time.Minute)
+	times := povoaHistory(t, hist, rel, 40, time.Minute)
 
 	sel := selados(t, hist)
 	if len(sel) < 3 {
@@ -191,10 +191,10 @@ func TestFronteiraDaJanelaUsaORecordMaisNovoDoSegmento(t *testing.T) {
 	}
 	// O corte cai DENTRO do alvo: depois do primeiro record dele e antes do
 	// último. Pelo mais novo ele fica; pelo mais antigo ele sairia.
-	corte := tempos[faixa[0]].Add(time.Minute)
-	if !corte.After(tempos[faixa[0]]) || !corte.Before(tempos[faixa[1]]) {
+	corte := times[faixa[0]].Add(time.Minute)
+	if !corte.After(times[faixa[0]]) || !corte.Before(times[faixa[1]]) {
 		t.Fatalf("o corte %s não atravessa o segmento %d (%s..%s)",
-			corte, target, tempos[faixa[0]], tempos[faixa[1]])
+			corte, target, times[faixa[0]], times[faixa[1]])
 	}
 	const window = time.Hour
 	rel.t = corte.Add(window)
@@ -206,11 +206,11 @@ func TestFronteiraDaJanelaUsaORecordMaisNovoDoSegmento(t *testing.T) {
 		t.Fatalf("o segmento %d atravessa a fronteira e perdeu o índice (com índice: %v); "+
 			"a fronteira está olhando o record mais ANTIGO", target, withIndex)
 	}
-	// E o vizinho mais velho, inteiramente do outro lado, perdeu o dele.
-	velho := sel[0]
-	if slices.Contains(withIndex, velho) {
+	// E o vizinho mais old, inteiramente do outro lado, perdeu o dele.
+	old := sel[0]
+	if slices.Contains(withIndex, old) {
 		t.Fatalf("o segmento %d está inteiro fora da janela e manteve o índice (com índice: %v)",
-			velho, withIndex)
+			old, withIndex)
 	}
 }
 
@@ -306,12 +306,12 @@ func TestOTetoDeBytesVenceOPrazoDeclarado(t *testing.T) {
 	povoaHistory(t, hist, rel, 40, time.Minute)
 
 	const declarada = 24 * time.Hour
-	withoutCeiling := WindowOfIndex{Duration: declarada}
-	if n := aplicaWindow(t, hist, withoutCeiling); n != 0 {
+	withoutTeto := WindowOfIndex{Duration: declarada}
+	if n := aplicaWindow(t, hist, withoutTeto); n != 0 {
 		t.Fatalf("a janela sem teto expulsou %d índices", n)
 	}
-	cobertaWithoutCeiling := hist.WindowEfetiva()
-	if cobertaWithoutCeiling <= 0 {
+	cobertaWithoutTeto := hist.WindowEfetiva()
+	if cobertaWithoutTeto <= 0 {
 		t.Fatal("WindowEfetiva = 0 com o dataset inteiro indexado")
 	}
 
@@ -325,16 +325,16 @@ func TestOTetoDeBytesVenceOPrazoDeclarado(t *testing.T) {
 		t.Fatal("o teto de bytes não expulsou nada")
 	}
 	cobertaWithCeiling := hist.WindowEfetiva()
-	if cobertaWithCeiling >= cobertaWithoutCeiling {
+	if cobertaWithCeiling >= cobertaWithoutTeto {
 		t.Fatalf("WindowEfetiva = %s com teto e %s sem teto: o teto não estreitou a cobertura",
-			cobertaWithCeiling, cobertaWithoutCeiling)
+			cobertaWithCeiling, cobertaWithoutTeto)
 	}
 	// E quem mandou foi o TETO, não o relógio: a janela declarada é maior que a
 	// cobertura que o dataset inteiro daria, então o prazo não cortou nada. É
 	// esta a comparação que o operador faz no painel.
-	if cobertaWithoutCeiling >= declarada {
+	if cobertaWithoutTeto >= declarada {
 		t.Fatalf("a cobertura sem teto (%s) alcançou a janela declarada (%s): o teste não separa "+
-			"o corte por bytes do corte por tempo", cobertaWithoutCeiling, declarada)
+			"o corte por bytes do corte por tempo", cobertaWithoutTeto, declarada)
 	}
 }
 
@@ -430,7 +430,7 @@ func TestAJanelaConvergeEmVezDeMoer(t *testing.T) {
 		t.Fatalf("%d segmentos selados; o teste precisa de uma pilha", len(sel))
 	}
 	atypical := sel[0]
-	sizeAtypical := hist.bytesOfIndexOfSegment(atypical)
+	sizeAtipico := hist.bytesOfIndexOfSegment(atypical)
 	var somaPequenos, maiorSmall int64
 	for _, sec := range sel[1:] {
 		b := hist.bytesOfIndexOfSegment(sec)
@@ -440,10 +440,10 @@ func TestAJanelaConvergeEmVezDeMoer(t *testing.T) {
 	// A precondição é o teste do próprio fixture: sem um índice maior que os
 	// outros, os três estimadores dariam a mesma resposta e o oráculo abaixo
 	// não provaria nada.
-	if sizeAtypical <= maiorSmall {
+	if sizeAtipico <= maiorSmall {
 		t.Fatalf("o segmento mais velho tem índice de %d bytes e o maior dos outros tem %d: "+
 			"o fixture não produziu variedade, e sem ela nenhum estimador é distinguível",
-			sizeAtypical, maiorSmall)
+			sizeAtipico, maiorSmall)
 	}
 	// Teto com UMA vaga de folga além dos pequenos: é ela que um estimador
 	// subestimado usaria para readmitir o atípico.
@@ -489,7 +489,7 @@ func TestOTamanhoLembradoNaoViraCatraca(t *testing.T) {
 
 	sel := selados(t, hist)
 	atypical := sel[0]
-	sizeAtypical := hist.bytesOfIndexOfSegment(atypical)
+	sizeAtipico := hist.bytesOfIndexOfSegment(atypical)
 	var somaPequenos, maiorSmall int64
 	for _, sec := range sel[1:] {
 		b := hist.bytesOfIndexOfSegment(sec)
@@ -502,7 +502,7 @@ func TestOTamanhoLembradoNaoViraCatraca(t *testing.T) {
 	}
 	// Agora o teto comporta todo mundo, inclusive o atípico pelo tamanho REAL
 	// que a expulsão lembrou.
-	folgado := WindowOfIndex{MaxBytes: somaPequenos + sizeAtypical}
+	folgado := WindowOfIndex{MaxBytes: somaPequenos + sizeAtipico}
 	fila := pendentes(t, hist, folgado)
 	if !slices.Contains(fila, atypical) {
 		t.Fatalf("pendentes = %v: subir o teto não trouxe o segmento %d de volta; "+
@@ -585,7 +585,7 @@ func TestAJanelaNaoDeixaIndiceDeSegmentoAposentado(t *testing.T) {
 		ExpireAfterWrite: time.Hour,
 		Window:           WindowOfIndex{Duration: 24 * time.Hour},
 	})
-	if res.ByTempo == 0 {
+	if res.ByTime == 0 {
 		t.Fatal("nenhum segmento foi aposentado; o teste precisa da purga")
 	}
 	vivos := selados(t, hist)
@@ -692,42 +692,42 @@ func TestNoBootstrapOTetoAdmiteSoOMaisNovo(t *testing.T) {
 // séries diriam que o índice cobre linhas que a consulta já não vê.
 func TestAJanelaEfetivaRespeitaAMarcaDagua(t *testing.T) {
 	hist, rel := histIndexed(t, 512)
-	tempos := povoaHistory(t, hist, rel, 40, time.Minute)
+	times := povoaHistory(t, hist, rel, 40, time.Minute)
 
 	sel := selados(t, hist)
 	if len(sel) < 3 {
 		t.Fatalf("%d segmentos selados; o teste precisa de uma pilha", len(sel))
 	}
 	faixas := faixasOfSegmentos(t, hist)
-	velho, seguinte := sel[0], sel[1]
-	faixaVelho := faixas[velho]
-	if faixaVelho[1]-faixaVelho[0] < 3 {
+	old, seguinte := sel[0], sel[1]
+	faixaOld := faixas[old]
+	if faixaOld[1]-faixaOld[0] < 3 {
 		t.Fatalf("o segmento %d tem %d linhas; o teste precisa que a marca caia DENTRO dele",
-			velho, faixaVelho[1]-faixaVelho[0]+1)
+			old, faixaOld[1]-faixaOld[0]+1)
 	}
 
 	// 1. A marca cai DENTRO do segmento mais velho, que por isso NÃO é
 	//    aposentado: o arquivo e o índice continuam lá, e só parte das linhas
 	//    dele é visível.
-	target := faixaVelho[0] + 2
-	prazo := rel.t.Sub(tempos[target])
+	target := faixaOld[0] + 2
+	prazo := rel.t.Sub(times[target])
 	res := pass(t, hist, LimitesOfRetention{ExpireAfterWrite: prazo})
-	if res.ByTempo != 0 {
+	if res.ByTime != 0 {
 		t.Fatalf("aposentou %d segmentos: o teste precisa do segmento VIVO com prefixo vencido",
-			res.ByTempo)
+			res.ByTime)
 	}
 	if hist.RowIDBase() != target {
 		t.Fatalf("marca = %d, quer %d", hist.RowIDBase(), target)
 	}
-	if !slices.Contains(segmentosWithIndex(t, hist), velho) {
-		t.Fatalf("o segmento %d perdeu o índice; o teste precisa dele indexado", velho)
+	if !slices.Contains(segmentosWithIndex(t, hist), old) {
+		t.Fatalf("o segmento %d perdeu o índice; o teste precisa dele indexado", old)
 	}
-	quer := rel.t.Sub(tempos[target])
+	quer := rel.t.Sub(times[target])
 	if got := hist.WindowEfetiva(); got != quer {
 		t.Fatalf("WindowEfetiva = %s, quer %s: ela precisa partir da MARCA, e não do primeiro "+
 			"record físico (que daria %s) — senão ela e a série de instante mais antigo falam "+
 			"de pontos de partida diferentes",
-			got, quer, rel.t.Sub(tempos[faixaVelho[0]]))
+			got, quer, rel.t.Sub(times[faixaOld[0]]))
 	}
 
 	// 2. A marca passa do segmento mais velho INTEIRO sem que ele saia do disco.
@@ -736,7 +736,7 @@ func TestAJanelaEfetivaRespeitaAMarcaDagua(t *testing.T) {
 	//    segmento sem linha visível não descreve cobertura nenhuma e é pulado.
 	startSeguinte := faixas[seguinte][0]
 	hist.rowIDBase.Store(uint64(startSeguinte))
-	quer = rel.t.Sub(tempos[startSeguinte])
+	quer = rel.t.Sub(times[startSeguinte])
 	if got := hist.WindowEfetiva(); got != quer {
 		t.Fatalf("WindowEfetiva = %s, quer %s: o segmento inteiro abaixo da marca não tem linha "+
 			"visível e não pode decidir a cobertura", got, quer)

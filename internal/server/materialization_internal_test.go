@@ -100,7 +100,7 @@ func TestAmostrasDeMaterializacaoPublicamAsSeries(t *testing.T) {
 	}
 	samples := samplesOfMaterializacao("d", specWithPoliticas(), snap)
 
-	valores := map[string]float64{}
+	values := map[string]float64{}
 	for _, a := range samples {
 		key := a.Name
 		for _, l := range a.Labels {
@@ -108,7 +108,7 @@ func TestAmostrasDeMaterializacaoPublicamAsSeries(t *testing.T) {
 				key += "{rule=" + l.Value + "}"
 			}
 		}
-		valores[key] = a.Value
+		values[key] = a.Value
 	}
 	quer := map[string]float64{
 		metrics.MetFrozenCaptured:              7,
@@ -120,7 +120,7 @@ func TestAmostrasDeMaterializacaoPublicamAsSeries(t *testing.T) {
 		metrics.MetTTLUnmatched:                3,
 	}
 	for name, v := range quer {
-		if got, ok := valores[name]; !ok || got != v {
+		if got, ok := values[name]; !ok || got != v {
 			t.Errorf("%s = %v (presente=%v), quero %v", name, got, ok, v)
 		}
 	}

@@ -77,7 +77,7 @@ func runQuery(args []string, amb Context) int {
 	// gramática. É o que faz `--param int64:9223372036854775808` receber a
 	// mensagem de overflow do protocolo na linha de comando, em vez de depois
 	// de um round-trip.
-	valores, err := protocol.Values(params)
+	values, err := protocol.Values(params)
 	if err != nil {
 		_, _ = fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUsageError
@@ -136,7 +136,7 @@ func runQuery(args []string, amb Context) int {
 	// mentir num dos dois modos, e quebraria a promessa escrita em
 	// consultaRemota: "um script que troca --config por --server não muda mais
 	// nada".
-	it, err := eng.Execute(amb.Ctx, *dataset, sql, valores)
+	it, err := eng.Execute(amb.Ctx, *dataset, sql, values)
 	if err != nil {
 		// O erro de sintaxe/bind sai ANTES de qualquer byte no stdout: quem
 		// consome a saída não pode receber linha parcial seguida de erro.
