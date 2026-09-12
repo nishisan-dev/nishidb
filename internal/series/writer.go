@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 // bufSize é o buffer de escrita. Uma passada emite uma linha por grupo, e
@@ -40,7 +41,16 @@ type Writer struct {
 	f    *os.File
 	size int64
 	buf  []byte
+
+	// rotations é lido pelo scrape, de outra goroutine.
+	rotations atomic.Uint64
 }
+
+// Rotations são as rotações desde a abertura.
+func (w *Writer) Rotations() uint64 { return w.rotations.Load() }
+
+// Size é o tamanho corrente do arquivo, incluindo o que está no buffer.
+func (w *Writer) Size() int64 { return w.size }
 
 // OpenWriter abre (ou cria) o arquivo corrente da série.
 //
@@ -152,6 +162,7 @@ func (w *Writer) rotate() error {
 		return fmt.Errorf("series: fechar %s: %w", w.path(0), err)
 	}
 	w.f = nil
+	w.rotations.Add(1)
 	if w.keep == 0 {
 		// Sem histórico a guardar, o corrente é descartado em vez de virar
 		// .1 — que seria um arquivo a mais do que o operador declarou.

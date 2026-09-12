@@ -71,17 +71,20 @@ func (r *Runner) enrich(ra *runnerAlarm, key, text []byte, total int64) []Enrich
 		e := Enrichment{Name: q.name}
 		switch {
 		case r.engine == nil:
+			ra.stats.enrichFailed.Add(1)
 			// Sem motor declarado não há como consultar. É configuração do
 			// chamador, não falha de runtime, e o evento o diz em vez de
 			// esconder.
 			e.Note = "sem motor de consulta"
 		case r.enrichBudget <= 0:
 			e.Note = "pulado: teto de enriquecimentos da passada"
+			ra.stats.enrichSkipped.Add(1)
 		default:
 			r.enrichBudget--
 			rows, err := r.runQuery(q, key, text, total)
 			if err != nil {
 				e.Note = "consulta falhou: " + err.Error()
+				ra.stats.enrichFailed.Add(1)
 			} else {
 				e.Rows = rows
 			}

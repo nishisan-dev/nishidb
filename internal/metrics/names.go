@@ -622,4 +622,67 @@ const (
 	// propósito) porque é a grafia que o plano da Fase 11 fixa para
 	// nishidb_auth_failures_total.
 	LabelReason = "reason"
+
+	// LabelAlarm é o nome do alarme declarado no contador, e o valor vem do
+	// YAML do dataset — conjunto fechado, declarado na subida —, nunca de
+	// entrada do cliente. Cardinalidade: o número de alarmes declarados, que é
+	// o número de itens dos blocos `alarms:`. Mesma doutrina do LabelCounter,
+	// que ele acompanha em toda série de alarme.
+	LabelAlarm = "alarm"
+)
+
+// Séries dos ALARMES de contador. Todas nascem com zero na subida: "nenhum
+// alarme disparou" tem de ser distinguível de "ninguém está observando", e sem
+// o zero um painel vazio não diz qual dos dois é.
+//
+// As três primeiras são por (dataset, counter, alarm); as três últimas, por
+// dataset — a passada é do dataset inteiro, e não de um alarme.
+const (
+	// MetAlarmGroupsTracked são os grupos em observação: a condição vale para
+	// eles, tenham ou não cumprido o prazo. Acompanha o PROBLEMA, nunca o
+	// tamanho do inventário — se esta série crescer com o número de grupos do
+	// contador, algo está guardando estado que não deveria.
+	MetAlarmGroupsTracked = "nishidb_alarm_groups_tracked"
+	// MetAlarmGroupsFiring são os grupos com o alarme disparado agora.
+	MetAlarmGroupsFiring = "nishidb_alarm_groups_firing"
+	// MetAlarmFiredTotal e MetAlarmResolvedTotal são os acumulados do ciclo.
+	MetAlarmFiredTotal    = "nishidb_alarm_fired_total"
+	MetAlarmResolvedTotal = "nishidb_alarm_resolved_total"
+	// MetAlarmEnrichFailedTotal e MetAlarmEnrichSkippedTotal são séries
+	// SEPARADAS de propósito: as duas deixam o bloco de enriquecimento vazio,
+	// mas pedem ações diferentes — falha manda investigar a consulta, pulo diz
+	// que houve avalanche e o teto da passada agiu.
+	MetAlarmEnrichFailedTotal  = "nishidb_alarm_enrich_failed_total"
+	MetAlarmEnrichSkippedTotal = "nishidb_alarm_enrich_skipped_total"
+	// MetAlarmWatching é 1 enquanto o laço de varredura está de pé. É a série
+	// que responde "ninguém está observando".
+	MetAlarmWatching = "nishidb_alarm_watching"
+	// MetAlarmSweepSeconds é a duração da última passada. Uma passada que
+	// passou a durar mais que a cadência apareceria só como alarme atrasado,
+	// sem causa nomeada, se esta série não existisse.
+	MetAlarmSweepSeconds = "nishidb_alarm_sweep_seconds"
+	// MetAlarmRestoredGroups são os cronômetros que vieram do disco na subida.
+	MetAlarmRestoredGroups = "nishidb_alarm_restored_groups"
+)
+
+// Séries da EMISSÃO periódica dos contadores. Por (dataset, counter), exceto a
+// de atividade, que é do dataset. Também nascem com zero.
+const (
+	// MetSeriesRowsTotal são as linhas escritas, e MetSeriesRotationsTotal as
+	// rotações: a primeira é o volume da série, a segunda diz quanto histórico
+	// está sendo descartado por intervalo.
+	MetSeriesRowsTotal      = "nishidb_series_rows_total"
+	MetSeriesRotationsTotal = "nishidb_series_rotations_total"
+	// MetSeriesErrorsTotal distingue "a série parou porque nada mudou" de "a
+	// série parou porque a escrita falha".
+	MetSeriesErrorsTotal = "nishidb_series_errors_total"
+	// MetSeriesBytes é o tamanho do arquivo corrente.
+	MetSeriesBytes = "nishidb_series_bytes"
+	// MetSeriesLastSuccessTimestamp é a última passada que escreveu sem erro,
+	// em segundos do epoch. É a série que um alerta de "a emissão parou"
+	// observa — e é zero até a primeira passada, o que é o estado de verdade.
+	MetSeriesLastSuccessTimestamp = "nishidb_series_last_success_timestamp"
+	// MetSeriesEmitting é 1 enquanto algum laço de emissão do dataset está de
+	// pé.
+	MetSeriesEmitting = "nishidb_series_emitting"
 )

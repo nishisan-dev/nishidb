@@ -65,6 +65,12 @@ type Emitter struct {
 	prefix    []byte
 	colPrefix [][]byte
 
+	// rows, errs e lastSuccess são os acumulados da observabilidade. Atômicos
+	// porque o scrape os lê de outra goroutine enquanto a passada os escreve.
+	rows        atomic.Uint64
+	errs        atomic.Uint64
+	lastSuccess atomic.Int64
+
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	active atomic.Bool
@@ -126,13 +132,21 @@ func (e *Emitter) EmitOnce() error {
 		line, err := e.appendLine(e.buf[:0], key, text, total)
 		e.buf = line
 		if err != nil {
+			e.errs.Add(1)
 			return err
 		}
 		if err := e.w.Write(line); err != nil {
+			e.errs.Add(1)
 			return err
 		}
+		e.rows.Add(1)
 	}
-	return e.w.Flush()
+	if err := e.w.Flush(); err != nil {
+		e.errs.Add(1)
+		return err
+	}
+	e.lastSuccess.Store(e.now().UnixMilli())
+	return nil
 }
 
 // appendLine monta a linha NDJSON de um grupo.
@@ -235,6 +249,38 @@ func (e *Emitter) run(ctx context.Context) {
 			return
 		}
 		t.Reset(e.opts.Every)
+	}
+}
+
+// Stats é o retrato da emissão de um contador para a observabilidade.
+type Stats struct {
+	Dataset string
+	Counter string
+	// Rows são as linhas escritas desde a subida, e Rotations quantas vezes o
+	// arquivo foi girado — o primeiro é o volume da série, o segundo diz
+	// quanto histórico está sendo descartado por intervalo.
+	Rows      uint64
+	Rotations uint64
+	// Errors distingue "a série parou porque nada mudou" de "a série parou
+	// porque a escrita falha".
+	Errors uint64
+	// Bytes é o tamanho do arquivo corrente.
+	Bytes int64
+	// LastSuccessUnixMs é a última passada que escreveu sem erro. É a série
+	// que um alerta de "a emissão parou" observa.
+	LastSuccessUnixMs int64
+}
+
+// Stats devolve o retrato corrente.
+func (e *Emitter) Stats() Stats {
+	return Stats{
+		Dataset:           e.opts.Dataset,
+		Counter:           e.opts.Counter,
+		Rows:              e.rows.Load(),
+		Rotations:         e.w.Rotations(),
+		Errors:            e.errs.Load(),
+		Bytes:             e.w.Size(),
+		LastSuccessUnixMs: e.lastSuccess.Load(),
 	}
 }
 

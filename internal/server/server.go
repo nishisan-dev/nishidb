@@ -383,6 +383,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 	// Depois do loop: o coletor percorre a lista pronta, e registrá-lo antes
 	// exporia um scrape com metade dos datasets durante a subida.
 	registerMetricsOfDataset(reg, s)
+	registerMetricsOfAlarms(reg, s)
 	ok = true
 	return s, nil
 }

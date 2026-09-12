@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
@@ -229,5 +230,97 @@ func TestDatasetSemEmissaoNaoCriaODiretorio(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cfg.DatasetRootDir("servicos"), schema.EmitDirName)); !os.IsNotExist(err) {
 		t.Errorf("o diretório da série foi criado sem ninguém declarar emissão (err=%v)", err)
+	}
+}
+
+// seriesOfAlarm são as séries publicadas por alarme declarado.
+var seriesOfAlarm = []string{
+	metrics.MetAlarmGroupsTracked,
+	metrics.MetAlarmGroupsFiring,
+	metrics.MetAlarmFiredTotal,
+	metrics.MetAlarmResolvedTotal,
+	metrics.MetAlarmEnrichFailedTotal,
+	metrics.MetAlarmEnrichSkippedTotal,
+}
+
+// TestMetricasDeAlarmeNascemComZero: um dataset com alarme declarado e nada
+// disparado emite as seis séries por alarme, zeradas. Série que alarma não pode
+// nascer no primeiro alarme — sem o zero na subida, "nenhum disparo" e "ninguém
+// observando" são o mesmo painel vazio.
+func TestMetricasDeAlarmeNascemComZero(t *testing.T) {
+	srv := serverWithAlarme(t, 0)
+	samples := coletaSamples(t, srv)
+	for _, nome := range seriesOfAlarm {
+		var achou bool
+		for _, a := range samples {
+			if a.Name != nome || a.Labels[metrics.LabelDataset] != "servicos" {
+				continue
+			}
+			achou = true
+			if a.Labels[metrics.LabelAlarm] != "olt_down" {
+				t.Errorf("%s sem o rótulo do alarme: %+v", nome, a.Labels)
+			}
+			if a.Value != 0 {
+				t.Errorf("%s = %v na subida, quero zero", nome, a.Value)
+			}
+		}
+		if !achou {
+			t.Errorf("a série %s não foi publicada", nome)
+		}
+	}
+	// O laço está de pé, e é a série que responde "ninguém está observando".
+	for _, a := range samples {
+		if a.Name == metrics.MetAlarmWatching && a.Labels[metrics.LabelDataset] == "servicos" && a.Value != 1 {
+			t.Errorf("%s = %v com o laço de pé", a.Name, a.Value)
+		}
+	}
+}
+
+// TestMetricasDeSerieNascemPublicadas: mesma doutrina para a emissão. O
+// timestamp do último sucesso é o único que pode nascer diferente de zero, se a
+// primeira passada já correu.
+func TestMetricasDeSerieSaoPublicadas(t *testing.T) {
+	a := newEnvWithStorage(t, blockPadrao, "")
+	a.writeDataset("servicos", fmt.Sprintf(specServicesComEmissao, "servicos"))
+	seedServices(t, a, "servicos", 8)
+	srv, err := server.Novo(a.load(), server.Options{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	run(t, srv)
+	samples := coletaSamples(t, srv)
+	for _, nome := range []string{
+		metrics.MetSeriesRowsTotal, metrics.MetSeriesRotationsTotal,
+		metrics.MetSeriesErrorsTotal, metrics.MetSeriesBytes,
+		metrics.MetSeriesLastSuccessTimestamp, metrics.MetSeriesEmitting,
+	} {
+		var achou bool
+		for _, s := range samples {
+			if s.Name == nome && s.Labels[metrics.LabelDataset] == "servicos" {
+				achou = true
+			}
+		}
+		if !achou {
+			t.Errorf("a série %s não foi publicada", nome)
+		}
+	}
+	for _, s := range samples {
+		if s.Name == metrics.MetSeriesErrorsTotal && s.Value != 0 {
+			t.Errorf("%s = %v num dataset saudável", s.Name, s.Value)
+		}
+	}
+}
+
+// TestDatasetSemAlarmeNaoPublicaSerieDeAlarme: rótulo com cardinalidade é
+// custo, e publicar zero para quem não declarou nada encheria o Prometheus de
+// séries que nunca vão mudar.
+func TestDatasetSemAlarmeNaoPublicaSerieDeAlarme(t *testing.T) {
+	srv := serverWithServices(t, 8)
+	for _, s := range coletaSamples(t, srv) {
+		for _, nome := range seriesOfAlarm {
+			if s.Name == nome {
+				t.Fatalf("série de alarme %s publicada num dataset sem alarme: %+v", nome, s.Labels)
+			}
+		}
 	}
 }

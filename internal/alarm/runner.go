@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/counters"
@@ -57,6 +58,11 @@ type Runner struct {
 	// grupo aposentado não aparece na varredura, e é a ausência que resolve o
 	// alarme dele.
 	pass uint64
+
+	// lastSweep é a duração da última passada, em nanossegundos, e
+	// restoredGroups quantos cronômetros vieram do disco na subida.
+	lastSweep      atomic.Int64
+	restoredGroups int64
 
 	// dirty marca que houve transição e o estado precisa ir ao disco. A
 	// gravação é por TRANSIÇÃO, e não por passada: o estado só muda quando um
@@ -116,6 +122,7 @@ type runnerAlarm struct {
 	// tracker para cada faria a memória crescer com o inventário em vez de com
 	// o problema.
 	trackers map[string]*tracker
+	stats    alarmCounters
 }
 
 // New monta o runner a partir dos alarmes compilados e dos contadores abertos.
@@ -213,6 +220,7 @@ func (r *Runner) restore() {
 			restored++
 		}
 	}
+	r.restoredGroups = int64(restored)
 	if restored > 0 || dropped > 0 {
 		r.log.Info("alarm.state_restored",
 			"estado de sustentação lido do disco",
@@ -239,6 +247,8 @@ func (r *Runner) findAlarm(counterName, alarmName string) *runnerAlarm {
 // É público para que o teste a chame direto, em vez de esperar um tique — é o
 // mesmo motivo do AposentaGroupsVazios no storage.
 func (r *Runner) EvaluateOnce() error {
+	inicio := time.Now()
+	defer func() { r.lastSweep.Store(int64(time.Since(inicio))) }()
 	now := r.now()
 	r.pass++
 	r.dirty = false
@@ -328,6 +338,14 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 	}
 	if d.verdict == verdictNone {
 		return
+	}
+	switch d.verdict {
+	case verdictFiring:
+		ra.stats.fired.Add(1)
+		ra.stats.firing.Add(1)
+	case verdictCleared, verdictRetired:
+		ra.stats.resolved.Add(1)
+		ra.stats.firing.Add(-1)
 	}
 	e := r.event(rc, ra, key, text, total, d, now)
 	// Só o DISPARO enriquece. O enriquecimento existe para dar contexto ao
