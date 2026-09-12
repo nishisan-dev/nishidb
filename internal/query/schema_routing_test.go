@@ -349,3 +349,58 @@ func schemasOfRefusal(t *testing.T, msg string) []string {
 	}
 	return out
 }
+
+// TestParPublicadoPorDoisDatasetsEhRecusadoComoAmbiguo exercita a REDE da
+// resolução: o ramo que recusa `schema.tabela` quando mais de um dataset
+// publica esse mesmo par.
+//
+// Ele não é alcançável por YAML — a barreira é a configuração, que recusa na
+// subida o schemaName repetido (config.ValidateSchemaUniqueness) e o contador
+// homônimo do dataset ou da irmã do histórico (schema.validateCounters). É
+// alcançável pelo RegisterVirtual, que é API exportada e não passa por
+// nenhuma das três: é exatamente esse retrato que o teste monta, registrando
+// dois datasets no MESMO schema e uma view de mesmo nome em cada um.
+//
+// A recusa é o comportamento certo porque a alternativa é pior: escolher um
+// dos dois em silêncio faria a consulta responder de outra tabela sem nada
+// acusar.
+func TestParPublicadoPorDoisDatasetsEhRecusadoComoAmbiguo(t *testing.T) {
+	const shadowDataset = "eventos_sombra"
+	h := newHarness(t)
+	tableVirtualOfTest(t, h.engine, dataset, schema.CountersNamespace, "por_olt")
+	// O MESMO schemaName do dataset do harness. É o que o motor não tem como
+	// impedir sozinho, e o que faz os dois pares colidirem.
+	registerDatasetOfTest(t, h.engine, shadowDataset, "telecom")
+	tableVirtualOfTest(t, h.engine, shadowDataset, schema.CountersNamespace, "por_olt")
+
+	const sql = "SELECT olt FROM telecom.por_olt"
+	_, err := queryOf(t, h.engine, dataset, sql)
+	if err == nil {
+		t.Fatal("o par publicado por dois datasets não pode resolver em silêncio")
+	}
+	if !strings.Contains(err.Error(), "é ambíguo") {
+		t.Errorf("a recusa tem de dizer que o par é ambíguo: %v", err)
+	}
+	// Nomear os DOIS donos é o que torna a recusa acionável: sem eles o
+	// operador sabe que há colisão e não sabe entre o quê.
+	for _, want := range []string{dataset, shadowDataset} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("a recusa tem de nomear o dataset %q: %v", want, err)
+		}
+	}
+	// A ordem é alfabética, e não a do laço do mapa: uma mensagem que muda
+	// entre duas execuções idênticas manda o operador procurar uma diferença
+	// que não existe. `eventos_sombra` vem antes de `radius_sessions`.
+	if i, j := strings.Index(err.Error(), shadowDataset), strings.Index(err.Error(), dataset); i > j {
+		t.Errorf("os donos têm de sair em ordem alfabética: %v", err)
+	}
+	assertRefusalOfBind(t, err, sql, "por_olt")
+
+	// Pelo handle do OUTRO dataset a recusa é a mesma: o par é ambíguo por si,
+	// e não em relação à conexão. Sem esta metade, um motor que desempatasse
+	// pelo handle da requisição passaria na primeira.
+	if _, err := queryOf(t, h.engine, shadowDataset, sql); err == nil ||
+		!strings.Contains(err.Error(), "é ambíguo") {
+		t.Fatalf("a ambiguidade não pode depender do handle da requisição: %v", err)
+	}
+}
