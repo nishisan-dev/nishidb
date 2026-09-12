@@ -1174,8 +1174,11 @@ elas descrevem a mesma tabela, então o driver corta a repetição pelo par
 são aditivos, e um binário anterior responde sem os dois. Aí cada dataset volta
 a ser uma linha `TABLE` com `TABLE_SCHEM` nulo e as colunas do campo `columns`,
 que é exatamente o que o driver listava antes — nenhuma view inventada e nada
-lançado (`metadataSemTablesDegradaSemErro`, que fala com um fixture só seu — o
-resto da suíte usa o documento novo).
+lançado (`NishiDatabaseMetaDataTest#metadataSemTablesDegradaSemErro`, que fala
+com um fixture só seu — o resto da suíte usa o documento novo). A citação vem
+qualificada pela classe porque é assim que o
+`TestEvidenciasCitadasNosDocumentosExistem` confere um teste JUnit: um nome
+camelCase solto é indistinguível de um identificador qualquer citado em prosa.
 
 ## O protocolo remoto
 
