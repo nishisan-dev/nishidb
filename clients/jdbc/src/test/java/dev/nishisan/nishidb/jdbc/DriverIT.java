@@ -174,25 +174,73 @@ class DriverIT {
             assertEquals("\"", m.getIdentifierQuoteString());
             assertFalse(m.supportsTransactions());
 
-            // Catálogo e schema: vazios, mas com a forma certa.
+            // Catálogo: vazio, mas com a forma certa. O produto não tem
+            // catálogo — o endereço qualificado tem dois níveis.
             try (ResultSet rs = m.getCatalogs()) {
                 assertEquals(1, rs.getMetaData().getColumnCount());
             }
+            // Schemas: os do servidor REAL. O do dataset é o `schemaName` do
+            // YAML, e o `_meta` é onde as tabelas que descrevem o motor moram.
+            List<String> schemas = new ArrayList<>();
             try (ResultSet rs = m.getSchemas()) {
-                assertFalse(rs.next());
-            }
-            try (ResultSet rs = m.getTableTypes()) {
-                assertTrue(rs.next());
-                assertEquals("TABLE", rs.getString(1));
-            }
-
-            List<String> tabelas = new ArrayList<>();
-            try (ResultSet rs = m.getTables(null, null, null, null)) {
                 while (rs.next()) {
-                    tabelas.add(rs.getString("TABLE_NAME"));
+                    schemas.add(rs.getString("TABLE_SCHEM"));
                 }
             }
-            assertTrue(tabelas.contains("todos_os_tipos"), "getTables não listou o dataset: " + tabelas);
+            assertTrue(schemas.contains("telecom"),
+                    "getSchemas não trouxe o schemaName do dataset: " + schemas);
+            assertTrue(schemas.contains("_meta"), "getSchemas não trouxe o _meta: " + schemas);
+
+            List<String> tipos = new ArrayList<>();
+            try (ResultSet rs = m.getTableTypes()) {
+                while (rs.next()) {
+                    tipos.add(rs.getString(1));
+                }
+            }
+            assertEquals(List.of("TABLE", "VIEW"), tipos);
+
+            // A árvore: a base como TABLE no schema do dataset, e as tabelas
+            // do _meta como VIEW no schema _meta.
+            List<String> tabelas = new ArrayList<>();
+            List<String> views = new ArrayList<>();
+            try (ResultSet rs = m.getTables(null, null, null, null)) {
+                while (rs.next()) {
+                    String qualificado = rs.getString("TABLE_SCHEM") + "."
+                            + rs.getString("TABLE_NAME");
+                    if ("VIEW".equals(rs.getString("TABLE_TYPE"))) {
+                        views.add(qualificado);
+                    } else {
+                        tabelas.add(qualificado);
+                    }
+                }
+            }
+            assertTrue(tabelas.contains("telecom.todos_os_tipos"),
+                    "getTables não listou a base no schema do dataset: " + tabelas);
+            assertTrue(views.contains("_meta.tables"),
+                    "getTables não listou as tabelas do _meta como view: " + views);
+
+            // O filtro por tipo é como a ferramenta abre a pasta de views.
+            try (ResultSet rs = m.getTables(null, null, null, new String[] {"VIEW"})) {
+                while (rs.next()) {
+                    assertEquals("VIEW", rs.getString("TABLE_TYPE"));
+                }
+            }
+            // E o de schema restringe à pasta aberta.
+            try (ResultSet rs = m.getTables(null, "_meta", null, null)) {
+                assertTrue(rs.next(), "getTables com o padrão de schema _meta não trouxe linha");
+                do {
+                    assertEquals("_meta", rs.getString("TABLE_SCHEM"));
+                } while (rs.next());
+            }
+
+            // O PAGAMENTO: o SQL que a ferramenta monta a partir do (schema,
+            // nome) desta árvore tem de EXECUTAR no servidor. É o que o driver
+            // promete ao preencher o TABLE_SCHEM.
+            try (Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery(
+                            "SELECT id FROM telecom.todos_os_tipos LIMIT 1")) {
+                assertTrue(rs.next(), "o SELECT qualificado pelo schema não devolveu linha");
+            }
 
             // getColumns publica o nome do CAMPO; o alias vai no REMARKS. O
             // dataset tem um campo com alias justamente para provar isso.
