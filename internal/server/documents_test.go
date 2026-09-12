@@ -697,6 +697,34 @@ func idsOfTables(d protocol.DatasetMeta) string {
 	return strings.Join(ids, ",")
 }
 
+// counterBlock declara UM contador sobre o campo indexado do specConsultavel.
+//
+// Ele existe para que a lista do catálogo tenha a linha `_counters.<nome>`: é a
+// ÚNICA em que o Schema (o do dataset) difere do Namespace, e é o ramo de
+// query.catalogEntries que escolhe o container da árvore. Um fixture sem
+// contador deixa esse ramo fora da lista, e um teste que se anuncia como "a
+// lista INTEIRA" passaria com ele quebrado.
+const counterBlock = `counters:
+  - name: por_status
+    groupBy: [status]
+`
+
+// serverWithCounter sobe o servidor do specConsultavel com o contador declarado.
+// O dataset é povoado ANTES do `counters:`, como no counters_test: é o servidor
+// que constrói o contador na abertura.
+func serverWithCounter(t *testing.T, n int) *server.Server {
+	t.Helper()
+	a := newEnvWithStorage(t, blockPadrao, "")
+	a.writeDataset("d", strings.ReplaceAll(specConsultavel, "%s", "d")+counterBlock)
+	seed(t, a, "d", n)
+	srv, err := server.Novo(a.load(), server.Options{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	run(t, srv)
+	return srv
+}
+
 // O /v1/metadata é de onde o driver JDBC monta a árvore do cliente SQL, e até
 // aqui ele só publicava as colunas da tabela BASE: nem contador nem tabela de
 // meta apareciam, e a lista completa só saía por `SELECT ... FROM _meta.tables`
@@ -707,8 +735,13 @@ func idsOfTables(d protocol.DatasetMeta) string {
 // não é o do dataset), o NAMESPACE do atalho (que não sai de (schema, nome)) e
 // o código JDBC de cada coluna — calculado no servidor, pelo mesmo columnMeta
 // que já serve as colunas da base.
+//
+// O fixture declara um contador de propósito: sem ele a lista não tem nenhuma
+// linha em que Schema e Namespace divirjam, e o ramo do catálogo que põe o
+// contador no schema do DATASET — e não no `_virtual` da spec sintética dele —
+// não é exercitado por este canal.
 func TestMetadataPublicaOSchemaEOCatalogoDeTabelas(t *testing.T) {
-	srv := serverWithData(t, 3, blockPadrao)
+	srv := serverWithCounter(t, 3)
 
 	m := readJSON[protocol.Metadata](t, srv, "/v1/metadata")
 	if len(m.Datasets) != 1 {
@@ -723,9 +756,17 @@ func TestMetadataPublicaOSchemaEOCatalogoDeTabelas(t *testing.T) {
 	// enumeração, e uma asserção que só procurasse a base passaria com o
 	// catálogo errado ao redor dela. A ordem é a do Catalog — base, contadores,
 	// `_meta` por nome.
-	const wantIDs = "d,_meta.counters,_meta.fields,_meta.kafka,_meta.tables"
+	const wantIDs = "d,_counters.por_status,_meta.counters,_meta.fields,_meta.kafka,_meta.tables"
 	if got := idsOfTables(d); got != wantIDs {
 		t.Fatalf("tabelas = %s, quero %s", got, wantIDs)
+	}
+
+	// O contador mora no schema do DATASET, ao lado da base — é tabela do
+	// usuário —, e é alcançado pelo atalho `_counters`. É a única linha em que
+	// os dois endereços não coincidem.
+	counter := tableOf(t, d, "_counters.por_status")
+	if counter.Schema != "telecom" || counter.Namespace != "_counters" || counter.Kind != "VIEW" {
+		t.Errorf("o contador saiu como %+v; quero schema telecom, namespace _counters e kind VIEW", counter)
 	}
 
 	base := tableOf(t, d, "d")
