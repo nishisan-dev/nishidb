@@ -2516,6 +2516,127 @@ foi medido (débito 108). `_counters` fica fora do isolamento de snapshot
 (débito 109), e `WHERE olt = …` num contador composto varre os grupos em vez
 de usar índice (débito 110).
 
+## Alarmes e emissão periódica de contador
+
+Os contadores respondem quando perguntados. Estes dois subsistemas **empurram**:
+o alarme avisa quando uma condição declarada se sustenta por um prazo, e a
+emissão escreve o valor de cada grupo num arquivo, periodicamente. Os dois são
+declarados DENTRO do contador, no YAML do dataset.
+
+```yaml
+counters:
+  - name: autenticados_por_olt
+    groupBy: [olt]
+    where: authenticated = true
+    alarms:
+      - name: olt_down
+        when: "total < 100"          # a mesma linguagem do WHERE
+        sustainedFor: 2m             # o prazo que separa alarme de rajada
+        enrich:
+          - name: servicos_afetados
+            sql: "SELECT customerId FROM servicos WHERE olt = ? LIMIT 5"
+            bind: [olt]
+    emit:
+      every: 30s                     # file, maxBytes e keep têm default
+```
+
+![Alarme por condição sustentada: a passada, a decisão e o que sai](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/alarmes_flow.puml)
+
+**A condição não tem gramática nova.** A tabela `_counters.<nome>` já monta cada
+grupo como um payload de record de verdade, e o `when` passa pelo avaliador
+compartilhado de `internal/predicate` — o mesmo do `WHERE` de uma consulta e do
+`when:` de uma regra de TTL. `total < 100` num alarme significa exatamente o que
+significaria num `SELECT`, e não há uma segunda implementação de coerção para
+divergir da primeira.
+
+**A varredura não disputa nada com a ingestão.** Ler os grupos de um contador
+toma o lock FOLHA do dicionário e lê atômicos; nada do `Store`. A exigência de
+que a emissão não segure o writer sai satisfeita por construção, não por
+cuidado. A passada tem **zero alocação por grupo saudável**, gateada por
+`AllocsPerRun` — o estado em memória acompanha o problema, nunca o tamanho do
+inventário.
+
+**A cadência é o menor `sustainedFor` dividido por quatro**, com piso de um
+segundo. É o cálculo do `watchdogInterval` do Kafka, pelo mesmo motivo: a
+sustentação só é reconhecida entre DUAS observações, e com passada igual ao
+prazo um alarme de dois minutos levaria até quatro para sair.
+
+**Dispara uma vez, e avisa de novo quando passa.** O evento de resolução traz o
+motivo, e os dois motivos são distintos de propósito: `condition_cleared` é "o
+problema passou", `group_retired` é "o grupo saiu do contador". Equipamento
+removido do inventário não é equipamento recuperado, e quem gera evento a partir
+disso trata os dois de formas diferentes. Resolução sem disparo anterior nunca
+sai — é o que faz toda rajada curta não emitir nada, em vez de anunciar um
+"voltou" que ninguém viu abrir.
+
+**O enriquecimento nunca barra o alarme.** As consultas declaradas rodam no
+disparo, fora de qualquer lock, pelo MESMO motor que serve as consultas remotas
+— mesmo binder, mesmo planner, mesmo orçamento. O valor do grupo viaja como
+PARÂMETRO, nunca concatenado no texto: um nome de equipamento é dado vindo do
+cliente, e um apóstrofo dentro dele reescreveria o `WHERE`. Falha, prazo
+estourado ou teto da passada deixam o bloco vazio com o motivo, e o alarme sai
+igual. O teto é de dezesseis consultas por passada, não configurável — ele
+protege o processo de uma avalanche, não expressa política.
+
+A coluna cujo NOME cai na supressão de log (`token`, `senha`, `value`, …) sai
+redigida na montagem do bloco, e é obrigatório fazê-lo ali: a redação do handler
+percorre atributos e grupos, mas não entra num valor já serializado, e o nome da
+coluna vem do SQL que o operador escreveu. `logging.IsSensitiveKey` existe para
+que haja uma lista só, e o teste dela usa o handler de verdade como oráculo.
+
+**O reinício preserva o cronômetro.** O "desde quando" vai para
+`checkpoint/alarms.state`, escrito nas transições pelo caminho de durabilidade do
+manifest. Ele NÃO entra na ordem do passo 8 (§48): não descreve dado
+materializado nem posição de consumo, e escrevê-lo antes ou depois só muda
+quando um alarme dispara depois de um reinício. A identidade do grupo é a chave
+CANÔNICA em bytes, não o texto do `groupKey` — o texto é derivado do
+`keyFormat`, que pode mudar sem reconstruir o contador, e usá-lo como identidade
+faria uma troca de molde descartar em silêncio todos os cronômetros. Ausência é
+distinta de corrupção, e nenhuma das duas impede a abertura (§51): o que se
+perde são os cronômetros, e cada alarme recomeça a contar.
+
+Um alarme restaurado dispara marcado, com a **lacuna** do processo parado no
+evento. Sem ela, um disparo sobre um período que ninguém acompanhou seria
+indistinguível de um observado de ponta a ponta.
+
+**A emissão escreve uma linha por grupo vivo**, e o grupo com total ZERO sai —
+é o equipamento que apagou por inteiro, e é justamente a linha que interessa num
+gráfico: desaparecer da série viraria um buraco onde deve haver um zero. Os
+valores usam o serializador canônico das respostas de consulta, então o `slot`
+sai como o número 8, não como a string `"8"`. O arquivo fica em
+`<dataset>/series/<file>`, com rotação por tamanho e sufixo numérico crescendo
+para o passado — o teto de disco é `maxBytes × (keep+1)`, calculável por
+multiplicação. Não há fsync: é telemetria, e um crash perder a cauda é o desfecho
+certo, o mesmo argumento do spill do ORDER BY.
+
+**Ordem de parada.** Os dois laços vivem no SERVIDOR, não no `Store`, porque o
+enriquecimento precisa do motor de consulta — que o `Store` não conhece. Eles
+leem os contadores sem a guarda de vida, então o `encerra()` os cancela e
+AGUARDA antes do quiesce. A prova disso é um gate que lê a AST, e a escolha tem
+medida por trás: subir com alarme e encerrar sob `-race` NÃO prova a ordem — a
+passada sobre dezenas de grupos termina em microssegundos, o laço já está
+dormindo no timer, e com a ordem invertida cinco rodadas passaram verdes.
+
+**Observabilidade.** Nove séries para o alarme e seis para a emissão (ver
+[`metricas.md`](metricas.md)), todas nascendo com zero. Falha e pulo de
+enriquecimento são séries separadas porque pedem ações opostas. E a tabela
+virtual `_meta.alarms` dá o detalhe que os agregados não dão:
+
+```sql
+SELECT groupKey, state, since, condition FROM _meta.alarms WHERE state = 'firing' ORDER BY since ASC
+```
+
+`state = 'pending'` é o alarme que ainda conta o prazo — "vai alarmar em
+quarenta segundos" é informação que só existe antes do disparo.
+
+**O que NÃO existe aqui.** O canal é o log estruturado; tópico e webhook entram
+como outro `Sink` sobre o MESMO evento, e o ponto de extensão está pronto. A
+condição fala de UM contador: a razão entre dois (autenticados ÷ serviços da
+mesma OLT) não é expressável, e o desenho aninhado dentro do contador não
+acomoda um alarme que cite dois — quando a razão entrar, precisará de lugar
+próprio. `/v1/stats` não publica estes números; o coletor do `/metrics` é a
+fonte única, e expô-los no documento do dataset sairá de lá.
+
 ## O que ainda não existe
 
 **Tombstones por retenção** — a expiração por inatividade existe e está

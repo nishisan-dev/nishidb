@@ -527,6 +527,22 @@ inglês correspondente.
 | definição (o contador como declarado no YAML e compilado contra o schema) | definition | internal/storage/counter |
 | registrar (guardar o resultado de uma medição para as métricas) | record | internal/storage/counter |
 | espia (a segunda instância aberta sobre os mesmos arquivos só para olhar o que está em disco) | peeker | internal/storage/counter |
+| alarme (a condição declarada sobre a linha de um contador, com prazo de sustentação) | alarm | internal/alarm |
+| sustentação / sustentar-se (o prazo pelo qual a condição tem de valer antes de disparar) | sustain / sustainedFor | internal/alarm, internal/schema |
+| disparar / disparado (o alarme anunciado depois de a condição se sustentar) | fire / firing | internal/alarm |
+| resolver / resolvido (o alarme que deixou de valer) | resolve / resolved | internal/alarm |
+| pendente (a condição que vale e ainda não cumpriu o prazo) | pending | internal/alarm, internal/metaalarm |
+| cronômetro (o instante em que a condição passou a valer, e o que dele se persiste) | tracker | internal/alarm |
+| enriquecimento (o resultado das consultas que acompanham o evento de disparo) | enrichment | internal/alarm |
+| ligar (dar valor a um parâmetro `?` da consulta de enriquecimento) | bind | internal/alarm, internal/query/binder |
+| canal (o destino do evento de alarme: o log hoje, tópico e webhook depois) | sink | internal/alarm |
+| lacuna (quanto tempo o processo ficou sem observar, reportada no alarme restaurado) | downtime | internal/alarm |
+| retrato (a lista imutável de alarmes em observação, publicada a cada passada) | snapshot | internal/alarm, internal/metaalarm |
+| aposentado (o grupo que saiu do contador, e o motivo de resolução que ele produz) | retired | internal/alarm, internal/storage/counter |
+| emissão (a escrita periódica do valor de cada grupo num arquivo) | emission / emit | internal/series, internal/schema |
+| série (o arquivo NDJSON com uma linha por grupo por intervalo) | series | internal/series |
+| rotação / rotacionar (girar o arquivo de série ao cruzar o teto de tamanho) | rotate / rotation | internal/series |
+| guardar (quantos arquivos rotacionados são mantidos) | keep | internal/series, internal/schema |
 
 ## 4. Como usar
 

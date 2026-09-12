@@ -1376,6 +1376,108 @@ em partições diferentes e chegam fora de ordem) e com um **número de sequênc
 inteiro no primeiro nível** do documento, para que o stale check descarte o
 evento atrasado. Sem isso o contador está certo sobre um estado errado.
 
+### Alarme por condição sustentada
+
+O contador responde quando perguntado; o alarme **avisa**. Declarado dentro do
+contador, ele observa uma condição sobre a linha de cada grupo e emite um evento
+quando ela se sustenta pelo prazo:
+
+```yaml
+counters:
+  - name: autenticados_por_olt
+    groupBy: [olt]
+    where: authenticated = true
+    alarms:
+      - name: olt_down
+        when: "total < 100"
+        sustainedFor: 2m
+        enrich:
+          - name: servicos_afetados
+            sql: "SELECT customerId, ip FROM servicos WHERE olt = ? LIMIT 5"
+            bind: [olt]
+```
+
+O `when` fala a **mesma linguagem do `WHERE`** — é o mesmo avaliador — sobre as
+colunas da tabela do contador: `groupKey`, as do `groupBy` e `total`. Um nome de
+coluna errado **derruba a subida**, com a coluna nomeada.
+
+`sustainedFor` é o que separa alarme de rajada: mínimo de 10 s, e `never` é
+recusado (um alarme que nunca dispara não é um alarme). A varredura roda a cada
+`sustainedFor ÷ 4`.
+
+O `enrich` acompanha o evento com o resultado de consultas parametrizadas pelo
+grupo que alarmou — `bind` liga cada `?` a uma coluna do contador (`total` e
+`groupKey` incluídos). O valor vai como **parâmetro**, nunca concatenado: um nome
+de OLT com apóstrofo não reescreve a consulta. `LIMIT` é obrigatório, no máximo
+100. Cada consulta precisa de `name`, que é como o bloco é identificado no
+evento.
+
+**A consulta nunca barra o alarme.** Se ela falhar, o evento sai com o bloco
+vazio e o motivo. Coluna cujo nome seja sensível (`token`, `senha`, …) sai
+redigida.
+
+O disparo é um `WARN` e a resolução um `INFO`:
+
+```json
+{"event":"alarm.firing","counter":"autenticados_por_olt","alarm":"olt_down",
+ "groupKey":"BR_SPOAM_OLT_14","total":42,"condition":"total < 100",
+ "sustainedFor":"2m0s","since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:16:00.000Z",
+ "olt":"BR_SPOAM_OLT_14",
+ "enrichment":{"servicos_afetados":{"rows":[{"customerId":"cli-4471","ip":"10.0.0.9"}]}}}
+{"event":"alarm.resolved","reason":"condition_cleared","groupKey":"BR_SPOAM_OLT_14",
+ "total":812,"since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:25:00.000Z"}
+```
+
+`at − since` é a duração do problema. O `reason` distingue **`condition_cleared`**
+(o problema passou) de **`group_retired`** (o grupo saiu do contador) — um
+equipamento removido do inventário não é um equipamento recuperado.
+
+O cronômetro **sobrevive ao reinício**: o "desde quando" é gravado em
+`checkpoint/alarms.state`, e um alarme restaurado dispara com `"restored":true` e
+`"downtimeMs"` — quanto tempo ninguém estava observando. Mudar o `when` ou o
+`sustainedFor` no YAML invalida o cronômetro salvo daquele alarme.
+
+Para inspecionar o que está em curso, sem ler log:
+
+```bash
+nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT groupKey, state, since FROM _meta.alarms ORDER BY since ASC"
+```
+
+`state` é `firing` (já anunciado) ou `pending` (ainda contando o prazo).
+
+### Emissão periódica: a série de cada grupo
+
+Para alimentar gráfico por equipamento, o contador pode escrever o valor de
+**cada grupo** num arquivo NDJSON, periodicamente:
+
+```yaml
+counters:
+  - name: autenticados_por_olt
+    groupBy: [olt]
+    emit:
+      every: 30s                     # mínimo 10s
+      file: autenticados.ndjson      # opcional; default <nome do contador>.ndjson
+      maxBytes: 64MiB                # opcional
+      keep: 5                        # opcional
+```
+
+O arquivo fica em `<dataset>/series/<file>` — o diretório é fixo, e `file` é só o
+nome. Uma linha por grupo vivo, a cada intervalo, **inclusive os com total zero**
+(o equipamento que apagou por inteiro é justamente a linha que interessa):
+
+```json
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"at":"2026-09-12T03:30:00.000Z"}
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_09","olt":"BR_SPOAM_OLT_09","total":0,"at":"2026-09-12T03:30:00.000Z"}
+```
+
+Os valores são **tipados**: `total` e as colunas `int64` saem como número, não
+como texto. A rotação é por tamanho, com o sufixo crescendo para o passado
+(`file`, `file.1`, …) — o teto de disco é `maxBytes × (keep+1)`. Não há fsync:
+é telemetria, e um crash perde a cauda da série, que é o desfecho certo.
+
+Grupo aposentado deixa de ser emitido. Baixar o `keep` devolve o disco na subida
+seguinte.
+
 ### SQL suportado (v1)
 
 ```sql
@@ -1516,6 +1618,11 @@ cliente compilado antes deles lê o documento como lia.
 `_meta.counters` lista os contadores mantidos na escrita do dataset, com a
 definição e os números vivos; `_counters.<nome>`, uma tabela por contador
 declarado no YAML, lê os totais (ver "Contadores mantidos na escrita" acima).
+
+`_meta.alarms` lista os alarmes em observação, um por par (alarme, grupo): qual
+grupo, desde quando, e se o prazo já se cumpriu (ver "Alarme por condição
+sustentada" acima). Vazia num dataset sem alarme declarado — e no
+`nishidb query --config` ela é sempre vazia, porque quem varre é o servidor.
 
 `_meta.kafka` responde o estado da fonte Kafka do dataset, **uma linha por
 partição** — offset aplicado, offset durável do checkpoint, fim do log, lag,
