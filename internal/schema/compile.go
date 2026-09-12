@@ -298,9 +298,12 @@ type Compiled struct {
 	// em que schema a tabela vive seria a estrutura errada para o caminho de
 	// uma requisição.
 	//
-	// Nenhum leitor de produção existe AINDA: a cópia é a preparação para o
-	// catálogo das tabelas, que é quem vai lê-la. Hoje quem a exercita são os
-	// testes desta chave.
+	// Quem a lê em produção é o catálogo, pelos dois canais que ele serve: o
+	// Engine.Catalog põe este nome no Schema de cada TableInfo — o da tabela
+	// base e o das virtuais do dataset, que vivem no schema DELE e não no
+	// `_virtual` da spec sintética (internal/query/catalog.go) —, e o
+	// /v1/metadata publica o mesmo nome no campo `schema` do DatasetMeta
+	// (internal/server/documents.go).
 	//
 	// Ele viaja para as tabelas IRMÃS pelo mesmo caminho da spec: a histórica
 	// nasce de DeriveHistory, que o herda, porque a irmã é outra tabela do

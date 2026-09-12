@@ -37,9 +37,10 @@ const TableMetaTables = "tables"
 // FieldID — que qualquer outro dataset.
 //
 // A key é `id`, e NÃO `name`: o nome não é único dentro do dataset. A
-// compilação da spec recusa TRÊS colisões no nome de um contador — o prefixo
-// `_`, que é a reserva do produto; o nome do próprio dataset; e o nome repetido
-// entre dois contadores (internal/schema/counter.go) —, e nenhuma das três
+// compilação da spec recusa QUATRO colisões no nome de um contador — o prefixo
+// `_`, que é a reserva do produto; o nome do próprio dataset; o nome da tabela
+// irmã do histórico, que herda o schema do base; e o nome repetido entre dois
+// contadores (internal/schema/counter.go) —, e nenhuma das quatro
 // alcança o nome de uma tabela de meta: um contador chamado `tables` é aceito e
 // apareceria aqui ao lado desta própria tabela, com o mesmo `name` e schemas
 // diferentes. Duas linhas de mesma key fariam o point lookup

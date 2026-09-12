@@ -827,9 +827,10 @@ de T0, e a varredura não vê tabela aparecer no meio.
 aceita sem nomear schema (`_counters.por_olt`, `_meta.tables`, ou só o nome na
 base) — o par `schema.name`, que as outras duas colunas dão, é o endereço
 completo. O nome sozinho não serve
-de key porque não é único: a compilação da spec recusa três colisões no nome de
-um contador — o prefixo `_`, o nome do próprio dataset e o nome repetido entre
-dois contadores —, e nenhuma delas alcança o nome de uma tabela de meta. Um
+de key porque não é único: a compilação da spec recusa quatro colisões no nome
+de um contador — o prefixo `_`, o nome do próprio dataset, o nome da tabela irmã
+do histórico e o nome repetido entre dois contadores —, e nenhuma delas alcança
+o nome de uma tabela de meta. Um
 contador `tables` é aceito e teria o mesmo `name` que esta tabela; com duas
 linhas de mesma key, o point lookup devolveria uma e a varredura devolveria
 duas — o motor discordando de si mesmo conforme o plano.
