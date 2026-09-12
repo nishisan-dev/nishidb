@@ -136,6 +136,32 @@ go build -o nishidb ./cmd/nishidb
 Binário único, sem dependência externa em runtime. Requer Go 1.25+ e Linux
 (o storage usa `mmap` e `fallocate` diretamente).
 
+### Rodar como serviço (systemd)
+
+A unit está versionada em
+[`packaging/systemd/nishidb.service`](packaging/systemd/nishidb.service), para
+ser empacotada com a distribuição:
+
+```bash
+sudo cp packaging/systemd/nishidb.service /lib/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now nishidb
+```
+
+Ela pressupõe o layout de releases com symlink que
+[`scripts/nishidb-update.sh`](scripts/nishidb-update.sh) opera
+(`/app/nishidb/current -> releases/<versão>`), e escreve o log estruturado em
+`/var/log/nishidb/service.log` — **não** no journal. `journalctl -u nishidb`
+mostra apenas `Started`/`Stopped`; evento de alarme, de ingestão e de consulta
+estão no arquivo:
+
+```bash
+tail -F /var/log/nishidb/service.log | grep '"component":"alarm"'
+```
+
+Os caminhos são os do piloto. Torná-los configuráveis pede `EnvironmentFile`, o
+que muda o contrato de operação — não está feito.
+
 ## Uso
 
 ### 1. Configuração

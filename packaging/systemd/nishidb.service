@@ -1,0 +1,77 @@
+# Unit do NishiDB, para instalar em /lib/systemd/system/nishidb.service.
+#
+# Versionada aqui para ser empacotada com a distribuição (.deb) em vez de viver
+# só no host — a cópia do piloto divergia do repositório a cada ajuste, e
+# nenhum dos dois lados sabia qual estava certo.
+#
+# O layout que ela pressupõe é o de releases com symlink, que scripts/
+# nishidb-update.sh opera:
+#
+#   /app/nishidb/releases/<versão>/{nishidb, nishidb.yaml}
+#   /app/nishidb/current -> releases/<versão>      (symlink, trocado no update)
+#
+# O ExecStart aponta para `current/`, e não para uma versão: é a troca do
+# symlink que promove a release, e binário e config viajam SEMPRE juntos (o
+# porquê está no cabeçalho do nishidb-update.sh).
+#
+# Os caminhos são os do piloto. Um pacote que os torne configuráveis precisa de
+# EnvironmentFile, e aí o ExecStart passa a ler as variáveis — mudança de
+# contrato de operação, não de arquivo.
+
+[Unit]
+Description=NishiDB — materialização e consulta de fluxos de eventos JSON
+Documentation=https://github.com/nishisan-dev/nishidb
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/app/nishidb
+ExecStart=/app/nishidb/current/nishidb server --config /app/nishidb/current/nishidb.yaml --log-format json --pprof 127.0.0.1:9144
+
+# pprof em LOOPBACK, e o endereco e obrigatorio ser explicito: o codigo binda
+# onde mandarem, sem forcar 127.0.0.1. Exposto, ele entrega despejo de heap e
+# o /debug/pprof/profile vira vetor de negacao de servico.
+#
+# Ligado depois do incidente de 27/08/2026: o consumidor Kafka travou dentro
+# do PollRecords e a unica forma de ver as pilhas foi kill -QUIT, que mata o
+# processo. Com o pprof, o proximo diagnostico e uma consulta:
+#   curl -s http://127.0.0.1:9144/debug/pprof/goroutine?debug=2
+# Debito 91.
+
+# SIGTERM é o encerramento gracioso do §51: drena a fila, checkpointa e
+# devolve o flock do dataset. Matar com SIGKILL não perde estado confirmado
+# (o replay do tail reconstrói), mas custa reprocessar desde o último
+# checkpoint — por isso o prazo é generoso.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+Restart=on-failure
+RestartSec=15
+
+# O storage usa mmap e um arquivo por segmento; com o backlog inteiro são
+# centenas de arquivos abertos, mais um bitmap denso por valor distinto.
+LimitNOFILE=65536
+
+# SEM MemoryMax de propósito: os índices são mmap, e o §79 avisa que tamanho
+# de arquivo mapeado não é RSS residente. Um teto aqui produziria OOM kill no
+# meio de uma escrita por causa de páginas que o kernel pode descartar.
+
+SyslogIdentifier=nishidb
+
+# O log estruturado vai para ARQUIVO, e não para o journal: o acompanhamento no
+# piloto é por tail de arquivo, e o journald não dá o caminho estável que um
+# `tail -F` e um coletor esperam.
+#
+# StandardOutput aceita UM valor, então isto é uma escolha e não uma soma: com
+# `append:`, `journalctl -u nishidb` mostra apenas as mensagens do systemd
+# (Started/Stopped), nunca as linhas do processo. Quem procura evento de alarme
+# ou de ingestão procura no arquivo.
+#
+# LogsDirectory cria /var/log/nishidb com o dono certo antes do ExecStart.
+LogsDirectory=nishidb
+StandardOutput=append:/var/log/nishidb/service.log
+StandardError=append:/var/log/nishidb/service.log
+
+[Install]
+WantedBy=multi-user.target
