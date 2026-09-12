@@ -11,9 +11,12 @@ import java.sql.RowIdLifetime;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * O {@code DatabaseMetaData} do §71, com a errata registrada como decisão D3.
@@ -169,40 +172,176 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
 
     // -------------------------------------------------------------- catálogo
 
+    /**
+     * Uma tabela consultável, já resolvida para o que os getters de catálogo
+     * publicam: onde ela mora, como se chama, o que ela é, o comentário e as
+     * colunas.
+     *
+     * <p>{@code schema} é NULO quando o servidor não disse em qual schema a
+     * tabela mora — é o "sem schema" do JDBC, e é o que este driver publicava
+     * em toda linha antes de o campo existir no fio.
+     */
+    private record CatalogTable(String schema, String name, String type, String remarks,
+            List<JsonValue> columns) {}
+
+    /**
+     * TODA tabela consultável do servidor, sem repetição, na ordem do fio.
+     *
+     * <p>Cada elemento de {@code datasets} publica em {@code tables} o
+     * catálogo inteiro do dataset: a base como {@code TABLE} no schema
+     * declarado, e o contador e as tabelas do {@code _meta} como {@code VIEW}
+     * — o contador no schema do dataset, as de meta no schema {@code _meta}.
+     * A ordem dentro de cada dataset é contrato do servidor.
+     *
+     * <p><b>A repetição que some aqui.</b> As linhas do {@code _meta} chegam
+     * uma vez por dataset, porque o atalho {@code _meta.x} significa "no
+     * dataset da requisição" e o catálogo de cada dataset o inclui. Elas
+     * descrevem a mesma tabela — o nome, o schema e as colunas são os mesmos
+     * em todos os datasets —, então a primeira ocorrência de cada par
+     * (schema, nome) é a que sai. Sem isto a ferramenta mostraria o
+     * {@code _meta} com uma cópia de cada tabela por dataset do servidor.
+     *
+     * <p><b>Servidor sem o campo.</b> {@code tables} é aditivo, e um binário
+     * anterior responde sem ele. Aí cada dataset vira UMA entrada — a base,
+     * com o nome do dataset, o {@code columns} do próprio dataset e schema
+     * nulo —, que é exatamente o que este driver listava antes de a lista
+     * existir. Nenhuma view é inventada e nada lança.
+     */
+    private List<CatalogTable> catalogTables() throws SQLException {
+        List<CatalogTable> out = new ArrayList<>();
+        Set<String> vistas = new HashSet<>();
+        for (JsonValue d : datasets()) {
+            List<JsonValue> tables = d.itensDe("tables");
+            if (tables.isEmpty()) {
+                out.add(new CatalogTable(textOrNull(d, "schema"), d.textoOu("name", ""),
+                        "TABLE", datasetRemarks(d), d.itensDe("columns")));
+                continue;
+            }
+            for (JsonValue t : tables) {
+                String schema = textOrNull(t, "schema");
+                String name = t.textoOu("name", "");
+                // A chave é o endereço qualificado: nem schema nem nome
+                // de tabela contêm ponto, então o par não pode colidir com
+                // outro par por causa da concatenação.
+                if (!vistas.add(schema + "." + name)) {
+                    continue;
+                }
+                // O tipo ausente cai em TABLE, e não em nulo: o filtro de tipo
+                // e a ordenação comparam esta string, e um nulo aqui viraria
+                // uma linha que nenhum filtro alcança.
+                String type = t.textoOu("kind", "TABLE");
+                String descricao = t.textoOu("description", "");
+                String remarks = descricao;
+                if (descricao.isEmpty()) {
+                    // A descrição sai vazia em toda linha do servidor de hoje.
+                    // Na linha da BASE o driver continua publicando o texto do
+                    // dataset, que é o que ele sempre publicou ali.
+                    remarks = "TABLE".equals(type) ? datasetRemarks(d) : null;
+                }
+                out.add(new CatalogTable(schema, name, type, remarks, t.itensDe("columns")));
+            }
+        }
+        return out;
+    }
+
+    /** O texto do campo, ou {@code null} quando ele está ausente OU vazio. */
+    private static String textOrNull(JsonValue v, String campo) {
+        String s = v.textoOu(campo, "");
+        return s.isEmpty() ? null : s;
+    }
+
+    /** Os tetos do dataset, que o JDBC não modela e a ferramenta mostra. */
+    private static String datasetRemarks(JsonValue d) {
+        return "chave: " + d.textoOu("key", "") + "; maxRows: " + d.inteiroOu("maxRows", 0)
+                + "; timeoutMs: " + d.inteiroOu("timeoutMs", 0);
+    }
+
+    /**
+     * A ordem do contrato de getTables: TABLE_TYPE, TABLE_CAT, TABLE_SCHEM,
+     * TABLE_NAME.
+     *
+     * <p>O TABLE_CAT não entra porque é NULO em toda linha — o produto não tem
+     * catálogo —, e comparar um campo constante não ordena nada. Os outros
+     * três variam desde que a base e as views passaram a sair juntas, e uma
+     * ferramenta que confia na ordem para agrupar mostraria a árvore
+     * embaralhada sem isto.
+     *
+     * <p>O TABLE_SCHEM aceita nulo — é a linha de um servidor anterior ao
+     * campo {@code tables} —, e nulo vem PRIMEIRO. Onde ele aparece, aparece
+     * em TODA linha (aquele documento não diz schema nenhum), então a escolha
+     * não reordena nada: ela existe para que o comparador não estoure ao
+     * encontrá-lo.
+     */
+    private static final Comparator<Object[]> ORDEM_DE_TABLES =
+            Comparator.<Object[], String>comparing(l -> (String) l[3])
+                    .thenComparing(l -> (String) l[1], Comparator.nullsFirst(Comparator.naturalOrder()))
+                    .thenComparing(l -> (String) l[2]);
+
     /** As 10 colunas canônicas de getTables. */
     private static final List<Molduras.Coluna> COLUNAS_TABLES = List.of(
             texto("TABLE_CAT"), texto("TABLE_SCHEM"), texto("TABLE_NAME"), texto("TABLE_TYPE"),
             texto("REMARKS"), texto("TYPE_CAT"), texto("TYPE_SCHEM"), texto("TYPE_NAME"),
             texto("SELF_REFERENCING_COL_NAME"), texto("REF_GENERATION"));
 
+    /**
+     * A árvore que a ferramenta desenha: a base, os contadores e as tabelas do
+     * {@code _meta}, cada uma no schema em que mora.
+     *
+     * <p>O TABLE_SCHEM é o que faz a ferramenta gerar {@code FROM
+     * <schema>.<tabela>} ao abrir os dados de uma tabela — e é o endereço que
+     * o servidor resolve. Publicá-lo nulo faria o SQL gerado cair no dataset
+     * da conexão, que para toda linha de outro schema é outra tabela.
+     *
+     * <p>O {@code catalogo} é ignorado: o {@link #getCatalogs()} devolve vazio
+     * de propósito, então não há valor que pudesse restringir coisa alguma.
+     */
     @Override
-    public ResultSet getTables(String catalogo, String schema, String padraoDeTabela, String[] tipos)
-            throws SQLException {
-        boolean querTabelas = tipos == null;
-        if (tipos != null) {
-            for (String t : tipos) {
-                querTabelas = querTabelas || "TABLE".equals(t);
-            }
-        }
+    public ResultSet getTables(String catalogo, String padraoDeSchema, String padraoDeTabela,
+            String[] tipos) throws SQLException {
         List<Object[]> linhas = new ArrayList<>();
-        if (querTabelas) {
-            for (JsonValue d : datasets()) {
-                String nome = d.textoOu("name", "");
-                if (!casa(padraoDeTabela, nome)) {
-                    continue;
-                }
-                linhas.add(new Object[] {null, null, nome, "TABLE",
-                    "chave: " + d.textoOu("key", "") + "; maxRows: " + d.inteiroOu("maxRows", 0)
-                            + "; timeoutMs: " + d.inteiroOu("timeoutMs", 0),
-                    null, null, null, null, null});
+        for (CatalogTable t : catalogTables()) {
+            if (!acceptsType(tipos, t.type()) || !matchesSchema(padraoDeSchema, t.schema())
+                    || !casa(padraoDeTabela, t.name())) {
+                continue;
             }
-            // A ordem é do contrato: TABLE_TYPE, TABLE_CAT, TABLE_SCHEM,
-            // TABLE_NAME. Aqui os três primeiros são constantes, então sobra o
-            // nome — e uma ferramenta que confia na ordem para agrupar
-            // mostraria a árvore embaralhada sem isto.
-            linhas.sort(Comparator.comparing(l -> (String) l[2]));
+            linhas.add(new Object[] {null, t.schema(), t.name(), t.type(), t.remarks(),
+                null, null, null, null, null});
         }
+        linhas.sort(ORDEM_DE_TABLES);
         return resultado(COLUNAS_TABLES, linhas);
+    }
+
+    /**
+     * O filtro de tipo do contrato de {@code getTables}.
+     *
+     * <p>{@code null} é "todos os tipos" — é a primeira chamada que uma
+     * ferramenta faz, e tratá-lo como "nenhum" deixaria a árvore vazia. Uma
+     * lista traz o que ela ENUMERA, e a lista vazia não traz nada porque
+     * enumera zero tipos. É por aqui que a pasta de views se abre: o DBeaver
+     * pede {@code {"VIEW"}}.
+     */
+    private static boolean acceptsType(String[] tipos, String tipo) {
+        if (tipos == null) {
+            return true;
+        }
+        for (String t : tipos) {
+            if (tipo.equals(t)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * O padrão de schema do contrato, com o "sem schema" tratado.
+     *
+     * <p>{@code null} casa tudo, como no padrão de tabela. A linha SEM schema
+     * — a que um servidor anterior ao campo {@code tables} produz — casa
+     * contra a string VAZIA: é assim que {@code %} continua trazendo tudo e
+     * que {@code ""} traz justamente as que não têm schema, como o JDBC manda.
+     */
+    private static boolean matchesSchema(String padrao, String schema) {
+        return casa(padrao, schema == null ? "" : schema);
     }
 
     /** As 24 colunas canônicas de getColumns. */
@@ -215,24 +354,46 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
             texto("SCOPE_CATALOG"), texto("SCOPE_SCHEMA"), texto("SCOPE_TABLE"),
             inteiro("SOURCE_DATA_TYPE"), texto("IS_AUTOINCREMENT"), texto("IS_GENERATEDCOLUMN"));
 
+    /**
+     * A ordem do contrato de getColumns: TABLE_CAT, TABLE_SCHEM, TABLE_NAME,
+     * ORDINAL_POSITION. O TABLE_CAT fica de fora pela mesma razão do
+     * {@link #ORDEM_DE_TABLES} — é nulo em toda linha.
+     */
+    private static final Comparator<Object[]> ORDEM_DE_COLUMNS =
+            Comparator.<Object[], String>comparing(l -> (String) l[1],
+                            Comparator.nullsFirst(Comparator.naturalOrder()))
+                    .thenComparing(l -> (String) l[2])
+                    .thenComparing(l -> (Long) l[16]);
+
+    /**
+     * As colunas de TODA tabela consultável — a base e as views —, pelo mesmo
+     * documento de onde a árvore sai.
+     *
+     * <p>O código do tipo vem do campo {@code jdbc}, calculado pelo SERVIDOR.
+     * Rededuzi-lo aqui a partir do nome do tipo criaria uma segunda tabela de
+     * tipos no driver, que divergiria da do servidor no primeiro tipo novo.
+     *
+     * <p>O ORDINAL_POSITION é a posição dentro da TABELA, e conta também a
+     * coluna que o padrão descartou: é a posição no schema que o contrato
+     * pede, não a posição nesta resposta.
+     */
     @Override
-    public ResultSet getColumns(String catalogo, String schema, String padraoDeTabela,
+    public ResultSet getColumns(String catalogo, String padraoDeSchema, String padraoDeTabela,
             String padraoDeColuna) throws SQLException {
         List<Object[]> linhas = new ArrayList<>();
-        for (JsonValue d : datasets()) {
-            String tabela = d.textoOu("name", "");
-            if (!casa(padraoDeTabela, tabela)) {
+        for (CatalogTable t : catalogTables()) {
+            if (!matchesSchema(padraoDeSchema, t.schema()) || !casa(padraoDeTabela, t.name())) {
                 continue;
             }
             int posicao = 0;
-            for (JsonValue c : d.itensDe("columns")) {
+            for (JsonValue c : t.columns()) {
                 posicao++;
                 String nome = c.textoOu("name", "");
                 if (!casa(padraoDeColuna, nome)) {
                     continue;
                 }
                 boolean nulavel = c.booleanoOu("nullable", true);
-                linhas.add(new Object[] {null, null, tabela, nome,
+                linhas.add(new Object[] {null, t.schema(), t.name(), nome,
                     (long) TiposJdbc.codigoDe(c.textoOu("jdbc", "OTHER")),
                     c.textoOu("type", "unknown"),
                     c.inteiroOu("precision", 0), null, c.inteiroOu("scale", 0), 10L,
@@ -246,6 +407,7 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
                     null, null, null, null, "NO", "NO"});
             }
         }
+        linhas.sort(ORDEM_DE_COLUMNS);
         return resultado(COLUNAS_COLUMNS, linhas);
     }
 
@@ -265,6 +427,13 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
     /**
      * A chave do dataset, que é ganho real: é ela que a ferramenta desenha
      * como chave primária na árvore e usa para montar a edição de uma linha.
+     *
+     * <p>A chave é publicada POR DATASET no documento, e não por tabela: a
+     * única linha que ela descreve é a da base, e por isso esta lista continua
+     * saindo dos datasets. O TABLE_SCHEM é o do dataset, e vai preenchido para
+     * que a linha descreva a MESMA tabela que o {@link #getTables} publica —
+     * uma ferramenta que case as duas por (schema, nome) perderia a chave se
+     * aqui ele saísse nulo.
      */
     @Override
     public ResultSet getPrimaryKeys(String catalogo, String schema, String tabela) throws SQLException {
@@ -278,7 +447,7 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
             }
             String chave = d.textoOu("key", "");
             if (!chave.isEmpty()) {
-                linhas.add(new Object[] {null, null, nome, chave, 1L, "chave"});
+                linhas.add(new Object[] {null, textOrNull(d, "schema"), nome, chave, 1L, "chave"});
             }
         }
         return resultado(colunas, linhas);
@@ -291,6 +460,11 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
      * o M1 e o índice físico ainda não existe, então uma consulta sobre o campo
      * continua caindo em varredura. Publicar sem a ressalva faria alguém
      * concluir, olhando a ferramenta, que a consulta lenta está usando índice.
+     *
+     * <p>O índice viaja na COLUNA, e as colunas da base são as do campo
+     * {@code columns} do dataset — é de lá que esta lista sai, e por isso ela
+     * continua percorrendo os datasets. O TABLE_SCHEM vai preenchido pela
+     * razão do {@link #getPrimaryKeys}.
      */
     @Override
     public ResultSet getIndexInfo(String catalogo, String schema, String tabela, boolean unico,
@@ -313,7 +487,7 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
                 if (unico) {
                     continue; // nenhum índice do NishiDB é único
                 }
-                linhas.add(new Object[] {null, null, nome, 1L, null,
+                linhas.add(new Object[] {null, textOrNull(d, "schema"), nome, 1L, null,
                     indice + " (declarado no YAML, não é garantia de plano)",
                     (long) tableIndexOther, 1L, c.textoOu("name", ""), null, 0L, 0L, null});
             }
@@ -364,9 +538,14 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
     /**
      * VAZIO com a forma certa — a errata D3 em ação.
      *
-     * <p>O NishiDB não tem catálogo nem schema. Lançar aqui faria a ferramenta
-     * mostrar erro ao abrir a árvore de navegação; um ResultSet vazio com a
-     * coluna certa é o "não" que o próprio JDBC criou para este caso.
+     * <p>O NishiDB não tem catálogo: o endereço qualificado que o servidor
+     * resolve tem DOIS níveis, e o de cima é o schema. Lançar aqui faria a
+     * ferramenta mostrar erro ao abrir a árvore de navegação; um ResultSet
+     * vazio com a coluna certa é o "não" que o próprio JDBC criou para este
+     * caso.
+     *
+     * <p>É por isso que o TABLE_CAT sai nulo em toda linha dos outros getters:
+     * não existe valor que ele pudesse carregar.
      */
     @Override
     public ResultSet getCatalogs() throws SQLException {
@@ -375,18 +554,59 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public ResultSet getSchemas() throws SQLException {
-        return resultado(List.of(texto("TABLE_SCHEM"), texto("TABLE_CATALOG")), List.of());
+        return getSchemas(null, null);
     }
 
+    /**
+     * Os schemas em que as tabelas do servidor moram, DISTINTOS e ordenados.
+     *
+     * <p>São as pastas da árvore da ferramenta, e é sobre elas que ela pede as
+     * tabelas de cada uma. Saem da MESMA montagem de catálogo que o
+     * {@link #getTables} usa, e não de uma leitura própria do documento: duas
+     * derivações da mesma lista divergiriam, e a divergência apareceria como
+     * uma pasta que abre vazia.
+     *
+     * <p>O {@code _meta} chega repetido — uma vez por dataset —, e aqui sai uma
+     * vez só. Um servidor anterior ao campo {@code tables} não diz schema
+     * nenhum, e então esta lista sai VAZIA, exatamente como saía antes.
+     *
+     * <p>O {@code catalogo} é ignorado, pela razão do {@link #getCatalogs()}.
+     */
     @Override
     public ResultSet getSchemas(String catalogo, String padrao) throws SQLException {
-        return getSchemas();
+        Set<String> nomes = new TreeSet<>();
+        for (CatalogTable t : catalogTables()) {
+            if (t.schema() != null && casa(padrao, t.schema())) {
+                nomes.add(t.schema());
+            }
+        }
+        List<Object[]> linhas = new ArrayList<>(nomes.size());
+        for (String nome : nomes) {
+            linhas.add(new Object[] {nome, null});
+        }
+        return resultado(List.of(texto("TABLE_SCHEM"), texto("TABLE_CATALOG")), linhas);
     }
 
+    /**
+     * TABLE e VIEW — os dois tipos do catálogo do servidor, e nunca
+     * {@code SYSTEM TABLE}.
+     *
+     * <p>A base é TABLE; o contador e as tabelas do {@code _meta} são VIEW. O
+     * terceiro tipo seria o natural para as de meta, e é justamente o que não
+     * se pode usar: o DBeaver esconde objeto de sistema por default, e a opção
+     * que o revela não está onde alguém a procuraria. Tabela que existe para
+     * ser descoberta não pode nascer invisível.
+     *
+     * <p>A lista é FIXA, e não derivada do documento: ela diz o que este
+     * driver sabe publicar, e é respondida antes de a ferramenta perguntar
+     * quais tabelas existem. Contra um servidor anterior ao campo
+     * {@code tables}, o {@link #getTables} simplesmente não devolve linha
+     * nenhuma de tipo VIEW.
+     */
     @Override
     public ResultSet getTableTypes() throws SQLException {
         return resultado(List.of(texto("TABLE_TYPE")),
-                List.<Object[]>of(new Object[] {"TABLE"}));
+                List.<Object[]>of(new Object[] {"TABLE"}, new Object[] {"VIEW"}));
     }
 
     // Os demais getters de catálogo: vazios COM A FORMA CERTA, pela mesma
@@ -651,9 +871,13 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
         return "";
     }
 
+    /**
+     * "schema" — o termo do produto, e é ele que a ferramenta escreve na
+     * árvore. Vazio era a resposta de quando não havia o que nomear.
+     */
     @Override
     public String getSchemaTerm() {
-        return "";
+        return "schema";
     }
 
     @Override
@@ -843,9 +1067,19 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
         return false;
     }
 
+    /**
+     * TRUE: o {@code FROM <schema>.<tabela>} é resolvido pelo servidor.
+     *
+     * <p>É a única das cinco que responde sim. As outras quatro cobrem DDL,
+     * procedimento e privilégio, que o produto não tem — aqui a pergunta é
+     * sobre a consulta, e a consulta aceita o qualificador. Responder não
+     * faria um construtor de query desqualificar o nome, e o nome sem
+     * qualificador significa "no dataset da conexão": para toda tabela de
+     * outro schema, outra tabela.
+     */
     @Override
     public boolean supportsSchemasInDataManipulation() {
-        return false;
+        return true;
     }
 
     @Override
