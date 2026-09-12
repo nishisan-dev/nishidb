@@ -198,7 +198,8 @@ Naquele spike o SELECT qualificado ainda falhava no servidor
 (`dataset X desconhecido (este handle é de Y)`), como se esperava: o jar
 falsificava o driver, e o roteamento era a Task 7.
 
-**A metade que falta**, e é o que impede este aceite de ser completo: abrir o
+**A metade que faltava** quando esta seção foi escrita, e que fechou em
+12/09/2026 (o desfecho está logo abaixo): abrir o
 DBeaver contra o **driver real** desta branch e repetir as três perguntas. Não
 há sessão gráfica na árvore em que o ciclo rodou. O que existe no lugar é o
 `DriverIT#aSequenciaQueUmaFerramentaFazAoAbrirAConexao`, que faz contra o
@@ -208,6 +209,64 @@ binário real a sequência mecânica — `getCatalogs`, `getSchemas`,
 nulo vira `SELECT id FROM null.todos_os_tipos` e o servidor recusa. O que ele
 não cobre é a suposição de interface: se a ferramenta monta a árvore como o
 spike mediu, e se ela qualifica o `FROM` com o `TABLE_SCHEM` deste driver.
+
+### O desfecho: 12/09/2026, contra o driver desta branch
+
+O aceite pelo DBeaver real aconteceu em 12/09/2026, rodado pelo usuário contra
+o driver desta branch e um servidor de verdade. Três fatos foram verificados, e
+é só isso que este registro afirma:
+
+- **a árvore monta, com os dois schemas** — o do dataset e o `_meta`;
+- **o SELECT que a própria ferramenta gera executa**;
+- **o duplo clique nas views abre os dados.**
+
+O item 1 do "o que fica em aberto" está fechado por aqui.
+
+### O defeito que este aceite encontrou
+
+É o achado mais valioso do ciclo, e ele só apareceu porque alguém abriu a
+ferramenta. O `SqlScanner` do driver tem DOIS ramos que capturam o nome do
+dataset depois do `FROM` — o do identificador NU e o do identificador ENTRE
+ASPAS —, e só o primeiro verificava se vinha um ponto depois do nome. O ramo
+das aspas capturava sempre: com `"_meta".counters`, que é um nome QUALIFICADO
+com a primeira parte citada, o driver mandava `dataset: "_meta"` no corpo, e o
+servidor recusava um dataset que não existe.
+
+A consequência é exatamente a que o duplo clique expõe: **nenhuma view do
+`_meta` abria**. A árvore montava inteira e não abria nada — o modo de falha
+que o `getTables` verde esconde, porque montar a árvore e abrir uma tabela são
+caminhos diferentes.
+
+Corrigido em `44a3f70`: o ramo das aspas passa a aplicar a mesma regra, com o
+ponto procurado a partir do índice logo APÓS a aspa de fechamento (procurar do
+miolo tiraria o palpite de `FROM "_meta.counters"`, que é um identificador só e
+cuja recusa é do servidor). As cinco formas entram no `SqlScannerTest` —
+`SqlScannerTest#nomeQualificadoComAPrimeiraParteCitadaAbandonaOPalpite`,
+`SqlScannerTest#nomeQualificadoCitadoInteiroContinuaSendoUmIdentificadorSo`,
+`SqlScannerTest#nomeCitadoSemPontoDepoisContinuaSendoPalpiteValido`,
+`SqlScannerTest#aContagemDePlaceholdersNaoMudaComAFormaDoNome` e
+`SqlScannerTest#apenasOPrimeiroFromContaTambemComNomeCitado` —, e o caminho
+inteiro ganhou um caso contra o binário real,
+`DriverIT#oSqlComCadaParteCitadaDaArvoreExecuta`, que monta o endereço a partir
+da árvore e das aspas que o metadata declara.
+
+**E o que ele ensina vale mais que a correção: o defeito atravessou nove
+revisões e toda a verificação deste ciclo.** A razão é precisa, e vale escrever
+por inteiro. O `SqlScanner` ERA exercitado contra o binário real: o
+`DriverIT#aSequenciaQueUmaFerramentaFazAoAbrirAConexao` monta o `FROM` a partir
+do par (schema, nome) que a árvore devolveu. Só que ele o monta CONCATENANDO as
+duas partes com um ponto, sem aspas — e essa é justamente a forma que o ramo do
+identificador NU já tratava certo. A ferramenta de verdade escreve a outra: ela
+cita cada parte com o `getIdentifierQuoteString`, que o próprio IT confere ser
+`"`. O ramo das aspas, portanto, não era percorrido por teste nenhum, e todo o
+resto da verificação correu pelo CLI, que não passa pelo scanner.
+
+Nenhuma quantidade de revisão do que ERA testado encontraria isso. Não é
+nenhuma das classes que a doutrina nomeia — não é texto que mente nem citação
+que não resolve —, e a forma dela é a do achado nº 2 desta mesma rodada: **um
+teste que monta ele mesmo a entrada do cliente prova a forma que o teste
+escreveu, não a que o cliente escreve.** Onde houver um cliente que GERA a
+entrada, a entrada tem de sair dele.
 
 ## Três achados de método, que valem mais que o código
 
@@ -297,8 +356,12 @@ de identificadores em inglês), e nenhuma tarefa o tocou.
 
 ## O que fica em aberto
 
-1. **O aceite pelo DBeaver real está pendente** (seção acima). É o único item do
-   plano que nenhum teste substitui.
+1. ~~**O aceite pelo DBeaver real está pendente** (seção acima). É o único item
+   do plano que nenhum teste substitui.~~ **FECHADO em 12/09/2026**: a árvore
+   monta com os dois schemas, o SELECT gerado pela ferramenta executa e o duplo
+   clique nas views abre os dados. Ele cobrou o preço de ser o único item sem
+   teste substituto — encontrou o defeito do `SqlScanner` que deixava toda view
+   do `_meta` sem abrir (`44a3f70`). O relato está em "O desfecho: 12/09/2026".
 2. **O piloto não foi tocado nesta rodada.** O `service_view.yaml` precisa ganhar
    a linha `schemaName` antes de qualquer subida com este binário — sem ela o
    dataset não abre. Fica como o primeiro passo de quem for fazer o deploy.
