@@ -43,13 +43,14 @@ var ErrInvalidSpec = errors.New("materialization spec inválida")
 // de usuário pode carregar este schema, e que encontrá-lo fora das quatro
 // specs sintéticas é bug, não configuração.
 //
-// # O QUE AINDA NÃO EXISTE
+// # O CATÁLOGO SOBRESCREVE ESTE VALOR
 //
-// Não há catálogo. Quando ele existir (Task 5 de
-// `planning/schema-declarado-e-catalogo-jdbc-plano.md`), a tabela virtual
-// aparecerá no schema do DATASET a que pertence — que é quem declarou um —, e
-// não no da spec que a descreve; é aí que este valor deixa de ser apenas
-// aceito pela validação e passa a ser sobrescrito na montagem da árvore.
+// O catálogo existe, e nenhuma linha dele carrega este schema: a tabela virtual
+// aparece no schema do DATASET a que pertence — que é quem declarou um — ou em
+// `_meta`, quando ela descreve o motor e não o dado
+// (query.Engine.catalogEntries). Este valor continua sem consumidor: ele existe
+// para a spec sintética atravessar o Parse/Compile, e a montagem da árvore o
+// substitui antes de publicar qualquer coisa.
 const SyntheticSchemaName = "_virtual"
 
 // DatasetSpec é a spec validada, com defaults aplicados.
@@ -70,9 +71,11 @@ type DatasetSpec struct {
 	//
 	// O campo é LIDO em três lugares, e por isso a recusa acima deixou de ser
 	// preventiva: o motor resolve o qualificador de um `FROM telecom.tabela`
-	// contra os schemas declarados (query.Engine.Catalog), a `_meta.tables` o
-	// publica por SQL e o `/v1/metadata` o publica no wire, por dataset e por
-	// tabela. A tabela IRMÃ do histórico herda este schema (DeriveHistory), e é
+	// contra os schemas declarados (query.Engine.resolveSchemaQualified, que
+	// varre a ENUMERAÇÃO do catálogo — catalogEntries — e não o
+	// query.Engine.Catalog, que é o invólucro que acrescenta as colunas e não
+	// participa da resolução), a `_meta.tables` o publica por SQL e o
+	// `/v1/metadata` o publica no wire, por dataset e por tabela. A tabela IRMÃ do histórico herda este schema (DeriveHistory), e é
 	// por isso que ela não entra na conta da unicidade: é outra tabela do mesmo
 	// dataset, não outro dataset.
 	SchemaName      string
