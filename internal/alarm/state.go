@@ -34,6 +34,11 @@ type observation struct {
 type decision struct {
 	verdict  verdict
 	restored bool
+	// since é o instante em que a condição passou a valer, e viaja AQUI porque
+	// o clear apaga o campo do tracker antes de o evento ser montado. Lido de
+	// lá depois da decisão, o evento de resolução saía com o instante zero —
+	// afirmando que a condição nunca valeu.
+	since time.Time
 }
 
 // verdict é o que uma passada decide para um par (alarme, grupo).
@@ -138,7 +143,7 @@ func (t *tracker) evaluate(o observation, sustainedFor time.Duration, now time.T
 			return decision{verdict: verdictNone}
 		}
 		t.phase = phaseFiring
-		return decision{verdict: verdictFiring, restored: t.consumeRestored()}
+		return decision{verdict: verdictFiring, restored: t.consumeRestored(), since: t.since}
 	default:
 		// phaseFiring: não repete. O pedido é avisar uma vez quando a condição
 		// se firma, e de novo quando ela passa.
@@ -155,6 +160,7 @@ func (t *tracker) evaluate(o observation, sustainedFor time.Duration, now time.T
 func (t *tracker) clear(resolved verdict) decision {
 	wasFiring := t.phase == phaseFiring
 	restored := t.consumeRestored()
+	since := t.since
 	t.phase = phaseAbsent
 	t.since = time.Time{}
 	if !wasFiring {
@@ -164,7 +170,7 @@ func (t *tracker) clear(resolved verdict) decision {
 		// restaurado cuja condição já tinha passado.
 		return decision{verdict: verdictNone}
 	}
-	return decision{verdict: resolved, restored: restored}
+	return decision{verdict: resolved, restored: restored, since: since}
 }
 
 // consumeRestored devolve a marca e a apaga, de uma vez.

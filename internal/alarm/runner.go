@@ -329,7 +329,7 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 	if d.verdict == verdictNone {
 		return
 	}
-	e := r.event(rc, ra, key, text, total, tr, d, now)
+	e := r.event(rc, ra, key, text, total, d, now)
 	// Só o DISPARO enriquece. O enriquecimento existe para dar contexto ao
 	// problema; na resolução o fato relevante é que ele passou, e executar as
 	// consultas outra vez dobraria o custo para contar isso.
@@ -341,7 +341,7 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 
 // event monta o evento de uma decisão.
 func (r *Runner) event(rc *runnerCounter, ra *runnerAlarm, key, text []byte, total int64,
-	tr *tracker, d decision, now time.Time) Event {
+	d decision, now time.Time) Event {
 	e := Event{
 		Dataset:      rc.def.Dataset,
 		Counter:      rc.def.Counter,
@@ -350,14 +350,13 @@ func (r *Runner) event(rc *runnerCounter, ra *runnerAlarm, key, text []byte, tot
 		Total:        total,
 		Condition:    ra.compiled.when,
 		SustainedFor: ra.compiled.sustainedFor,
-		Since:        tr.observedSince(),
+		Since:        d.since,
 		At:           now,
 		Restored:     d.restored,
 	}
 	switch d.verdict {
 	case verdictFiring:
 		e.State = StateFiring
-		e.Since = tr.observedSince()
 	case verdictCleared:
 		e.State, e.Reason = StateResolved, ReasonConditionCleared
 	case verdictRetired:

@@ -314,3 +314,62 @@ func TestTrocarOKeyFormatNaoPerdeOEstadoDoAlarme(t *testing.T) {
 		t.Errorf("o disparo não usou o instante salvo: restored=%v since=%v", e.Restored, e.Since)
 	}
 }
+
+// TestResolucaoDizDesdeQuandoACondicaoValia foi escrito por causa de um defeito
+// que só apareceu ao rodar o produto e LER a linha de log: a resolução saía com
+// o instante zero (0001-01-01) no campo `since`.
+//
+// A causa é a ordem: clear() apaga o cronômetro, e o evento era montado depois,
+// lendo o campo já zerado. O `since` descreve o evento, então tem de viajar com
+// a decisão — quem recebe um "voltou" precisa saber quanto tempo durou o
+// problema, e o instante zero não é só inútil, é uma afirmação falsa.
+func TestResolucaoDizDesdeQuandoACondicaoValia(t *testing.T) {
+	f := newFakeCounter(t, defByPON("autenticados_por_pon"), grupo{olt: "OLT_A", slot: 3, total: 50, live: true})
+	r, sink, clock := runnerDeTeste(t, f, "")
+	passada(t, r)
+	clock.advance(2 * time.Minute)
+	passada(t, r)
+	f.setTotal("OLT_A", 3, 500)
+	clock.advance(5 * time.Minute)
+	passada(t, r)
+
+	e := sink.last()
+	if e.State != StateResolved {
+		t.Fatalf("estado = %q", e.State)
+	}
+	if e.Since.IsZero() {
+		t.Fatal("a resolução saiu com o instante zero em `since`: o cronômetro foi apagado antes de o evento ser montado")
+	}
+	if !e.Since.Equal(t0) {
+		t.Errorf("since = %v, quero %v — o instante em que a condição passou a valer", e.Since, t0)
+	}
+	if got := e.At.Sub(e.Since); got != 7*time.Minute {
+		t.Errorf("duração do problema = %v, quero 7m (2 de sustentação + 5 disparado)", got)
+	}
+}
+
+// TestResolucaoPorAposentadoriaTambemDizDesdeQuando: o grupo sai do contador, e
+// a varredura não tem mais nem o texto dele — mas o cronômetro ainda é um fato.
+func TestResolucaoPorAposentadoriaTambemDizDesdeQuando(t *testing.T) {
+	f := newFakeCounter(t, defByPON("autenticados_por_pon"), grupo{olt: "OLT_A", slot: 3, total: 50, live: true})
+	r, sink, clock := runnerDeTeste(t, f, "")
+	passada(t, r)
+	clock.advance(2 * time.Minute)
+	passada(t, r)
+	f.retire("OLT_A", 3)
+	clock.advance(time.Minute)
+	passada(t, r)
+
+	e := sink.last()
+	if e.Reason != ReasonGroupRetired {
+		t.Fatalf("motivo = %q", e.Reason)
+	}
+	if e.Since.IsZero() || !e.Since.Equal(t0) {
+		t.Errorf("since = %v, quero %v", e.Since, t0)
+	}
+	// O texto do grupo é re-renderizado da chave canônica, porque a varredura
+	// não viu o grupo nesta passada e ninguém tem o texto em mão.
+	if e.GroupKey != "OLT_A|3" {
+		t.Errorf("groupKey = %q, quero OLT_A|3 renderizado da chave canônica", e.GroupKey)
+	}
+}
