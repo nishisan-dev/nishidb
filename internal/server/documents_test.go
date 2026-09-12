@@ -756,7 +756,7 @@ func TestMetadataPublicaOSchemaEOCatalogoDeTabelas(t *testing.T) {
 	// enumeração, e uma asserção que só procurasse a base passaria com o
 	// catálogo errado ao redor dela. A ordem é a do Catalog — base, contadores,
 	// `_meta` por nome.
-	const wantIDs = "d,_counters.por_status,_meta.counters,_meta.fields,_meta.kafka,_meta.tables"
+	const wantIDs = "d,_counters.por_status,_meta.alarms,_meta.counters,_meta.fields,_meta.kafka,_meta.tables"
 	if got := idsOfTables(d); got != wantIDs {
 		t.Fatalf("tabelas = %s, quero %s", got, wantIDs)
 	}

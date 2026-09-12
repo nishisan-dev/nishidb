@@ -9,6 +9,7 @@ import (
 
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/counters"
+	"github.com/nishisan-dev/nishidb/internal/metaalarm"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/query"
@@ -130,6 +131,15 @@ func runQuery(args []string, amb Context) int {
 			notify(amb, "query: %v\n", err)
 			return ExitUsageError
 		}
+	}
+	// `_meta.alarms` responde a lista VAZIA aqui, e é a resposta certa: este
+	// processo não observa alarme nenhum — quem varre é o servidor, que tem o
+	// flock. Registrá-la de qualquer forma é o que faz o `SELECT` ter a mesma
+	// forma nos dois caminhos, em vez de falhar com "tabela desconhecida" só
+	// no CLI.
+	if err := metaalarm.Register(eng, *dataset, metaalarm.Source{}); err != nil {
+		notify(amb, "query: %v\n", err)
+		return ExitUsageError
 	}
 	// `_meta.tables` entra por último só por leitura: ela lista as tabelas
 	// acima, e as linhas são montadas a cada consulta, a partir do catálogo do

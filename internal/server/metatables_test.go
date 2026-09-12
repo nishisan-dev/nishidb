@@ -50,7 +50,7 @@ func idsOfMetaTables(t *testing.T, srv *server.Server, dataset string) string {
 // registra mesmo sem contador e sem Kafka declarados.
 func TestMetaTablesRespondePelaRotaDeConsultaDoServidor(t *testing.T) {
 	srv := serverWithData(t, 4, blockPadrao)
-	const want = "_meta.counters,_meta.fields,_meta.kafka,_meta.tables,d"
+	const want = "_meta.alarms,_meta.counters,_meta.fields,_meta.kafka,_meta.tables,d"
 	if got := idsOfMetaTables(t, srv, "d"); got != want {
 		t.Fatalf("catálogo = %s, quero %s", got, want)
 	}

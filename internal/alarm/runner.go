@@ -59,6 +59,11 @@ type Runner struct {
 	// alarme dele.
 	pass uint64
 
+	// snapshot é o retrato dos grupos em observação, republicado a cada
+	// passada que muda algo. É como a tabela `_meta.alarms` lê o estado sem
+	// disputar o mapa de trackers com a varredura.
+	snapshot snapshotHolder
+
 	// lastSweep é a duração da última passada, em nanossegundos, e
 	// restoredGroups quantos cronômetros vieram do disco na subida.
 	lastSweep      atomic.Int64
@@ -173,6 +178,11 @@ func New(defs []Definition, readers map[string]counters.Reader, opts Options) (*
 		r.counters = append(r.counters, rc)
 	}
 	r.restore()
+	// O retrato nasce com o que veio do disco: um processo que volta com
+	// alarmes em curso tem de responder a `_meta.alarms` antes da primeira
+	// passada, senão a tabela diria que não há nada acontecendo durante a
+	// janela de subida — justamente quando alguém está olhando.
+	r.publishSnapshot()
 	return r, nil
 }
 
@@ -260,6 +270,7 @@ func (r *Runner) EvaluateOnce() error {
 		}
 	}
 	if r.dirty {
+		r.publishSnapshot()
 		return r.persist(now)
 	}
 	return nil
