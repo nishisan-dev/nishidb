@@ -484,8 +484,13 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	}
 	if len(alarmes) > 0 {
 		runner, err := alarm.New(alarmes, readersOfCounters(st), alarm.Options{
-			Sink:      alarm.NewLogSink(log),
-			Log:       log,
+			Sink: alarm.NewLogSink(log),
+			Log:  log,
+			// O motor é o MESMO que serve as consultas remotas. As de
+			// enriquecimento passam pelo mesmo binder, pelo mesmo planner e
+			// pelo mesmo orçamento — e é isso que garante que elas não podem
+			// fazer nada que um SELECT do cliente não pudesse.
+			Engine:    s.eng,
 			StatePath: st.AlarmStatePath(),
 		})
 		if err != nil {

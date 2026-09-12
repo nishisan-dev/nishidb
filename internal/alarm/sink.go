@@ -1,6 +1,8 @@
 package alarm
 
 import (
+	"log/slog"
+
 	"github.com/nishisan-dev/nishidb/internal/logging"
 )
 
@@ -60,6 +62,9 @@ func (s *logSink) Emit(e Event) {
 	for _, c := range e.Columns {
 		args = append(args, c.Name, c.Value)
 	}
+	if g, ok := enrichmentAttr(e.Enrichment); ok {
+		args = append(args, g)
+	}
 	switch e.State {
 	case StateFiring:
 		s.log.Warn(eventFiring,
@@ -68,6 +73,35 @@ func (s *logSink) Emit(e Event) {
 		s.log.Info(eventResolved,
 			"o alarme deixou de valer", args...)
 	}
+}
+
+// enrichmentAttr monta o atributo aninhado dos enriquecimentos, indexado pelo
+// NOME declarado de cada consulta.
+//
+// Um evento sem enriquecimento declarado não ganha o campo: presente e vazio,
+// ele obrigaria quem consome a distinguir "não declarei" de "declarei e não veio
+// nada" pelo conteúdo.
+//
+// As linhas entram como json.RawMessage para chegarem ao log como JSON de
+// verdade, navegável — e não como uma string com o JSON escapado dentro, que é
+// o que uma serialização ingênua produziria e o que impediria um `jq` de
+// indexar dentro do resultado.
+func enrichmentAttr(es []Enrichment) (slog.Attr, bool) {
+	if len(es) == 0 {
+		return slog.Attr{}, false
+	}
+	blocos := make([]any, 0, len(es))
+	for _, e := range es {
+		attrs := make([]any, 0, 2)
+		if len(e.Rows) > 0 {
+			attrs = append(attrs, slog.Any("rows", e.Rows))
+		}
+		if e.Note != "" {
+			attrs = append(attrs, slog.String("note", e.Note))
+		}
+		blocos = append(blocos, slog.Group(e.Name, attrs...))
+	}
+	return slog.Group("enrichment", blocos...), true
 }
 
 // logTimeLayout é o formato de instante das chaves do evento: o mesmo RFC3339

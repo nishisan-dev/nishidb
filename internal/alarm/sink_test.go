@@ -118,3 +118,51 @@ func TestLacunaSaiSoQuandoOEstadoVeioDoDisco(t *testing.T) {
 		t.Errorf("restored=%v downtimeMs=%v", got["restored"], got["downtimeMs"])
 	}
 }
+
+// TestEnriquecimentoSaiAninhadoPorNome: o consumidor acha o bloco pelo nome
+// declarado, nunca pela posição na lista.
+func TestEnriquecimentoSaiAninhadoPorNome(t *testing.T) {
+	e := eventoDeExemplo()
+	e.Enrichment = []Enrichment{
+		{Name: "servicos_da_olt", Rows: []byte(`[{"customerId":"c1"},{"customerId":"c2"}]`)},
+		{Name: "vizinhas", Note: "consulta falhou: dataset desconhecido"},
+	}
+	got := emitir(t, e)
+	bloco, ok := got["enrichment"].(map[string]any)
+	if !ok {
+		t.Fatalf("enrichment = %#v, quero um objeto", got["enrichment"])
+	}
+	primeiro, ok := bloco["servicos_da_olt"].(map[string]any)
+	if !ok {
+		t.Fatalf("o bloco nomeado não saiu: %#v", bloco)
+	}
+	rows, ok := primeiro["rows"].([]any)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("rows = %#v, quero as duas linhas como array JSON", primeiro["rows"])
+	}
+	// O array chega como JSON de verdade, e não como texto escapado: quem
+	// consome o log com jq precisa poder indexar dentro dele.
+	linha, ok := rows[0].(map[string]any)
+	if !ok || linha["customerId"] != "c1" {
+		t.Errorf("a primeira linha não é um objeto navegável: %#v", rows[0])
+	}
+	segundo, ok := bloco["vizinhas"].(map[string]any)
+	if !ok {
+		t.Fatalf("o bloco que falhou não saiu: %#v", bloco)
+	}
+	if segundo["note"] == nil {
+		t.Error("o bloco vazio tem de dizer por quê")
+	}
+	if segundo["rows"] != nil {
+		t.Error("bloco que falhou não pode trazer rows")
+	}
+}
+
+// TestEventoSemEnriquecimentoNaoTrazOCampo: um campo vazio sempre presente
+// obrigaria quem consome a distinguir "não declarei enriquecimento" de "declarei
+// e não veio nada" pelo conteúdo.
+func TestEventoSemEnriquecimentoNaoTrazOCampo(t *testing.T) {
+	if got := emitir(t, eventoDeExemplo()); got["enrichment"] != nil {
+		t.Errorf("enrichment = %#v num evento sem enriquecimento declarado", got["enrichment"])
+	}
+}

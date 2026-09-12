@@ -25,6 +25,10 @@ type Options struct {
 	// StatePath é o arquivo de estado durável. Vazio DESLIGA a persistência —
 	// é o que o teste de lógica de passada usa, e não um modo de produção.
 	StatePath string
+	// Engine é o motor onde as consultas de enriquecimento correm. nil deixa
+	// os blocos declarados vazios, com o motivo no evento — é o que o teste da
+	// lógica de passada usa, e não um modo de produção.
+	Engine Executor
 	// Now é o relógio. Exclusivo de teste, no molde do UsaRelogio do storage:
 	// um teste de prazo precisa avançar o tempo sem dormir, e a alternativa
 	// seria uma suíte que leva minutos ou que só prova a sustentação com
@@ -65,6 +69,13 @@ type Runner struct {
 	cols []Column
 	// vals é o scratch da decomposição da chave canônica.
 	vals []types.Value
+
+	engine Executor
+	// enrichBudget é quantas consultas ainda podem correr NESTA passada.
+	enrichBudget int
+	// enrichBuf e params são scratch das consultas de enriquecimento.
+	enrichBuf []byte
+	params    []types.Value
 
 	// loop é o ciclo de vida da goroutine de varredura.
 	loop loop
@@ -117,6 +128,7 @@ func New(defs []Definition, readers map[string]counters.Reader, opts Options) (*
 		return nil, errors.New("alarm: Sink obrigatório")
 	}
 	r := &Runner{
+		engine:    opts.Engine,
 		sink:      opts.Sink,
 		log:       opts.Log,
 		statePath: opts.StatePath,
@@ -230,6 +242,7 @@ func (r *Runner) EvaluateOnce() error {
 	now := r.now()
 	r.pass++
 	r.dirty = false
+	r.enrichBudget = maxEnrichmentsPerSweep
 	for _, rc := range r.counters {
 		if err := r.sweep(rc, now); err != nil {
 			return err
@@ -316,7 +329,14 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 	if d.verdict == verdictNone {
 		return
 	}
-	r.sink.Emit(r.event(rc, ra, key, text, total, tr, d, now))
+	e := r.event(rc, ra, key, text, total, tr, d, now)
+	// Só o DISPARO enriquece. O enriquecimento existe para dar contexto ao
+	// problema; na resolução o fato relevante é que ele passou, e executar as
+	// consultas outra vez dobraria o custo para contar isso.
+	if d.verdict == verdictFiring {
+		e.Enrichment = r.enrich(ra, key, text, total)
+	}
+	r.sink.Emit(e)
 }
 
 // event monta o evento de uma decisão.

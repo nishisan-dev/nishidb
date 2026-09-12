@@ -51,6 +51,8 @@ type compiledAlarm struct {
 
 // enrichQuery é uma consulta de enriquecimento com os binds resolvidos.
 type enrichQuery struct {
+	// name identifica o bloco de resultado dentro do evento.
+	name  string
 	sql   string
 	binds []bind
 }
@@ -156,7 +158,7 @@ func compileAlarm(label string, as schema.AlarmSpec, def counter.Definition, sc 
 }
 
 func compileEnrich(label string, es schema.EnrichSpec, def counter.Definition) (enrichQuery, error) {
-	q := enrichQuery{sql: es.SQL}
+	q := enrichQuery{name: es.Name, sql: es.SQL}
 	stmt, err := parser.Parse(es.SQL)
 	if err != nil {
 		return q, fmt.Errorf("%s.sql: %w", label, err)

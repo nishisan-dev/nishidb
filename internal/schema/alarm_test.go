@@ -43,9 +43,11 @@ counters:
         when: "total = 0"
         sustainedFor: 5m
         enrich:
-          - sql: "SELECT customerId, olt FROM servicos WHERE olt = ? LIMIT 5"
+          - name: servicos_da_olt
+            sql: "SELECT customerId, olt FROM servicos WHERE olt = ? LIMIT 5"
             bind: [olt]
-          - sql: "SELECT customerId FROM servicos LIMIT 1"
+          - name: amostra
+            sql: "SELECT customerId FROM servicos LIMIT 1"
 `)), BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
@@ -71,6 +73,15 @@ counters:
 	}
 	if got, quero := alarms[1].Enrich[0].Bind, []string{"olt"}; strings.Join(got, ",") != strings.Join(quero, ",") {
 		t.Errorf("bind = %v, quero %v", got, quero)
+	}
+	// O nome identifica o bloco no evento. Sem ele o consumidor teria de casar
+	// a consulta pela POSIÇÃO na lista, que muda toda vez que alguém insere
+	// uma consulta no meio.
+	if got := alarms[1].Enrich[0].Name; got != "servicos_da_olt" {
+		t.Errorf("name = %q, quero servicos_da_olt", got)
+	}
+	if got := alarms[1].Enrich[1].Name; got != "amostra" {
+		t.Errorf("name da segunda = %q", got)
 	}
 	// Consulta sem `?` não precisa de bind: a contagem de placeholders é
 	// conferida contra o parser do SQL na compilação, não aqui.
@@ -119,10 +130,13 @@ func TestAlarmeRecusas(t *testing.T) {
 		{"enrich não é lista", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          sql: SELECT 1\n", "lista de consultas"},
 		{"enrich lista vazia", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich: []\n", "lista vazia"},
 		{"enrich chave desconhecida", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - query: SELECT 1\n", "chave desconhecida"},
-		{"enrich sql ausente", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - bind: [olt]\n", "sql obrigatório"},
-		{"enrich sql vazio", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - sql: \"  \"\n", "sql vazio"},
-		{"enrich bind vazio", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - sql: SELECT 1\n            bind: [\"\"]\n", "coluna vazia"},
-		{"enrich bind repetido", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - sql: SELECT 1\n            bind: [olt, olt]\n", "repetida"},
+		{"enrich sql ausente", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - name: e\n            bind: [olt]\n", "sql obrigatório"},
+		{"enrich sql vazio", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - name: e\n            sql: \"  \"\n", "sql vazio"},
+		{"enrich bind vazio", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - name: e\n            sql: SELECT 1\n            bind: [\"\"]\n", "coluna vazia"},
+		{"enrich bind repetido", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - name: e\n            sql: SELECT 1\n            bind: [olt, olt]\n", "repetida"},
+		{"enrich name ausente", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - sql: SELECT 1\n", "name obrigatório"},
+		{"enrich name inválido", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - name: Da-OLT\n            sql: SELECT 1\n", "inválido"},
+		{"enrich name repetido", "alarms:\n      - name: a\n        when: \"total = 0\"\n        sustainedFor: 2m\n        enrich:\n          - name: e\n            sql: SELECT 1\n          - name: e\n            sql: SELECT 2\n", "repetido"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

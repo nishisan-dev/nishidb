@@ -22,7 +22,8 @@ import (
 //	        when: "total < 100"        # condição sobre as colunas da tabela
 //	        sustainedFor: 2m           # por quanto tempo ela tem de valer
 //	        enrich:                    # opcional
-//	          - sql: "SELECT customerId FROM servicos WHERE olt = ? LIMIT 5"
+//	          - name: servicos_da_olt   # identifica o bloco no evento
+//	            sql: "SELECT customerId FROM servicos WHERE olt = ? LIMIT 5"
 //	            bind: [olt]
 //
 // O `when` fala a MESMA linguagem do WHERE de uma consulta e do `when:` de uma
@@ -64,6 +65,12 @@ type AlarmSpec struct {
 
 // EnrichSpec é uma consulta de enriquecimento do evento de alarme.
 type EnrichSpec struct {
+	// Name identifica o bloco de resultado dentro do evento.
+	//
+	// É obrigatório porque a alternativa é o consumidor casar a consulta pela
+	// POSIÇÃO na lista — e a posição muda toda vez que alguém insere uma
+	// consulta no meio, sem que nada no evento avise. Único dentro do alarme.
+	Name string
 	// SQL é a consulta como declarada, apenas com as pontas aparadas. NÃO é
 	// normalizada: colapsar espaços mudaria o valor de uma string literal
 	// dentro da própria consulta.
@@ -84,6 +91,7 @@ type rawAlarm struct {
 }
 
 type rawEnrich struct {
+	Name string
 	SQL  *string
 	Bind []string
 }
@@ -140,7 +148,7 @@ func enrichFromNode(n *yaml.Node, keyPath string) ([]rawEnrich, error) {
 	out := make([]rawEnrich, 0, len(n.Content))
 	for i, item := range n.Content {
 		path := fmt.Sprintf("%s[%d]", keyPath, i)
-		keys, err := block(item, path, "sql", "bind")
+		keys, err := block(item, path, "name", "sql", "bind")
 		if err != nil {
 			return nil, err
 		}
@@ -148,6 +156,8 @@ func enrichFromNode(n *yaml.Node, keyPath string) ([]rawEnrich, error) {
 		for key, value := range keys {
 			var err error
 			switch key {
+			case "name":
+				err = decodeInto(value, path+".name", &r.Name)
 			case "sql":
 				var s string
 				err = decodeInto(value, path+".sql", &s)
@@ -241,9 +251,20 @@ func validateEnrich(raws []rawEnrich, keyPath string) ([]EnrichSpec, error) {
 	if len(raws) == 0 {
 		return nil, specErrf("%s: lista vazia — remova a chave ou declare uma consulta", keyPath)
 	}
+	seenNames := make(map[string]int, len(raws))
 	out := make([]EnrichSpec, 0, len(raws))
 	for i, r := range raws {
 		path := fmt.Sprintf("%s[%d]", keyPath, i)
+		if r.Name == "" {
+			return nil, specErrf("%s.name obrigatório — é ele que identifica o bloco dentro do evento", path)
+		}
+		if !isIdentName(r.Name) {
+			return nil, specErrf("%s.name %q inválido (esperado [a-z0-9_]+)", path, r.Name)
+		}
+		if j, dup := seenNames[r.Name]; dup {
+			return nil, specErrf("%s.name %q repetido (já declarado em %s[%d])", path, r.Name, keyPath, j)
+		}
+		seenNames[r.Name] = i
 		if r.SQL == nil {
 			return nil, specErrf("%s.sql obrigatório", path)
 		}
@@ -251,7 +272,7 @@ func validateEnrich(raws []rawEnrich, keyPath string) ([]EnrichSpec, error) {
 		if sql == "" {
 			return nil, specErrf("%s.sql vazio", path)
 		}
-		e := EnrichSpec{SQL: sql}
+		e := EnrichSpec{Name: r.Name, SQL: sql}
 		if r.Bind != nil {
 			seen := make(map[string]bool, len(r.Bind))
 			for _, col := range r.Bind {

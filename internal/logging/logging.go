@@ -76,6 +76,18 @@ var sensitiveKeys = map[string]bool{
 	"value":         true,
 }
 
+// IsSensitiveKey diz se uma chave cai na supressão do handler.
+//
+// Existe porque a redação do handler não alcança tudo: ela percorre atributos e
+// grupos, mas NÃO entra num valor serializado por slog.Any, onde o
+// encoding/json toma conta e não há mais atributo para inspecionar. Quem monta
+// um valor estruturado a partir de nomes que vêm da configuração do cliente
+// tem de aplicar a MESMA regra na montagem — e é para que exista uma lista só
+// que esta função é exportada, em vez de a lista ser copiada lá.
+func IsSensitiveKey(key string) bool {
+	return sensitiveKeys[strings.ToLower(key)]
+}
+
 // Secret marca um valor que nunca deve ser registrado, qualquer que seja a
 // chave sob a qual ele apareça. É a defesa para o caso em que a chave é
 // inocente e o valor não é — `bootstrap: user:senha@host`, por exemplo.

@@ -69,6 +69,10 @@ type Event struct {
 	// sentido com Restored. Sem ele, um disparo sobre um período que ninguém
 	// acompanhou é indistinguível de um observado de ponta a ponta.
 	DowntimeMs int64
+	// Enrichment são os resultados das consultas declaradas, na ordem. Só o
+	// disparo os carrega. Um bloco sem linhas traz o motivo, e nenhum deles
+	// jamais impede o evento de sair.
+	Enrichment []Enrichment
 }
 
 // Sink é para onde os eventos vão.
