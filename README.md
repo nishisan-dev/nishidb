@@ -1422,6 +1422,14 @@ existem; schema certo com tabela que não existe é recusado listando as tabelas
 daquele schema. Nenhum dos dois é erro interno: o cliente recebe erro de bind
 com a posição do nome ofensor.
 
+**As aspas envolvem UM identificador, e isso vale também no `FROM`.**
+`FROM "telecom.por_olt"` pede uma tabela cujo *nome* contém um ponto, e não a
+`por_olt` do schema `telecom` — para qualificar, cite cada parte:
+`FROM "telecom"."por_olt"`. As formas `telecom.por_olt` e `"telecom".por_olt`
+também valem; o que não vale é o nome inteiro entre aspas, e a recusa **mostra
+a forma certa** em vez de só dizer que o dataset não existe. É o erro de quem
+copia o nome já qualificado de uma ferramenta gráfica e o cola entre aspas.
+
 Os limites `query.maxRows`, `query.timeout` e `query.maxTimeout` são do
 **dataset lido**, não do da conexão: numa consulta `FROM telecom.tabela` valem
 os declarados no YAML de quem é dono do schema `telecom`, venha a requisição
