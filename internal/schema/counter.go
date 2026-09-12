@@ -23,6 +23,8 @@ import (
 //	    keyFormat: "{olt}.{slot:02}"     # opcional; molde do groupKey
 //	    maxGroups: 65536                 # opcional
 //	    retainEmptyGroups: 7d            # opcional; `never` mantém para sempre
+//	    alarms: [...]                    # opcional; ver alarm.go
+//	    emit: {...}                      # opcional; ver emit.go
 //
 // O `keyFormat` precisa de aspas: `{` abre mapa no YAML. Ausente, o groupKey
 // sai como sempre saiu — as colunas na ordem do groupBy separadas por `|`.
@@ -70,6 +72,12 @@ type CounterSpec struct {
 	// compilado — aqui a validação existe para recusar na subida, e guardar o
 	// molde já compilado faria a spec carregar estado que ela não usa.
 	KeyFormat string
+	// Alarms são os alarmes declarados, na ordem; nil quando não há bloco
+	// `alarms`. O When de cada um segue a mesma regra do Where: validado
+	// sintaticamente aqui, compilado contra o schema em internal/alarm.
+	Alarms []AlarmSpec
+	// Emit é a emissão periódica por linha; nil quando não há bloco `emit`.
+	Emit *EmitSpec
 }
 
 // groupingTypes são os tipos que o groupBy aceita. Três, e não a lista de
@@ -85,6 +93,8 @@ type rawCounter struct {
 	MaxGroups         *int64
 	RetainEmptyGroups string
 	KeyFormat         *string
+	Alarms            []rawAlarm
+	Emit              *rawEmit
 	hasGroupBy        bool
 }
 
@@ -105,7 +115,8 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 	out := make([]rawCounter, 0, len(n.Content))
 	for i, item := range n.Content {
 		keyPath := fmt.Sprintf("counters[%d]", i)
-		keys, err := block(item, keyPath, "name", "groupBy", "where", "keyFormat", "maxGroups", "retainEmptyGroups")
+		keys, err := block(item, keyPath, "name", "groupBy", "where", "keyFormat",
+			"maxGroups", "retainEmptyGroups", "alarms", "emit")
 		if err != nil {
 			return nil, err
 		}
@@ -132,6 +143,10 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 				r.MaxGroups = &m
 			case "retainEmptyGroups":
 				err = decodeInto(value, keyPath+".retainEmptyGroups", &r.RetainEmptyGroups)
+			case "alarms":
+				r.Alarms, err = alarmsFromNode(value, keyPath+".alarms")
+			case "emit":
+				r.Emit, err = emitFromNode(value, keyPath+".emit")
 			}
 			if err != nil {
 				return nil, err
@@ -164,6 +179,10 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 		return nil, err
 	}
 	seenNames := make(map[string]int, len(raws))
+	// seenFiles casa nome de arquivo de emissão → contador que o declarou. É
+	// por dataset, e não por contador, porque a colisão que importa é entre
+	// dois contadores do MESMO dataset escrevendo no mesmo arquivo.
+	seenFiles := make(map[string]string, len(raws))
 	out := make([]CounterSpec, 0, len(raws))
 	for i, r := range raws {
 		keyPath := fmt.Sprintf("counters[%d]", i)
@@ -253,6 +272,16 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 				return nil, err
 			}
 			c.RetainEmptyGroups = d
+		}
+		if r.Alarms != nil {
+			if c.Alarms, err = validateAlarms(r.Alarms, keyPath+".alarms"); err != nil {
+				return nil, err
+			}
+		}
+		if r.Emit != nil {
+			if c.Emit, err = validateEmit(r.Emit, keyPath+".emit", r.Name, seenFiles); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, c)
 	}
