@@ -65,15 +65,32 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 // rejectCatalog recusa a rota quando o catálogo de um dataset não pôde ser
-// montado. É INTERNAL porque não há ação do cliente: todo dataset desta lista
-// foi registrado no motor na subida, então o Catalog só falha aqui se o
-// registro e a lista do servidor tiverem divergido — defeito, não uso.
+// montado. São TRÊS as falhas que chegam aqui, e nenhuma é uso:
+//
+//   - o dataset não estar registrado no motor (catalogEntries) — divergência
+//     entre o registro do motor e a lista deste servidor, já que todo dataset
+//     desta lista foi registrado na subida;
+//   - a spec sintética da `_meta.fields` não compilar (meta.ColumnsOfFields):
+//     ela é constante do binário, então só falha por defeito de código;
+//   - o catálogo não ter tabela base (metaOfDataset) — que é a falha coberta
+//     aqui e é estruturalmente inalcançável: a enumeração acrescenta a linha de
+//     Kind TABLE antes de qualquer outra e a ordem a mantém em primeiro. A
+//     guarda existe para que a invariante seja VERIFICADA em vez de suposta,
+//     porque o que ela protege é o campo `columns` de um cliente anterior.
+//
+// Daí o INTERNAL: não há ação do cliente que provoque ou evite qualquer uma das
+// três.
+//
+// A chave de log e as duas mensagens nascem em inglês (débito 116). A chave de
+// campo `erro` é a exceção deliberada: ela é o vocabulário do resto do processo,
+// e um mesmo campo com dois nomes no mesmo fluxo de log custa mais do que um
+// campo em português.
 func (s *Server) rejectCatalog(w http.ResponseWriter, r *http.Request, d *dataset, err error) {
-	s.log.Warn("metadata.catalogo_falhou", "o catálogo do dataset não pôde ser montado",
+	s.log.Warn("metadata.catalog_failed", "dataset catalog could not be assembled",
 		"dataset", d.nome, "erro", err.Error())
 	s.reject(w, r, http.StatusInternalServerError, d.nome, protocol.ErrorDetail{
 		Code:    protocol.CodeInternal,
-		Message: "o catálogo do dataset " + d.nome + " não pôde ser montado",
+		Message: "the catalog of dataset " + d.nome + " could not be assembled",
 	})
 }
 
