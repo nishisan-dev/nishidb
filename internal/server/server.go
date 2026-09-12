@@ -21,22 +21,27 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/alarm"
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/kafka"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
+	"github.com/nishisan-dev/nishidb/internal/metaalarm"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/budget"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/series"
 	"github.com/nishisan-dev/nishidb/internal/storage"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
 
 // dataset é um dataset aberto no processo.
@@ -56,6 +61,17 @@ type dataset struct {
 	irma *dataset
 	// ehHistorico marca a própria tabela irmã.
 	ehHistorico bool
+
+	// alarms é o observador dos alarmes declarados nos contadores, ou nil
+	// quando nenhum contador declara `alarms:`. Mora AQUI, e não no Store,
+	// porque o enriquecimento de um evento precisa do motor de consulta — que
+	// o Store não conhece, e nem deve.
+	alarms *alarm.Runner
+
+	// emitters são as emissões periódicas declaradas nos contadores, uma por
+	// contador com bloco `emit`. Moram aqui pelo mesmo motivo dos alarmes: o
+	// laço vive fora do Store, e é o servidor que o para antes do quiesce.
+	emitters []*series.Emitter
 
 	// cons é nil quando o dataset não declara Kafka ou está com
 	// `enabled: false` — o botão de pausa declarativo.
@@ -368,6 +384,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 	// Depois do loop: o coletor percorre a lista pronta, e registrá-lo antes
 	// exporia um scrape com metade dos datasets durante a subida.
 	registerMetricsOfDataset(reg, s)
+	registerMetricsOfAlarms(reg, s)
 	ok = true
 	return s, nil
 }
@@ -458,12 +475,40 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	if err := counters.Register(s.eng, spec.Name, st); err != nil {
 		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
+	// Os alarmes são compilados DEPOIS do counters.Register, que é quando as
+	// tabelas dos contadores existem no motor, e ANTES de qualquer laço subir:
+	// condição com nome de coluna errado ou consulta de enriquecimento
+	// malformada derrubam a subida aqui, em vez de esperar a madrugada em que
+	// o alarme disparia.
+	alarmes, err := alarm.Compile(spec.Name, spec.Counters, defsOfCounters(st))
+	if err != nil {
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
 	d := &dataset{
 		nome: spec.Name,
 		spec: spec,
 		sch:  compilado,
 		st:   st,
 		mat:  mat,
+	}
+	if err := openEmitters(d, spec, st, dir, log); err != nil {
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
+	if len(alarmes) > 0 {
+		runner, err := alarm.New(alarmes, readersOfCounters(st), alarm.Options{
+			Sink: alarm.NewLogSink(log),
+			Log:  log,
+			// O motor é o MESMO que serve as consultas remotas. As de
+			// enriquecimento passam pelo mesmo binder, pelo mesmo planner e
+			// pelo mesmo orçamento — e é isso que garante que elas não podem
+			// fazer nada que um SELECT do cliente não pudesse.
+			Engine:    s.eng,
+			StatePath: st.AlarmStatePath(),
+		})
+		if err != nil {
+			return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+		}
+		d.alarms = runner
 	}
 	// `_meta.kafka` entra no motor DEPOIS de d existir: a tabela resolve o
 	// consumidor por closure sobre ele, e o consumidor só nasce em
@@ -479,6 +524,17 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		Duraveis:   st.SourceOffsets,
 		State:      func() (string, string) { return stateOfIngestion(d) },
 		Vigia:      d.vigiaCorrente,
+	}); err != nil {
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
+	// `_meta.alarms` entra pelo mesmo caminho, e SEMPRE — inclusive num
+	// dataset sem alarme declarado, onde ela responde a lista vazia: "este
+	// dataset não observa nada" é uma resposta.
+	//
+	// Groups é closure sobre d, e não a fatia: o retrato TROCA a cada passada,
+	// e uma fatia capturada aqui descreveria para sempre o estado da subida.
+	if err := metaalarm.Register(s.eng, spec.Name, metaalarm.Source{
+		Groups: d.activeAlarmGroups,
 	}); err != nil {
 		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
@@ -538,6 +594,8 @@ func (s *Server) Run(ctx context.Context, pprofAddr string) error {
 	s.turnonCompaction(ctx)
 	s.turnonExpiration(ctx)
 	s.turnonRetirementOfGroups(ctx)
+	s.turnonAlarms(ctx)
+	s.turnonEmit(ctx)
 	s.turnonRetention(ctx)
 	s.turnonRebuild(ctx)
 
@@ -770,6 +828,50 @@ func (s *Server) turnonRetirementOfGroups(ctx context.Context) {
 		"datasets", withRetention, "cadencia", storage.CadenciaOfRetirement.String())
 }
 
+// turnonAlarms sobe o laço de varredura nos datasets que declaram alarme — só
+// neles, pela mesma economia dos laços irmãos. O log nomeia quais subiram,
+// porque "nenhum alarme disparou" é indistinguível de "ninguém está
+// observando" quando ninguém conta qual dos dois é.
+func (s *Server) turnonAlarms(ctx context.Context) {
+	var withAlarms []string
+	for _, d := range s.datasets {
+		if d.alarms == nil {
+			continue
+		}
+		d.alarms.Start(ctx)
+		if d.alarms.Active() {
+			withAlarms = append(withAlarms, d.nome)
+		}
+	}
+	if len(withAlarms) == 0 {
+		return
+	}
+	sort.Strings(withAlarms)
+	s.log.Info("alarm.watching",
+		"o laço de varredura de alarmes está de pé",
+		"datasets", withAlarms)
+}
+
+// turnonEmit sobe o laço de emissão periódica nos contadores que a declaram.
+func (s *Server) turnonEmit(ctx context.Context) {
+	var withEmit []string
+	for _, d := range s.datasets {
+		for _, e := range d.emitters {
+			e.Start(ctx)
+		}
+		if len(d.emitters) > 0 {
+			withEmit = append(withEmit, d.nome)
+		}
+	}
+	if len(withEmit) == 0 {
+		return
+	}
+	sort.Strings(withEmit)
+	s.log.Info("series.emitting",
+		"a emissão periódica dos contadores está de pé",
+		"datasets", withEmit)
+}
+
 func (s *Server) turnonExpiration(ctx context.Context) {
 	maxByPassada, timeByPassada := s.cfg.Expiry()
 	var withExpiration []string
@@ -915,8 +1017,151 @@ func (s *Server) encerra() error {
 	if s.pprofSrv != nil {
 		errs = append(errs, s.pprofSrv.Shutdown(ctx))
 	}
+	// ORDEM: os alarmes param ANTES do quiesce dos Stores.
+	//
+	// O laço lê os contadores pelo campo do Store, que é leitura direta sem a
+	// guarda de vida — diferente da auditoria, ele não passa por
+	// entra()/sai(). E como ele vive AQUI, e não no Store, o Close de lá não o
+	// aguarda. Invertida a ordem, uma varredura em voo leria um Store fechado.
+	s.forAlarms()
+	s.forEmitters()
 	errs = append(errs, s.closeDatasets())
 	return errors.Join(errs...)
+}
+
+// forAlarms cancela e AGUARDA o laço de alarmes de cada dataset. Idempotente e
+// seguro sem nenhum laço de pé, como os For* do storage.
+func (s *Server) forAlarms() {
+	for _, d := range s.datasets {
+		if d.alarms != nil {
+			d.alarms.Stop()
+		}
+	}
+}
+
+// forEmitters cancela e AGUARDA o laço de emissão de cada contador, e fecha os
+// arquivos. Mesma ordem e mesma razão dos alarmes: o laço lê os contadores sem
+// a guarda de vida do Store, e vive fora dele.
+func (s *Server) forEmitters() {
+	for _, d := range s.datasets {
+		for _, e := range d.emitters {
+			if err := e.Close(); err != nil {
+				s.log.Warn("series.close_failed",
+					"a emissão periódica não fechou o arquivo limpo; a cauda da série pode ter sido perdida",
+					"dataset", d.nome, "error", err.Error())
+			}
+		}
+	}
+}
+
+// EmitActive diz se ALGUM laço de emissão do dataset está de pé. Existe para a
+// observabilidade e para o teste da parada.
+func (s *Server) EmitActive(dataset string) bool {
+	for _, d := range s.datasets {
+		if d.nome != dataset {
+			continue
+		}
+		for _, e := range d.emitters {
+			if e.Active() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// openEmitters monta um emissor por contador com bloco `emit`.
+//
+// A limpeza do diretório roda ANTES de qualquer arquivo ser aberto, e recebe o
+// que está declarado: baixar o keep no YAML devolve o disco na subida seguinte,
+// e o que não está declarado é deixado em paz (series.Cleanup explica por quê).
+func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir string, log *logging.Logger) error {
+	declared := make(map[string]int)
+	for _, cs := range spec.Counters {
+		if cs.Emit != nil {
+			declared[cs.Emit.File] = cs.Emit.Keep
+		}
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+	seriesDir := filepath.Join(dir, schema.EmitDirName)
+	if err := series.Cleanup(seriesDir, declared); err != nil {
+		return err
+	}
+	readers := readersOfCounters(st)
+	byName := make(map[string][]string, len(spec.Counters))
+	for _, c := range st.Counters() {
+		byName[c.Def().Name] = c.Def().Names
+	}
+	for _, cs := range spec.Counters {
+		if cs.Emit == nil {
+			continue
+		}
+		reader, ok := readers[cs.Name]
+		if !ok {
+			return fmt.Errorf("emit: o contador %q não está aberto neste dataset", cs.Name)
+		}
+		e, err := series.NewEmitter(series.Options{
+			Dataset:  spec.Name,
+			Counter:  cs.Name,
+			Columns:  byName[cs.Name],
+			Reader:   reader,
+			Dir:      seriesDir,
+			File:     cs.Emit.File,
+			Every:    cs.Emit.Every,
+			MaxBytes: cs.Emit.MaxBytes,
+			Keep:     cs.Emit.Keep,
+			Log:      log,
+		})
+		if err != nil {
+			return err
+		}
+		d.emitters = append(d.emitters, e)
+	}
+	return nil
+}
+
+// activeAlarmGroups é o retrato dos alarmes em observação deste dataset, para
+// a tabela `_meta.alarms`. nil quando o dataset não declara alarme — e a lista
+// vazia é a resposta certa, não um erro.
+func (d *dataset) activeAlarmGroups() []alarm.ActiveGroup {
+	if d.alarms == nil {
+		return nil
+	}
+	return d.alarms.ActiveGroups()
+}
+
+// AlarmsActive diz se o laço de alarmes do dataset está de pé. Existe para a
+// observabilidade e para o teste da ordem de parada: "nenhum alarme disparou" é
+// indistinguível de "ninguém está observando" sem esta resposta.
+func (s *Server) AlarmsActive(dataset string) bool {
+	for _, d := range s.datasets {
+		if d.nome == dataset {
+			return d.alarms != nil && d.alarms.Active()
+		}
+	}
+	return false
+}
+
+// defsOfCounters são as definições dos contadores abertos, na ordem declarada.
+func defsOfCounters(st *storage.Store) []counter.Definition {
+	cs := st.Counters()
+	out := make([]counter.Definition, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, c.Def())
+	}
+	return out
+}
+
+// readersOfCounters casa nome de contador → leitor, para o laço de alarmes.
+func readersOfCounters(st *storage.Store) map[string]counters.Reader {
+	cs := st.Counters()
+	out := make(map[string]counters.Reader, len(cs))
+	for _, c := range cs {
+		out[c.Def().Name] = c
+	}
+	return out
 }
 
 // closeDatasets faz o quiesce de cada Store, que é o que devolve o flock.

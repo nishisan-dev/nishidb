@@ -214,6 +214,42 @@ Dez por contador declarado no bloco `counters:`, com o rótulo `counter`.
 | `nishidb_counter_audit_divergent_groups` | gauge | `counter`, `dataset` | divergências na última auditoria conclusiva — grupos, linhas sem grupo internado e os dois agregados; 0 até a primeira (ver o timestamp ao lado) |
 | `nishidb_counter_audit_last_success_timestamp` | gauge | `counter`, `dataset` | Unix timestamp da última auditoria conclusiva do contador; 0 até a primeira |
 
+### Alarmes de contador
+
+Só nos datasets que declaram `alarms:` dentro de algum contador. As seis
+primeiras saem por alarme declarado, com os rótulos `counter` e `alarm`; as três
+últimas são do dataset, porque a passada de varredura é do dataset inteiro.
+
+Todas nascem com zero na subida. "Nenhum alarme disparou" tem de ser
+distinguível de "ninguém está observando", e é `nishidb_alarm_watching` que
+responde a segunda pergunta.
+
+| série | tipo | labels | o que responde |
+|---|---|---|---|
+| `nishidb_alarm_groups_tracked` | gauge | `alarm`, `counter`, `dataset` | grupos em observação: a condição vale para eles, tenham ou não cumprido o prazo. Acompanha o problema, não o tamanho do inventário — se crescer com o número de grupos do contador, algo guarda estado que não deveria |
+| `nishidb_alarm_groups_firing` | gauge | `alarm`, `counter`, `dataset` | grupos com o alarme disparado agora |
+| `nishidb_alarm_fired_total` ⚠️ | counter | `alarm`, `counter`, `dataset` | disparos desde a subida |
+| `nishidb_alarm_resolved_total` | counter | `alarm`, `counter`, `dataset` | resoluções desde a subida, somando condição que passou e grupo aposentado; o motivo de cada uma está no evento de log, não na série |
+| `nishidb_alarm_enrich_failed_total` ⚠️ | counter | `alarm`, `counter`, `dataset` | consultas de enriquecimento que falharam; o alarme saiu sem o bloco. Diferente de zero manda investigar a consulta declarada |
+| `nishidb_alarm_enrich_skipped_total` ⚠️ | counter | `alarm`, `counter`, `dataset` | consultas puladas pelo teto da passada; o alarme saiu sem o bloco. Diferente de zero significa avalanche de disparos, não consulta ruim — é por isso que não compartilha série com a de falha |
+| `nishidb_alarm_watching` | gauge | `dataset` | 1 enquanto o laço de varredura está de pé. Zero com alarme declarado significa que o laço parou na primeira falha |
+| `nishidb_alarm_sweep_seconds` | gauge | `dataset` | duração da última passada. Acima da cadência (o menor `sustainedFor` dividido por quatro), os alarmes atrasam — e sem esta série o atraso apareceria sem causa |
+| `nishidb_alarm_restored_groups` | gauge | `dataset` | cronômetros de sustentação lidos do disco na subida. Diferente de zero significa que o processo voltou com alarmes em curso |
+
+### Emissão periódica de contador
+
+Só nos datasets que declaram `emit:` dentro de algum contador. As cinco
+primeiras saem por contador, com o rótulo `counter`.
+
+| série | tipo | labels | o que responde |
+|---|---|---|---|
+| `nishidb_series_rows_total` | counter | `counter`, `dataset` | linhas de série escritas desde a subida |
+| `nishidb_series_rotations_total` | counter | `counter`, `dataset` | rotações do arquivo desde a subida; é quanto histórico está sendo descartado por intervalo. Subindo rápido, aumente `maxBytes` ou `keep` |
+| `nishidb_series_errors_total` ⚠️ | counter | `counter`, `dataset` | falhas de escrita da série; diferente de zero significa série incompleta |
+| `nishidb_series_bytes` | gauge | `counter`, `dataset` | tamanho do arquivo corrente. O teto de disco de um contador é `maxBytes × (keep+1)` |
+| `nishidb_series_last_success_timestamp` | gauge | `counter`, `dataset` | epoch segundos da última passada que escreveu sem erro; 0 até a primeira. É a série que um alerta de "a emissão parou" observa |
+| `nishidb_series_emitting` | gauge | `dataset` | 1 enquanto algum laço de emissão do dataset está de pé |
+
 ### Autenticação e TLS
 
 Só com `server.authentication` / `server.tls` configurados.

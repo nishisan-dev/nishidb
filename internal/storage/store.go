@@ -2443,6 +2443,19 @@ func (s *Store) DiretorioOfSpill() string {
 	return filepath.Join(s.opts.Dir, spill.DirName)
 }
 
+// AlarmStatePath é o arquivo de estado de sustentação dos alarmes deste
+// dataset.
+//
+// Fica em checkpoint/, ao lado do kafka.offsets, e pelas mesmas razões do
+// spill: sob o mesmo flock exclusivo, herdando a política de filesystem do
+// dataset, e sem um segundo lugar para o operador dimensionar. O que ele NÃO
+// compartilha com os vizinhos é a ordem de durabilidade do passo 8 — o estado
+// de alarme não descreve dado materializado nem posição de consumo, e quem o
+// escreve é o laço de alarmes, fora do Checkpoint (ver checkpoint/alarms.go).
+func (s *Store) AlarmStatePath() string {
+	return filepath.Join(s.opts.Dir, "checkpoint", checkpoint.AlarmStateFileName)
+}
+
 // Lookup consulta o índice do campo; valor nunca visto devolve iterador vazio;
 // campo sem índice POR SEGMENTO é ErrInvalidArgument. O resultado é um SUPERSET
 // de candidatos — rows tombstoned, sem location, rows que apenas COLIDEM no

@@ -1,0 +1,85 @@
+package alarm
+
+import "time"
+
+// Estados e motivos de um evento de alarme. São CONTRATO com quem consome o
+// canal: strings estáveis em inglês, como as chaves de log e os nomes de
+// métrica.
+const (
+	// StateFiring: a condição se sustentou pelo prazo declarado.
+	StateFiring = "firing"
+	// StateResolved: o alarme que estava disparado deixou de estar.
+	StateResolved = "resolved"
+
+	// ReasonConditionCleared: o problema passou — a condição não vale mais.
+	ReasonConditionCleared = "condition_cleared"
+	// ReasonGroupRetired: o assunto desapareceu — o grupo saiu do contador.
+	// É distinto do anterior de propósito: um equipamento removido do
+	// inventário não é um equipamento que voltou ao normal, e quem gera evento
+	// a partir disto trata os dois de formas diferentes.
+	ReasonGroupRetired = "group_retired"
+)
+
+// Column é uma coluna do groupBy do grupo alarmado.
+//
+// O valor vai como TEXTO porque o canal é uma linha de log JSON, e é o mesmo
+// texto que a coluna teria num SELECT da tabela do contador. Quem precisar do
+// tipo o encontra em `_meta.counters`, que publica o groupBy de cada contador —
+// carregá-lo aqui duplicaria no evento um dado que já é consultável.
+type Column struct {
+	Name  string
+	Value string
+}
+
+// Event é o que sai quando um alarme dispara ou resolve.
+//
+// É UM tipo, e não um por canal: o log é o único destino hoje, e quando um
+// tópico ou um webhook entrarem eles publicam ESTE evento. Um segundo formato
+// por canal divergiria do primeiro na primeira correção, e quem consome os dois
+// veria dois fatos onde há um.
+type Event struct {
+	Dataset string
+	Counter string
+	Alarm   string
+	// State é StateFiring ou StateResolved.
+	State string
+	// Reason acompanha StateResolved; vazio no disparo.
+	Reason string
+	// GroupKey é o texto canônico do grupo, como a coluna groupKey o mostra.
+	GroupKey string
+	// Columns são as colunas do groupBy abertas, na ordem declarada. Existem
+	// além do GroupKey porque quem recebe o evento costuma querer filtrar por
+	// uma delas, e repartir o texto do grupo exigiria conhecer o keyFormat.
+	Columns []Column
+	// Total é o valor observado no instante da decisão — não o do disparo
+	// original, quando o evento é uma resolução.
+	Total int64
+	// Condition e SustainedFor são a regra que produziu o evento. Vão no
+	// evento porque quem o recebe não tem o YAML, e "total baixo" sem o limiar
+	// não é acionável.
+	Condition    string
+	SustainedFor time.Duration
+	// Since é quando a condição passou a valer, e At o instante do evento.
+	Since time.Time
+	At    time.Time
+	// Restored diz que o Since foi lido do disco, e não observado por este
+	// processo.
+	Restored bool
+	// DowntimeMs é quanto tempo o processo ficou sem observar, e só tem
+	// sentido com Restored. Sem ele, um disparo sobre um período que ninguém
+	// acompanhou é indistinguível de um observado de ponta a ponta.
+	DowntimeMs int64
+	// Enrichment são os resultados das consultas declaradas, na ordem. Só o
+	// disparo os carrega. Um bloco sem linhas traz o motivo, e nenhum deles
+	// jamais impede o evento de sair.
+	Enrichment []Enrichment
+}
+
+// Sink é para onde os eventos vão.
+//
+// Interface de um método, com uma implementação (o log) neste ciclo. É o ponto
+// de extensão para tópico e webhook: eles entram como outro Sink, sobre o
+// MESMO Event.
+type Sink interface {
+	Emit(Event)
+}

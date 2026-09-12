@@ -1,0 +1,112 @@
+@startuml alarmes_flow
+title Alarme por condição sustentada: a passada, a decisão e o que sai
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+
+partition "Subida (openDataset)" {
+  start
+  :Compila a condição de cada alarme
+  contra o schema da tabela do contador
+  (internal/predicate, o MESMO do WHERE);
+  note right
+    Nome de coluna errado, SQL de
+    enriquecimento malformado ou
+    contagem de `?` divergente
+    DERRUBAM a subida aqui.
+  end note
+  :Lê checkpoint/alarms.state;
+  if (arquivo?) then (ausente)
+    :primeira subida: nada a restaurar;
+  elseif (ilegível) then
+    :WARN alarm.state_unreadable;
+    :cada alarme recomeça a contar
+    (a abertura NÃO é recusada);
+  else (válido)
+    if (when e sustainedFor batem com o YAML?) then (não)
+      :descarta a entrada
+      (prazo antigo sobre condição nova
+      anunciaria sustentação que
+      ninguém mediu);
+    else (sim)
+      :restaura o `desde quando`
+      pela chave CANÔNICA do grupo;
+    endif
+  endif
+  :Publica o retrato para `_meta.alarms`;
+}
+
+partition "Passada (cadência = menor sustainedFor / 4)" {
+  :Para cada grupo VIVO do contador;
+  note right
+    Só o lock FOLHA do dicionário,
+    nada do Store: a varredura não
+    disputa nada com a ingestão.
+  end note
+  :Avalia a condição sobre a linha
+  que a tabela virtual monta;
+  if (grupo já tem estado?) then (não)
+    if (condição vale?) then (não)
+      :nada a lembrar
+      (caso dominante, zero alocação);
+      stop
+    endif
+    :cria o cronômetro;
+  endif
+  if (condição vale?) then (não)
+    if (estava disparado?) then (sim)
+      :RESOLVED / condition_cleared;
+    else (não)
+      :nada
+      (rajada curta: resolução sem
+      disparo seria um "voltou" que
+      ninguém viu abrir);
+      stop
+    endif
+  elseif (prazo cumprido?) then (não)
+    :nada, segue contando;
+    stop
+  elseif (já disparado?) then (sim)
+    :nada, não repete;
+    stop
+  else (dispara)
+    :FIRING;
+    :Enriquecimento: executa as consultas
+    com os valores do grupo LIGADOS como
+    parâmetro, fora de qualquer lock;
+    note right
+      Falha, prazo estourado ou teto da
+      passada deixam o bloco vazio COM o
+      motivo. A consulta NUNCA barra o
+      alarme.
+    end note
+  endif
+}
+
+partition "Fase dois: quem a varredura não viu" {
+  :Grupo com estado que não apareceu
+  foi APOSENTADO pelo contador;
+  if (estava disparado?) then (sim)
+    :RESOLVED / group_retired;
+    note right
+      Motivo distinto de propósito:
+      equipamento removido do inventário
+      não é equipamento recuperado.
+    end note
+  else (não)
+    :descarta o estado em silêncio;
+  endif
+}
+
+partition "Saída" {
+  :Evento no log estruturado
+  (alarm.firing / alarm.resolved);
+  if (houve transição?) then (sim)
+    :republica o retrato de `_meta.alarms`;
+    :grava checkpoint/alarms.state
+    (temp -> fsync -> rename -> dirsync);
+  endif
+  stop
+}
+
+@enduml

@@ -54,7 +54,7 @@ func idsOfMetaTables(t *testing.T, a *env, dataset string) string {
 func TestQueryLocalRespondeMetaTablesComOCatalogoDoDataset(t *testing.T) {
 	a := newEnv(t)
 	writeDatasetServices(t, a)
-	const want = "_counters.autenticados_por_olt,_meta.counters,_meta.fields,_meta.kafka,_meta.tables,servicos"
+	const want = "_counters.autenticados_por_olt,_meta.alarms,_meta.counters,_meta.fields,_meta.kafka,_meta.tables,servicos"
 	if got := idsOfMetaTables(t, a, "servicos"); got != want {
 		t.Fatalf("catálogo = %s, quero %s", got, want)
 	}
@@ -94,7 +94,7 @@ func TestQueryLocalListaMetaCountersNaIrmaQueOServidorNaoLista(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(a.dir, "datasets", "eventos.yaml"), []byte(specWithHistoryCLI), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	const want = "_meta.counters,_meta.fields,_meta.tables,eventos_history"
+	const want = "_meta.alarms,_meta.counters,_meta.fields,_meta.tables,eventos_history"
 	if got := idsOfMetaTables(t, a, "eventos_history"); got != want {
 		t.Fatalf("catálogo da irmã = %s, quero %s", got, want)
 	}

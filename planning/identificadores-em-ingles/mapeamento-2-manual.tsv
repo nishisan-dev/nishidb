@@ -944,3 +944,5 @@ internal/config	var	datasets_internal_test.quero	want	renomeado nos testes de re
 internal/server	var	server_test.quero	want	renomeado nos testes de recusa por schema repetido, código novo do ciclo do schema declarado (11/09/2026)
 internal/schema	var	TestSpecRecusaSchemaNameInvalido.nome	name	renomeado no teste de recusa do schemaName, código novo do ciclo do schema declarado (11/09/2026)
 internal/schema	var	TestSpecRecusaSchemaNameInvalido.valor	value	renomeado no teste de recusa do schemaName, código novo do ciclo do schema declarado (11/09/2026)
+internal/counters	const	maxColumnsOfAgrupamento	maxGroupingColumns	renomeado ao tocar a Table na extração do TableSchema, ciclo dos alarmes de contador (12/09/2026)
+internal/counters	func	nameOfTipo	typeName	renomeado ao tocar a Table na extração do TableSchema, ciclo dos alarmes de contador (12/09/2026)
