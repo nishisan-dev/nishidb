@@ -28,7 +28,13 @@ type Definition struct {
 	Dataset string
 	// Counter é o nome do contador cujas linhas os alarmes observam.
 	Counter string
-	alarms  []compiledAlarm
+	// def é a definição do contador, guardada porque o laço precisa dela para
+	// montar a tabela virtual, abrir a chave do grupo nas colunas e renderizar
+	// o texto de um grupo que a varredura não viu mais. Ela JÁ é o insumo desta
+	// compilação: recuperá-la depois do leitor por type assertion acoplaria o
+	// laço ao leitor concreto e falharia em silêncio com qualquer outro.
+	def    counter.Definition
+	alarms []compiledAlarm
 }
 
 // compiledAlarm é um alarme pronto para o laço.
@@ -114,7 +120,7 @@ func Compile(dataset string, specs []schema.CounterSpec, defs []counter.Definiti
 		if err != nil {
 			return nil, fmt.Errorf("%s.alarms: %w", label, err)
 		}
-		d := Definition{Dataset: dataset, Counter: cs.Name, alarms: make([]compiledAlarm, 0, len(cs.Alarms))}
+		d := Definition{Dataset: dataset, Counter: cs.Name, def: def, alarms: make([]compiledAlarm, 0, len(cs.Alarms))}
 		for j, as := range cs.Alarms {
 			a, err := compileAlarm(fmt.Sprintf("%s.alarms[%d]", label, j), as, def, sc)
 			if err != nil {

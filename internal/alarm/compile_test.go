@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/counters"
-	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/keyformat"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
@@ -32,35 +31,11 @@ func defByPON(name string) counter.Definition {
 	return d
 }
 
-// fakeCounter é um Reader de counters com um grupo só, para produzir a linha
-// que o avaliador da condição vê. Um contador de verdade exigiria diretório e
-// mmap para provar o que é lógica de compilação.
-type fakeCounter struct {
-	key, text []byte
-	total     int64
-}
-
-func (f *fakeCounter) Limit() uint32 { return 2 }
-func (f *fakeCounter) Group(id uint32) ([]byte, []byte, int64, int64, bool) {
-	if id != 1 {
-		return nil, nil, 0, 0, false
-	}
-	return f.key, f.text, f.total, f.total, true
-}
-func (f *fakeCounter) ByText(t []byte) (uint32, bool) { return 1, string(t) == string(f.text) }
-
 // rowOf devolve o payload da linha do grupo (olt, slot) com o total dado,
 // montado pela MESMA tabela virtual que o SQL consulta.
 func rowOf(t *testing.T, def counter.Definition, olt string, slot, total int64) []byte {
 	t.Helper()
-	key, err := valuekey.AppendComposite(nil, []types.Value{
-		{Type: types.TypeString, Bytes: []byte(olt)},
-		{Type: types.TypeInt64, I64: slot},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := &fakeCounter{key: key, text: []byte(olt + "|" + itoa(slot)), total: total}
+	f := newFakeCounter(t, defByPON("autenticados_por_pon"), grupo{olt: olt, slot: slot, total: total, live: true})
 	_, store, err := counters.Table(def, f)
 	if err != nil {
 		t.Fatal(err)
@@ -71,18 +46,6 @@ func rowOf(t *testing.T, def counter.Definition, olt string, slot, total int64) 
 		t.Fatalf("linha do grupo indisponível: ok=%v err=%v", ok, err)
 	}
 	return rec.Payload
-}
-
-func itoa(v int64) string {
-	if v == 0 {
-		return "0"
-	}
-	var b []byte
-	for v > 0 {
-		b = append([]byte{byte('0' + v%10)}, b...)
-		v /= 10
-	}
-	return string(b)
 }
 
 func specWith(alarms ...schema.AlarmSpec) []schema.CounterSpec {

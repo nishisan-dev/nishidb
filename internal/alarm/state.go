@@ -84,6 +84,12 @@ type tracker struct {
 	// restored marca que o since veio do estado durável e não foi observado
 	// por este processo. É consumido pelo primeiro evento que sai.
 	restored bool
+	// seen é a passada em que a varredura viu este grupo. Mora no tracker, e
+	// não num mapa paralelo, porque escrever num mapa com string(chave) ALOCA
+	// — a otimização do compilador que evita a cópia vale para leitura e
+	// delete, nunca para atribuição. Com a marca aqui, só quem já tem estado é
+	// marcado, e o grupo saudável não custa nada.
+	seen uint64
 }
 
 // restore instala o estado lido do arquivo durável.
