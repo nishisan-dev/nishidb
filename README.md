@@ -1430,6 +1430,13 @@ também valem; o que não vale é o nome inteiro entre aspas, e a recusa **mostr
 a forma certa** em vez de só dizer que o dataset não existe. É o erro de quem
 copia o nome já qualificado de uma ferramenta gráfica e o cola entre aspas.
 
+A mesma correção sai pelos **dois** pontos em que essa consulta pode ser
+recusada: o bind, quando o nome citado inteiro não é o do handle, e o
+`404 UNKNOWN_DATASET` do `POST /v1/query`, quando o nome chega no campo
+`dataset` do corpo — que é o caminho do driver JDBC, porque ele lê o nome do
+`FROM` e o manda no corpo, e aí a recusa acontece antes de o SQL ser analisado.
+Nome desconhecido **sem** ponto recebe a mensagem de sempre, sem falar de aspas.
+
 Os limites `query.maxRows`, `query.timeout` e `query.maxTimeout` são do
 **dataset lido**, não do da conexão: numa consulta `FROM telecom.tabela` valem
 os declarados no YAML de quem é dono do schema `telecom`, venha a requisição

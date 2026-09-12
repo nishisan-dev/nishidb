@@ -342,3 +342,14 @@ de identificadores em inglês), e nenhuma tarefa o tocou.
    116, junto com o resto do wire, e não deste: feita aqui, seria mudança de
    contrato de saída sem a decisão que o próprio débito exige. Fica registrado
    para que a divergência seja lida como escolha, e não como descuido.
+
+   **Atualização de 12/09/2026:** esse complemento passou a sair também pela
+   recusa de **dataset desconhecido** do `POST /v1/query`
+   (`internal/server/query.go`), que é o ponto em que o cliente JDBC é
+   recusado — o driver lê o nome do `FROM` e o manda no corpo, então
+   `FROM "telecom.service_view"` morre no 404 antes de o SQL ser analisado, e o
+   bind nunca roda. É a MESMA função, agora exportada como
+   `binder.DottedDatasetNameHint`, e não uma segunda redação da regra. O texto
+   passou a enunciar a regra das aspas em vez de afirmar que o chamador as
+   escreveu: no caminho HTTP o nome chega num campo do corpo, e o servidor não
+   tem como saber se ele veio de um `FROM` citado inteiro.

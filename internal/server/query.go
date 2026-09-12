@@ -67,9 +67,19 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		// O nome NÃO entra na métrica: ele é entrada do cliente, e um label
 		// alimentado por entrada do cliente é uma série nova por requisição.
+		//
+		// O complemento sai de binder.DottedDatasetNameHint, a MESMA função que
+		// o bind usa, e não de uma segunda redação da regra. Ele é necessário
+		// aqui porque este é o ponto de recusa que o cliente JDBC alcança: o
+		// driver extrai o nome do FROM e o manda no corpo, então
+		// `FROM "telecom.service_view"` chega como o dataset
+		// `telecom.service_view`, que não está registrado — e a recusa acontece
+		// ANTES de o SQL ser analisado, de modo que o bind, onde a dica já
+		// existia, nunca roda. Um nome sem ponto não recebe complemento nenhum.
 		s.reject(w, r, http.StatusNotFound, datasetDesconhecido, protocol.ErrorDetail{
-			Code:    protocol.CodeUnknownDataset,
-			Message: fmt.Sprintf("dataset %q não está registrado neste servidor", req.Dataset),
+			Code: protocol.CodeUnknownDataset,
+			Message: fmt.Sprintf("dataset %q não está registrado neste servidor%s",
+				req.Dataset, binder.DottedDatasetNameHint(req.Dataset)),
 		})
 		return
 	}

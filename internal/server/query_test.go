@@ -497,6 +497,77 @@ func TestErrosAntesDaPrimeiraLinha(t *testing.T) {
 	})
 }
 
+// TestARecusaDeDatasetDesconhecidoEnsinaACitarCadaParteQuandoONomeTemPonto
+// cobre o ponto de recusa que o cliente JDBC realmente alcança.
+//
+// O driver extrai o nome do FROM e o manda no campo `dataset` do corpo, então
+// `FROM "telecom.d"` chega aqui como o dataset `telecom.d`, que não está
+// registrado. A recusa acontece ANTES de o SQL ser analisado, de modo que o
+// complemento que o binder já servia nunca é alcançado por este caminho — e o
+// operador recebia só "não está registrado", que o manda procurar um dataset
+// que ele nunca quis abrir.
+//
+// A segunda metade é o limite da dica: nome desconhecido SEM ponto não tem
+// nada a ver com aspas, e falar delas ali mandaria corrigir o que não está
+// errado.
+func TestARecusaDeDatasetDesconhecidoEnsinaACitarCadaParteQuandoONomeTemPonto(t *testing.T) {
+	srv := serverWithData(t, 3, blockPadrao)
+
+	t.Run("nome com ponto", func(t *testing.T) {
+		resp := consulta(t, srv, `{"dataset":"telecom.d","sql":"SELECT id FROM \"telecom.d\""}`)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d, quer 404", resp.StatusCode)
+		}
+		f := failOf(t, resp)
+		if f.Code != protocol.CodeUnknownDataset {
+			t.Fatalf("código = %q, quer %q", f.Code, protocol.CodeUnknownDataset)
+		}
+		// O diagnóstico de sempre continua lá: ele diz o que o servidor procurou.
+		if !strings.Contains(f.Message, `dataset "telecom.d" não está registrado`) {
+			t.Errorf("a recusa perdeu o nome procurado: %q", f.Message)
+		}
+		// E a correção, que é o que faltava por este caminho.
+		if !strings.Contains(f.Message, "citado INTEIRO") {
+			t.Errorf("a recusa não explica a regra das aspas: %q", f.Message)
+		}
+		if !strings.Contains(f.Message, `"telecom"."d"`) {
+			t.Errorf("a recusa não mostra a forma certa: %q", f.Message)
+		}
+	})
+
+	t.Run("nome sem ponto", func(t *testing.T) {
+		resp := consulta(t, srv, `{"dataset":"nao_existe","sql":"SELECT id FROM nao_existe"}`)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d, quer 404", resp.StatusCode)
+		}
+		f := failOf(t, resp)
+		if !strings.Contains(f.Message, `dataset "nao_existe" não está registrado`) {
+			t.Errorf("a recusa perdeu o nome procurado: %q", f.Message)
+		}
+		if strings.Contains(f.Message, "aspas") {
+			t.Errorf("a recusa fala de aspas sem ponto no nome: %q", f.Message)
+		}
+	})
+}
+
+// A forma CERTA que a recusa acima ensina tem de ser a que funciona — senão a
+// dica troca uma recusa por outra. `"telecom"."d"` é lido pelo driver como um
+// nome qualificado, ele abandona o palpite e manda o dataset da conexão; aqui
+// isso é reproduzido mandando `d` no corpo, que é o que o driver faria.
+func TestAFormaQueARecusaEnsinaExecuta(t *testing.T) {
+	srv := serverWithData(t, 3, blockPadrao)
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM \"telecom\".\"d\""}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, quer 200: %q", resp.StatusCode, failOf(t, resp).Message)
+	}
+	// As linhas são conferidas, e não só o status: a moldura sai com 200 no
+	// primeiro byte, então "abriu" é ter devolvido as três linhas semeadas.
+	rows, _ := result(t, resp)
+	if len(rows) != 3 {
+		t.Fatalf("linhas = %d, quer 3", len(rows))
+	}
+}
+
 // O §81 autoriza rejeitar consulta antes de comprometer a ingestão. Com uma
 // vaga só, a segunda requisição simultânea sai 503 sem tocar o Store.
 func TestConcorrenciaAcimaDoTetoEhRejeitada(t *testing.T) {

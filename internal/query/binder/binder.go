@@ -237,33 +237,56 @@ func Bind(stmt *parser.SelectStmt, sc *schema.Compiled, params []types.Value) (*
 // TokenDot, que o parser consome como separador e grava em Namespace. Um ponto
 // DENTRO de stmt.Dataset, portanto, só chega aqui vindo de TokenQuotedIdent.
 // Isso vale para o caminho Parse → Bind; uma SelectStmt montada à mão pelo
-// chamador não passa por essa garantia, e aí o complemento fala de aspas que
-// ninguém escreveu.
-//
-// Só é consultada no ramo que JÁ ia recusar a query, e por isso não estraga
-// nome legítimo nenhum: um dataset chamado `a.b` é inconstruível. O `name` do
-// YAML tem de casar com [a-z0-9_]+ (isIdentName, spec.go:504-515, checado em
-// spec.go:736-737), e Config.LoadDatasetSpecs recusa a carga se esse `name`
-// não for idêntico ao nome do arquivo (config.go:733-736) — o sc.Name que
-// chega até aqui é sempre esse valor já validado, nunca um nome de arquivo não
-// conferido. Não existe, portanto, um handle com ponto para `FROM "a.b"`
-// colidir; o complemento só é alcançado onde nenhum dataset legítimo poderia
-// estar.
+// chamador não passa por essa garantia — e é por isso que o texto de
+// DottedDatasetNameHint enuncia a regra das aspas em vez de afirmar que o
+// chamador as escreveu.
 func wholeQuotedNameHint(stmt *parser.SelectStmt) string {
 	if stmt.Namespace != "" {
 		return ""
 	}
+	return DottedDatasetNameHint(stmt.Dataset)
+}
+
+// DottedDatasetNameHint devolve o complemento da recusa de um dataset
+// DESCONHECIDO cujo nome traz um ponto — `_meta.counters`,
+// `telecom.service_view` —, e string vazia em todo o resto.
+//
+// É o complemento de UMA regra servido a DOIS pontos de recusa, que é o que
+// impede a regra de existir em duas redações. O binder recusa quando o nome do
+// FROM não é o do handle (wholeQuotedNameHint); o servidor recusa antes disso,
+// quando o `dataset` do corpo de POST /v1/query não está registrado — e é por
+// esse segundo caminho que o cliente JDBC passa, porque ele extrai o nome do
+// FROM e o manda no corpo (SqlScanner), de modo que o bind nunca chega a rodar.
+//
+// A dica não estraga nome legítimo nenhum: um dataset chamado `a.b` é
+// INCONSTRUÍVEL. O `name` do YAML tem de casar com [a-z0-9_]+ (isIdentName,
+// spec.go:504-515, checado em spec.go:736-737) e Config.LoadDatasetSpecs recusa
+// a carga se esse `name` não for idêntico ao nome do arquivo
+// (config.go:733-736). Um nome com ponto, portanto, nunca é o de um dataset que
+// existe — só é alcançado onde a recusa já era certa.
+//
+// O texto enuncia a REGRA das aspas ("um nome citado inteiro entre aspas é um
+// identificador só"), e não a autoria do chamador: quem chega aqui pela rota
+// HTTP mandou uma string num campo do corpo, e o servidor não tem como saber se
+// ela foi copiada de um FROM citado inteiro. Afirmar as aspas ali seria afirmar
+// o que o código não sustenta.
+//
+// Um nome sem ponto devolve string vazia: `FROM inexistente` não tem nada a ver
+// com aspas, e sugerir que tem mandaria o operador corrigir o que não está
+// errado.
+func DottedDatasetNameHint(name string) string {
 	// Corte no PRIMEIRO ponto, com as duas partes não vazias. Em `"a.b.c"` a
 	// sugestão sai `"a"."b.c"`, e não três níveis: o FROM aceita no máximo
 	// namespace.tabela (parser.parseSelect), e sugerir uma forma que a
 	// gramática recusa trocaria uma recusa por outra.
-	i := strings.IndexByte(stmt.Dataset, '.')
-	if i <= 0 || i == len(stmt.Dataset)-1 {
+	i := strings.IndexByte(name, '.')
+	if i <= 0 || i == len(name)-1 {
 		return ""
 	}
-	return "; o nome foi citado INTEIRO, e as aspas fazem dele um identificador único" +
-		" — se o ponto separa schema e tabela, cite cada parte: " +
-		quoteIdent(stmt.Dataset[:i]) + "." + quoteIdent(stmt.Dataset[i+1:])
+	return "; nome de dataset nunca tem ponto — um nome citado INTEIRO entre aspas" +
+		" é UM identificador, e não o par schema.tabela; se o ponto separa os dois," +
+		" cite cada parte: " +
+		quoteIdent(name[:i]) + "." + quoteIdent(name[i+1:])
 }
 
 // quoteIdent devolve name entre aspas duplas, dobrando as aspas internas — é o
