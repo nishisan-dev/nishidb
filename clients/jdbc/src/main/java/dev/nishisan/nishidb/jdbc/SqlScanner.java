@@ -98,8 +98,24 @@ public final class SqlScanner {
                     break;
                 }
                 if (esperandoNome) {
-                    dataset = desescapa(sql.substring(i + 1, fim - 1), '"');
+                    vistoFrom = true;
                     esperandoNome = false;
+                    // A MESMA regra do identificador nu, e pela mesma razão: as
+                    // aspas do SQL padrão envolvem UM identificador, então
+                    // `"_meta".counters` e `"telecom"."service_view"` são nomes
+                    // QUALIFICADOS, e capturar só a primeira parte pediria ao
+                    // servidor um dataset chamado `_meta`, que não existe.
+                    // Devolver null faz o driver usar o dataset da conexão e
+                    // deixa o motor resolver o par inteiro — que é exatamente o
+                    // SQL que uma ferramenta gráfica monta ao abrir a tabela
+                    // pela árvore, citando cada parte.
+                    //
+                    // O ponto é procurado a partir de `fim`, o índice logo APÓS
+                    // a aspa de fechamento: procurar do miolo acharia um ponto
+                    // que é parte do próprio nome citado.
+                    if (!seguidoDePonto(sql, fim, n)) {
+                        dataset = desescapa(sql.substring(i + 1, fim - 1), '"');
+                    }
                 }
                 i = fim;
                 continue;

@@ -305,6 +305,71 @@ class DriverIT {
     }
 
     /**
+     * O SQL COM CADA PARTE CITADA executa — é o que o duplo clique na árvore
+     * gera.
+     *
+     * <p>A ferramenta gráfica não monta {@code schema.tabela} cru: ela cita
+     * cada parte com o {@link DatabaseMetaData#getIdentifierQuoteString()} e
+     * manda {@code "telecom"."todos_os_tipos"}. O scanner do driver tira o
+     * dataset do FROM, e enquanto o ramo das aspas não abandonava o palpite no
+     * nome qualificado ele mandava ao servidor o dataset {@code _meta} — e
+     * abrir qualquer view do metadado morria com "dataset não está
+     * registrado", com a árvore montada e nada abrindo.
+     *
+     * <p>O endereço vem DA ÁRVORE e as aspas vêm do metadata: escrever os dois
+     * à mão faria o teste provar a string do teste, e não o par que o driver
+     * publica.
+     */
+    @Test
+    void oSqlComCadaParteCitadaDaArvoreExecuta() throws SQLException {
+        try (Connection c = conecta()) {
+            DatabaseMetaData m = c.getMetaData();
+            String aspa = m.getIdentifierQuoteString();
+            String base = null;
+            String view = null;
+            try (ResultSet rs = m.getTables(null, null, null, null)) {
+                while (rs.next()) {
+                    String endereco = aspa + rs.getString("TABLE_SCHEM") + aspa + "."
+                            + aspa + rs.getString("TABLE_NAME") + aspa;
+                    if ("VIEW".equals(rs.getString("TABLE_TYPE"))) {
+                        // `_meta.tables` nomeadamente: é a view que sempre tem
+                        // linha (ela se lista), e um teste que pegasse a
+                        // primeira view qualquer poderia cair numa vazia e
+                        // confundir "não abriu" com "abriu e não tem dado".
+                        if ("_meta".equals(rs.getString("TABLE_SCHEM"))
+                                && "tables".equals(rs.getString("TABLE_NAME"))) {
+                            view = endereco;
+                        }
+                    } else if ("todos_os_tipos".equals(rs.getString("TABLE_NAME"))) {
+                        base = endereco;
+                    }
+                }
+            }
+            assertNotNull(base, "a base não apareceu na árvore");
+            assertNotNull(view, "a view _meta.tables não apareceu na árvore");
+
+            try (Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT * FROM " + base + " LIMIT 1")) {
+                assertTrue(rs.next(), "o SELECT citado parte a parte não devolveu linha: " + base);
+            }
+            // O caso que quebrava: a view do _meta, que é o motivo de a árvore
+            // existir. O dataset da conexão não é `_meta`, então só o abandono
+            // do palpite faz o motor resolver o namespace.
+            try (Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT * FROM " + view + " LIMIT 1")) {
+                assertTrue(rs.next(), "o SELECT na view do _meta não devolveu linha: " + view);
+            }
+            // E com a primeira parte citada e a segunda nua, que é a outra
+            // forma que a ferramenta emite ao completar nome à mão.
+            try (Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery(
+                            "SELECT * FROM " + aspa + "_meta" + aspa + ".tables LIMIT 1")) {
+                assertTrue(rs.next(), "o SELECT em \"_meta\".tables não devolveu linha");
+            }
+        }
+    }
+
+    /**
      * O nome de saída do ResultSetMetaData é o ALIAS; o do getColumns é o do
      * campo.
      *

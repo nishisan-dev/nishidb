@@ -167,4 +167,74 @@ class SqlScannerTest {
     void depoisDeAbandonarNaoCapturaOutroFrom() {
         assertNull(dataset("SELECT a FROM ns.t WHERE x = 'from outra'"));
     }
+
+    /**
+     * Nome qualificado com a PRIMEIRA parte entre aspas também abandona o
+     * palpite.
+     *
+     * <p>É o SQL que a ferramenta gráfica monta ao abrir uma tabela pela
+     * árvore: ela cita cada parte com o {@code getIdentifierQuoteString}, e
+     * sai {@code "_meta"."counters"}. As aspas do SQL padrão envolvem UM
+     * identificador, então a parte citada é só o namespace — capturá-la pediria
+     * ao servidor um dataset {@code _meta}, que não existe, e o duplo clique em
+     * qualquer view do metadado morreria com "dataset não está registrado".
+     *
+     * <p>A assimetria entre os dois ramos foi o defeito: o identificador nu já
+     * abandonava, o citado capturava sempre.
+     */
+    @Test
+    void nomeQualificadoComAPrimeiraParteCitadaAbandonaOPalpite() {
+        assertNull(dataset("SELECT * FROM \"_meta\".counters"));
+        assertNull(dataset("SELECT * FROM \"telecom\".\"service_view\""));
+        assertNull(dataset("SELECT * FROM telecom.\"service_view\""));
+        // O ponto pode vir separado por branco, como em qualquer fronteira.
+        assertNull(dataset("SELECT * FROM \"_meta\"\n . counters"));
+    }
+
+    /**
+     * Nome qualificado citado INTEIRO é UM identificador, e continua sendo
+     * palpite.
+     *
+     * <p>{@code FROM "_meta.counters"} nomeia uma tabela cujo nome contém um
+     * ponto. O servidor recusa esse dataset com a mensagem que ensina a citar
+     * cada parte — e é ele quem deve recusar: um palpite abandonado aqui
+     * trocaria essa mensagem pela de um dataset que o usuário não escreveu.
+     */
+    @Test
+    void nomeQualificadoCitadoInteiroContinuaSendoUmIdentificadorSo() {
+        assertEquals("_meta.counters", dataset("SELECT * FROM \"_meta.counters\""));
+        assertEquals("telecom.service_view", dataset("SELECT * FROM \"telecom.service_view\""));
+    }
+
+    /** Nome citado SEM ponto depois não é qualificado: o palpite vale. */
+    @Test
+    void nomeCitadoSemPontoDepoisContinuaSendoPalpiteValido() {
+        assertEquals("eventos", dataset("SELECT * FROM \"eventos\""));
+        assertEquals("eventos", dataset("SELECT * FROM \"eventos\" WHERE a = 1"));
+        assertEquals("eventos", dataset("SELECT * FROM \"eventos\" ORDER BY a.b"));
+    }
+
+    /**
+     * A contagem de '?' não muda em nenhuma das formas de escrever o nome.
+     *
+     * <p>É a metade que quebraria em silêncio: um return antecipado no ramo das
+     * aspas zeraria a contagem e o PreparedStatement recusaria o setString do
+     * índice 1 — com a query certa e o dataset certo.
+     */
+    @Test
+    void aContagemDePlaceholdersNaoMudaComAFormaDoNome() {
+        String cauda = " WHERE a = ? AND b = ?";
+        assertEquals(2, placeholders("SELECT * FROM _meta.counters" + cauda));
+        assertEquals(2, placeholders("SELECT * FROM \"_meta\".counters" + cauda));
+        assertEquals(2, placeholders("SELECT * FROM \"telecom\".\"service_view\"" + cauda));
+        assertEquals(2, placeholders("SELECT * FROM \"_meta.counters\"" + cauda));
+        assertEquals(2, placeholders("SELECT * FROM \"eventos\"" + cauda));
+    }
+
+    /** Só o PRIMEIRO FROM conta também quando o nome vem entre aspas. */
+    @Test
+    void apenasOPrimeiroFromContaTambemComNomeCitado() {
+        assertEquals("a", dataset("SELECT * FROM \"a\" FROM b"));
+        assertNull(dataset("SELECT * FROM \"ns\".t FROM b"));
+    }
 }
