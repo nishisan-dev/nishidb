@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -37,6 +38,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/budget"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/series"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
@@ -64,6 +66,11 @@ type dataset struct {
 	// porque o enriquecimento de um evento precisa do motor de consulta — que
 	// o Store não conhece, e nem deve.
 	alarms *alarm.Runner
+
+	// emitters são as emissões periódicas declaradas nos contadores, uma por
+	// contador com bloco `emit`. Moram aqui pelo mesmo motivo dos alarmes: o
+	// laço vive fora do Store, e é o servidor que o para antes do quiesce.
+	emitters []*series.Emitter
 
 	// cons é nil quando o dataset não declara Kafka ou está com
 	// `enabled: false` — o botão de pausa declarativo.
@@ -482,6 +489,9 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		st:   st,
 		mat:  mat,
 	}
+	if err := openEmitters(d, spec, st, dir, log); err != nil {
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
 	if len(alarmes) > 0 {
 		runner, err := alarm.New(alarmes, readersOfCounters(st), alarm.Options{
 			Sink: alarm.NewLogSink(log),
@@ -572,6 +582,7 @@ func (s *Server) Run(ctx context.Context, pprofAddr string) error {
 	s.turnonExpiration(ctx)
 	s.turnonRetirementOfGroups(ctx)
 	s.turnonAlarms(ctx)
+	s.turnonEmit(ctx)
 	s.turnonRetention(ctx)
 	s.turnonRebuild(ctx)
 
@@ -828,6 +839,26 @@ func (s *Server) turnonAlarms(ctx context.Context) {
 		"datasets", withAlarms)
 }
 
+// turnonEmit sobe o laço de emissão periódica nos contadores que a declaram.
+func (s *Server) turnonEmit(ctx context.Context) {
+	var withEmit []string
+	for _, d := range s.datasets {
+		for _, e := range d.emitters {
+			e.Start(ctx)
+		}
+		if len(d.emitters) > 0 {
+			withEmit = append(withEmit, d.nome)
+		}
+	}
+	if len(withEmit) == 0 {
+		return
+	}
+	sort.Strings(withEmit)
+	s.log.Info("series.emitting",
+		"a emissão periódica dos contadores está de pé",
+		"datasets", withEmit)
+}
+
 func (s *Server) turnonExpiration(ctx context.Context) {
 	maxByPassada, timeByPassada := s.cfg.Expiry()
 	var withExpiration []string
@@ -980,6 +1011,7 @@ func (s *Server) encerra() error {
 	// entra()/sai(). E como ele vive AQUI, e não no Store, o Close de lá não o
 	// aguarda. Invertida a ordem, uma varredura em voo leria um Store fechado.
 	s.forAlarms()
+	s.forEmitters()
 	errs = append(errs, s.closeDatasets())
 	return errors.Join(errs...)
 }
@@ -992,6 +1024,89 @@ func (s *Server) forAlarms() {
 			d.alarms.Stop()
 		}
 	}
+}
+
+// forEmitters cancela e AGUARDA o laço de emissão de cada contador, e fecha os
+// arquivos. Mesma ordem e mesma razão dos alarmes: o laço lê os contadores sem
+// a guarda de vida do Store, e vive fora dele.
+func (s *Server) forEmitters() {
+	for _, d := range s.datasets {
+		for _, e := range d.emitters {
+			if err := e.Close(); err != nil {
+				s.log.Warn("series.close_failed",
+					"a emissão periódica não fechou o arquivo limpo; a cauda da série pode ter sido perdida",
+					"dataset", d.nome, "error", err.Error())
+			}
+		}
+	}
+}
+
+// EmitActive diz se ALGUM laço de emissão do dataset está de pé. Existe para a
+// observabilidade e para o teste da parada.
+func (s *Server) EmitActive(dataset string) bool {
+	for _, d := range s.datasets {
+		if d.nome != dataset {
+			continue
+		}
+		for _, e := range d.emitters {
+			if e.Active() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// openEmitters monta um emissor por contador com bloco `emit`.
+//
+// A limpeza do diretório roda ANTES de qualquer arquivo ser aberto, e recebe o
+// que está declarado: baixar o keep no YAML devolve o disco na subida seguinte,
+// e o que não está declarado é deixado em paz (series.Cleanup explica por quê).
+func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir string, log *logging.Logger) error {
+	declared := make(map[string]int)
+	for _, cs := range spec.Counters {
+		if cs.Emit != nil {
+			declared[cs.Emit.File] = cs.Emit.Keep
+		}
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+	seriesDir := filepath.Join(dir, schema.EmitDirName)
+	if err := series.Cleanup(seriesDir, declared); err != nil {
+		return err
+	}
+	readers := readersOfCounters(st)
+	byName := make(map[string][]string, len(spec.Counters))
+	for _, c := range st.Counters() {
+		byName[c.Def().Name] = c.Def().Names
+	}
+	for _, cs := range spec.Counters {
+		if cs.Emit == nil {
+			continue
+		}
+		reader, ok := readers[cs.Name]
+		if !ok {
+			return fmt.Errorf("emit: o contador %q não está aberto neste dataset", cs.Name)
+		}
+		e, err := series.NewEmitter(series.Options{
+			Dataset:  spec.Name,
+			Counter:  cs.Name,
+			Columns:  byName[cs.Name],
+			Reader:   reader,
+			Dir:      seriesDir,
+			File:     cs.Emit.File,
+			Every:    cs.Emit.Every,
+			MaxBytes: cs.Emit.MaxBytes,
+			Keep:     cs.Emit.Keep,
+			Log:      log,
+		})
+		if err != nil {
+			return err
+		}
+		d.emitters = append(d.emitters, e)
+	}
+	return nil
 }
 
 // AlarmsActive diz se o laço de alarmes do dataset está de pé. Existe para a

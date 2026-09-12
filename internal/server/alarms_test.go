@@ -2,12 +2,16 @@ package server_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -130,5 +134,100 @@ func TestEncerrarParaOLacoDeAlarmes(t *testing.T) {
 	stop()
 	if srv.AlarmsActive("servicos") {
 		t.Fatal("o encerramento devolveu o controle com o laço de alarmes ainda de pé")
+	}
+}
+
+// specServicesComEmissao declara a emissão periódica no menor intervalo
+// permitido, para que a primeira passada caiba na suíte.
+const specServicesComEmissao = `version: 1
+name: %s
+schemaName: telecom
+materialization:
+  key:
+    field: customerId
+schema:
+  fields:
+    customerId:
+      type: string
+    olt:
+      type: string
+    slot:
+      type: int64
+    port:
+      type: int64
+    authenticated:
+      type: boolean
+counters:
+  - name: autenticados_por_olt
+    groupBy: [olt]
+    where: authenticated = true
+    emit:
+      every: 10s
+      maxBytes: 1MiB
+      keep: 2
+`
+
+// TestEmissaoDeclaradaEscreveAserie é a costura ponta a ponta da parte 2: o
+// YAML declara, o laço sobe, e o arquivo aparece no diretório do dataset com
+// uma linha por grupo.
+func TestEmissaoDeclaradaEscreveAserie(t *testing.T) {
+	a := newEnvWithStorage(t, blockPadrao, "")
+	a.writeDataset("servicos", fmt.Sprintf(specServicesComEmissao, "servicos"))
+	seedServices(t, a, "servicos", 24)
+	cfg := a.load()
+	srv, err := server.Novo(cfg, server.Options{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	run(t, srv)
+
+	path := filepath.Join(cfg.DatasetRootDir("servicos"), schema.EmitDirName, "autenticados_por_olt.ndjson")
+	var linhas []string
+	for i := 0; i < 400; i++ {
+		if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
+			linhas = strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(linhas) == 0 {
+		t.Fatalf("nada escrito em %s", path)
+	}
+	// 24 serviços: 6 na OLT14 e 18 na G1M10, dois grupos no total.
+	if len(linhas) != 2 {
+		t.Fatalf("%d linhas na primeira passada, quero uma por grupo:\n%s", len(linhas), strings.Join(linhas, "\n"))
+	}
+	var l map[string]any
+	if err := json.Unmarshal([]byte(linhas[0]), &l); err != nil {
+		t.Fatalf("a linha não é JSON: %v\n%s", err, linhas[0])
+	}
+	if l["counter"] != "autenticados_por_olt" {
+		t.Errorf("counter = %v", l["counter"])
+	}
+	if l["groupKey"] == nil || l["olt"] == nil || l["total"] == nil || l["at"] == nil {
+		t.Errorf("a linha não traz os campos da série: %+v", l)
+	}
+	if !srv.EmitActive("servicos") {
+		t.Error("o laço de emissão devia estar de pé")
+	}
+}
+
+// TestDatasetSemEmissaoNaoCriaODiretorio: não se cria estrutura para quem não
+// declarou nada.
+func TestDatasetSemEmissaoNaoCriaODiretorio(t *testing.T) {
+	a := newEnvWithStorage(t, blockPadrao, "")
+	a.writeDataset("servicos", fmt.Sprintf(specServices, "servicos"))
+	seedServices(t, a, "servicos", 8)
+	cfg := a.load()
+	srv, err := server.Novo(cfg, server.Options{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	run(t, srv)
+	if srv.EmitActive("servicos") {
+		t.Fatal("subiu emissão num dataset que não a declara")
+	}
+	if _, err := os.Stat(filepath.Join(cfg.DatasetRootDir("servicos"), schema.EmitDirName)); !os.IsNotExist(err) {
+		t.Errorf("o diretório da série foi criado sem ninguém declarar emissão (err=%v)", err)
 	}
 }

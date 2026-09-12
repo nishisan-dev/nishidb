@@ -7,15 +7,16 @@ import (
 	"testing"
 )
 
-// TestAlarmesParamAntesDoQuiesceDosDatasets é o gate da invariante de ordem do
-// encerramento.
+// TestLacosDoServidorParamAntesDoQuiesceDosDatasets é o gate da invariante de
+// ordem do encerramento.
 //
 // # Por que é um gate, e não um teste de corrida
 //
-// O laço de alarmes lê os contadores pelo campo do Store, que é leitura direta
-// sem a guarda de vida — diferente da auditoria, ele não passa por
-// entra()/sai(). Como o laço vive no servidor, o Close do Store não o aguarda:
-// é o encerra() que tem de cancelá-lo e AGUARDÁ-LO antes do quiesce.
+// Os dois laços que vivem no SERVIDOR — a varredura de alarmes e a emissão
+// periódica — leem os contadores pelo campo do Store, que é leitura direta sem
+// a guarda de vida: diferente da auditoria, eles não passam por entra()/sai().
+// E como vivem fora do Store, o Close de lá não os aguarda. É o encerra() que
+// tem de cancelá-los e AGUARDÁ-LOS antes do quiesce.
 //
 // A tentativa óbvia de provar isso — subir um servidor com alarme e encerrar
 // sob -race — NÃO prova nada, e isso foi medido: a passada sobre algumas
@@ -28,7 +29,7 @@ import (
 // gate que lê a AST de encerra() e confere a posição das duas chamadas é
 // determinístico e não depende de escalonamento — e ler código como DADO, em
 // vez de grep em prosa, é a doutrina de gate deste repositório.
-func TestAlarmesParamAntesDoQuiesceDosDatasets(t *testing.T) {
+func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 	const path = "../server/server.go"
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
@@ -37,7 +38,13 @@ func TestAlarmesParamAntesDoQuiesceDosDatasets(t *testing.T) {
 	}
 	corpo := methodBody(t, f, "Server", "encerra")
 
-	posAlarms, posClose := -1, -1
+	// Os laços que têm de parar antes, e o que os para. Um laço novo que more
+	// no servidor entra nesta lista — e o gate falha enquanto ele não estiver
+	// no encerra(), que é o ponto.
+	paradas := []string{"forAlarms", "forEmitters"}
+	const quiesce = "closeDatasets"
+
+	pos := map[string]int{}
 	i := 0
 	ast.Inspect(corpo, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -48,31 +55,29 @@ func TestAlarmesParamAntesDoQuiesceDosDatasets(t *testing.T) {
 		if !ok {
 			return true
 		}
-		switch sel.Sel.Name {
-		case "forAlarms":
-			if posAlarms < 0 {
-				posAlarms = i
-			}
-		case "closeDatasets":
-			if posClose < 0 {
-				posClose = i
-			}
+		if _, visto := pos[sel.Sel.Name]; !visto {
+			pos[sel.Sel.Name] = i
 		}
 		i++
 		return true
 	})
 
-	// Guarda de vacuidade: um gate que não encontra as duas chamadas passaria
-	// verde para sempre depois de qualquer renomeação.
-	if posAlarms < 0 {
-		t.Fatal("encerra() não chama forAlarms(): o laço de alarmes ficaria de pé sobre Stores fechados")
+	// Guarda de vacuidade: um gate que não encontra as chamadas passaria verde
+	// para sempre depois de qualquer renomeação.
+	posQuiesce, ok := pos[quiesce]
+	if !ok {
+		t.Fatalf("encerra() não chama %s(): este gate precisa dele para comparar", quiesce)
 	}
-	if posClose < 0 {
-		t.Fatal("encerra() não chama closeDatasets(): este gate precisa das duas chamadas para comparar")
-	}
-	if posAlarms > posClose {
-		t.Fatalf("encerra() fecha os datasets (posição %d) ANTES de parar os alarmes (posição %d): "+
-			"uma varredura em voo leria um Store fechado", posClose, posAlarms)
+	for _, parada := range paradas {
+		p, ok := pos[parada]
+		if !ok {
+			t.Errorf("encerra() não chama %s(): o laço ficaria de pé sobre Stores fechados", parada)
+			continue
+		}
+		if p > posQuiesce {
+			t.Errorf("encerra() chama %s (posição %d) DEPOIS de %s (posição %d): "+
+				"uma passada em voo leria um Store fechado", parada, p, quiesce, posQuiesce)
+		}
 	}
 }
 
