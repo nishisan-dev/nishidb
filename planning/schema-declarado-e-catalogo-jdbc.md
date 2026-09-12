@@ -123,22 +123,38 @@ nomeando os dois datasets.
 ### Motor — a fonte única
 
 Uma função no `Engine` que devolve o catálogo de um dataset: por tabela, o
-schema, o nome, o tipo (`TABLE` / `VIEW` / `SYSTEM TABLE`) e as colunas já
-compiladas. Ela é a **única** fonte, com dois consumidores: o handler do
-`/v1/metadata` e a tabela `_tables`. Nunca duas derivações do mesmo fato — é a
-mesma disciplina que o `/v1/stats` e o `/metrics` já seguem.
+schema, o nome, o tipo e as colunas já compiladas. Os tipos são **dois** —
+`TABLE` para a base e `VIEW` para o contador e para a tabela de meta. O
+`SYSTEM TABLE` que a primeira versão deste desenho previa caiu com o spike da
+Task 1, pela mesma razão que tirou as tabelas de meta do schema do dataset: o
+DBeaver esconde objeto de sistema por default. Ela é a **única** fonte, com dois
+consumidores: o handler do `/v1/metadata` e a tabela `_meta.tables`. Nunca duas
+derivações do mesmo fato — é a mesma disciplina que o `/v1/stats` e o `/metrics`
+já seguem.
 
 O roteamento passa a resolver o schema declarado como qualificador do dataset,
 ao lado dos namespaces reservados. O binder hoje exige que o dataset do
 argumento bata com o do `FROM` (`engine.go:226`); a regra continua, agora
 resolvendo o schema antes de comparar.
 
-### `_tables`
+### `_meta.tables`
 
-Uma linha por tabela consultável: `name` (key), `schema`, `type`, `columns`
-(contagem) e `description`. O `_meta` deste produto já é o information_schema —
-`fields`, `counters`, `kafka` — e faltava exatamente a tabela que lista as
-tabelas.
+Uma linha por tabela consultável: `id` (key), `name`, `schema`, `namespace`,
+`kind`, `columns` (contagem) e `description`. O `_meta` deste produto já é o
+information_schema — `fields`, `counters`, `kafka` — e faltava exatamente a
+tabela que lista as tabelas; com as tabelas de meta no `_meta`, é lá que ela
+mora, e não em `<schema>._tables`.
+
+A key é `id` — o endereço do ATALHO (`_counters.por_olt`, `_meta.tables`, ou só
+o nome na base) — e não `name`: o nome não é único dentro do dataset, porque
+nada impede um contador de se chamar como uma tabela de meta, e duas linhas de
+mesma key fariam o point lookup e a varredura discordarem. O par
+(`schema`, `name`) é o outro endereço, e sai em colunas próprias.
+
+A coluna do tipo chama `kind`, e não `type`: `type` é o nome que este produto já
+usa para o tipo de um CAMPO (é a chave do YAML e a coluna da `_meta.fields`), e
+reusá-lo para o tipo de uma tabela poria dois significados no mesmo nome dentro
+do mesmo `_meta`.
 
 ### Protocolo
 
@@ -154,7 +170,8 @@ cobram paridade entre os clients precisam ser lidos ANTES, não depois.
 ### Driver JDBC
 
 - `getSchemas` devolve os schemas declarados dos datasets do servidor;
-- `getTableTypes` devolve `TABLE`, `VIEW` e `SYSTEM TABLE`;
+- `getTableTypes` devolve `TABLE` e `VIEW` — os dois tipos que o catálogo
+  produz, e nada além deles;
 - `getTables` passa a listar as virtuais com `TABLE_SCHEM` preenchido — os
   contadores como `VIEW` no schema do dataset (derivada, somente leitura, sem
   armazenamento próprio) e as de meta como `VIEW` no schema `_meta`. **Não**
@@ -187,7 +204,7 @@ verde — e relatar os dois.
 | Contador homônimo do dataset recusa | contador `service_view` no dataset `service_view` |
 | A tabela qualificada resolve, e resolve o dataset CERTO | `FROM telecom.autenticados_por_slot` contra um servidor com dois datasets, conferindo que o outro não responde |
 | O atalho continua valendo | `_counters.x` sem qualificar |
-| O catálogo tem fonte única | fazer `_tables` derivar de outro lugar que não a função do Engine — a divergência tem de aparecer num teste |
+| O catálogo tem fonte única | fazer `_meta.tables` derivar de outro lugar que não a função do Engine — a divergência tem de aparecer num teste |
 | O documento é aditivo | driver novo contra metadata sem o campo: nenhuma view, nenhum erro |
 
 Ponta a ponta: `make test`, `make test-race`, `make lint` na baseline,
