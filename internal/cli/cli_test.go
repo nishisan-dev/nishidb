@@ -381,9 +381,9 @@ schema:
 		t.Fatalf("quer recusa: dois datasets no mesmo schema tornariam `FROM telecom.tabela` ambíguo\n%s",
 			a.stdout.String())
 	}
-	for _, quero := range []string{"schemaName", "telecom", "radius_sessions", "colidente"} {
-		if !strings.Contains(a.stderr.String(), quero) {
-			t.Errorf("a recusa não nomeia %q — ela precisa do schema E dos DOIS datasets: %s", quero, a.stderr.String())
+	for _, want := range []string{"schemaName", "telecom", "radius_sessions", "colidente"} {
+		if !strings.Contains(a.stderr.String(), want) {
+			t.Errorf("a recusa não nomeia %q — ela precisa do schema E dos DOIS datasets: %s", want, a.stderr.String())
 		}
 	}
 }

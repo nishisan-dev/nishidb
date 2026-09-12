@@ -38,10 +38,10 @@ func BenchmarkExecuteFromQualified(b *testing.B) {
 		simple := "SELECT id FROM " + name
 		qualified := "SELECT id FROM " + schemaName + "." + name
 
-		b.Run(fmt.Sprintf("campos=%d/simples", fields), func(b *testing.B) {
+		b.Run(fmt.Sprintf("fields=%d/simple", fields), func(b *testing.B) {
 			benchExecute(b, eng, name, simple)
 		})
-		b.Run(fmt.Sprintf("campos=%d/qualificado", fields), func(b *testing.B) {
+		b.Run(fmt.Sprintf("fields=%d/qualified", fields), func(b *testing.B) {
 			benchExecute(b, eng, name, qualified)
 		})
 	}

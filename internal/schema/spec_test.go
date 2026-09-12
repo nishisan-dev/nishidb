@@ -386,16 +386,16 @@ func TestSpecSinteticaAtravessaAValidacaoComOSchemaReservado(t *testing.T) {
 // nome), o ponto (que inventaria um terceiro nível que a gramática do FROM não
 // tem) e o vazio explícito, que é ausência escrita à mão.
 func TestSpecRecusaSchemaNameInvalido(t *testing.T) {
-	for nome, valor := range map[string]string{
+	for name, value := range map[string]string{
 		"prefixo reservado": "_meta",
 		"maiuscula":         "Telecom",
 		"com ponto":         "tele.com",
 		"vazio":             `""`,
 	} {
-		t.Run(nome, func(t *testing.T) {
-			_, err := Parse([]byte("version: 1\nname: servicos\nschemaName: "+valor+"\n"+minimalMaterialization), BuiltinDefaults)
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte("version: 1\nname: servicos\nschemaName: "+value+"\n"+minimalMaterialization), BuiltinDefaults)
 			if err == nil {
-				t.Fatalf("schemaName %s tem de ser recusado", valor)
+				t.Fatalf("schemaName %s tem de ser recusado", value)
 			}
 		})
 	}

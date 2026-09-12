@@ -322,13 +322,13 @@ func (e *Engine) resolveSchemaQualified(schemaName, table string, pos int) (sche
 		// Escolher um dos dois em silêncio seria a consulta respondendo de
 		// outra tabela sem nada acusar; a recusa nomeia os datasets para que o
 		// YAML possa ser corrigido.
-		donos := make([]string, 0, len(found))
+		owners := make([]string, 0, len(found))
 		for _, f := range found {
-			donos = append(donos, f.dataset)
+			owners = append(owners, f.dataset)
 		}
 		return schemaQualifiedTarget{}, binder.ErrorAt(pos,
 			"%s.%s é ambíguo: os datasets %s publicam essa mesma tabela no mesmo schema",
-			schemaName, table, strings.Join(donos, " e "))
+			schemaName, table, strings.Join(owners, " e "))
 	case !seenSchema[schemaName]:
 		sort.Strings(schemas)
 		return schemaQualifiedTarget{}, binder.ErrorAt(pos,

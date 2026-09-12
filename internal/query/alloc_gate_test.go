@@ -135,10 +135,10 @@ func TestLimitAllocsIndependenteDoNumeroDeRows(t *testing.T) {
 // ela nunca passou pela resolução, então é ela que diz se a igualdade mede o
 // roteamento ou uma invariância que já existia em todo o Execute.
 func TestResolucaoQualificadaNaoAlocaPorCampoDoDataset(t *testing.T) {
-	abre := func(fields int, qualificado bool) func() {
+	openQuery := func(fields int, qualified bool) func() {
 		eng, name, schemaName := engineOfWideDataset(t, fields)
 		sql := "SELECT id FROM " + name
-		if qualificado {
+		if qualified {
 			sql = "SELECT id FROM " + schemaName + "." + name
 		}
 		return func() {
@@ -152,21 +152,21 @@ func TestResolucaoQualificadaNaoAlocaPorCampoDoDataset(t *testing.T) {
 		}
 	}
 
-	for _, caso := range []struct {
-		nome        string
-		qualificado bool
+	for _, tc := range []struct {
+		name      string
+		qualified bool
 	}{
 		{"FROM <nome>", false},
 		{"FROM <schema>.<nome>", true},
 	} {
-		estreito := bytesPerRun(200, abre(40, caso.qualificado))
-		largo := bytesPerRun(200, abre(4_000, caso.qualificado))
-		if estreito != largo {
+		narrow := bytesPerRun(200, openQuery(40, tc.qualified))
+		wide := bytesPerRun(200, openQuery(4_000, tc.qualified))
+		if narrow != wide {
 			t.Errorf("%s: %d bytes por consulta com 40 campos e %d com 4.000: "+
 				"o roteamento aloca POR CAMPO do dataset (%d bytes por campo)",
-				caso.nome, estreito, largo, (largo-estreito)/3960)
+				tc.name, narrow, wide, (wide-narrow)/3960)
 		}
-		t.Logf("%s: bytes por consulta (constante no tamanho do dicionário): %d", caso.nome, estreito)
+		t.Logf("%s: bytes por consulta (constante no tamanho do dicionário): %d", tc.name, narrow)
 	}
 }
 

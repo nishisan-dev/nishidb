@@ -234,9 +234,9 @@ schema:
 	if err == nil {
 		t.Fatal("quer recusa: dois datasets no mesmo group dividiriam as partições")
 	}
-	for _, quero := range []string{"consumer.groupId", "mesmo-group", "mesmo-topico"} {
-		if !strings.Contains(err.Error(), quero) {
-			t.Errorf("a recusa não fala de %q — não é a do groupId duplicado: %v", quero, err)
+	for _, want := range []string{"consumer.groupId", "mesmo-group", "mesmo-topico"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("a recusa não fala de %q — não é a do groupId duplicado: %v", want, err)
 		}
 	}
 }
@@ -271,9 +271,9 @@ schema:
 	if err == nil {
 		t.Fatal("quer recusa: dois datasets no mesmo schema tornariam `FROM telecom.tabela` ambíguo")
 	}
-	for _, quero := range []string{"schemaName", "telecom", "servicos", "eventos"} {
-		if !strings.Contains(err.Error(), quero) {
-			t.Errorf("a recusa não nomeia %q — ela precisa do schema E dos DOIS datasets: %v", quero, err)
+	for _, want := range []string{"schemaName", "telecom", "servicos", "eventos"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("a recusa não nomeia %q — ela precisa do schema E dos DOIS datasets: %v", want, err)
 		}
 	}
 }

@@ -79,9 +79,9 @@ func TestDoisDatasetsNoMesmoSchemaSaoRecusados(t *testing.T) {
 	if err == nil {
 		t.Fatal("schema repetido entre datasets tem de ser recusado")
 	}
-	for _, quero := range []string{"telecom", "servicos", "eventos"} {
-		if !strings.Contains(err.Error(), quero) {
-			t.Errorf("a mensagem precisa nomear o schema E os DOIS datasets, e não cita %q: %v", quero, err)
+	for _, want := range []string{"telecom", "servicos", "eventos"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("a mensagem precisa nomear o schema E os DOIS datasets, e não cita %q: %v", want, err)
 		}
 	}
 }

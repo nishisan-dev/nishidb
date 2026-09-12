@@ -55,14 +55,14 @@ schema:
 		t.Fatal(err)
 	}
 	st := fakestorage.New(fakestorage.Indexes{})
-	for i, regiao := range []string{"NORTE", "SUL"} {
+	for i, region := range []string{"NORTE", "SUL"} {
 		var p []byte
 		for _, col := range []struct {
 			name string
 			v    types.Value
 		}{
-			{"id", types.Value{Type: types.TypeString, Bytes: []byte(regiao)}},
-			{"regiao", types.Value{Type: types.TypeString, Bytes: []byte(regiao)}},
+			{"id", types.Value{Type: types.TypeString, Bytes: []byte(region)}},
+			{"regiao", types.Value{Type: types.TypeString, Bytes: []byte(region)}},
 		} {
 			f, ok := sc.FieldByName([]byte(col.name))
 			if !ok {
@@ -72,7 +72,7 @@ schema:
 				t.Fatal(err)
 			}
 		}
-		if _, _, err := st.Put([]byte(regiao), int64(i+1), 0, p, nil); err != nil {
+		if _, _, err := st.Put([]byte(region), int64(i+1), 0, p, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -219,9 +219,9 @@ func TestSchemaDesconhecidoListaOsExistentes(t *testing.T) {
 	if err == nil {
 		t.Fatal("schema desconhecido tem de ser recusado")
 	}
-	for _, quero := range []string{"nao_existe", "telecom", otherSchemaName} {
-		if !strings.Contains(err.Error(), quero) {
-			t.Errorf("a recusa tem de nomear o schema pedido e listar os que existem, e não cita %q: %v", quero, err)
+	for _, want := range []string{"nao_existe", "telecom", otherSchemaName} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("a recusa tem de nomear o schema pedido e listar os que existem, e não cita %q: %v", want, err)
 		}
 	}
 	assertRefusalOfBind(t, err, sql, "coisa")
@@ -239,9 +239,9 @@ func TestSchemaConhecidoSemATabelaListaAsDoSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("tabela inexistente no schema tem de ser recusada")
 	}
-	for _, quero := range []string{"nao_existe", dataset, "por_olt"} {
-		if !strings.Contains(err.Error(), quero) {
-			t.Errorf("a recusa tem de listar as tabelas do schema, e não cita %q: %v", quero, err)
+	for _, want := range []string{"nao_existe", dataset, "por_olt"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("a recusa tem de listar as tabelas do schema, e não cita %q: %v", want, err)
 		}
 	}
 	// A lista é do schema PEDIDO. Vazar as tabelas do outro schema mandaria o
@@ -278,7 +278,7 @@ func TestQualificadorQueNaoEhSchemaEhRecusado(t *testing.T) {
 // assertRefusalOfBind cobra o contrato de erro das recusas de roteamento: da
 // família do bind (senão o servidor responde INTERNAL/500) e com a posição
 // apontando o token ofensor, que é o nome DEPOIS do ponto.
-func assertRefusalOfBind(t *testing.T, err error, sql, ofensor string) {
+func assertRefusalOfBind(t *testing.T, err error, sql, offender string) {
 	t.Helper()
 	if !errors.Is(err, binder.ErrBind) {
 		t.Fatalf("a recusa tem de ser da família do bind: %v", err)
@@ -287,8 +287,8 @@ func assertRefusalOfBind(t *testing.T, err error, sql, ofensor string) {
 	if !errors.As(err, &be) {
 		t.Fatalf("a recusa tem de carregar a posição para o cliente destacar o trecho: %v", err)
 	}
-	if be.Pos < 0 || be.Pos > len(sql) || !strings.HasPrefix(sql[be.Pos:], ofensor) {
-		t.Fatalf("a posição %d tem de apontar %q em %q", be.Pos, ofensor, sql)
+	if be.Pos < 0 || be.Pos > len(sql) || !strings.HasPrefix(sql[be.Pos:], offender) {
+		t.Fatalf("a posição %d tem de apontar %q em %q", be.Pos, offender, sql)
 	}
 }
 
@@ -323,13 +323,13 @@ func TestRecusaDeSchemaNaoOfereceOsNamespacesDoMotor(t *testing.T) {
 	if errOfCatalog != nil {
 		t.Fatal(errOfCatalog)
 	}
-	var temMeta bool
+	var hasMeta bool
 	for _, tb := range tables {
 		if tb.Schema == "_meta" {
-			temMeta = true
+			hasMeta = true
 		}
 	}
-	if !temMeta {
+	if !hasMeta {
 		t.Fatal("o catálogo tem de publicar linhas no `_meta`, senão não há o que a recusa deixe de fora")
 	}
 }
@@ -338,12 +338,12 @@ func TestRecusaDeSchemaNaoOfereceOsNamespacesDoMotor(t *testing.T) {
 // depois de "existem: ".
 func schemasOfRefusal(t *testing.T, msg string) []string {
 	t.Helper()
-	const marca = "existem: "
-	i := strings.Index(msg, marca)
+	const marker = "existem: "
+	i := strings.Index(msg, marker)
 	if i < 0 {
 		t.Fatalf("a recusa tem de listar os schemas existentes: %q", msg)
 	}
-	out := strings.Split(msg[i+len(marca):], ", ")
+	out := strings.Split(msg[i+len(marker):], ", ")
 	for j := range out {
 		out[j] = strings.TrimSpace(out[j])
 	}

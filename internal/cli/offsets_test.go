@@ -220,9 +220,9 @@ schema:
 		t.Fatalf("code = %d, quer %d: schema repetido no diretório tem de barrar o offsets\nstdout:%s\nstderr:%s",
 			code, cli.ExitUsageError, a.stdout.String(), a.stderr.String())
 	}
-	for _, quero := range []string{"schemaName", "telecom", "radius_sessions", "colidente"} {
-		if !strings.Contains(a.stderr.String(), quero) {
-			t.Errorf("a recusa não nomeia %q — ela precisa do schema E dos DOIS datasets: %s", quero, a.stderr.String())
+	for _, want := range []string{"schemaName", "telecom", "radius_sessions", "colidente"} {
+		if !strings.Contains(a.stderr.String(), want) {
+			t.Errorf("a recusa não nomeia %q — ela precisa do schema E dos DOIS datasets: %s", want, a.stderr.String())
 		}
 	}
 	if _, err := os.Stat(a.pathOffsets()); !os.IsNotExist(err) {
@@ -244,9 +244,9 @@ func TestOffsetsRecusaDatasetNaoDeclaradoNoDiretorio(t *testing.T) {
 		t.Fatalf("code = %d, quer %d\nstdout:%s\nstderr:%s",
 			code, cli.ExitUsageError, a.stdout.String(), a.stderr.String())
 	}
-	for _, quero := range []string{"não há", "inexistente.yaml", "em datasets.directory"} {
-		if !strings.Contains(a.stderr.String(), quero) {
-			t.Errorf("a recusa não traz %q — ela precisa dizer QUAL arquivo falta e ONDE: %s", quero, a.stderr.String())
+	for _, want := range []string{"não há", "inexistente.yaml", "em datasets.directory"} {
+		if !strings.Contains(a.stderr.String(), want) {
+			t.Errorf("a recusa não traz %q — ela precisa dizer QUAL arquivo falta e ONDE: %s", want, a.stderr.String())
 		}
 	}
 }
