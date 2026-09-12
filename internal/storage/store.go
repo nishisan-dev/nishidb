@@ -1307,7 +1307,7 @@ func Open(opts Options) (*Store, error) {
 	if len(s.counters) > 0 {
 		s.opts.Log.Info("contadores.abertos",
 			"contadores mantidos na escrita abertos com o dataset",
-			"contadores", descreveCounters(s.counters))
+			"contadores", describeCounters(s.counters))
 	}
 	// O índice por segmento cobre TODO campo indexado, sem distinção de motor:
 	// com um motor só, `hash` e `bitmap` deixam de nomear coisas diferentes

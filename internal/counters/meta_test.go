@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/counters"
+	"github.com/nishisan-dev/nishidb/internal/keyformat"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/meta"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -57,7 +58,7 @@ func TestMetaCountersListaOsContadores(t *testing.T) {
 		t.Fatalf("name = %s", got)
 	}
 	if got := column(rows, "groupBy"); got != "olt,olt|slot|port" {
-		t.Fatalf("groupBy = %s (o separador é o mesmo do groupKey)", got)
+		t.Fatalf("groupBy = %s (a lista de colunas na ordem declarada)", got)
 	}
 	if got := column(rows, "condition"); got != "authenticated = true,authenticated = true" {
 		t.Fatalf("condition = %s", got)
@@ -199,5 +200,31 @@ func TestTabelaMetaRecusaNomeRepetido(t *testing.T) {
 	b := openCounter(t, defByOLT("a"))
 	if _, _, err := counters.TableMeta([]counters.Contado{a, b}); err == nil {
 		t.Fatal("nome repetido tem de ser recusado")
+	}
+}
+
+// TestMetaCountersMostraOMoldeEfetivo: o groupBy diz QUAIS colunas agrupam, e
+// só isso; como a key é escrita quem diz é o molde. Sem esta coluna, um
+// contador com keyFormat declarado seria indistinguível de um com o default na
+// única tabela que existe para descrever os contadores — e a aplicação teria de
+// adivinhar por qual texto consultar.
+//
+// O default sai EXPANDIDO, e não vazio: "nenhum molde declarado" e "não sei
+// como a key sai" são coisas diferentes, e quem lê a tabela quer a segunda
+// respondida sempre.
+func TestMetaCountersMostraOMoldeEfetivo(t *testing.T) {
+	byOLT := openCounter(t, defByOLT("com_default"))
+	comMolde := defByPON("com_molde")
+	f, err := keyformat.Parse("{olt}.{slot:02}.{port:02}", keyformat.Columns(comMolde.Names, comMolde.Types))
+	if err != nil {
+		t.Fatal(err)
+	}
+	comMolde.Format = f
+	eng := engineWithMeta(t, byOLT, openCounter(t, comMolde))
+
+	rows := consulta(t, eng, "SELECT name, keyFormat FROM _meta.counters ORDER BY name")
+	// ORDER BY name: com_default vem antes de com_molde.
+	if got, quero := column(rows, "keyFormat"), "{olt},{olt}.{slot:02}.{port:02}"; got != quero {
+		t.Fatalf("keyFormat = %s, quero %s", got, quero)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/keyformat"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
@@ -42,6 +43,7 @@ type counterOfTest struct {
 	where     bool // "authenticated = true"
 	ceiling   uint32
 	retention time.Duration
+	keyFormat string
 }
 
 // callbackOfCounters é o CompilaContadores dos testes: resolve os nomes pelo
@@ -50,6 +52,7 @@ type counterOfTest struct {
 func callbackOfCounters(cs ...counterOfTest) func(*fielddict.Dict) ([]counter.Definition, error) {
 	return func(dict *fielddict.Dict) ([]counter.Definition, error) {
 		out := make([]counter.Definition, 0, len(cs))
+		var err2 error
 		for _, c := range cs {
 			def := counter.Definition{Name: c.name, MaxGroups: c.ceiling, RetainEmptyGroups: c.retention}
 			if def.MaxGroups == 0 {
@@ -75,6 +78,12 @@ func callbackOfCounters(cs ...counterOfTest) func(*fielddict.Dict) ([]counter.De
 				}
 				def.Where = "authenticated = true"
 				def.NewEvaluator = func() counter.Evaluator { return &avaliadorByID{field: auth} }
+			}
+			cols := keyformat.Columns(def.Names, def.Types)
+			if c.keyFormat == "" {
+				def.Format = keyformat.Default(cols)
+			} else if def.Format, err2 = keyformat.Parse(c.keyFormat, cols); err2 != nil {
+				return nil, err2
 			}
 			out = append(out, def)
 		}
@@ -494,4 +503,38 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// TestMudarOMoldeNaoReconstroiEReRenderizaOTexto é a afirmação central do
+// formato declarável: o texto do grupo NÃO está em disco — o que está é a
+// chave composta —, então trocar o molde re-renderiza na abertura e não custa
+// uma reconstrução. Por isso o molde fica fora do manifest e de sameDefinition,
+// como o maxGroups.
+//
+// O que o teste exige é justamente o par: nada reconstruído E o texto novo
+// valendo. Só a primeira metade passaria com o molde sendo ignorado.
+func TestMudarOMoldeNaoReconstroiEReRenderizaOTexto(t *testing.T) {
+	dir := t.TempDir()
+	c := byOLT("aut", true)
+	s, rel := storeWithCounters(t, dir, c)
+	mustPut(t, s, "k", 1, payloadServico(t, s, "k", "A", true, rel.agora()), nil)
+	if _, ok := counterChamado(t, s, "aut").ByText([]byte("A")); !ok {
+		t.Fatal("com o molde default o texto do grupo é a própria OLT")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	c.keyFormat = "[{olt}]"
+	s2 := openStore(t, optionsWithCounters(dir, c))
+	if n := s2.CountersConstruidosForTest(); n != 0 {
+		t.Errorf("%d contadores reconstruídos; o molde não decide o conteúdo do vetor e não pode custar uma reconstrução", n)
+	}
+	// exigeTotal resolve o grupo PELO TEXTO, então esta linha diz as duas
+	// coisas de uma vez: o grupo já internado responde pelo molde novo, e os
+	// totais atravessaram a troca intactos.
+	exigeTotal(t, s2, "aut", "[A]", 1, 1)
+	if _, ok := counterChamado(t, s2, "aut").ByText([]byte("A")); ok {
+		t.Error("o texto velho não pode continuar resolvendo: o groupKey é um só")
+	}
 }

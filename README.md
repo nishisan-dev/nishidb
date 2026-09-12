@@ -377,11 +377,18 @@ counters:
     where: authenticated = true
     maxGroups: 65536          # opcional; teto de grupos vivos (default 65536, até 2^31-1)
     retainEmptyGroups: 7d     # opcional; `never` mantém o grupo vazio para sempre
+
+  # O nome do grupo como o inventário o escreve, em vez de `olt|slot`.
+  - name: autenticados_por_pon
+    groupBy: [olt, slot]
+    keyFormat: "{olt}.{slot:02}"   # opcional; BR_SPOAM_OLT.08
 ```
 
 `groupBy` aceita colunas declaradas de tipo `string`, `int64` ou `boolean`
 (de topo ou extraídas), nunca a key nem a sequence; `where` tem a gramática do
-WHERE e não pode tocar campo com `merge: sum` nem campo de sistema. Como se
+WHERE e não pode tocar campo com `merge: sum` nem campo de sistema;
+`keyFormat` é o molde do `groupKey`, descrito com as regras em "O formato do
+`groupKey`". Como se
 lê, o que custa e como se audita está em "Contadores mantidos na escrita",
 mais abaixo.
 
@@ -1215,9 +1222,9 @@ nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT groupKey, total
 nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT olt, slot, port, total FROM _counters.autenticados_por_pon WHERE olt = 'PRCTA_G1M10' ORDER BY total ASC LIMIT 3"
 ```
 
-Cada tabela tem `groupKey` (o texto canônico do grupo — a própria OLT num
-`groupBy` de uma coluna; `olt|slot|port` num composto, com `|` e `\` escapados
-por `\`), as colunas do `groupBy` **abertas e tipadas**, e `total`. `groupKey`
+Cada tabela tem `groupKey` (o texto do grupo — a própria OLT num `groupBy` de
+uma coluna, `olt|slot|port` num composto), as colunas do `groupBy` **abertas e
+tipadas**, e `total`. `groupKey`
 é a key da tabela: `WHERE groupKey = '…'` é busca direta; as outras colunas
 varrem os grupos (milhares, não milhões de linhas). **Um grupo que chega a
 zero permanece na tabela com `total: 0`** — o equipamento que apagou por
@@ -1228,11 +1235,47 @@ sem alguma coluna do `groupBy` (ausente ou nula) não é contada. Os totais são
 lidos no **presente**: eles não entram no snapshot de leitura da consulta — o
 que a consulta congela é o conjunto de grupos.
 
+#### O formato do `groupKey`
+
+O separador default é `|`, mas o texto pode ser declarado por contador — é o
+que faz a aplicação consultar o grupo **pelo nome que o inventário escreve**:
+
+```yaml
+counters:
+  - name: autenticados_por_pon
+    groupBy: [olt, slot]
+    keyFormat: "{olt}.{slot:02}"    # BR_SPOAM_OLT.08
+```
+
+As aspas são obrigatórias: `{` abre um mapa no YAML. O molde é feito de
+literais e de marcadores `{coluna}`, com `{coluna:0N}` para número com zero à
+esquerda (só em `int64`; valor mais largo que `N` sai inteiro, sem truncar).
+`{{` e `}}` são as chaves literais. Ele pode reordenar as colunas em relação
+ao `groupBy` e ter prefixo e sufixo: `"OLT-{olt}.{slot:02}"`.
+
+Dois grupos distintos nunca podem render o mesmo texto — `groupKey` é a key, e
+a busca por ela tem de identificar UM grupo. Por isso a subida recusa o molde
+que não usa toda coluna do `groupBy` exatamente uma vez, o que cola dois
+marcadores sem literal entre eles, o que põe dígito ou `-` logo depois de um
+marcador `int64`, e o que tem `\` ou caractere de controle num literal. Dentro
+de um valor, o texto escapa com `\` a barra invertida e o primeiro caractere
+do literal que vem logo depois daquele marcador — e só ele: sob
+`"OLT-{olt}.{slot:02}"` a OLT `BR_SPOAM_OLT` sai inteira, e só um `.` no meio
+do nome seria escapado.
+
+`_meta.counters` tem a coluna `keyFormat` com o molde efetivo — quem não
+declarou vê o default já expandido (`{olt}|{slot}`), e nunca precisa adivinhar
+por qual texto consultar.
+
 Mudar `groupBy` ou `where` de um contador, ou declarar um contador novo num
 dataset que já tem linhas, **reconstrói o contador na abertura** varrendo as
 linhas vivas (o log `counter.construido` diz o motivo e quanto custou — a
 ordem de grandeza de uma varredura completa). Mudar `maxGroups` não
-reconstrói; um teto abaixo dos grupos em uso é recusado na subida. Um grupo
+reconstrói; um teto abaixo dos grupos em uso é recusado na subida. **Mudar
+`keyFormat` também não reconstrói**: o que está em disco é a chave do grupo, e
+o texto é derivado dela em toda abertura — mas o `groupKey` muda, e com ele o
+valor que as consultas salvas procuram. O log de subida sai com o molde
+efetivo, para a troca não ser silenciosa. Um grupo
 novo acima do teto é recusado em runtime: a linha entra, **não é contada**, e
 `nishidb_counter_groups_refused_total` sobe — é o alarme.
 
@@ -1255,7 +1298,9 @@ direto: são as linhas sem alguma coluna do `groupBy` (o serviço sem `olt`),
 que o contador não conta por desenho e que antes ninguém enxergava sem uma
 varredura. Sem `where`, `total` é igual a `rows`.
 
-`groupBy` usa o mesmo separador do `groupKey` (`olt|slot|port`); `condition`
+`groupBy` é a lista das colunas de agrupamento na ordem declarada, junta por
+`|`, e `keyFormat` é o molde efetivo da key (os dois são independentes: o
+molde escolhe o separador dele e pode reordenar); `condition`
 é o `where` do YAML (NULL no denominador, que não tem condição); `retired`,
 `refused` e `orphans` são os mesmos números do `nishidb counters`;
 `auditDivergent` e `auditAt` são NULL até a primeira auditoria conclusiva

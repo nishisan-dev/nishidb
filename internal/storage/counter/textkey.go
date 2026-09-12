@@ -1,57 +1,32 @@
 package counter
 
 import (
-	"fmt"
-	"strconv"
-
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
+	"github.com/nishisan-dev/nishidb/internal/keyformat"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// KeyText renderiza a chave composta de um grupo como o `groupKey` da
-// tabela virtual: os componentes na ordem do groupBy, separados por `|`.
+// KeyText renderiza a chave composta de um grupo como o `groupKey` da tabela
+// virtual: decodifica os componentes e entrega ao molde, que decide separador,
+// ordem, literais e zero à esquerda (internal/keyformat).
 //
-// A string escapa `\` como `\\` e `|` como `\|`, para que dois grupos distintos
-// nunca rendam o mesmo texto — o texto é a key da tabela, e o point lookup por
-// ela tem de identificar UM grupo. int64 sai em decimal, boolean como
-// `true`/`false`. Um componente só sai sem separador: `groupKey` de um
-// contador por OLT é a própria OLT.
+// A decodificação mora aqui, e não no keyformat, porque a chave composta é
+// formato de disco do dicionário de grupos; o molde só conhece valores.
 //
-// Só os três tipos que o groupBy aceita têm renderização; qualquer outro é
-// erro, e não um fallback, porque um fallback silencioso é como o texto de um
-// tipo novo divergiria do que o operador espera.
+// Duas chaves distintas nunca rendem o mesmo texto — o texto é a key da tabela,
+// e o point lookup por ela tem de identificar UM grupo. Quem garante isso são
+// as recusas de keyformat.Parse; o argumento completo está no godoc daquele
+// pacote, e a guarda de colisão de catchUpWithDict é a rede embaixo dele.
 //
-// dst e scratch são do chamador e os retornos têm de ser reatribuídos: a
-// função roda a cada grupo NOVO no writer e a cada linha na tabela virtual.
-func KeyText(dst []byte, key []byte, scratch []types.Value) ([]byte, []types.Value, error) {
+// dst e scratch são do chamador e os retornos têm de ser reatribuídos: a função
+// roda a cada grupo NOVO no writer e sobre TODOS os grupos na abertura do
+// dataset. Depois disso a tabela virtual lê o texto já pronto de `texts`, e
+// não chama esta função por linha.
+func KeyText(dst []byte, format *keyformat.Format, key []byte, scratch []types.Value) ([]byte, []types.Value, error) {
 	vals, err := valuekey.DecodeComposite(key, scratch[:0])
 	if err != nil {
 		return dst, vals, err
 	}
-	dst = dst[:0]
-	for i, v := range vals {
-		if i > 0 {
-			dst = append(dst, '|')
-		}
-		switch v.Type {
-		case types.TypeString:
-			for _, b := range v.Bytes {
-				if b == '\\' || b == '|' {
-					dst = append(dst, '\\')
-				}
-				dst = append(dst, b)
-			}
-		case types.TypeInt64:
-			dst = strconv.AppendInt(dst, v.I64, 10)
-		case types.TypeBool:
-			if v.I64 != 0 {
-				dst = append(dst, "true"...)
-			} else {
-				dst = append(dst, "false"...)
-			}
-		default:
-			return dst, vals, fmt.Errorf("contador: componente %d da chave tem tipo %#x, sem renderização (groupBy aceita string, int64 e boolean)", i, v.Type)
-		}
-	}
-	return dst, vals, nil
+	dst, err = format.Append(dst[:0], vals)
+	return dst, vals, err
 }

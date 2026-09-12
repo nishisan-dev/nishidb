@@ -12,6 +12,7 @@ package counters
 import (
 	"fmt"
 
+	"github.com/nishisan-dev/nishidb/internal/keyformat"
 	"github.com/nishisan-dev/nishidb/internal/predicate"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
@@ -30,8 +31,9 @@ func Compile(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definitio
 		return nil, fmt.Errorf("contadores: spec ou schema ausentes")
 	}
 	out := make([]counter.Definition, 0, len(spec.Counters))
+	var err error
 	for i, cs := range spec.Counters {
-		rotulo := fmt.Sprintf("counters[%d]", i)
+		label := fmt.Sprintf("counters[%d]", i)
 		def := counter.Definition{
 			Name:              cs.Name,
 			Columns:           make([]types.FieldID, 0, len(cs.GroupBy)),
@@ -44,22 +46,30 @@ func Compile(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definitio
 		for _, col := range cs.GroupBy {
 			f, ok := sc.FieldByName([]byte(col))
 			if !ok {
-				return nil, fmt.Errorf("%s.groupBy: coluna %q não existe no schema compilado", rotulo, col)
+				return nil, fmt.Errorf("%s.groupBy: coluna %q não existe no schema compilado", label, col)
 			}
 			if f.Accumulates {
-				return nil, fmt.Errorf("%s.groupBy: coluna %q tem merge: sum — o valor somado não é estado do último evento, e o grupo mudaria a cada reprocessamento", rotulo, col)
+				return nil, fmt.Errorf("%s.groupBy: coluna %q tem merge: sum — o valor somado não é estado do último evento, e o grupo mudaria a cada reprocessamento", label, col)
 			}
 			def.Columns = append(def.Columns, f.ID)
 			def.Types = append(def.Types, f.Type)
 		}
+		cols := keyformat.Columns(def.Names, def.Types)
+		if cs.KeyFormat == "" {
+			def.Format = keyformat.Default(cols)
+		} else if def.Format, err = keyformat.Parse(cs.KeyFormat, cols); err != nil {
+			// A spec já recusou na subida, pelo MESMO parser. Chegar aqui é
+			// spec e schema compilado discordarem sobre os tipos das colunas.
+			return nil, fmt.Errorf("%s.keyFormat: %w", label, err)
+		}
 		if cs.Where != "" {
-			prog, slots, err := predicate.CompileCondition(rotulo+".where", cs.Where, sc)
+			prog, slots, err := predicate.CompileCondition(label+".where", cs.Where, sc)
 			if err != nil {
 				return nil, err
 			}
 			for _, id := range slots.IDs {
 				if f, ok := sc.FieldByID(id); ok && f.Accumulates {
-					return nil, fmt.Errorf("%s.where: condição %q referencia %q, que tem merge: sum — a soma não é idempotente e o contador deixaria de ser função do estado", rotulo, cs.Where, f.Name)
+					return nil, fmt.Errorf("%s.where: condição %q referencia %q, que tem merge: sum — a soma não é idempotente e o contador deixaria de ser função do estado", label, cs.Where, f.Name)
 				}
 			}
 			ids := slots.IDs

@@ -18,6 +18,15 @@ partition "Escrita (applyRecord, sob wmu)" {
     :Derive(payload):
     chave composta (valuekey) + where;
     if (grupo novo?) then (sim)
+      :Renderiza o groupKey pelo molde
+      (keyformat) e confere colisão;
+      if (texto já é de outro grupo vivo?) then (sim)
+        :ERRO, e NADA foi ao disco
+        (a guarda vem ANTES do Intern:
+        chave colidente durável faria
+        toda abertura seguinte falhar);
+        stop
+      endif
       :Interna no dicionário
       (fsync ANTES de devolver o id);
     endif

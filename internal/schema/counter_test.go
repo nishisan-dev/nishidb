@@ -189,3 +189,71 @@ func TestOPrefixoReservadoNomeiaOsDoisNamespaces(t *testing.T) {
 		t.Fatalf("a recusa tem de nomear os namespaces reservados: %v", err)
 	}
 }
+
+// TestCountersAceitaOMoldeDoGroupKey: o molde é opcional e, quando declarado,
+// chega à spec como texto — quem o compila contra o schema é internal/counters.
+func TestCountersAceitaOMoldeDoGroupKey(t *testing.T) {
+	spec, err := Parse([]byte(yamlWithCounters(`
+counters:
+  - name: sem_molde
+    groupBy: [olt]
+  - name: autenticados_por_pon
+    groupBy: [olt, slot]
+    keyFormat: "{olt}.{slot:02}"
+`)), BuiltinDefaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := spec.Counters[0].KeyFormat; got != "" {
+		t.Errorf("keyFormat ausente = %q, quero vazio — o default não é materializado na spec", got)
+	}
+	if got, quero := spec.Counters[1].KeyFormat, "{olt}.{slot:02}"; got != quero {
+		t.Errorf("keyFormat = %q, quero %q", got, quero)
+	}
+}
+
+// TestCountersRecusaMoldeInvalido confere que a recusa acontece na SUBIDA e que
+// a mensagem traz o caminho do YAML: sem ele o operador tem a regra, mas não a
+// linha. A gramática em si tem os casos dela em internal/keyformat; aqui só
+// interessa que a spec chame o parser e vista o erro.
+func TestCountersRecusaMoldeInvalido(t *testing.T) {
+	cases := map[string]string{
+		"coluna de fora do molde":    `"{olt}"`,
+		"nome que nao e do groupBy":  `"{olt}.{porta}"`,
+		"marcadores colados":         `"{olt}{slot}"`,
+		"barra invertida no literal": `"{olt}\\{slot}"`,
+		"zero a esquerda em string":  `"{olt:02}.{slot}"`,
+		"molde vazio":                `""`,
+	}
+	for name, mold := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte(yamlWithCounters(`
+counters:
+  - name: por_pon
+    groupBy: [olt, slot]
+    keyFormat: `+mold+`
+`)), BuiltinDefaults)
+			if err == nil {
+				t.Fatal("o molde tem de ser recusado na subida")
+			}
+			if !strings.Contains(err.Error(), "counters[0].keyFormat") {
+				t.Errorf("a mensagem não traz o caminho do YAML: %v", err)
+			}
+		})
+	}
+}
+
+// TestCountersRecusaChaveDesconhecidaDepoisDoKeyFormat: a lista de chaves do
+// bloco cresceu, e uma lista que cresce sem teste deixa de recusar o erro de
+// digitação que ela existe para pegar.
+func TestCountersRecusaChaveDesconhecidaDepoisDoKeyFormat(t *testing.T) {
+	_, err := Parse([]byte(yamlWithCounters(`
+counters:
+  - name: por_olt
+    groupBy: [olt]
+    keyFormat2: "{olt}"
+`)), BuiltinDefaults)
+	if err == nil || !strings.Contains(err.Error(), "chave desconhecida") {
+		t.Fatalf("chave desconhecida tem de ser recusada, veio: %v", err)
+	}
+}
