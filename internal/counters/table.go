@@ -14,10 +14,10 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// maxColumnsOfAgrupamento é o teto de colunas do groupBy que a tabela virtual
+// maxGroupingColumns é o teto de colunas do groupBy que a tabela virtual
 // monta sem alocar: a linha é composta num array de pilha desse tamanho mais
 // as duas colunas fixas.
-const maxColumnsOfAgrupamento = 16
+const maxGroupingColumns = 16
 
 // Reader é o que a tabela virtual precisa do contador. Interface, e não o
 // *counter.Counter, para que o teste da tabela e o do contador não se
@@ -50,38 +50,9 @@ type Reader interface {
 // snapshot. O que o snapshot congela é o CONJUNTO de grupos — um grupo que
 // nasce no meio da varredura não entra no universo dela.
 func Table(def counter.Definition, l Reader) (*schema.Compiled, query.Store, error) {
-	if len(def.Columns) == 0 || len(def.Columns) > maxColumnsOfAgrupamento {
-		return nil, nil, fmt.Errorf("contadores: %q tem %d colunas de agrupamento; a tabela aceita de 1 a %d", def.Name, len(def.Columns), maxColumnsOfAgrupamento)
-	}
-	if len(def.Names) != len(def.Columns) || len(def.Types) != len(def.Columns) {
-		return nil, nil, fmt.Errorf("contadores: %q com Names, Types e Columns de tamanhos diferentes", def.Name)
-	}
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "version: 1\nname: %s\nschemaName: %s\nmaterialization:\n  key:\n    field: %s\nschema:\n  include: [%s",
-		def.Name, schema.SyntheticSchemaName, schema.CounterKeyColumn, schema.CounterKeyColumn)
-	for _, n := range def.Names {
-		if n == schema.CounterKeyColumn || n == schema.CounterTotalColumn {
-			return nil, nil, fmt.Errorf("contadores: %q agrupa por %q, que colide com a coluna fixa da tabela", def.Name, n)
-		}
-		fmt.Fprintf(&sb, ", %s", n)
-	}
-	fmt.Fprintf(&sb, ", %s]\n  fields:\n    %s:\n      type: string\n", schema.CounterTotalColumn, schema.CounterKeyColumn)
-	for i, n := range def.Names {
-		tipo, err := nameOfTipo(def.Types[i])
-		if err != nil {
-			return nil, nil, fmt.Errorf("contadores: %q, coluna %q: %w", def.Name, n, err)
-		}
-		fmt.Fprintf(&sb, "    %s:\n      type: %s\n", n, tipo)
-	}
-	fmt.Fprintf(&sb, "    %s:\n      type: int64\n", schema.CounterTotalColumn)
-
-	spec, err := schema.Parse([]byte(sb.String()), schema.BuiltinDefaults)
+	sc, err := TableSchema(def)
 	if err != nil {
-		return nil, nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", schema.CountersNamespace, def.Name, err)
-	}
-	sc, err := spec.Compile(schema.NewInMemoryDict())
-	if err != nil {
-		return nil, nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", schema.CountersNamespace, def.Name, err)
+		return nil, nil, err
 	}
 	f := &source{l: l, columns: make([]types.FieldID, len(def.Names))}
 	if f.idKey, err = idOfColumn(sc, schema.CounterKeyColumn); err != nil {
@@ -98,7 +69,52 @@ func Table(def counter.Definition, l Reader) (*schema.Compiled, query.Store, err
 	return sc, f, nil
 }
 
-func nameOfTipo(t types.FieldType) (string, error) {
+// TableSchema monta e compila o schema sintético da tabela de um contador, sem
+// o Store virtual.
+//
+// Existe separada da Table porque quem compila uma condição sobre as colunas do
+// contador — o `when` de um alarme — precisa do schema e não tem Reader para
+// dar. Exigir um obrigaria o declarante a inventar um leitor vazio só para
+// compilar texto, e um leitor inventado é a porta para a condição acabar
+// compilada contra um schema que não é o da tabela de verdade.
+func TableSchema(def counter.Definition) (*schema.Compiled, error) {
+	if len(def.Columns) == 0 || len(def.Columns) > maxGroupingColumns {
+		return nil, fmt.Errorf("contadores: %q tem %d colunas de agrupamento; a tabela aceita de 1 a %d", def.Name, len(def.Columns), maxGroupingColumns)
+	}
+	if len(def.Names) != len(def.Columns) || len(def.Types) != len(def.Columns) {
+		return nil, fmt.Errorf("contadores: %q com Names, Types e Columns de tamanhos diferentes", def.Name)
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "version: 1\nname: %s\nschemaName: %s\nmaterialization:\n  key:\n    field: %s\nschema:\n  include: [%s",
+		def.Name, schema.SyntheticSchemaName, schema.CounterKeyColumn, schema.CounterKeyColumn)
+	for _, n := range def.Names {
+		if n == schema.CounterKeyColumn || n == schema.CounterTotalColumn {
+			return nil, fmt.Errorf("contadores: %q agrupa por %q, que colide com a coluna fixa da tabela", def.Name, n)
+		}
+		fmt.Fprintf(&sb, ", %s", n)
+	}
+	fmt.Fprintf(&sb, ", %s]\n  fields:\n    %s:\n      type: string\n", schema.CounterTotalColumn, schema.CounterKeyColumn)
+	for i, n := range def.Names {
+		kind, err := typeName(def.Types[i])
+		if err != nil {
+			return nil, fmt.Errorf("contadores: %q, coluna %q: %w", def.Name, n, err)
+		}
+		fmt.Fprintf(&sb, "    %s:\n      type: %s\n", n, kind)
+	}
+	fmt.Fprintf(&sb, "    %s:\n      type: int64\n", schema.CounterTotalColumn)
+
+	spec, err := schema.Parse([]byte(sb.String()), schema.BuiltinDefaults)
+	if err != nil {
+		return nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", schema.CountersNamespace, def.Name, err)
+	}
+	sc, err := spec.Compile(schema.NewInMemoryDict())
+	if err != nil {
+		return nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", schema.CountersNamespace, def.Name, err)
+	}
+	return sc, nil
+}
+
+func typeName(t types.FieldType) (string, error) {
 	switch t {
 	case types.TypeString:
 		return "string", nil
@@ -210,7 +226,7 @@ type pair struct {
 // os pares são ordenados num array de pilha, sem alocar — a linha é montada
 // por grupo a cada consulta do alarme.
 func (f *source) record(row types.RowID, key, text []byte, total int64, buf []byte) (types.Record, []byte, bool, error) {
-	var pares [maxColumnsOfAgrupamento + 2]pair
+	var pares [maxGroupingColumns + 2]pair
 	n := 0
 	pares[n] = pair{f.idKey, types.Value{Type: types.TypeString, Bytes: text}}
 	n++
