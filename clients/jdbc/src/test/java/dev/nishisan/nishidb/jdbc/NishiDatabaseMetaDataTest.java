@@ -297,6 +297,63 @@ class NishiDatabaseMetaDataTest {
     }
 
     /**
+     * O ORDINAL_POSITION reinicia em CADA tabela e conta a coluna descartada.
+     *
+     * <p>São as duas propriedades que o contrato pede, e nenhuma das duas
+     * aparece numa chamada que filtra uma tabela só e não filtra coluna: ali o
+     * laço externo roda uma vez e nada é descartado. Por isso esta chamada
+     * pede o SCHEMA inteiro — {@code telecom} tem a base e a view — e a de
+     * baixo passa um padrão de coluna.
+     *
+     * <p>Contar a coluna descartada é o que faz a posição ser a do SCHEMA da
+     * tabela, e não a desta resposta: quem pedir só o campo {@code status}
+     * recebe a posição que ele ocupa na tabela (2), que é a mesma que uma
+     * chamada sem filtro devolveria.
+     */
+    @Test
+    void oOrdinalPositionEhPorTabelaEContaAColunaDescartada() throws Exception {
+        comMetadata(m -> {
+            try (ResultSet rs = m.getColumns(null, "telecom", null, null)) {
+                assertEquals(List.of(
+                        "telecom|eventos|service_id|1",
+                        "telecom|eventos|status|2",
+                        "telecom|eventos|payload|3",
+                        "telecom|eventos|quando|4",
+                        "telecom|por_olt|olt|1",
+                        "telecom|por_olt|total|2"), posicoes(rs));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        comMetadata(m -> {
+            try (ResultSet rs = m.getColumns(null, "telecom", "eventos", "status")) {
+                assertEquals(List.of("telecom|eventos|status|2"), posicoes(rs));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        comMetadata(m -> {
+            // O padrão que descarta a PRIMEIRA coluna: sem contar a
+            // descartada, `quando` sairia em 1.
+            try (ResultSet rs = m.getColumns(null, "telecom", "eventos", "q%")) {
+                assertEquals(List.of("telecom|eventos|quando|4"), posicoes(rs));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    /** Schema, tabela, coluna e a posição de cada linha, na ordem devolvida. */
+    private static List<String> posicoes(ResultSet rs) throws SQLException {
+        List<String> out = new ArrayList<>();
+        while (rs.next()) {
+            out.add(rs.getString("TABLE_SCHEM") + "|" + rs.getString("TABLE_NAME") + "|"
+                    + rs.getString("COLUMN_NAME") + "|" + rs.getInt("ORDINAL_POSITION"));
+        }
+        return out;
+    }
+
+    /**
      * Servidor anterior a {@code tables}: a árvore de sempre, e nada lança.
      *
      * <p>Nenhuma view é inventada e nenhum schema aparece — o documento não
@@ -407,12 +464,20 @@ class NishiDatabaseMetaDataTest {
         });
     }
 
-    /** A chave do dataset é ganho real: é ela que a ferramenta desenha. */
+    /**
+     * A chave do dataset é ganho real: é ela que a ferramenta desenha.
+     *
+     * <p>E ela sai NO SCHEMA do dataset: quem cruza esta lista com a do
+     * {@link DatabaseMetaData#getTables} pelo par (schema, nome) — que é como
+     * uma ferramenta liga a chave à tabela da árvore — não acha a linha se
+     * aqui o TABLE_SCHEM sair nulo.
+     */
     @Test
-    void aChaveDoDatasetSaiComoChavePrimaria() throws Exception {
+    void aChaveDoDatasetSaiComoChavePrimariaNoSchemaDoDataset() throws Exception {
         comMetadata(m -> {
             try (ResultSet rs = m.getPrimaryKeys(null, null, "eventos")) {
                 assertTrue(rs.next());
+                assertEquals("telecom", rs.getString("TABLE_SCHEM"));
                 assertEquals("eventos", rs.getString("TABLE_NAME"));
                 assertEquals("service_id", rs.getString("COLUMN_NAME"));
                 assertEquals(1, rs.getInt("KEY_SEQ"));
@@ -423,12 +488,16 @@ class NishiDatabaseMetaDataTest {
         });
     }
 
-    /** O índice sai com a ressalva de que é DECLARADO, não plano escolhido. */
+    /**
+     * O índice sai com a ressalva de que é DECLARADO, não plano escolhido — e
+     * no schema do dataset, pela razão da chave primária.
+     */
     @Test
-    void oIndiceSaiComARessalvaDeQueEhDeclarado() throws Exception {
+    void oIndiceSaiComARessalvaDeQueEhDeclaradoENoSchemaDoDataset() throws Exception {
         comMetadata(m -> {
             try (ResultSet rs = m.getIndexInfo(null, null, "eventos", false, true)) {
                 assertTrue(rs.next());
+                assertEquals("telecom", rs.getString("TABLE_SCHEM"));
                 assertEquals("status", rs.getString("COLUMN_NAME"));
                 assertTrue(rs.getString("INDEX_NAME").contains("bitmap"), rs.getString("INDEX_NAME"));
                 assertTrue(rs.getString("INDEX_NAME").contains("declarado"), rs.getString("INDEX_NAME"));
@@ -437,6 +506,64 @@ class NishiDatabaseMetaDataTest {
                 throw new IllegalStateException(e);
             }
         });
+    }
+
+    /**
+     * As duas listas HONRAM o schema que receberam.
+     *
+     * <p>Elas passaram a publicar o TABLE_SCHEM, e um método que publica o
+     * campo sem filtrar por ele afirma um schema que não conferiu: pedir a
+     * chave de {@code zoo.eventos} devolveria a de {@code telecom.eventos}.
+     * {@code null} continua sendo "não restrinja", que é o que a ferramenta
+     * manda quando já sabe a tabela.
+     */
+    @Test
+    void aChaveEOIndiceHonramOSchemaRecebido() throws Exception {
+        comMetadata(m -> {
+            try {
+                assertEquals(1, linhas(m.getPrimaryKeys(null, "telecom", "eventos")));
+                assertEquals(0, linhas(m.getPrimaryKeys(null, "zoo", "eventos")));
+                assertEquals(0, linhas(m.getPrimaryKeys(null, "", "eventos")));
+                assertEquals(1, linhas(m.getPrimaryKeys(null, null, "eventos")));
+
+                assertEquals(1, linhas(m.getIndexInfo(null, "telecom", "eventos", false, true)));
+                assertEquals(0, linhas(m.getIndexInfo(null, "zoo", "eventos", false, true)));
+                assertEquals(0, linhas(m.getIndexInfo(null, "", "eventos", false, true)));
+                assertEquals(1, linhas(m.getIndexInfo(null, null, "eventos", false, true)));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    /**
+     * O servidor SEM schema: a string vazia é quem pega as linhas dele.
+     *
+     * <p>É a outra metade do contrato do argumento — a linha sem schema tem de
+     * ser alcançável, e o nome de um schema não pode alcançá-la.
+     */
+    @Test
+    void aChaveDoServidorSemSchemaSaiPelaStringVazia() throws Exception {
+        metadata = META_SEM_TABLES;
+        comMetadata(m -> {
+            try {
+                assertEquals(1, linhas(m.getPrimaryKeys(null, "", "eventos")));
+                assertEquals(1, linhas(m.getPrimaryKeys(null, null, "eventos")));
+                assertEquals(0, linhas(m.getPrimaryKeys(null, "telecom", "eventos")));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    private static int linhas(ResultSet rs) throws SQLException {
+        int n = 0;
+        try (rs) {
+            while (rs.next()) {
+                n++;
+            }
+        }
+        return n;
     }
 
     /**

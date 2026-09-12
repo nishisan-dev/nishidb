@@ -201,6 +201,18 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
      * (schema, nome) é a que sai. Sem isto a ferramenta mostraria o
      * {@code _meta} com uma cópia de cada tabela por dataset do servidor.
      *
+     * <p><b>De onde vem o direito de cortar por (schema, nome).</b> A chave
+     * vale para TODA linha, e não só para as do {@code _meta}: duas tabelas
+     * homônimas no mesmo schema fariam a segunda sumir da árvore em silêncio.
+     * Quem garante que elas não chegam é o SERVIDOR, e na subida — o
+     * {@code ValidateSchemaUniqueness} ({@code internal/config/config.go})
+     * recusa dois datasets com o mesmo {@code schemaName}, e o
+     * {@code validateCounters} ({@code internal/schema/counter.go}) recusa,
+     * dentro de um dataset, o contador que se chame como o próprio dataset ou
+     * como a tabela irmã do histórico. As três recusas juntas são o que faz o
+     * par endereçar uma tabela e só uma no servidor inteiro; a repetição do
+     * {@code _meta} é a única que sobra para cortar aqui.
+     *
      * <p><b>Servidor sem o campo.</b> {@code tables} é aditivo, e um binário
      * anterior responde sem ele. Aí cada dataset vira UMA entrada — a base,
      * com o nome do dataset, o {@code columns} do próprio dataset e schema
@@ -209,7 +221,7 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
      */
     private List<CatalogTable> catalogTables() throws SQLException {
         List<CatalogTable> out = new ArrayList<>();
-        Set<String> vistas = new HashSet<>();
+        Set<String> seen = new HashSet<>();
         for (JsonValue d : datasets()) {
             List<JsonValue> tables = d.itensDe("tables");
             if (tables.isEmpty()) {
@@ -223,16 +235,16 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
                 // A chave é o endereço qualificado: nem schema nem nome
                 // de tabela contêm ponto, então o par não pode colidir com
                 // outro par por causa da concatenação.
-                if (!vistas.add(schema + "." + name)) {
+                if (!seen.add(schema + "." + name)) {
                     continue;
                 }
                 // O tipo ausente cai em TABLE, e não em nulo: o filtro de tipo
                 // e a ordenação comparam esta string, e um nulo aqui viraria
                 // uma linha que nenhum filtro alcança.
                 String type = t.textoOu("kind", "TABLE");
-                String descricao = t.textoOu("description", "");
-                String remarks = descricao;
-                if (descricao.isEmpty()) {
+                String description = t.textoOu("description", "");
+                String remarks = description;
+                if (description.isEmpty()) {
                     // A descrição sai vazia em toda linha do servidor de hoje.
                     // Na linha da BASE o driver continua publicando o texto do
                     // dataset, que é o que ele sempre publicou ali.
@@ -344,6 +356,25 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
         return casa(padrao, schema == null ? "" : schema);
     }
 
+    /**
+     * O SCHEMA de {@code getPrimaryKeys} e {@code getIndexInfo}, que NÃO é
+     * padrão: nesses dois o contrato pede o nome do schema, e não um LIKE.
+     *
+     * <p>{@code null} é "não restrinja por schema" — é o que a ferramenta
+     * manda quando já sabe qual tabela quer —, e a string VAZIA pede as linhas
+     * SEM schema, que são as de um servidor anterior ao campo. Sem este filtro
+     * os dois métodos AFIRMARIAM um TABLE_SCHEM que não conferiram: desde que
+     * as duas listas publicam o campo, responder a chave de
+     * {@code telecom.eventos} a quem pediu o schema {@code zoo} seria descrever
+     * outra tabela. O servidor não produz o par ambíguo — dois datasets com o
+     * mesmo {@code schemaName} são recusados na subida —, então o filtro só
+     * muda a resposta quando o CHAMADOR pede um schema que não é o da tabela;
+     * o que ele fecha é a afirmação, e não um documento observado.
+     */
+    private static boolean matchesSchemaName(String schema, String actual) {
+        return schema == null || schema.equals(actual == null ? "" : actual);
+    }
+
     /** As 24 colunas canônicas de getColumns. */
     private static final List<Molduras.Coluna> COLUNAS_COLUMNS = List.of(
             texto("TABLE_CAT"), texto("TABLE_SCHEM"), texto("TABLE_NAME"), texto("COLUMN_NAME"),
@@ -434,6 +465,10 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
      * que a linha descreva a MESMA tabela que o {@link #getTables} publica —
      * uma ferramenta que case as duas por (schema, nome) perderia a chave se
      * aqui ele saísse nulo.
+     *
+     * <p>O {@code schema} do argumento é honrado, pelo
+     * {@link #matchesSchemaName}: publicar o campo e ignorar o filtro seria
+     * afirmar um schema que o método não conferiu.
      */
     @Override
     public ResultSet getPrimaryKeys(String catalogo, String schema, String tabela) throws SQLException {
@@ -442,12 +477,13 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
         List<Object[]> linhas = new ArrayList<>();
         for (JsonValue d : datasets()) {
             String nome = d.textoOu("name", "");
-            if (!casa(tabela, nome)) {
+            String datasetSchema = textOrNull(d, "schema");
+            if (!matchesSchemaName(schema, datasetSchema) || !casa(tabela, nome)) {
                 continue;
             }
             String chave = d.textoOu("key", "");
             if (!chave.isEmpty()) {
-                linhas.add(new Object[] {null, textOrNull(d, "schema"), nome, chave, 1L, "chave"});
+                linhas.add(new Object[] {null, datasetSchema, nome, chave, 1L, "chave"});
             }
         }
         return resultado(colunas, linhas);
@@ -464,7 +500,8 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
      * <p>O índice viaja na COLUNA, e as colunas da base são as do campo
      * {@code columns} do dataset — é de lá que esta lista sai, e por isso ela
      * continua percorrendo os datasets. O TABLE_SCHEM vai preenchido pela
-     * razão do {@link #getPrimaryKeys}.
+     * razão do {@link #getPrimaryKeys}, e o {@code schema} do argumento é
+     * honrado pela mesma razão.
      */
     @Override
     public ResultSet getIndexInfo(String catalogo, String schema, String tabela, boolean unico,
@@ -476,7 +513,8 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
         List<Object[]> linhas = new ArrayList<>();
         for (JsonValue d : datasets()) {
             String nome = d.textoOu("name", "");
-            if (!casa(tabela, nome)) {
+            String datasetSchema = textOrNull(d, "schema");
+            if (!matchesSchemaName(schema, datasetSchema) || !casa(tabela, nome)) {
                 continue;
             }
             for (JsonValue c : d.itensDe("columns")) {
@@ -487,7 +525,7 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
                 if (unico) {
                     continue; // nenhum índice do NishiDB é único
                 }
-                linhas.add(new Object[] {null, textOrNull(d, "schema"), nome, 1L, null,
+                linhas.add(new Object[] {null, datasetSchema, nome, 1L, null,
                     indice + " (declarado no YAML, não é garantia de plano)",
                     (long) tableIndexOther, 1L, c.textoOu("name", ""), null, 0L, 0L, null});
             }
