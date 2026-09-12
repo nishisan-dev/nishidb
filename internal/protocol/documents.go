@@ -127,42 +127,37 @@ type DatasetMeta struct {
 // do query.TableInfo, e sai do MESMO Catalog que alimenta a `_meta.tables` —
 // duas derivações da mesma enumeração divergiriam, e a divergência apareceria
 // como uma ferramenta que discorda do SQL sem nada estar quebrado.
+//
+// O SIGNIFICADO dos campos mora no godoc de query.TableInfo — e o dos dois
+// valores de Kind no de query.TableKind —, e mora lá SÓ: por que o Schema de
+// uma linha do `_meta` não é o do dataset, por que o Namespace não é
+// reconstruível a partir de (Schema, Name), por que não existe "SYSTEM TABLE" e
+// por que Columns é deliberadamente um superset do que o `SELECT *` devolve.
+// Repetir a explicação aqui daria dois textos normativos
+// para o mesmo fato, e eles divergiriam no primeiro que alguém atualizasse.
+// Abaixo ficam as chaves do JSON e o que é específico do wire.
 type TableMeta struct {
 	// Name é o nome da tabela dentro do Schema.
 	Name string `json:"name"`
-	// Schema é onde a tabela mora: o `schemaName` do dataset para a base e
-	// para os contadores, e `_meta` para as tabelas que descrevem o motor. É o
-	// que um cliente JDBC publica como TABLE_SCHEM, e por isso ele viaja na
-	// linha em vez de ser herdado do DatasetMeta: as linhas do `_meta` NÃO
-	// estão no schema do dataset.
+	// Schema é onde a tabela mora, e é o que um cliente JDBC publica como
+	// TABLE_SCHEM. Ele viaja na LINHA em vez de ser herdado do DatasetMeta
+	// justamente porque as linhas do `_meta` NÃO estão no schema do dataset.
 	Schema string `json:"schema"`
 	// Namespace é o espaço de nome reservado por onde o ATALHO abre a tabela
-	// (`_counters`, `_meta`) — a forma que significa "no dataset da
-	// requisição" —, e sai VAZIO para a base, aberta pelo atalho só pelo nome.
-	//
-	// Ele é publicado porque não é reconstruível a partir de (Schema, Name), e
-	// porque para as linhas do `_meta` ele é o ÚNICO endereço que existe: o
-	// prefixo `_` é reservado, o motor desvia todo `FROM _x.y` para o atalho
-	// antes da resolução por schema, e `FROM _meta.tables` vale sempre no
-	// dataset da requisição. Para a base e para os contadores o par
-	// (Schema, Name) também endereça, de qualquer dataset do servidor.
+	// (`_counters`, `_meta`), e sai VAZIO para a base.
 	Namespace string `json:"namespace"`
-	// Kind é "TABLE" para a base — a única que materializa evento — e "VIEW"
-	// para o contador e para as tabelas do `_meta`. Não há "SYSTEM TABLE": o
-	// spike do DBeaver mostrou que objeto de sistema fica escondido por
-	// default, e tabela que existe para ser descoberta não pode nascer
-	// invisível.
+	// Kind é "TABLE" para a base e "VIEW" para o contador e para as tabelas do
+	// `_meta` — os dois valores de query.TableKind, no wire como texto.
 	Kind string `json:"kind"`
-	// Description é o texto que o cliente mostra ao lado da tabela. Hoje sai
-	// VAZIA em toda linha: nem a spec do dataset nem o registro de tabela
-	// virtual declaram descrição, e o catálogo não inventa uma.
+	// Description é o texto que o cliente mostra ao lado da tabela, e sai VAZIA
+	// em toda linha hoje. O campo é string, e não ponteiro como o Alias de
+	// ColumnMeta: a MESMA ausência que a `_meta.tables` publica como NULL sai
+	// aqui como `""`, e um cliente que espere `null` no JSON está lendo a regra
+	// da tabela SQL no lugar errado.
 	Description string `json:"description"`
 	// Columns são as colunas descritíveis da tabela, pela MESMA regra do campo
-	// Columns do dataset (schema.Compiled.FieldsForMetadata): as de topo mais
-	// as derivadas, sem os campos de sistema, em ordem crescente de FieldID.
-	// É deliberadamente um SUPERSET do que o `SELECT *` devolve — a coluna
-	// derivada fica fora do `SELECT *` e está aqui, porque escondê-la também
-	// aqui deixaria o operador sem forma nenhuma de saber que ela existe.
+	// Columns do dataset (schema.Compiled.FieldsForMetadata), cada uma já com o
+	// código JDBC calculado pelo servidor.
 	Columns []ColumnMeta `json:"columns"`
 }
 
