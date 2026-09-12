@@ -69,3 +69,91 @@ func TestDuracaoDaPassadaEhMedida(t *testing.T) {
 		t.Errorf("duração da passada = %v, quero um valor positivo", d)
 	}
 }
+
+// TestEstatisticasSaoLidasDeOutraGoroutine: o scrape do /metrics lê as
+// estatísticas enquanto a passada as escreve. Ler o mapa de trackers para saber
+// quantos são é corrida de dados — e o detector só a acusa se as duas coisas
+// acontecerem ao mesmo tempo, que é o que este teste força.
+func TestEstatisticasSaoLidasDeOutraGoroutine(t *testing.T) {
+	gs := make([]grupo, 0, 32)
+	for i := int64(0); i < 32; i++ {
+		// Metade satisfaz a condição, para que haja transição em cada passada.
+		total := int64(500)
+		if i%2 == 0 {
+			total = 10
+		}
+		gs = append(gs, grupo{olt: "OLT_A", slot: i, total: total, live: true})
+	}
+	f := newFakeCounter(t, defByPON("autenticados_por_pon"), gs...)
+	r, _, clock := runnerDeTeste(t, f, "")
+
+	parar := make(chan struct{})
+	pronto := make(chan struct{})
+	go func() {
+		defer close(pronto)
+		for {
+			select {
+			case <-parar:
+				return
+			default:
+				_ = r.Stats()
+				_ = r.LastSweep()
+			}
+		}
+	}()
+	for i := 0; i < 50; i++ {
+		if err := r.EvaluateOnce(); err != nil {
+			t.Fatal(err)
+		}
+		// Alterna os totais, para que grupos entrem e saiam de observação e o
+		// mapa de trackers mude de tamanho a cada passada.
+		for j := range f.groups {
+			if f.groups[j].total == 10 {
+				f.groups[j].total = 500
+			} else {
+				f.groups[j].total = 10
+			}
+		}
+		clock.advance(time.Minute)
+	}
+	close(parar)
+	<-pronto
+}
+
+// TestContadorDeObservadosAcompanhaOMapa: o número publicado é mantido à parte
+// do mapa, e duas fontes para o mesmo fato divergem no dia em que um caminho de
+// transição esquece de somar. Este teste é o que as reconcilia.
+func TestContadorDeObservadosAcompanhaOMapa(t *testing.T) {
+	f := newFakeCounter(t, defByPON("autenticados_por_pon"),
+		grupo{olt: "OLT_A", slot: 1, total: 10, live: true},
+		grupo{olt: "OLT_A", slot: 2, total: 10, live: true},
+		grupo{olt: "OLT_A", slot: 3, total: 900, live: true},
+	)
+	r, _, clock := runnerDeTeste(t, f, "")
+	confere := func(etapa string) {
+		t.Helper()
+		mapa := 0
+		for _, rc := range r.counters {
+			for _, ra := range rc.alarms {
+				mapa += len(ra.trackers)
+			}
+		}
+		if got := r.Stats()[0].Tracked; got != int64(mapa) {
+			t.Fatalf("%s: contador publicado = %d, mapa = %d", etapa, got, mapa)
+		}
+	}
+	passada(t, r)
+	confere("dois em observação")
+	f.setTotal("OLT_A", 1, 900)
+	clock.advance(time.Minute)
+	passada(t, r)
+	confere("um saiu")
+	f.retire("OLT_A", 2)
+	clock.advance(time.Minute)
+	passada(t, r)
+	confere("o outro foi aposentado")
+	f.setTotal("OLT_A", 3, 10)
+	clock.advance(time.Minute)
+	passada(t, r)
+	confere("um novo entrou")
+}

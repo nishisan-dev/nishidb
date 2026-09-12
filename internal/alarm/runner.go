@@ -217,6 +217,7 @@ func (r *Runner) restore() {
 			tr := &tracker{}
 			tr.restore(time.UnixMilli(g.SinceUnixMs))
 			ra.trackers[string(g.Group)] = tr
+			ra.stats.tracked.Add(1)
 			restored++
 		}
 	}
@@ -303,6 +304,7 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
 				}
 				tr = &tracker{}
 				ra.trackers[string(key)] = tr
+				ra.stats.tracked.Add(1)
 			}
 			tr.seen = r.pass
 			r.decide(rc, ra, tr, key, text, total, observation{present: true, conditionHolds: holds}, now)
@@ -335,6 +337,7 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 	if !tr.active() {
 		// delete com string(chave) também não copia a chave.
 		delete(ra.trackers, string(key))
+		ra.stats.tracked.Add(-1)
 	}
 	if d.verdict == verdictNone {
 		return

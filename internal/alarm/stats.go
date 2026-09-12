@@ -39,6 +39,12 @@ type alarmCounters struct {
 	enrichFailed  atomic.Uint64
 	enrichSkipped atomic.Uint64
 	firing        atomic.Int64
+	// tracked acompanha o TAMANHO do mapa de trackers, e existe porque ler
+	// len(mapa) daqui é corrida de dados: o scrape lê de outra goroutine
+	// enquanto a passada escreve, e mapa em Go não tolera isso nem para
+	// leitura de tamanho. O detector de corrida só acusa quando as duas coisas
+	// coincidem — foi um teste que as forçou a coincidir que encontrou isto.
+	tracked atomic.Int64
 }
 
 // Stats devolve um retrato por alarme declarado, na ordem da declaração.
@@ -50,7 +56,7 @@ func (r *Runner) Stats() []Stats {
 				Dataset:       rc.def.Dataset,
 				Counter:       rc.def.Counter,
 				Alarm:         ra.compiled.name,
-				Tracked:       int64(len(ra.trackers)),
+				Tracked:       ra.stats.tracked.Load(),
 				Firing:        ra.stats.firing.Load(),
 				Fired:         ra.stats.fired.Load(),
 				Resolved:      ra.stats.resolved.Load(),
