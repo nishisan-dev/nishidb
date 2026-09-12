@@ -280,6 +280,21 @@ canônica na documentação passou a ser a qualificada.
 `maxRows` alto deixou de ser porta para ler, sob aquele teto, um dataset cujo
 YAML declara teto baixo.
 
+## Verificação da rodada
+
+Rodado no fechamento, em 11/09/2026, sobre o commit `d20b9a5`:
+
+| Comando | Resultado |
+|---|---|
+| `make test` | 51 pacotes `ok`, nenhum `FAIL` (com os gates de medida) |
+| `make test-race` | 51 pacotes `ok`, nenhum `FAIL`, nenhum `DATA RACE` |
+| `make lint` | **333** apontamentos (errcheck 278, revive 42, staticcheck 13), IGUAL a `.golangci-baseline` — a saída != 0 é o esperado enquanto a baseline > 0 |
+| `make test-jdbc` | **217 testes, 0 falhas, 0 SKIP** — o `DriverIT` rodou contra o binário real, com TLS e credencial |
+
+`make test-integration` não foi rodado: está quebrado desde antes deste ciclo
+(`undefined: bancada` em `internal/kafka/integration_test.go`, resíduo do ciclo
+de identificadores em inglês), e nenhuma tarefa o tocou.
+
 ## O que fica em aberto
 
 1. **O aceite pelo DBeaver real está pendente** (seção acima). É o único item do
