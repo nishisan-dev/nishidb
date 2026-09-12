@@ -1696,6 +1696,43 @@ IntelliJ funcionarem:
 jdbc:nishidb://db01:9142/radius_sessions?tls=true&tlsCaFile=/etc/nishidb/ca.pem
 ```
 
+A árvore que a ferramenta mostra sai do `schemaName` e do catálogo publicado no
+`/v1/metadata` — o driver não descobre tabela por conta própria. Para o dataset
+acima, se ele declarasse dois contadores:
+
+```
+telecom                        (schema: o schemaName do YAML)
+├── Tables
+│   └── radius_sessions        a tabela base
+└── Views
+    ├── autenticados_por_olt   um contador declarado em `counters:`
+    └── autenticados_por_pon   outro
+_meta                          (schema do motor; descreve o dataset da conexão)
+└── Views
+    ├── counters
+    ├── fields
+    ├── kafka
+    └── tables
+```
+
+As quatro do `_meta` existem em todo dataset declarado, com contador ou sem,
+com Kafka ou sem: "este dataset não consome de Kafka" é uma resposta, e
+`SELECT * FROM _meta.kafka` nunca pode ser erro. A tabela **histórica** é a
+exceção — ela publica só `fields` e `tables`, porque contador e ingestão são do
+dataset base.
+
+O `TABLE_SCHEM` de cada linha é preenchido, e é ele que faz a ferramenta gerar
+`SELECT ... FROM telecom.autenticados_por_olt` ao clicar na tabela — a forma
+qualificada, que o servidor resolve contra o dataset dono do schema. Não há
+catálogo: o endereço tem dois níveis, o de cima é o schema, e `getCatalogs`
+responde vazio. As tabelas do `_meta` saem como `VIEW`, e nunca como
+`SYSTEM TABLE`: objeto de sistema é escondido por default nas ferramentas
+gráficas, e tabela que existe para ser descoberta não pode nascer invisível.
+
+Contra um servidor **anterior** a estes campos o driver volta à árvore de
+sempre — uma linha `TABLE` por dataset, sem schema e sem views —, sem lançar
+nada.
+
 **Python — client DB-API 2.0** ([clients/python](clients/python)), pacote
 `nishidb`, Python 3.10+, também sem dependência de runtime. É o que faz
 `pandas.read_sql` e as ferramentas de BI funcionarem.
@@ -1740,6 +1777,9 @@ Detalhes de cada um em [clients/python/README.md](clients/python/README.md).
   ambiente da rodada declarados.
 - [Aceite do M5](docs/aceite-m5.md) — autenticação e TLS (Fase 11); a rodada
   operacional no piloto (Fase C) segue pendente.
+- [Aceite do schema declarado](docs/aceite-schema-declarado.md) — o `schemaName`,
+  o catálogo, a `_meta.tables` e a árvore do cliente SQL; o aceite pelo DBeaver
+  real segue pendente.
 - [Rodada de aceite](benchmark/baselines/aceite-8m-20260815.md) — 8M entidades
   com consultas concorrentes, corpus de referência.
 - [Débitos abertos](docs/debitos.md) — o que ficou para o M2, M3, M4 e M5, com dono.

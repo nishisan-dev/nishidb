@@ -898,11 +898,14 @@ colunas de cada tabela; a resolução usa só a enumeração. A separação é m
 não estética: montar as colunas chama `FieldsForMetadata`, que aloca um slice
 com todos os campos e o ordena, e a resolução as montava para jogá-las fora.
 Num dataset de 4.000 colunas a forma qualificada custava ~479 µs e ~35 KiB de
-lixo contra ~4 µs e 1,5 KiB da simples — 113x —, e é a qualificada que o
-DBeaver gera sozinho. Depois da separação são ~1,6x nos três tamanhos medidos
+lixo contra ~4 µs e ~1,5 KiB da simples — 113x —, e é a qualificada que o
+DBeaver gera sozinho. Depois da separação são ~1,5x nos três tamanhos medidos
 (40, 400 e 4.000 campos) e 2.216 B por consulta, constante no tamanho do
 dicionário (`BenchmarkExecuteFromQualified`,
-`TestResolucaoQualificadaNaoAlocaPorCampoDoDataset`).
+`TestResolucaoQualificadaNaoAlocaPorCampoDoDataset`). Origem dos números, com o
+ambiente da rodada e a saída crua: [`aceite-schema-declarado.md`](aceite-schema-declarado.md),
+seção "A bancada", e
+[`benchmark/baselines/from-qualified-20260911.txt`](../benchmark/baselines/from-qualified-20260911.txt).
 
 **Quem resolve o par é a enumeração do `Engine.Catalog`, não uma varredura
 própria do roteamento.** A enumeração já é a única derivação de "que tabelas
@@ -1154,7 +1157,24 @@ conexão, que para toda tabela de outro schema é outra tabela. O
 procedimento e privilégio, que o produto não tem.
 
 **O `TABLE_CAT` continua nulo em toda linha**, e o `getCatalogs` continua
-vazio: o endereço qualificado tem dois níveis, e o de cima é o schema.
+vazio. Não é omissão: **é a gramática do `FROM` que decide o mapeamento JDBC.**
+O parser aceita no máximo `qualificador.tabela` — dois níveis —, e o JDBC tem
+três nomes para gastar (`TABLE_CAT`, `TABLE_SCHEM`, `TABLE_NAME`). Um deles
+sobra, e a escolha de qual é forçada em cadeia:
+
+- o nível de baixo é a tabela, e não há discussão;
+- o de cima tem de ser o `TABLE_SCHEM`, porque **é ele que a ferramenta usa para
+  qualificar o `FROM` que gera** — o spike mediu isso. Gastá-lo no `TABLE_CAT`
+  deixaria o `TABLE_SCHEM` nulo, e a ferramenta geraria `FROM <tabela>` sem
+  qualificador, que cai no dataset da conexão;
+- logo o `TABLE_CAT` é o que sobra vazio, e o `getCatalogs` responde vazio por
+  coerência com ele.
+
+O caminho contrário — inventar um terceiro nível para o produto ter catálogo —
+mudaria a gramática do SQL por causa de um cliente, e não há o que ganhar: com
+um catálogo só, todo nome viria qualificado por um prefixo constante. As cinco
+`supportsCatalogsIn*` respondem `false`, e o `getCatalogs` devolve o ResultSet
+de uma coluna e nenhuma linha, que é a forma que o contrato pede para "não há".
 
 **O `getTableTypes` responde `TABLE` e `VIEW`, e nunca `SYSTEM TABLE`.** O
 terceiro rótulo seria o natural para as tabelas do `_meta`, e é justamente o
