@@ -203,6 +203,10 @@ class DriverIT {
             // do _meta como VIEW no schema _meta.
             List<String> tabelas = new ArrayList<>();
             List<String> views = new ArrayList<>();
+            // O endereço qualificado sai DA ÁRVORE, e não escrito à mão: é ele
+            // que vai virar o FROM logo abaixo, e escrever o schema no teste
+            // faria a asserção provar a string do teste, não a do driver.
+            String enderecoDaBase = null;
             try (ResultSet rs = m.getTables(null, null, null, null)) {
                 while (rs.next()) {
                     String qualificado = rs.getString("TABLE_SCHEM") + "."
@@ -211,6 +215,9 @@ class DriverIT {
                         views.add(qualificado);
                     } else {
                         tabelas.add(qualificado);
+                        if ("todos_os_tipos".equals(rs.getString("TABLE_NAME"))) {
+                            enderecoDaBase = qualificado;
+                        }
                     }
                 }
             }
@@ -235,11 +242,12 @@ class DriverIT {
 
             // O PAGAMENTO: o SQL que a ferramenta monta a partir do (schema,
             // nome) desta árvore tem de EXECUTAR no servidor. É o que o driver
-            // promete ao preencher o TABLE_SCHEM.
-            try (Statement st = c.createStatement();
-                    ResultSet rs = st.executeQuery(
-                            "SELECT id FROM telecom.todos_os_tipos LIMIT 1")) {
-                assertTrue(rs.next(), "o SELECT qualificado pelo schema não devolveu linha");
+            // promete ao preencher o TABLE_SCHEM — e por isso o FROM é MONTADO
+            // com o endereço que a árvore devolveu.
+            assertNotNull(enderecoDaBase, "a base não apareceu na árvore: " + tabelas);
+            String sql = "SELECT id FROM " + enderecoDaBase + " LIMIT 1";
+            try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+                assertTrue(rs.next(), "o SELECT montado da árvore não devolveu linha: " + sql);
             }
 
             // getColumns publica o nome do CAMPO; o alias vai no REMARKS. O
@@ -257,12 +265,21 @@ class DriverIT {
             assertTrue(colunas > 10, "getColumns devolveu " + colunas + " colunas");
             assertTrue(viuAlias, "o alias do campo não apareceu no REMARKS de getColumns");
 
+            // A chave e o índice descrevem a MESMA tabela que a árvore
+            // publica: o TABLE_SCHEM das duas listas é o schema do dataset, e
+            // é por ele que a ferramenta liga a chave à tabela da árvore.
             try (ResultSet rs = m.getPrimaryKeys(null, null, "todos_os_tipos")) {
                 assertTrue(rs.next());
                 assertEquals("id", rs.getString("COLUMN_NAME"));
+                assertEquals(enderecoDaBase,
+                        rs.getString("TABLE_SCHEM") + "." + rs.getString("TABLE_NAME"),
+                        "a chave primária não caiu na tabela da árvore");
             }
             try (ResultSet rs = m.getIndexInfo(null, null, "todos_os_tipos", false, true)) {
                 assertTrue(rs.next(), "o dataset declara índice em dois campos");
+                assertEquals(enderecoDaBase,
+                        rs.getString("TABLE_SCHEM") + "." + rs.getString("TABLE_NAME"),
+                        "o índice não caiu na tabela da árvore");
             }
             try (ResultSet rs = m.getTypeInfo()) {
                 assertTrue(rs.next(), "getTypeInfo saiu vazio");
