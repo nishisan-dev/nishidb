@@ -48,8 +48,27 @@ type Metadata struct {
 // MaxRows e TimeoutMs são os valores EFETIVOS (o do dataset, ou o default
 // global que ele herdou), e não o que está escrito no YAML dele: quem consulta
 // precisa saber o teto que vai valer, não onde ele foi declarado.
+//
+// Eles governam a consulta que LÊ este dataset, e não a que ENTRA por ele: o
+// servidor resolve o dono do `FROM <schema>.<tabela>` antes de admitir a
+// consulta e aplica os limites dele (query.Engine.TargetDataset). Numa conexão
+// que abre uma tabela de outro schema, portanto, quem manda são os números
+// deste documento na entrada daquele OUTRO dataset — e é o par Schema/Tables
+// abaixo que diz qual é. O driver JDBC ainda clampa pelos números do dataset da
+// conexão; ver o débito 118.
 type DatasetMeta struct {
-	Name    string `json:"name"`
+	Name string `json:"name"`
+	// Schema é o `schemaName` declarado no YAML: o container em que TODAS as
+	// tabelas deste dataset aparecem na árvore de um cliente SQL, e o
+	// qualificador que o `FROM <schema>.<tabela>` aceita. Campo ADITIVO.
+	//
+	// Ele não é derivável do Name nem o identifica sozinho: a carga da
+	// configuração recusa dois DATASETS com o mesmo schemaName
+	// (config.ValidateSchemaUniqueness), mas a tabela irmã do histórico HERDA
+	// o schema do base (schema.DeriveHistory) e sai neste documento como um
+	// dataset próprio — dois elementos de `datasets` com o mesmo `schema` são
+	// o par base/irmã, e não colisão.
+	Schema  string `json:"schema"`
 	Key     string `json:"key"`
 	MaxRows int    `json:"maxRows"`
 	// TimeoutMs é o TETO — `query.maxTimeout` —, e não o prazo padrão.
@@ -85,8 +104,61 @@ type DatasetMeta struct {
 	// MENOS colunas não é uma pergunta que o cliente precise fazer, porque
 	// ele já escolhe as colunas escrevendo-as. Um teto de cliente aqui só
 	// poderia transformar uma consulta que funciona em erro.
-	MaxNestedCols int          `json:"maxNestedCols"`
-	Columns       []ColumnMeta `json:"columns"`
+	MaxNestedCols int `json:"maxNestedCols"`
+	// Columns são as colunas da tabela BASE, e continuam sendo exatamente isso
+	// — é o campo que o driver e o client Python já leem. Elas são as MESMAS
+	// que saem em Tables, na linha de Kind "TABLE": as duas listas são
+	// preenchidas do mesmo elemento do catálogo, não montadas duas vezes.
+	Columns []ColumnMeta `json:"columns"`
+	// Tables são TODAS as tabelas consultáveis deste dataset, a base inclusive:
+	// os contadores e as tabelas do `_meta` só apareciam, até aqui, por SQL
+	// (`_meta.tables`), e nenhuma ferramenta que monta árvore fala SQL de
+	// catálogo. Campo ADITIVO — um cliente que não o conhece continua lendo
+	// Columns como antes.
+	//
+	// A ordem é a do query.Engine.Catalog, que é contrato: a base primeiro,
+	// depois os contadores e por último as tabelas do `_meta`, cada grupo por
+	// nome. Sem ela, uma ferramenta que agrupa a árvore pela sequência das
+	// linhas mostraria as pastas embaralhadas a cada reconexão.
+	Tables []TableMeta `json:"tables"`
+}
+
+// TableMeta descreve UMA tabela consultável de um dataset. É o espelho no wire
+// do query.TableInfo, e sai do MESMO Catalog que alimenta a `_meta.tables` —
+// duas derivações da mesma enumeração divergiriam, e a divergência apareceria
+// como uma ferramenta que discorda do SQL sem nada estar quebrado.
+//
+// O SIGNIFICADO dos campos mora no godoc de query.TableInfo — e o dos dois
+// valores de Kind no de query.TableKind —, e mora lá SÓ: por que o Schema de
+// uma linha do `_meta` não é o do dataset, por que o Namespace não é
+// reconstruível a partir de (Schema, Name), por que não existe "SYSTEM TABLE" e
+// por que Columns é deliberadamente um superset do que o `SELECT *` devolve.
+// Repetir a explicação aqui daria dois textos normativos
+// para o mesmo fato, e eles divergiriam no primeiro que alguém atualizasse.
+// Abaixo ficam as chaves do JSON e o que é específico do wire.
+type TableMeta struct {
+	// Name é o nome da tabela dentro do Schema.
+	Name string `json:"name"`
+	// Schema é onde a tabela mora, e é o que um cliente JDBC publica como
+	// TABLE_SCHEM. Ele viaja na LINHA em vez de ser herdado do DatasetMeta
+	// justamente porque as linhas do `_meta` NÃO estão no schema do dataset.
+	Schema string `json:"schema"`
+	// Namespace é o espaço de nome reservado por onde o ATALHO abre a tabela
+	// (`_counters`, `_meta`), e sai VAZIO para a base.
+	Namespace string `json:"namespace"`
+	// Kind é "TABLE" para a base e "VIEW" para o contador e para as tabelas do
+	// `_meta` — os dois valores de query.TableKind, no wire como texto.
+	Kind string `json:"kind"`
+	// Description é o texto que o cliente mostra ao lado da tabela, e sai VAZIA
+	// em toda linha hoje. O campo é string, e não ponteiro como o Alias de
+	// ColumnMeta: a MESMA ausência que a `_meta.tables` publica como NULL sai
+	// aqui como `""`, e um cliente que espere `null` no JSON está lendo a regra
+	// da tabela SQL no lugar errado.
+	Description string `json:"description"`
+	// Columns são as colunas descritíveis da tabela, pela MESMA regra do campo
+	// Columns do dataset (schema.Compiled.FieldsForMetadata), cada uma já com o
+	// código JDBC calculado pelo servidor.
+	Columns []ColumnMeta `json:"columns"`
 }
 
 // ColumnMeta descreve uma coluna do dataset.

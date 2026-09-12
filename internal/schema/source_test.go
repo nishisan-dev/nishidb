@@ -12,6 +12,7 @@ import (
 // baseWithoutSource é o mínimo válido, sem bloco source nenhum.
 const baseWithoutSource = `version: 1
 name: d
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -22,7 +23,7 @@ schema:
 `
 
 func withSource(body string) string {
-	return "version: 1\nname: d\n" + body + `
+	return "version: 1\nname: d\nschemaName: telecom\n" + body + `
 materialization:
   key:
     field: id
@@ -337,7 +338,7 @@ func TestFixtureDoSpec12ContinuaValidoEInerte(t *testing.T) {
 
 // yamlWithConsumer monta uma spec com o bloco consumer dado.
 func yamlWithConsumer(consumer string) string {
-	return "version: 1\nname: t\n" +
+	return "version: 1\nname: t\nschemaName: telecom\n" +
 		"source:\n  type: kafka\n  kafka:\n    bootstrapServers: [\"h:9092\"]\n    topic: t\n" +
 		"    consumer:\n      groupId: g\n" + consumer +
 		"materialization:\n  key:\n    field: id\n" +

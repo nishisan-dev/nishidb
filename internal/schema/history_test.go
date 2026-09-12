@@ -14,7 +14,7 @@ import (
 // O schema tem um campo de cada família que a validação do bloco consulta —
 // indexável por hash, indexável por bitmap, não indexável, e uma congelada.
 func yamlWithHistory(history string) string {
-	return "version: 1\nname: events\n" +
+	return "version: 1\nname: events\nschemaName: telecom\n" +
 		"materialization:\n  key:\n    field: identifier\n" +
 		history +
 		"schema:\n  include: [\"*\"]\n  fields:\n" +
@@ -171,7 +171,7 @@ func TestAKeyDoBasePodeSerIndexadaNoHistorico(t *testing.T) {
 }
 
 func TestRawPayloadColideComCampoRawDoBase(t *testing.T) {
-	yaml := "version: 1\nname: events\n" +
+	yaml := "version: 1\nname: events\nschemaName: telecom\n" +
 		"materialization:\n  key:\n    field: identifier\n" +
 		"history:\n  expireAfterWrite: 7d\n  rawPayload: true\n" +
 		"schema:\n  include: [\"*\"]\n  fields:\n" +
@@ -191,6 +191,20 @@ func TestDerivaHistoricoNomeiaATabelaIrma(t *testing.T) {
 	}
 	if !h.IsHistory {
 		t.Fatal("IsHistory = false")
+	}
+}
+
+// A irmã não vem de arquivo nenhum, então não tem onde declarar o schema — e
+// declará-lo seria errado de qualquer forma: ela é outra TABELA do mesmo
+// dataset, e o desenho é que tudo que um dataset publica vive num schema só.
+func TestDerivaHistoricoHerdaOSchemaDoDatasetBase(t *testing.T) {
+	base := specWithHistory(t, "history:\n  expireAfterWrite: 7d\n")
+	h := base.DeriveHistory()
+	if h.SchemaName != base.SchemaName {
+		t.Fatalf("SchemaName da irmã = %q, quer o do base (%q)", h.SchemaName, base.SchemaName)
+	}
+	if h.SchemaName == "" {
+		t.Fatal("SchemaName da irmã vazio: a herança não pode deixar a tabela sem schema")
 	}
 }
 
@@ -403,7 +417,7 @@ func TestOsIndicesDoHistoricoChegamAoCompilado(t *testing.T) {
 // registra o espelho, que é como o servidor os abre.
 func pairWithDiscovery(t *testing.T, extraSchema string) (base, hist *Compiled) {
 	t.Helper()
-	yaml := "version: 1\nname: events\n" +
+	yaml := "version: 1\nname: events\nschemaName: telecom\n" +
 		"materialization:\n  key:\n    field: identifier\n" +
 		"history:\n  expireAfterWrite: 7d\n" +
 		"schema:\n  include: [\"*\"]\n  unknownFields: include\n" + extraSchema + "  fields:\n" +
@@ -543,6 +557,7 @@ func TestEspelharASiMesmoEhIgnorado(t *testing.T) {
 // reidratação pelo dicionário), congelada, TTL e rawPayload.
 const pairSpecWithRaw = `version: 1
 name: events
+schemaName: telecom
 materialization:
   key:
     field: identifier

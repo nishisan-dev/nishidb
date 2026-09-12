@@ -70,6 +70,7 @@ do dataset** (`radius_sessions.yaml` → `name: radius_sessions`).
 version: 1
 
 name: radius_sessions
+schemaName: telecom
 
 source:
   type: kafka
@@ -300,7 +301,39 @@ os casos abaixo o dataset fica `DOWN` com o motivo em `detalhes`.
 | `assignment parcial: o group entregou 2 de 4 partições` | Outra instância no mesmo `groupId` | Derrube a outra. O v1 é single-writer com checkpoint local autoritativo: duas instâncias materializam metade cada uma |
 | `ingestão PARADA` + `nishidb_ingest_blocked 1` | `errors.invalidEvent: stop` encontrou um evento ruim, ou houve `STORAGE_ERROR` | O offset persistido aponta **exatamente** para o evento problemático. Investigue-o no tópico; para pular, `nishidb offsets --set <particao>:<offset+1> --yes` |
 | `variável de ambiente KAFKA_PASSWORD não está definida` | Credencial ausente no ambiente do processo | Corrija o `EnvironmentFile`. A mensagem nomeia a variável e nunca o valor |
-| `datasets X e Y consomem o tópico T com o mesmo consumer.groupId` | Dois YAMLs copiados sem trocar o group | Recusa na subida do processo inteiro, de propósito: com o group compartilhado, cada dataset materializaria estado parcial e nenhuma métrica acusaria |
+| `datasets X e Y consomem o tópico T com o mesmo consumer.groupId` | Dois YAMLs copiados sem trocar o group | Recusa na carga do `datasets.directory` — derruba a subida do processo **e** os comandos locais (ver 7.1). Com o group compartilhado, cada dataset materializaria estado parcial e nenhuma métrica acusaria |
+| `datasets X e Y declaram o mesmo schemaName S` | Dois YAMLs copiados sem trocar o schema | Mesma recusa, mesma abrangência. Dê a cada dataset um `schemaName` próprio |
+
+### 7.1. Defeito no diretório barra também as ferramentas
+
+O `datasets.directory` é lido **inteiro** por quem quer que o abra: o servidor,
+o `nishidb offsets`, o `nishidb ingest`, o `nishidb query` e o
+`nishidb counters` entram todos pela mesma porta. Quatro defeitos são de
+CONJUNTO e por isso não pertencem a arquivo nenhum:
+
+| Defeito | Mensagem |
+|---|---|
+| Um YAML que não parseia, em qualquer lugar do diretório | o erro de parse, nomeando o arquivo |
+| `name:` divergente do nome do arquivo | `dataset "X": o YAML declara name "Y"` |
+| `consumer.groupId` repetido no mesmo tópico e cluster | `datasets X e Y consomem o tópico T ...` |
+| `schemaName` repetido | `datasets X e Y declaram o mesmo schemaName S` |
+
+Qualquer um deles derruba o comando **mesmo quando o `--dataset` pedido é
+outro** — é a doutrina de configuração do projeto: recusa nomeando o defeito,
+nunca contorno em silêncio. Até a Task 3 do ciclo do schema declarado só a
+subida do servidor era barrada; agora as ferramentas também são.
+
+**A consequência prática:** a ferramenta de reparo pode estar barrada pelo
+mesmo defeito que se quer reparar. Um `groupId` repetido impede a subida, e o
+`nishidb offsets --reset` que resolveria o outro dataset não roda enquanto a
+colisão estiver no diretório. **A saída é sempre a mesma e é barata:** conserte
+o diretório primeiro — a mensagem nomeia os dois arquivos e a chave —, e só
+então rode a ferramenta. Se o reparo precisa acontecer antes da correção do
+YAML (por exemplo, um dataset que será removido de qualquer forma), mova o YAML
+ofensor para FORA do `datasets.directory`; o diretório volta a ser válido, o
+`offsets` roda, e o arquivo pode voltar depois de corrigido. Mover o YAML não
+toca em dado nenhum: o estado do dataset mora em `storage.path`, não no
+diretório de specs.
 
 ## 8. Reposicionar
 
@@ -314,6 +347,11 @@ Exige o **servidor parado** — o comando toma o flock. É proposital: mexer na
 posição com o consumer de pé faria o writer sobrescrever a decisão no
 checkpoint seguinte. `--set` e `--reset` pedem `--yes`, porque uma reposição
 acidental reprocessa ou pula uma janela inteira do tópico.
+
+Exige também um `datasets.directory` **válido como conjunto**: o comando lê o
+diretório inteiro, e um dos quatro defeitos de 7.1 o barra antes de ele abrir o
+dataset. Conserte o diretório primeiro; 7.1 diz o que fazer quando isso não é
+possível de imediato.
 
 ## 9. O que é seguro mudar com o dataset já em produção
 

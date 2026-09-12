@@ -229,31 +229,29 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		return nil, fmt.Errorf("server.enabled é false em %s: o servidor não sobe com a chave desligada", cfg.Datasets.Directory)
 	}
 
-	nomes, err := cfg.ListDatasets()
+	// Carrega e valida TODAS as specs antes de abrir qualquer dataset: uma
+	// colisão de groupId ou de schemaName entre o primeiro e o último arquivo
+	// não pode ser descoberta depois de meio processo já estar de pé.
+	//
+	// A carga é do config, e não daqui, porque as duas regras de conjunto
+	// valem para o diretório e não para o processo: o `nishidb ingest` e o
+	// `nishidb query` leem o MESMO diretório e entram pela MESMA porta.
+	specs, err := cfg.LoadDatasetSpecs()
 	if err != nil {
 		return nil, err
 	}
-	if len(nomes) == 0 {
+	if len(specs) == 0 {
 		return nil, fmt.Errorf("nenhum dataset em %s", cfg.Datasets.Directory)
 	}
+	names := make([]string, 0, len(specs))
+	for name := range specs {
+		names = append(names, name)
+	}
+	// Alfabética, como a do ListDatasets: a ordem de abertura dos datasets é
+	// a ordem em que os erros de subida aparecem, e ela tem de ser a mesma em
+	// dois processos com a mesma configuração.
+	sort.Strings(names)
 
-	// Carrega e valida TODAS as specs antes de abrir qualquer dataset: uma
-	// colisão de groupId entre o primeiro e o último arquivo não pode ser
-	// descoberta depois de meio processo já estar de pé.
-	specs := make(map[string]*schema.DatasetSpec, len(nomes))
-	for _, name := range nomes {
-		spec, err := schema.Load(cfg.DatasetSpecPath(name), cfg.QueryDefaults())
-		if err != nil {
-			return nil, err
-		}
-		if spec.Name != name {
-			return nil, fmt.Errorf("dataset %q: o YAML declara name %q", name, spec.Name)
-		}
-		specs[name] = spec
-	}
-	if err := config.ValidateGroupUniqueness(specs); err != nil {
-		return nil, err
-	}
 	if err := validateHistoryNames(specs); err != nil {
 		return nil, err
 	}
@@ -304,7 +302,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		log:         log,
 		reg:         reg,
 		eng:         query.NewEngine(),
-		byNome:      make(map[string]*dataset, len(nomes)),
+		byNome:      make(map[string]*dataset, len(names)),
 		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
 		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
 		inVoo:       newInVoo(),
@@ -351,7 +349,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		}
 	}
 
-	for _, name := range nomes {
+	for _, name := range names {
 		d, err := s.openDataset(specs[name], log)
 		if err != nil {
 			return nil, err
@@ -482,6 +480,17 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		State:      func() (string, string) { return stateOfIngestion(d) },
 		Vigia:      d.vigiaCorrente,
 	}); err != nil {
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
+	// `_meta.tables` entra por último só por leitura: ela lista as tabelas
+	// acima, e as linhas são montadas a cada consulta, a partir do catálogo do
+	// momento — registrá-la antes ou depois das outras dá a mesma resposta.
+	//
+	// A irmã recebe a DELA, em openHistory, e é por isso que esta não é como a
+	// `_meta.counters` e a `_meta.kafka`: aquelas descrevem a ingestão, que a
+	// irmã não tem própria; esta descreve o que se pode consultar, e a irmã é
+	// um dataset consultável por direito.
+	if err := s.eng.RegisterMetaTables(spec.Name); err != nil {
 		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 

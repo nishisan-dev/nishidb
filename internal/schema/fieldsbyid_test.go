@@ -9,6 +9,7 @@ import (
 const fieldsYAML = `
 version: 1
 name: fields_ds
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -102,6 +103,7 @@ func TestFieldsByIDDatasetSemCamposExtras(t *testing.T) {
 	const keyOnly = `
 version: 1
 name: min
+schemaName: telecom
 materialization:
   key:
     field: id

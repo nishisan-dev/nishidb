@@ -19,6 +19,7 @@ import (
 // os mesmos.
 const specWithHash = `version: 1
 name: d
+schemaName: telecom
 materialization:
   key:
     field: id

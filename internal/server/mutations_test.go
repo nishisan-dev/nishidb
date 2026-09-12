@@ -211,6 +211,10 @@ func TestCheckpointFiltraPorDatasetOuRecusaDesconhecido(t *testing.T) {
 // serverWithDoisDatasets sobe um servidor de verdade com DOIS datasets sem
 // Kafka — o suficiente para exercitar "todos os datasets" com mais de um
 // elemento de verdade, sem precisar de Kafka nenhum.
+//
+// Cada um fica no seu schema (specWithoutKafka o deriva do nome): dois datasets
+// no mesmo schema seriam recusados na subida assim que a unicidade de schema
+// entrar, e este harness deixaria de subir coisa nenhuma.
 func serverWithDoisDatasets(t *testing.T, blockServer string) *server.Server {
 	t.Helper()
 	a := newEnvWith(t, blockServer)

@@ -21,6 +21,7 @@ import (
 
 const specWithHistory = `version: 1
 name: eventos
+schemaName: schema_eventos
 materialization:
   key:
     field: id
@@ -119,6 +120,12 @@ func TestATabelaIrmaNaoDeclaraKey(t *testing.T) {
 
 // Os dois disputariam o mesmo diretório, com dois writers, dois contadores de
 // rowId e dois manifests. A recusa vem ANTES de abrir qualquer coisa.
+//
+// Os schemas dos dois são DIFERENTES de propósito — a irmã herda o
+// `schema_eventos` do base e o dataset declarado fica em
+// `schema_eventos_history` —, para que o que este teste prova continue sendo a
+// colisão de NOME quando a unicidade de schema entrar. Com os dois no mesmo
+// schema, a recusa mudaria de dono sem o teste mudar de cor.
 func TestNomeDaIrmaQueColideComDatasetDeclaradoRecusaASubida(t *testing.T) {
 	a := newEnvWith(t, blockPadrao)
 	a.writeDataset("eventos", specWithHistory)
@@ -226,6 +233,7 @@ func TestSeriesDoWatchdogNascemComZero(t *testing.T) {
 // aposenta o segmento antes de a janela o alcançar.
 const specWithWindowInocua = `version: 1
 name: eventos
+schemaName: schema_eventos
 materialization:
   key:
     field: id
@@ -378,6 +386,7 @@ func waitRowOfLog(t *testing.T, record *recordOfServer, event string) string {
 // relógio da ingestão.
 const specWithWindowApertada = `version: 1
 name: eventos
+schemaName: schema_eventos
 materialization:
   key:
     field: id

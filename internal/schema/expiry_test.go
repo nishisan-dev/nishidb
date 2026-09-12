@@ -10,7 +10,7 @@ import (
 
 // yamlWithTTL monta uma spec mínima com o bloco ttl dado.
 func yamlWithTTL(ttlBlock string) string {
-	return "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" + ttlBlock +
+	return "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n" + ttlBlock +
 		"schema:\n  include: [id, exp]\n  fields:\n    id:\n      type: string\n" +
 		"    exp:\n      type: timestamp\n"
 }
@@ -61,7 +61,7 @@ func TestExpireAfterWriteAbaixoDaResolucaoEhRecusadoEmVezDeArredondado(t *testin
 // A regra não referencia campo nenhum do payload, então não exige declaração
 // em schema.fields.
 func TestExpireAfterWriteNaoExigeCampoNoSchema(t *testing.T) {
-	yaml := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
+	yaml := "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n" +
 		"  ttl:\n    - expireAfterWrite: 7d\n" +
 		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n"
 	spec, err := Parse([]byte(yaml), BuiltinDefaults)
@@ -93,7 +93,7 @@ func TestChaveTypeNaRegraEhRecusada(t *testing.T) {
 // Era string crua sem parse e sem leitor: configuração que não faz nada e não
 // avisa. Agora a gramática é conferida no load.
 func TestTombstoneRetentionEhValidadoNoLoad(t *testing.T) {
-	good := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n  tombstoneRetention: 7d\n" +
+	good := "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n  tombstoneRetention: 7d\n" +
 		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n"
 	spec, err := Parse([]byte(good), BuiltinDefaults)
 	if err != nil {
@@ -111,7 +111,7 @@ func TestTombstoneRetentionEhValidadoNoLoad(t *testing.T) {
 // O writer injeta este campo a cada escrita; declará-lo deixaria o evento
 // sobrescrever o relógio do writer.
 func TestCampoDeSistemaNaoPodeSerDeclarado(t *testing.T) {
-	yaml := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
+	yaml := "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n" +
 		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n" +
 		"    " + WriteInstantFieldName + ":\n      type: timestamp\n"
 	_, err := Parse([]byte(yaml), BuiltinDefaults)
@@ -136,7 +136,7 @@ func TestCampoComUnderscoreQueNaoEhDeSistemaContinuaValido(t *testing.T) {
 // interna do banco. Mas quem precisa do conjunto FÍSICO do payload — o
 // storage, a compaction — precisa vê-lo.
 func TestFieldsByIDOcultaOCampoDeSistemaMasAVersaoCompletaNao(t *testing.T) {
-	yaml := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
+	yaml := "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n" +
 		"  ttl:\n    - expireAfterWrite: 2h\n" +
 		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n"
 	spec, err := Parse([]byte(yaml), BuiltinDefaults)

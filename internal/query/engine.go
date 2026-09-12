@@ -37,11 +37,12 @@ type record struct {
 	sch     *schema.Compiled
 	store   Store
 	planner *planner.Planner
-	// virtuais são as tabelas virtuais registradas sob este dataset, por
-	// namespace e por tabela — hoje as `_counters.<nome>`. Cada uma é um
-	// registro completo (schema sintético, store virtual, planner), e passa
-	// pelo MESMO pipeline que um dataset de verdade.
-	virtuais map[string]map[string]*record
+	// virtualTables são as tabelas virtuais registradas sob este dataset, por
+	// namespace e por tabela — as `_counters.<nome>` mais as do `_meta` que
+	// dependem do storage (`counters`, `kafka`). Cada uma é um registro
+	// completo (schema sintético, store virtual, planner), e passa pelo MESMO
+	// pipeline que um dataset de verdade.
+	virtualTables map[string]map[string]*record
 }
 
 // Engine mantém os datasets registrados. Register é de configuração; Execute é
@@ -113,10 +114,10 @@ func (e *Engine) RegisterVirtual(dataset, namespace, table string, sch *schema.C
 		return fmt.Errorf("query: dataset %q não registrado; a tabela virtual %s.%s não tem sob o que viver", dataset, namespace, table)
 	}
 	reg.declaraNamespace(namespace)
-	if _, exists := reg.virtuais[namespace][table]; exists {
+	if _, exists := reg.virtualTables[namespace][table]; exists {
 		return fmt.Errorf("query: tabela virtual %s.%s já registrada em %q", namespace, table, dataset)
 	}
-	reg.virtuais[namespace][table] = &record{sch: sch, store: st, planner: planner.New(st, &e.planStats)}
+	reg.virtualTables[namespace][table] = &record{sch: sch, store: st, planner: planner.New(st, &e.planStats)}
 	return nil
 }
 
@@ -139,11 +140,11 @@ func (e *Engine) DeclaraNamespace(dataset, namespace string) error {
 }
 
 func (reg *record) declaraNamespace(namespace string) {
-	if reg.virtuais == nil {
-		reg.virtuais = make(map[string]map[string]*record)
+	if reg.virtualTables == nil {
+		reg.virtualTables = make(map[string]map[string]*record)
 	}
-	if reg.virtuais[namespace] == nil {
-		reg.virtuais[namespace] = make(map[string]*record)
+	if reg.virtualTables[namespace] == nil {
+		reg.virtualTables[namespace] = make(map[string]*record)
 	}
 }
 
@@ -151,7 +152,7 @@ func (reg *record) declaraNamespace(namespace string) {
 // mensagem de recusa: o `_meta` fixo mais os registrados neste dataset.
 func (reg *record) namespacesConhecidos() []string {
 	out := []string{meta.Namespace}
-	for ns := range reg.virtuais {
+	for ns := range reg.virtualTables {
 		out = append(out, ns)
 	}
 	sort.Strings(out)
@@ -173,7 +174,7 @@ func (reg *record) namespacesConhecidos() []string {
 func tableVirtual(tableVirtual *record, dataset, namespace, table string, pos int) (*record, error) {
 	// O `_meta` existe sempre, registrado ou não: a `fields` é fixa e mora
 	// no pacote meta, fora deste registro.
-	byTable, ok := tableVirtual.virtuais[namespace]
+	byTable, ok := tableVirtual.virtualTables[namespace]
 	if !ok && namespace != meta.Namespace {
 		return nil, binder.ErrorAt(pos, "namespace %q não existe; existem %s", namespace, strings.Join(tableVirtual.namespacesConhecidos(), " e "))
 	}
@@ -220,12 +221,156 @@ type errOfTableVirtual struct {
 func (e *errOfTableVirtual) Error() string { return e.msg }
 func (e *errOfTableVirtual) Unwrap() error { return e.err }
 
+// schemaQualifiedTarget é o endereço INTERNO de uma tabela endereçada pelo
+// schema declarado: o dataset registrado que a hospeda e o namespace por onde
+// o Execute a abre — vazio para a tabela base, que é aberta pelo nome.
+type schemaQualifiedTarget struct {
+	dataset   string
+	namespace string
+}
+
+// resolveSchemaQualified traduz o par publicado pelo catálogo — `(Schema,
+// Name)` — no endereço interno que o Execute já sabe abrir.
+//
+// A tradução sai da enumeração do catálogo (catalogEntries), e não de uma
+// varredura própria dos registros, de propósito: ela é a ÚNICA derivação de
+// "que tabelas cada dataset publica, em que schema cada uma aparece e por qual
+// namespace cada uma abre", e o godoc do Catalog se compromete com isso ("Toda
+// tabela listada aqui É aberta pelo Execute, e tabela que ele abre não fica de
+// fora"). Com uma segunda varredura aqui a promessa viraria coincidência: na
+// primeira tabela que entrasse só num dos dois lados, o catálogo e o FROM
+// discordariam sem nada estar quebrado — a ferramenta mostraria uma tabela que
+// a consulta recusa, ou o contrário.
+//
+// O que ela NÃO pede é a montagem das colunas, e essa é a diferença entre uma
+// consulta qualificada custar microssegundos e custar meio milissegundo: ver o
+// godoc de catalogEntries e o BenchmarkExecuteFromQualified.
+//
+// O laço é sobre TODOS os datasets registrados, e é isso que faz o schema ser
+// endereço de servidor e não de conexão. O custo é uma enumeração por dataset
+// por consulta QUALIFICADA — os datasets são unidades e as tabelas de cada um
+// também, e o caminho já paga parse, bind e plano.
+//
+// A lista sai SEM os schemas de prefixo "_", e é só isso que o filtro faz: ele
+// não é a barreira que impede `_meta` de ser endereço qualificado. Quem impede
+// são dois outros fatos, e os dois estão fora daqui — o Execute desvia todo
+// `FROM _x.y` pelo meta.Reconhece ANTES de chegar nesta função, e um dataset
+// não consegue declarar schemaName com "_" (schema.validate recusa o prefixo
+// reservado). Sem o filtro, o único efeito seria a recusa de schema
+// desconhecido OFERECER `_meta` numa lista de endereços que não endereçam
+// nada.
+//
+// pos é a posição do nome DEPOIS do ponto (parser.SelectStmt.DatasetPos), o
+// mesmo token ofensor que as recusas de namespace apontam.
+func (e *Engine) resolveSchemaQualified(schemaName, table string, pos int) (schemaQualifiedTarget, error) {
+	e.mu.RLock()
+	names := make([]string, 0, len(e.datasets))
+	for n := range e.datasets {
+		names = append(names, n)
+	}
+	e.mu.RUnlock()
+	// A ordem alfabética é o que faz a lista das recusas e o desempate de uma
+	// eventual ambiguidade saírem sempre iguais: o laço de um mapa não tem
+	// ordem, e uma mensagem que muda entre duas execuções idênticas manda o
+	// operador procurar uma diferença que não existe.
+	sort.Strings(names)
+
+	var (
+		found          []schemaQualifiedTarget
+		schemas        []string
+		tablesOfSchema []string
+		seenSchema     = make(map[string]bool, len(names))
+	)
+	for _, n := range names {
+		entries, err := e.catalogEntries(n)
+		if err != nil {
+			return schemaQualifiedTarget{}, err
+		}
+		for _, entry := range entries {
+			tb := entry.info
+			if strings.HasPrefix(tb.Schema, "_") {
+				continue
+			}
+			if !seenSchema[tb.Schema] {
+				seenSchema[tb.Schema] = true
+				schemas = append(schemas, tb.Schema)
+			}
+			if tb.Schema != schemaName {
+				continue
+			}
+			tablesOfSchema = append(tablesOfSchema, tb.Name)
+			if tb.Name == table {
+				found = append(found, schemaQualifiedTarget{dataset: n, namespace: tb.Namespace})
+			}
+		}
+	}
+
+	switch {
+	case len(found) == 1:
+		return found[0], nil
+	case len(found) > 1:
+		// Esta é a REDE, não a barreira. A barreira é a configuração, e ela
+		// recusa na subida as três colisões construíveis por YAML: dois
+		// datasets no mesmo schemaName (config.ValidateSchemaUniqueness) e um
+		// contador com o nome do próprio dataset ou com o da tabela irmã do
+		// histórico, que herda o schema do base (schema.validateCounters). Um
+		// YAML aceito não chega aqui.
+		//
+		// A rede existe porque a unicidade do par é sustentada por uma LISTA
+		// de recusas, e não pela forma da estrutura: quem registrar uma tabela
+		// virtual direto pelo RegisterVirtual não passa por nenhuma delas.
+		// Escolher um dos dois em silêncio seria a consulta respondendo de
+		// outra tabela sem nada acusar; a recusa nomeia os datasets para que o
+		// YAML possa ser corrigido.
+		owners := make([]string, 0, len(found))
+		for _, f := range found {
+			owners = append(owners, f.dataset)
+		}
+		return schemaQualifiedTarget{}, binder.ErrorAt(pos,
+			"%s.%s é ambíguo: os datasets %s publicam essa mesma tabela no mesmo schema",
+			schemaName, table, strings.Join(owners, " e "))
+	case !seenSchema[schemaName]:
+		sort.Strings(schemas)
+		return schemaQualifiedTarget{}, binder.ErrorAt(pos,
+			"schema %q não existe; existem: %s", schemaName, strings.Join(schemas, ", "))
+	default:
+		sort.Strings(tablesOfSchema)
+		return schemaQualifiedTarget{}, binder.ErrorAt(pos,
+			"o schema %q não tem tabela %q; existem: %s",
+			schemaName, table, strings.Join(tablesOfSchema, ", "))
+	}
+}
+
 // Execute compila e abre a query. Erros de sintaxe e de bind saem AQUI, antes
 // de qualquer leitura de dado.
 //
-// O dataset vem por argumento E dentro do SQL (`FROM x`): o binder exige que
-// os dois batam, senão a query rodaria contra um schema que não é o que o
-// chamador pediu.
+// O FROM tem TRÊS formas, e cada uma resolve o dataset alvo de um jeito:
+//
+//   - `FROM x` — nome simples. O dataset é o do argumento, e o binder exige que
+//     os dois batam: sem isso a query rodaria contra um schema que não é o que
+//     o chamador pediu.
+//   - `FROM _ns.x` — namespace reservado. É atalho, e significa "a tabela
+//     virtual x DO DATASET DA REQUISIÇÃO"; ele não nomeia dataset nenhum.
+//   - `FROM schema.x` — schema declarado. É ENDEREÇO COMPLETO: o par
+//     (schema, tabela) endereça uma tabela em qualquer dataset do servidor.
+//
+// Que o par endereça UMA tabela e não duas é sustentado por três recusas de
+// CONFIGURAÇÃO, todas na subida: dois datasets não declaram o mesmo schemaName
+// (config.ValidateSchemaUniqueness) e um contador não se chama como o próprio
+// dataset nem como a tabela irmã do histórico (schema.validateCounters), que
+// herda o schema do base. Não é propriedade da estrutura — por isso a
+// resolução ainda recusa o par ambíguo, como rede.
+//
+// Na terceira forma o dataset do argumento deixa de ser o alvo e passa a ser
+// só o default das outras duas — é o papel que um "current schema" tem numa
+// conexão SQL. A regra do binder não é furada por isso: ela continua rodando,
+// agora contra o dataset DONO do schema, que é resolvido antes da comparação.
+// O que ela protege é endereço AMBÍGUO — `FROM y` com o handle `x` são dois
+// nomes e nenhum jeito de saber qual o usuário quis —, e o qualificado não tem
+// essa ambiguidade. Também não há fronteira de autorização a atravessar: os
+// papéis do servidor são READ e ADMIN por ROTA (internal/server/auth.go), não
+// por dataset, e quem pode consultar já podia mandar outro dataset no campo da
+// requisição.
 func (e *Engine) Execute(ctx context.Context, dataset, sql string, params []types.Value) (executor.RowIterator, error) {
 	e.mu.RLock()
 	reg, ok := e.datasets[dataset]
@@ -238,11 +383,11 @@ func (e *Engine) Execute(ctx context.Context, dataset, sql string, params []type
 	if err != nil {
 		return nil, err
 	}
-	// O namespace reservado desvia para a tabela virtual, que descreve o
-	// dataset nomeado NA REQUISIÇÃO. O desvio é aqui, e não no servidor,
-	// porque este é o ponto por onde o servidor e o CLI passam os dois — pô-lo
-	// numa camada acima faria a introspecção existir só para quem falasse HTTP.
-	if meta.Reconhece(stmt) {
+	// O desvio é aqui, e não no servidor, porque este é o ponto por onde o
+	// servidor e o CLI passam os dois — pô-lo numa camada acima faria a
+	// introspecção existir só para quem falasse HTTP.
+	switch {
+	case meta.Reconhece(stmt):
 		// `_meta.fields` é a tabela fixa do pacote meta, que descreve o
 		// dataset pela definição. As DEMAIS tabelas do `_meta` (`counters`) e
 		// os outros namespaces reservados são tabelas REGISTRADAS sob o
@@ -251,25 +396,103 @@ func (e *Engine) Execute(ctx context.Context, dataset, sql string, params []type
 			caps, _ := reg.store.(meta.Capacidades)
 			return meta.Open(ctx, stmt, reg.sch, caps, params)
 		}
-		e.mu.RLock()
-		v, err := tableVirtual(reg, dataset, stmt.Namespace, stmt.Dataset, stmt.DatasetPos)
-		e.mu.RUnlock()
+		return e.openVirtualTable(ctx, reg, dataset, stmt.Namespace, stmt, params)
+
+	case stmt.Namespace != "":
+		target, err := e.resolveSchemaQualified(stmt.Namespace, stmt.Dataset, stmt.DatasetPos)
 		if err != nil {
 			return nil, err
 		}
-		bq, err := binder.Bind(stmt, v.sch, params)
-		if err != nil {
-			return nil, renameTableVirtual(err, stmt.Namespace, stmt.Dataset)
+		e.mu.RLock()
+		owner, ok := e.datasets[target.dataset]
+		e.mu.RUnlock()
+		if !ok {
+			// O dataset saiu do registro entre a resolução e agora. Não há
+			// caminho que faça isso hoje (Register não tem par que remova),
+			// mas o mapa é lido fora do lock em dois momentos e a alternativa
+			// seria desreferenciar nil.
+			return nil, fmt.Errorf("query: dataset %q não registrado", target.dataset)
 		}
-		plan := v.planner.Plan(bq)
-		return executor.Open(ctx, bq, plan, executor.Options{Store: v.store, Metrics: &e.metrics})
+		if target.namespace == "" {
+			return e.openTable(ctx, owner, stmt, params)
+		}
+		return e.openVirtualTable(ctx, owner, target.dataset, target.namespace, stmt, params)
+
+	default:
+		return e.openTable(ctx, reg, stmt, params)
 	}
+}
+
+// TargetDataset devolve o dataset que esta consulta vai LER: o dono do schema,
+// quando o FROM é qualificado por um schema declarado, e o handle recebido em
+// todo o resto.
+//
+// Ela existe para quem precisa saber o alvo ANTES de chamar o Execute, e hoje
+// isso é um chamador só: o servidor, que aplica `query.maxRows`,
+// `query.timeout` e `query.maxTimeout` — declarados POR DATASET no YAML — antes
+// de abrir o iterador, e precisa aplicar os do dataset de que o YAML fala. Sem
+// isto, um handle com teto alto seria porta para ler, sob os limites dele, um
+// dataset cujo YAML declara teto baixo.
+//
+// Ela REUSA o parser e o resolveSchemaQualified do Execute, e não uma segunda
+// leitura do SQL: o preço é um parse a mais por consulta no servidor, e a
+// alternativa — o servidor decidindo por conta própria quem é o dono — seria
+// uma segunda fonte de verdade sobre onde cada tabela mora, que é exatamente o
+// que a resolução pelo catálogo existe para não ter.
+//
+// SQL que não compila, schema que não resolve e tabela que não existe devolvem
+// o handle, e não um erro: quem recusa e explica é o Execute, logo em seguida,
+// com a posição do token ofensor. Duplicar a recusa aqui daria duas mensagens
+// para o mesmo defeito, e a dela seria a pior.
+func (e *Engine) TargetDataset(dataset, sql string) string {
+	stmt, err := parser.Parse(sql)
+	if err != nil || stmt == nil {
+		return dataset
+	}
+	// O atalho `_ns.x` não nomeia dataset nenhum — significa "o da requisição"
+	// —, e é o mesmo desvio que o Execute faz primeiro.
+	if stmt.Namespace == "" || meta.Reconhece(stmt) {
+		return dataset
+	}
+	target, err := e.resolveSchemaQualified(stmt.Namespace, stmt.Dataset, stmt.DatasetPos)
+	if err != nil {
+		return dataset
+	}
+	return target.dataset
+}
+
+// openTable binda, planeja e abre contra a tabela BASE do registro.
+func (e *Engine) openTable(ctx context.Context, reg *record, stmt *parser.SelectStmt, params []types.Value) (executor.RowIterator, error) {
 	bq, err := binder.Bind(stmt, reg.sch, params)
 	if err != nil {
 		return nil, err
 	}
 	plan := reg.planner.Plan(bq)
 	return executor.Open(ctx, bq, plan, executor.Options{Store: reg.store, Metrics: &e.metrics})
+}
+
+// openVirtualTable resolve a tabela virtual sob o registro e a abre pelo MESMO
+// pipeline da base.
+//
+// O namespace vem por parâmetro porque ele nem sempre é o que o usuário
+// escreveu: pelo atalho `_counters.x` os dois coincidem, mas por
+// `FROM telecom.x` o qualificador escrito é o schema e o namespace que abre a
+// tabela vem do catálogo. Quem renomeia as mensagens do binder, esse sim, usa
+// o que o usuário escreveu — mandar procurar `_counters.x` quem digitou
+// `telecom.x` seria apontar um endereço que ele não escolheu.
+func (e *Engine) openVirtualTable(ctx context.Context, reg *record, dataset, namespace string, stmt *parser.SelectStmt, params []types.Value) (executor.RowIterator, error) {
+	e.mu.RLock()
+	v, err := tableVirtual(reg, dataset, namespace, stmt.Dataset, stmt.DatasetPos)
+	e.mu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+	bq, err := binder.Bind(stmt, v.sch, params)
+	if err != nil {
+		return nil, renameTableVirtual(err, stmt.Namespace, stmt.Dataset)
+	}
+	plan := v.planner.Plan(bq)
+	return executor.Open(ctx, bq, plan, executor.Options{Store: v.store, Metrics: &e.metrics})
 }
 
 // Metrics são os contadores do executor (diagnóstico).

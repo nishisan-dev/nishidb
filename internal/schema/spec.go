@@ -21,10 +21,64 @@ import (
 // ErrInvalidSpec categoriza qualquer erro de validação de spec.
 var ErrInvalidSpec = errors.New("materialization spec inválida")
 
+// SyntheticSchemaName é o schemaName das specs SINTÉTICAS — as das tabelas
+// virtuais (`_meta.*`, `_counters.*`), montadas em código para atravessar o
+// mesmo Parse/Compile de um dataset de verdade em vez de terem um caminho
+// próprio de validação.
+//
+// Ela existe porque a obrigatoriedade do schemaName vale para todas as specs,
+// sem exceção que abriria buraco; e é UMA constante porque três literais
+// soltos em três pacotes viram três valores diferentes na primeira vez que
+// alguém mexer num deles.
+//
+// # POR QUE O PREFIXO "_"
+//
+// Ninguém LÊ este valor hoje, e é justamente por isso que ele não pode ser um
+// nome que um dataset de usuário também poderia declarar: sentinela que se
+// confunde com dado legítimo não se denuncia quando vaza — ela aparece como um
+// schema plausível e ninguém desconfia. O prefixo "_" é o que validate recusa
+// para todo schemaName vindo de YAML, e esta constante é a ÚNICA exceção a
+// essa recusa; Load, que é a porta por onde entra todo dataset de arquivo,
+// recusa o valor explicitamente. As duas guardas juntas dizem que nenhuma spec
+// de usuário pode carregar este schema, e que encontrá-lo fora das quatro
+// specs sintéticas é bug, não configuração.
+//
+// # O CATÁLOGO SOBRESCREVE ESTE VALOR
+//
+// O catálogo existe, e nenhuma linha dele carrega este schema: a tabela virtual
+// aparece no schema do DATASET a que pertence — que é quem declarou um — ou em
+// `_meta`, quando ela descreve o motor e não o dado
+// (query.Engine.catalogEntries). Este valor continua sem consumidor: ele existe
+// para a spec sintética atravessar o Parse/Compile, e a montagem da árvore o
+// substitui antes de publicar qualquer coisa.
+const SyntheticSchemaName = "_virtual"
+
 // DatasetSpec é a spec validada, com defaults aplicados.
 type DatasetSpec struct {
-	Version         int
-	Name            string
+	Version int
+	Name    string
+	// SchemaName é o schema em que TODAS as tabelas deste dataset vivem — a
+	// base, os contadores e as de meta. É obrigatório e não tem default: um
+	// default faria `servicos.servicos`, e a ausência faria schema nula na
+	// árvore do cliente SQL. As duas foram olhadas e recusadas no desenho.
+	//
+	// A validação desta spec estabelece a gramática (`[a-z0-9_]+`) e a reserva
+	// do prefixo "_" — que é o que separa o que é do motor do que é do dado.
+	// Ela NÃO estabelece a unicidade entre datasets: isso é validação de
+	// CONJUNTO e não cabe aqui, que vê um arquivo por vez; quem recusa dois
+	// datasets no mesmo schema é config.ValidateSchemaUniqueness, na carga do
+	// diretório.
+	//
+	// O campo é LIDO em três lugares, e por isso a recusa acima deixou de ser
+	// preventiva: o motor resolve o qualificador de um `FROM telecom.tabela`
+	// contra os schemas declarados (query.Engine.resolveSchemaQualified, que
+	// varre a ENUMERAÇÃO do catálogo — catalogEntries — e não o
+	// query.Engine.Catalog, que é o invólucro que acrescenta as colunas e não
+	// participa da resolução), a `_meta.tables` o publica por SQL e o
+	// `/v1/metadata` o publica no wire, por dataset e por tabela. A tabela IRMÃ do histórico herda este schema (DeriveHistory), e é
+	// por isso que ela não entra na conta da unicidade: é outra tabela do mesmo
+	// dataset, não outro dataset.
+	SchemaName      string
 	Source          SourceSpec
 	Errors          ErrorsSpec
 	Materialization MaterializationSpec
@@ -212,8 +266,9 @@ type QuerySpec struct {
 
 // Estruturas cruas do YAML (tudo opcional; defaults e validação em validate).
 type rawSpec struct {
-	Version *int   `yaml:"version"`
-	Name    string `yaml:"name"`
+	Version    *int   `yaml:"version"`
+	Name       string `yaml:"name"`
+	SchemaName string `yaml:"schemaName"`
 	// Source e Errors ficam como nó cru porque a recusa de chave desconhecida
 	// nesses dois blocos é feita à mão, sobre as chaves do documento — ver
 	// block(), em source.go, para o motivo de yaml.KnownFields não servir.
@@ -315,6 +370,12 @@ type Defaults struct {
 var BuiltinDefaults = Defaults{MaxRows: 100000, Timeout: 30 * time.Second}
 
 // Load lê e valida uma spec de um arquivo YAML.
+//
+// É a porta por onde entra todo dataset que vem de arquivo — o servidor, a CLI
+// e o benchmark passam por aqui —, e por isso é aqui que mora a recusa do
+// SyntheticSchemaName: validate precisa aceitá-lo, porque as specs sintéticas
+// das tabelas virtuais atravessam o mesmo caminho, mas nada que venha de um
+// YAML de usuário pode carregar o sentinela do produto.
 func Load(path string, d Defaults) (*DatasetSpec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -323,6 +384,11 @@ func Load(path string, d Defaults) (*DatasetSpec, error) {
 	s, err := Parse(data, d)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if s.SchemaName == SyntheticSchemaName {
+		return nil, fmt.Errorf("%s: %w", path, specErrf(
+			"schemaName %q é reservado às tabelas virtuais do produto e não pode ser declarado por um dataset; escolha outro nome",
+			SyntheticSchemaName))
 	}
 	return s, nil
 }
@@ -686,6 +752,43 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 	}
 	s.Name = raw.Name
 
+	// O schema é o container de tudo que o dataset publica, e ele é
+	// OBRIGATÓRIO. Um default derivado do nome entregaria `servicos.servicos`,
+	// e a ausência entregaria a schema nula que o DBeaver mostra hoje — as
+	// duas foram consideradas e recusadas, porque a chave existe exatamente
+	// para desfazer a ambiguidade entre datasets de um mesmo servidor.
+	//
+	// Que isto derrube todo YAML existente é sabido e aceito: não há release
+	// publicada, e config recusada na subida custa uma linha e um restart,
+	// enquanto config adivinhada custa uma árvore errada que ninguém consegue
+	// explicar. A mensagem nomeia a chave E mostra um exemplo — ensinar a
+	// correção é o que separa uma recusa útil de um "faltando".
+	if raw.SchemaName == "" {
+		return nil, specErrf(
+			"schemaName obrigatório: é o schema em que as tabelas deste dataset aparecem para o cliente SQL (exemplo: `schemaName: telecom`)")
+	}
+	if !isIdentName(raw.SchemaName) {
+		return nil, specErrf("schemaName %q inválido (esperado [a-z0-9_]+)", raw.SchemaName)
+	}
+	// Mesma reserva do nome de DATASET, e pela mesma razão: as tabelas de meta
+	// moram num schema PRÓPRIO com o "_" na frente — o `_meta`, ao lado do
+	// schema do dataset e não dentro dele —, e um schema de usuário que
+	// pudesse se chamar `_meta` disputaria o nome com o espaço de nome do
+	// produto.
+	//
+	// A ÚNICA exceção é SyntheticSchemaName, e ela é o motivo de o sentinela
+	// das tabelas virtuais morar dentro da faixa reservada: as quatro specs
+	// sintéticas atravessam este mesmo validate, e um sentinela fora da faixa
+	// seria um nome que qualquer dataset de usuário também poderia declarar.
+	// Quem fecha o outro lado é Load: arquivo de dataset não passa por aqui
+	// com este valor.
+	if strings.HasPrefix(raw.SchemaName, "_") && raw.SchemaName != SyntheticSchemaName {
+		return nil, specErrf(
+			"schemaName %q: o prefixo \"_\" é reservado aos espaços de nome do produto (_meta, %s); escolha outro nome",
+			raw.SchemaName, CountersNamespace)
+	}
+	s.SchemaName = raw.SchemaName
+
 	var err error
 	if s.Source, err = validateSource(&raw.Source); err != nil {
 		return nil, err
@@ -873,18 +976,6 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 		}
 	}
 
-	// Os contadores vêm DEPOIS de key e sequence estarem resolvidos: metade
-	// das recusas do groupBy é sobre o PAPEL da coluna, não sobre ela.
-	if raws, err := countersFromNode(&raw.Counters); err != nil {
-		return nil, err
-	} else if raws != nil {
-		validated, err := validateCounters(raws, fields, key.Field, declaredSeq)
-		if err != nil {
-			return nil, err
-		}
-		s.Counters = validated
-	}
-
 	// include / exclude / unknownFields
 	include := raw.Schema.Include
 	includeAll := false
@@ -993,6 +1084,26 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 	// dela decide a indexabilidade, e a congelada precisa ser reconhecida.
 	if s.History, err = validateHistory(&raw.History, s.Name, fields); err != nil {
 		return nil, err
+	}
+
+	// Os contadores vêm DEPOIS de key e sequence estarem resolvidos — metade
+	// das recusas do groupBy é sobre o PAPEL da coluna, não sobre ela — e
+	// DEPOIS do histórico, porque o nome da tabela irmã é uma das colisões que
+	// eles têm de recusar: ela herda o schema do base e o nome dela sai de um
+	// sufixo configurável, então `name: events_history` num dataset `events`
+	// com bloco `history` põe duas tabelas diferentes no mesmo (schema, nome).
+	historyTable := ""
+	if s.History != nil {
+		historyTable = s.History.TableName(s.Name)
+	}
+	if raws, err := countersFromNode(&raw.Counters); err != nil {
+		return nil, err
+	} else if raws != nil {
+		validated, err := validateCounters(raws, fields, key.Field, declaredSeq, s.Name, historyTable)
+		if err != nil {
+			return nil, err
+		}
+		s.Counters = validated
 	}
 
 	// query: o dataset que declara a chave vence; quem omite herda o global.

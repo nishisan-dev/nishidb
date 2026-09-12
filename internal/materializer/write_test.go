@@ -14,6 +14,7 @@ import (
 const yamlWithExpire = `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -179,6 +180,7 @@ func TestEventoAntigoNaoRessuscitaEntidadeExpirada(t *testing.T) {
 	yaml := `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id

@@ -805,6 +805,151 @@ caminho consigo mesmo — sem que nada acusasse.
 
 ### Introspecção pelo próprio SQL
 
+`_meta.tables` responde "que tabelas existem" — a base como `TABLE` no schema
+declarado, os contadores como `VIEW` no mesmo schema, e as tabelas de meta como
+`VIEW` no `_meta`:
+
+```sql
+SELECT id, name, schema, kind, columns FROM _meta.tables ORDER BY id
+```
+
+Duas decisões a sustentam.
+
+**Ela se inclui.** Perguntar "que tabelas existem" e não ver a própria pergunta
+listada deixaria o catálogo incompleto na primeira linha. O que garante isso é
+o momento da montagem: as linhas saem do `Engine.Catalog` **a cada consulta**,
+não do catálogo congelado no registro — por isso a ordem em que ela é
+registrada, em relação à `_meta.counters` e à `_meta.kafka`, não muda a
+resposta. O congelamento existe, mas é POR CONSULTA: o snapshot fixa o catálogo
+de T0, e a varredura não vê tabela aparecer no meio.
+
+**A key é o endereço do atalho, não o nome.** `id` é a forma que o `FROM`
+aceita sem nomear schema (`_counters.por_olt`, `_meta.tables`, ou só o nome na
+base) — o par `schema.name`, que as outras duas colunas dão, é o endereço
+completo. O nome sozinho não serve
+de key porque não é único: a compilação da spec recusa quatro colisões no nome
+de um contador — o prefixo `_`, o nome do próprio dataset, o nome da tabela irmã
+do histórico e o nome repetido entre dois contadores —, e nenhuma delas alcança
+o nome de uma tabela de meta. Um
+contador `tables` é aceito e teria o mesmo `name` que esta tabela; com duas
+linhas de mesma key, o point lookup devolveria uma e a varredura devolveria
+duas — o motor discordando de si mesmo conforme o plano.
+
+Ela mora em `internal/query`, e não em `internal/query/meta` ao lado da
+`fields`, porque o conteúdo dela é o `Catalog` e o pacote `meta` não pode
+importar `query`; e não num pacote à parte como `internal/counters` e
+`internal/metakafka`, porque não costura o motor a subsistema nenhum.
+
+### O mesmo catálogo no `/v1/metadata`
+
+O `/v1/metadata` publica, por dataset, o `schema` declarado e o campo `tables`
+— a enumeração inteira, cada linha com `name`, `schema`, `namespace`, `kind`,
+`description` e as colunas já traduzidas para o wire pelo mesmo `columnMeta` que
+serve as colunas da base (o código `jdbc` é calculado no servidor; o driver não
+sabe derivá-lo). É o canal de quem monta ÁRVORE: um cliente SQL não escreve
+`SELECT ... FROM _meta.tables` sozinho.
+
+**Os dois canais saem do mesmo `Engine.Catalog`**, e isso é a decisão, não um
+detalhe: duas derivações da mesma enumeração divergem, e a divergência aparece
+como uma ferramenta que discorda do SQL sem nada estar quebrado — a mesma classe
+do painel que discorda do JSON no `/v1/stats`. A prova é
+`TestMetadataEMetaTablesNaoPodemDiscordarDoCatalogo`, que compara as duas saídas
+linha a linha, no dataset base e na irmã histórica (as listas são diferentes, e
+um oráculo de um dataset só passaria com a irmã servindo o catálogo do base).
+
+Os campos são **aditivos**, e o que o teste de aditividade protege é o lado que
+se perde por descuido — mover informação para o bloco novo: `columns` continua
+sendo a lista completa da tabela base, e `name` continua sendo o nome do
+dataset, e não o par com o schema
+(`TestOClienteAnteriorAosCamposNovosContinuaLendoOMetadata`). O `namespace` viaja
+na linha porque não é reconstruível a partir de `(schema, name)`, e para as
+tabelas do `_meta` ele é o único endereço que existe.
+
+O que **não** foi resolvido aqui é o clamp do driver: `maxRows` e `timeoutMs`
+são por dataset, o servidor aplica os do dataset LIDO e o `NishiConnection`
+ainda clampa pelos do dataset da conexão. O mapa que faltava — qual dataset é
+dono de cada schema — passa a existir com estes campos; usá-lo é trabalho do
+driver, registrado no débito 118.
+
+### O `FROM` qualificado pelo schema
+
+O `FROM` tem três formas, e cada uma resolve o dataset alvo de um jeito:
+`FROM <nome>` é a base do dataset da requisição; `FROM _ns.<nome>` é o ATALHO,
+que significa "a tabela virtual do dataset da requisição" e não nomeia dataset
+nenhum; `FROM <schema>.<nome>` é o **endereço completo** — o par endereça uma
+tabela em qualquer dataset, e a resolve venha a requisição pelo handle que
+vier. É a forma que um cliente SQL gera sozinho a partir do catálogo, e o spike
+do DBeaver confirmou que é a que ele monta.
+
+**A unicidade do par é sustentada pela CONFIGURAÇÃO, e não pela forma do
+catálogo.** São três recusas, todas na subida: dois datasets não declaram o
+mesmo `schemaName` (`config.ValidateSchemaUniqueness`), e um contador não se
+chama como o próprio dataset nem como a tabela irmã do histórico
+(`schema.validateCounters`) — a irmã herda o schemaName do base, e o nome dela
+sai de um sufixo configurável, de modo que `name: events` + `history:` +
+`counters: [{name: events_history}]` publicava o mesmo par duas vezes num
+arquivo só, e era aceito. O motor continua recusando o par ambíguo na
+resolução, mas isso é **rede**: um YAML aceito não chega lá, e quem pode chegar
+é um `RegisterVirtual` que não passa por nenhuma das três
+(`TestCountersRecusaNomeDaTabelaHistorica`).
+
+**A resolução lê a ENUMERAÇÃO do catálogo, não o catálogo montado.** O
+`Catalog` público é a enumeração — schema, nome, namespace, kind — mais as
+colunas de cada tabela; a resolução usa só a enumeração. A separação é medida,
+não estética: montar as colunas chama `FieldsForMetadata`, que aloca um slice
+com todos os campos e o ordena, e a resolução as montava para jogá-las fora.
+Num dataset de 4.000 colunas a forma qualificada custava ~479 µs e ~35 KiB de
+lixo contra ~4 µs e ~1,5 KiB da simples — 113x —, e é a qualificada que o
+DBeaver gera sozinho. Depois da separação são ~1,5x nos três tamanhos medidos
+(40, 400 e 4.000 campos) e 2.216 B por consulta, constante no tamanho do
+dicionário (`BenchmarkExecuteFromQualified`,
+`TestResolucaoQualificadaNaoAlocaPorCampoDoDataset`). Origem dos números, com o
+ambiente da rodada e a saída crua: [`aceite-schema-declarado.md`](aceite-schema-declarado.md),
+seção "A bancada", e
+[`benchmark/baselines/from-qualified-20260911.txt`](../benchmark/baselines/from-qualified-20260911.txt).
+
+**Quem resolve o par é a enumeração do `Engine.Catalog`, não uma varredura
+própria do roteamento.** A enumeração já é a única derivação de "que tabelas
+cada dataset publica, em que schema cada uma aparece e por qual namespace cada uma abre", e
+o godoc dele já prometia que toda tabela listada é aberta pelo `Execute`. Uma
+segunda varredura no roteamento faria dessa promessa uma coincidência: na
+primeira tabela que entrasse só num dos dois lados, a ferramenta mostraria uma
+tabela que a consulta recusa — ou o contrário — sem nada estar quebrado. Com a
+resolução SAINDO do catálogo, a promessa vira mecanismo.
+
+**A regra "o dataset do argumento tem de bater com o do `FROM`" continua
+valendo, e roda depois da resolução.** Ela existe contra endereço AMBÍGUO —
+`FROM y` com o handle `x` são dois nomes e nenhum jeito de saber qual o usuário
+quis. O qualificado não tem essa ambiguidade, então o handle deixa de ser o
+alvo e passa a ser só o default das formas não qualificadas, que é o papel do
+"current schema" numa conexão SQL. Não há fronteira de autorização a
+atravessar: os papéis do servidor são READ e ADMIN **por rota**, não por
+dataset, e quem pode consultar já podia mandar outro dataset no campo da
+requisição. Provas: `TestSchemaQualificadoResolveODatasetCerto` (a view e a
+base do OUTRO dataset abrem pelo schema) e
+`TestAtalhoSemSchemaUsaODatasetDaRequisicao` (o atalho não virou busca global).
+
+**Os limites de consulta são do dataset LIDO, não do handle.** `query.maxRows`,
+`query.timeout` e `query.maxTimeout` são declarados por dataset no YAML, e com
+o `FROM` qualificado o handle da requisição e o dataset lido podem ser
+diferentes. O servidor resolve o alvo antes de admitir a consulta
+(`Engine.TargetDataset`, que reusa o mesmo parser e a mesma resolução do
+`Execute`) e aplica os limites do dono — sem isso, um dataset com teto alto
+seria a porta para ler, sob o teto dele, outro cujo YAML declara teto baixo
+(`TestOsLimitesSaoDoDatasetLidoENaoDoHandle`). O que continua saindo do handle
+é a identificação: o label das métricas, o dataset do log e o registro de
+queries em voo.
+
+**Ler o qualificador é também recusar o que não é schema.** Até aqui
+`FROM qualquercoisa.tabela` era aceito e idêntico a `FROM tabela` — o prefixo
+era descartado. Agora qualificador que não é schema declarado é recusado
+listando os que existem, e schema certo com tabela inexistente é recusado
+listando as tabelas daquele schema. As duas são erro de quem escreveu a query e
+saem por `binder.ErrorAt`, como as recusas de namespace
+(`TestQualificadorQueNaoEhSchemaEhRecusado`,
+`TestSchemaDesconhecidoListaOsExistentes`,
+`TestSchemaConhecidoSemATabelaListaAsDoSchema`).
+
 `_meta.fields` responde "o que este dataset tem" — nome, tipo, se é
 autodescoberto, índice declarado, índice físico, campo de origem e a
 **densidade** de cada coluna derivada — como uma tabela qualquer:
@@ -993,6 +1138,68 @@ verdade responde `/v1/query` em `chunked` e o de mentira respondia com
 
 **O que nenhum dos dois faz**, porque é o que o NishiDB é: escrita (os dados
 entram por ingestão), transação, e cursor rolável.
+
+### A árvore do cliente SQL
+
+O `getSchemas`, o `getTables` e o `getColumns` do driver JDBC saem do campo
+`tables` do `/v1/metadata`, e não mais da lista de datasets: a base como
+`TABLE` no schema declarado, o contador como `VIEW` no mesmo schema, e as
+tabelas do `_meta` como `VIEW` no schema `_meta`. O código do tipo de cada
+coluna é o `jdbc` que o servidor calculou — o driver não o rededuz do nome do
+tipo, pela razão de sempre: duas tabelas de tipos divergem no primeiro tipo
+novo.
+
+**É o `TABLE_SCHEM` que faz a ferramenta gerar `FROM <schema>.<tabela>`.** Foi
+o que o spike do DBeaver mediu, e é por isso que ele é o campo que paga o
+ciclo: publicá-lo nulo faria o SQL que a ferramenta monta cair no dataset da
+conexão, que para toda tabela de outro schema é outra tabela. O
+`supportsSchemasInDataManipulation` responde `true` pela mesma razão, e é a
+única dos cinco `supportsSchemasIn*` que responde — as outras quatro são DDL,
+procedimento e privilégio, que o produto não tem.
+
+**O `TABLE_CAT` continua nulo em toda linha**, e o `getCatalogs` continua
+vazio. Não é omissão: **é a gramática do `FROM` que decide o mapeamento JDBC.**
+O parser aceita no máximo `qualificador.tabela` — dois níveis —, e o JDBC tem
+três nomes para gastar (`TABLE_CAT`, `TABLE_SCHEM`, `TABLE_NAME`). Um deles
+sobra, e a escolha de qual é forçada em cadeia:
+
+- o nível de baixo é a tabela, e não há discussão;
+- o de cima tem de ser o `TABLE_SCHEM`, porque **é ele que a ferramenta usa para
+  qualificar o `FROM` que gera** — o spike mediu isso. Gastá-lo no `TABLE_CAT`
+  deixaria o `TABLE_SCHEM` nulo, e a ferramenta geraria `FROM <tabela>` sem
+  qualificador, que cai no dataset da conexão;
+- logo o `TABLE_CAT` é o que sobra vazio, e o `getCatalogs` responde vazio por
+  coerência com ele.
+
+O caminho contrário — inventar um terceiro nível para o produto ter catálogo —
+mudaria a gramática do SQL por causa de um cliente, e não há o que ganhar: com
+um catálogo só, todo nome viria qualificado por um prefixo constante. As cinco
+`supportsCatalogsIn*` respondem `false`, e o `getCatalogs` devolve o ResultSet
+de uma coluna e nenhuma linha, que é a forma que o contrato pede para "não há".
+
+**O `getTableTypes` responde `TABLE` e `VIEW`, e nunca `SYSTEM TABLE`.** O
+terceiro rótulo seria o natural para as tabelas do `_meta`, e é justamente o
+que não se pode usar — o mesmo spike mostrou que o DBeaver esconde objeto de
+sistema por default e que a opção que o revela não é achável na interface.
+Tabela que existe para ser descoberta não pode nascer invisível. A lista é
+fixa: ela diz o que o driver sabe publicar, e é respondida antes de a
+ferramenta perguntar quais tabelas existem.
+
+**As linhas do `_meta` saem uma vez, não uma por dataset.** O documento as
+publica dentro de cada elemento de `datasets`, porque o atalho `_meta.x`
+significa "no dataset da requisição" e o catálogo de cada dataset o inclui;
+elas descrevem a mesma tabela, então o driver corta a repetição pelo par
+(schema, nome).
+
+**Servidor anterior aos campos novos: a árvore de sempre.** `schema` e `tables`
+são aditivos, e um binário anterior responde sem os dois. Aí cada dataset volta
+a ser uma linha `TABLE` com `TABLE_SCHEM` nulo e as colunas do campo `columns`,
+que é exatamente o que o driver listava antes — nenhuma view inventada e nada
+lançado (`NishiDatabaseMetaDataTest#metadataSemTablesDegradaSemErro`, que fala
+com um fixture só seu — o resto da suíte usa o documento novo). A citação vem
+qualificada pela classe porque é assim que o
+`TestEvidenciasCitadasNosDocumentosExistem` confere um teste JUnit: um nome
+camelCase solto é indistinguível de um identificador qualquer citado em prosa.
 
 ## O protocolo remoto
 

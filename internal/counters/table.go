@@ -57,8 +57,8 @@ func Table(def counter.Definition, l Reader) (*schema.Compiled, query.Store, err
 		return nil, nil, fmt.Errorf("contadores: %q com Names, Types e Columns de tamanhos diferentes", def.Name)
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "version: 1\nname: %s\nmaterialization:\n  key:\n    field: %s\nschema:\n  include: [%s",
-		def.Name, schema.CounterKeyColumn, schema.CounterKeyColumn)
+	fmt.Fprintf(&sb, "version: 1\nname: %s\nschemaName: %s\nmaterialization:\n  key:\n    field: %s\nschema:\n  include: [%s",
+		def.Name, schema.SyntheticSchemaName, schema.CounterKeyColumn, schema.CounterKeyColumn)
 	for _, n := range def.Names {
 		if n == schema.CounterKeyColumn || n == schema.CounterTotalColumn {
 			return nil, nil, fmt.Errorf("contadores: %q agrupa por %q, que colide com a coluna fixa da tabela", def.Name, n)

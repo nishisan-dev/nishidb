@@ -35,6 +35,7 @@ var (
 const yamlTest = `
 version: 1
 name: t
+schemaName: telecom
 materialization:
   key:
     field: id

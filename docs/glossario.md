@@ -104,6 +104,7 @@ inglês correspondente.
 | grupo | group | internal/storage/counter |
 | linha | row | internal/storage/rowindex |
 | campo | field | internal/schema |
+| schema (o container SQL em que TODAS as tabelas do dataset aparecem para o cliente; não confundir com o bloco `schema:` do YAML, que declara os campos) | schema | internal/schema/spec.go |
 | campo (componente de data/hora) | component | internal/typeparse/datetime.go |
 | chave | key | internal/index/valuekey |
 | dicionário | dict | internal/storage/counter/dict.go |
@@ -141,6 +142,12 @@ inglês correspondente.
 | fonte | source | internal/query/meta/source.go |
 | iterador | iterator | internal/index/segindex/union.go |
 | tabela | table | internal/counters/table.go |
+| catálogo (a enumeração de toda tabela consultável de um dataset) | catalog | internal/query/catalog.go |
+| schema declarado (o valor da chave obrigatória `schemaName` no YAML do dataset, único no servidor; é dele que sai o schema em que as tabelas daquele dataset aparecem) | schemaName | internal/schema/spec.go, internal/config/config.go |
+| espécie da tabela (TABLE para a base, VIEW para contador e tabela de meta) | kind | internal/query/catalog.go |
+| tabela de meta (a tabela do namespace `_meta` que descreve o dataset: `fields`, `counters`, `kafka`, `tables`) | meta table | internal/query/metatables.go, internal/query/meta |
+| tabela de sistema (o rótulo `SYSTEM TABLE` do JDBC, que este produto NÃO publica: as tabelas de meta saem como VIEW, porque o cliente gráfico esconde objeto de sistema por default) | system table | clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/NishiDatabaseMetaData.java |
+| árvore (do cliente SQL: schemas → tabelas → colunas que o driver JDBC publica a partir do catálogo) | tree | clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/NishiDatabaseMetaData.java |
 | registro de virtuais | registry | internal/query/engine.go |
 | registro (linha) | record | internal/storage/encoding/record.go |
 | abertura | open | internal/counters/open.go |
@@ -441,6 +448,7 @@ inglês correspondente.
 | indexável (a CONJUNÇÃO das duas: o schema declara E o store atende; o termo pode virar lookup) | indexable | internal/query/planner |
 | indexável (o TIPO declarado aceita `index: true`, decidido no load sem consultar store nem schema) | indexable type | internal/schema |
 | qualificado / qualificada / qualificador (o "pai." que precede o nome da coluna) | qualified / qualifier | internal/schema, internal/query/binder |
+| qualificado pelo schema (o "schema." que precede o nome da TABELA no FROM: endereço completo, que a configuração mantém único no servidor, distinto do atalho "_ns.") | schema-qualified | internal/query |
 | grafia (a palavra escrita no YAML para o valor de uma chave) | spelling | internal/schema |
 | visibilidade (por quanto tempo o grupo vazio continua visível) | visibility | internal/schema |
 | duração | duration | internal/schema, internal/storage/counter |

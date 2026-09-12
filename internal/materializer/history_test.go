@@ -12,6 +12,7 @@ import (
 
 const specWithHistory = `version: 1
 name: events
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -54,6 +55,7 @@ func (h *histFake) Apenda(payload []byte) (types.RowID, error) {
 // substituição textual esconde o que está sendo testado.
 const specWithRaw = `version: 1
 name: events
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -284,6 +286,7 @@ func TestSemHistoricoNadaEhGravado(t *testing.T) {
 
 const specWithSequence = `version: 1
 name: events
+schemaName: telecom
 materialization:
   key:
     field: id

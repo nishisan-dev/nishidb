@@ -16,6 +16,7 @@ import (
 const yamlCeilingBaixo = `
 version: 1
 name: pequeno
+schemaName: pequeno
 materialization:
   key:
     source: payload
@@ -236,6 +237,7 @@ func TestIngestDeArquivo(t *testing.T) {
 const yamlGrafiaOfIndexObsoleta = `
 version: 1
 name: grafiaantiga
+schemaName: grafiaantiga
 materialization:
   key:
     field: id
@@ -300,6 +302,7 @@ func TestServidorComGrafiaDeIndiceObsoletaSaiComExitDataset(t *testing.T) {
 const yamlWindowAmbigua = `
 version: 1
 name: janelaruim
+schemaName: janelaruim
 materialization:
   key:
     field: id

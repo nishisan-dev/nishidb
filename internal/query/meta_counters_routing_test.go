@@ -22,7 +22,7 @@ func TestMetaRoteiaFieldsParaOMetaEOsDemaisParaORegistro(t *testing.T) {
 	}
 
 	// Registrada, a tabela corre pelo pipeline do registro.
-	tableVirtualOfTest(t, h.engine, "_meta", "counters")
+	tableVirtualOfTest(t, h.engine, dataset, "_meta", "counters")
 	rows = h.consultaOK("SELECT groupKey, total FROM _meta.counters ORDER BY total DESC LIMIT 1")
 	if len(rows) != 1 || rows[0]["total"] != "2802" {
 		t.Fatalf("_meta.counters registrada = %v", rows)

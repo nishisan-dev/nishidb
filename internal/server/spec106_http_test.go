@@ -26,6 +26,7 @@ import (
 // evento traz, para o caso NULL.
 const spec106YAML = `version: 1
 name: %s
+schemaName: telecom
 materialization:
   key:
     field: id

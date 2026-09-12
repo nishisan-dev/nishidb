@@ -16,6 +16,7 @@ import (
 const specWithoutQuery = `
 version: 1
 name: sem_query
+schemaName: telecom
 materialization:
   key:
     field: id

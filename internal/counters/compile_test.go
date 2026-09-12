@@ -19,6 +19,7 @@ import (
 const yamlBase = `
 version: 1
 name: servicos
+schemaName: telecom
 materialization:
   key:
     field: customerId

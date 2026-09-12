@@ -18,7 +18,7 @@ import (
 // contadores dados — a mesma costura do Register, sem o Store real.
 func engineWithMeta(t *testing.T, cs ...*counter.Counter) *query.Engine {
 	t.Helper()
-	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
+	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

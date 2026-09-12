@@ -26,6 +26,7 @@ import (
 // o suficiente para exercitar projeção, WHERE com parâmetro e metadados.
 const specConsultavel = `version: 1
 name: %s
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -496,6 +497,77 @@ func TestErrosAntesDaPrimeiraLinha(t *testing.T) {
 	})
 }
 
+// TestARecusaDeDatasetDesconhecidoEnsinaACitarCadaParteQuandoONomeTemPonto
+// cobre o ponto de recusa que o cliente JDBC realmente alcança.
+//
+// O driver extrai o nome do FROM e o manda no campo `dataset` do corpo, então
+// `FROM "telecom.d"` chega aqui como o dataset `telecom.d`, que não está
+// registrado. A recusa acontece ANTES de o SQL ser analisado, de modo que o
+// complemento que o binder já servia nunca é alcançado por este caminho — e o
+// operador recebia só "não está registrado", que o manda procurar um dataset
+// que ele nunca quis abrir.
+//
+// A segunda metade é o limite da dica: nome desconhecido SEM ponto não tem
+// nada a ver com aspas, e falar delas ali mandaria corrigir o que não está
+// errado.
+func TestARecusaDeDatasetDesconhecidoEnsinaACitarCadaParteQuandoONomeTemPonto(t *testing.T) {
+	srv := serverWithData(t, 3, blockPadrao)
+
+	t.Run("nome com ponto", func(t *testing.T) {
+		resp := consulta(t, srv, `{"dataset":"telecom.d","sql":"SELECT id FROM \"telecom.d\""}`)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d, quer 404", resp.StatusCode)
+		}
+		f := failOf(t, resp)
+		if f.Code != protocol.CodeUnknownDataset {
+			t.Fatalf("código = %q, quer %q", f.Code, protocol.CodeUnknownDataset)
+		}
+		// O diagnóstico de sempre continua lá: ele diz o que o servidor procurou.
+		if !strings.Contains(f.Message, `dataset "telecom.d" não está registrado`) {
+			t.Errorf("a recusa perdeu o nome procurado: %q", f.Message)
+		}
+		// E a correção, que é o que faltava por este caminho.
+		if !strings.Contains(f.Message, "citado INTEIRO") {
+			t.Errorf("a recusa não explica a regra das aspas: %q", f.Message)
+		}
+		if !strings.Contains(f.Message, `"telecom"."d"`) {
+			t.Errorf("a recusa não mostra a forma certa: %q", f.Message)
+		}
+	})
+
+	t.Run("nome sem ponto", func(t *testing.T) {
+		resp := consulta(t, srv, `{"dataset":"nao_existe","sql":"SELECT id FROM nao_existe"}`)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d, quer 404", resp.StatusCode)
+		}
+		f := failOf(t, resp)
+		if !strings.Contains(f.Message, `dataset "nao_existe" não está registrado`) {
+			t.Errorf("a recusa perdeu o nome procurado: %q", f.Message)
+		}
+		if strings.Contains(f.Message, "aspas") {
+			t.Errorf("a recusa fala de aspas sem ponto no nome: %q", f.Message)
+		}
+	})
+}
+
+// A forma CERTA que a recusa acima ensina tem de ser a que funciona — senão a
+// dica troca uma recusa por outra. `"telecom"."d"` é lido pelo driver como um
+// nome qualificado, ele abandona o palpite e manda o dataset da conexão; aqui
+// isso é reproduzido mandando `d` no corpo, que é o que o driver faria.
+func TestAFormaQueARecusaEnsinaExecuta(t *testing.T) {
+	srv := serverWithData(t, 3, blockPadrao)
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM \"telecom\".\"d\""}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, quer 200: %q", resp.StatusCode, failOf(t, resp).Message)
+	}
+	// As linhas são conferidas, e não só o status: a moldura sai com 200 no
+	// primeiro byte, então "abriu" é ter devolvido as três linhas semeadas.
+	rows, _ := result(t, resp)
+	if len(rows) != 3 {
+		t.Fatalf("linhas = %d, quer 3", len(rows))
+	}
+}
+
 // O §81 autoriza rejeitar consulta antes de comprometer a ingestão. Com uma
 // vaga só, a segunda requisição simultânea sai 503 sem tocar o Store.
 func TestConcorrenciaAcimaDoTetoEhRejeitada(t *testing.T) {
@@ -603,6 +675,7 @@ func TestColunaComNomeReservadoEhRecusada(t *testing.T) {
 	a := newEnvWith(t, blockPadrao)
 	a.writeDataset("d", `version: 1
 name: d
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -928,5 +1001,153 @@ func TestMetaFieldsRespondePelaRotaDeQuery(t *testing.T) {
 		if !strings.Contains(l, `"name"`) || !strings.Contains(l, `"type"`) {
 			t.Fatalf("linha sem as colunas pedidas: %s", l)
 		}
+	}
+}
+
+// specComSchemaETeto é o specConsultavel com schemaName e os TRÊS limites de
+// consulta próprios — `query.maxRows`, `query.timeout` e `query.maxTimeout`:
+// é o mínimo para provar de QUEM são os limites aplicados a uma consulta que
+// atravessa datasets. Os três entram porque o handler troca o dataset nos três,
+// e um fixture que declarasse só o `maxRows` deixaria os outros dois medidos
+// contra o default global, que é o mesmo dos dois lados — e uma fixture em que
+// os dois lados têm o mesmo número não distingue implementação nenhuma.
+const specComSchemaETeto = `version: 1
+name: %s
+schemaName: %s
+materialization:
+  key:
+    field: id
+query:
+  maxRows: %d
+  timeout: %s
+  maxTimeout: %s
+schema:
+  fields:
+    id:
+      type: string
+    status:
+      type: string
+`
+
+// serverComDoisDatasetsDeLimites sobe o servidor com os dois datasets que os
+// testes de limite usam: `alto` (schema `alto_schema`, tetos folgados) e
+// `baixo` (schema `baixo_schema`, tetos apertados), cada um com três linhas.
+//
+// O par é assimétrico de propósito, e em TODOS os limites: é a assimetria que
+// separa "aplicou o do dono" de "aplicou o do handle", e de "aplicou o mais
+// baixo dos dois".
+func serverComDoisDatasetsDeLimites(t *testing.T) *server.Server {
+	t.Helper()
+	a := newEnvWithStorage(t, blockPadrao, "")
+	a.writeDataset("alto", fmt.Sprintf(specComSchemaETeto, "alto", "alto_schema", 1000, "30s", "60s"))
+	a.writeDataset("baixo", fmt.Sprintf(specComSchemaETeto, "baixo", "baixo_schema", 10, "500ms", "1s"))
+	seed(t, a, "alto", 3)
+	seed(t, a, "baixo", 3)
+
+	cfg := a.load()
+	srv, err := server.Novo(cfg, server.Options{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	run(t, srv)
+	return srv
+}
+
+// TestOsLimitesSaoDoDatasetLidoENaoDoHandle: `query.maxRows` é declarado POR
+// DATASET no YAML, e desde que o `FROM <schema>.<tabela>` resolve o dataset
+// dono, o handle da requisição e o dataset lido podem ser diferentes.
+//
+// Aplicar os limites do HANDLE faria de um dataset com teto alto a porta para
+// ler, sob o teto dele, outro cujo YAML declara teto baixo — o YAML deixaria de
+// valer para a tabela de que ele fala. O teste cobra os dois lados, e é o
+// segundo que separa "aplicou o do dono" de "aplicou o mais baixo dos dois":
+//
+//   - pelo handle `alto`, pedir 500 linhas de `baixo_schema.baixo` (teto 10) é
+//     RECUSADO, e a mensagem nomeia o teto do dono;
+//   - pelo handle `baixo`, pedir 500 linhas de `alto_schema.alto` (teto 1000) é
+//     ACEITO.
+func TestOsLimitesSaoDoDatasetLidoENaoDoHandle(t *testing.T) {
+	srv := serverComDoisDatasetsDeLimites(t)
+
+	resp := consulta(t, srv,
+		`{"dataset":"alto","sql":"SELECT id FROM baixo_schema.baixo","maxRows":500}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 400: o teto do dataset LIDO é 10", resp.StatusCode)
+	}
+	f := failOf(t, resp)
+	if f.Code != protocol.CodeMaxRowsAboveCeiling {
+		t.Fatalf("código = %q, quer %s", f.Code, protocol.CodeMaxRowsAboveCeiling)
+	}
+	if !strings.Contains(f.Message, "10") {
+		t.Fatalf("a mensagem tem de nomear o teto do dataset lido: %q", f.Message)
+	}
+
+	// O simétrico: o handle de teto baixo lendo o dataset de teto alto passa.
+	// Sem ele, uma implementação que aplicasse o MENOR dos dois tetos — ou que
+	// tivesse baixado o teto de todo mundo — passaria na metade de cima.
+	resp = consulta(t, srv,
+		`{"dataset":"baixo","sql":"SELECT id FROM alto_schema.alto","maxRows":500}`)
+	if resp.StatusCode != http.StatusOK {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 200: o teto do dataset LIDO é 1000", resp.StatusCode)
+	}
+	rows, l := result(t, resp)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, quer 3", len(rows))
+	}
+	if l.Failure() != nil {
+		t.Fatalf("fecho com falha: %+v", l.Failure())
+	}
+}
+
+// TestOTetoDeTimeoutEhDoDatasetLidoENaoDoHandle é o mesmo contrato do
+// `maxRows`, no SEGUNDO dos três lugares em que o handler troca o dataset: o
+// `query.maxTimeout`, que o contextoOfConsulta faz valer contra o `timeoutMs`
+// do request.
+//
+// Ele precisa existir por si porque a substituição é uma leitura SEPARADA: o
+// handler passa o dataset dono ao rowCeiling e ao contextoOfConsulta em duas
+// chamadas, e reverter só a segunda deixa o teste do `maxRows` verde. Sem esta
+// cobertura, o teto de prazo de um dataset seria contornável abrindo a conexão
+// pelo handle de outro — e `query.maxTimeout` é justamente o que impede uma
+// consulta de segurar vaga e storage por mais tempo do que o YAML admite.
+//
+// Os dois lados, pela mesma razão do teste do `maxRows`: o segundo é o que
+// separa "aplicou o do dono" de "aplicou o mais baixo dos dois".
+func TestOTetoDeTimeoutEhDoDatasetLidoENaoDoHandle(t *testing.T) {
+	srv := serverComDoisDatasetsDeLimites(t)
+
+	// Pelo handle `alto` (teto 60s), pedir 5s de `baixo` (teto 1s) é recusado.
+	resp := consulta(t, srv,
+		`{"dataset":"alto","sql":"SELECT id FROM baixo_schema.baixo","timeoutMs":5000}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 400: o teto de prazo do dataset LIDO é 1s", resp.StatusCode)
+	}
+	f := failOf(t, resp)
+	if f.Code != protocol.CodeBadRequest {
+		t.Fatalf("código = %q, quer %s", f.Code, protocol.CodeBadRequest)
+	}
+	// A mensagem nomeia o teto do DONO, em ms. Nomear o do handle mandaria o
+	// operador ajustar o YAML errado.
+	if !strings.Contains(f.Message, "1000 ms") {
+		t.Fatalf("a mensagem tem de nomear o teto do dataset lido: %q", f.Message)
+	}
+
+	// O simétrico: o handle de teto apertado lendo o dataset de teto folgado
+	// passa, com o prazo do DONO valendo.
+	resp = consulta(t, srv,
+		`{"dataset":"baixo","sql":"SELECT id FROM alto_schema.alto","timeoutMs":5000}`)
+	if resp.StatusCode != http.StatusOK {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 200: o teto de prazo do dataset LIDO é 60s", resp.StatusCode)
+	}
+	rows, l := result(t, resp)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, quer 3", len(rows))
+	}
+	if l.Failure() != nil {
+		t.Fatalf("fecho com falha: %+v", l.Failure())
 	}
 }

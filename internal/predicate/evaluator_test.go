@@ -14,6 +14,7 @@ import (
 const dsCounterYAML = `
 version: 1
 name: servicos
+schemaName: telecom
 materialization:
   key:
     field: customerId

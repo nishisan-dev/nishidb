@@ -67,9 +67,19 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		// O nome NÃO entra na métrica: ele é entrada do cliente, e um label
 		// alimentado por entrada do cliente é uma série nova por requisição.
+		//
+		// O complemento sai de binder.DottedDatasetNameHint, a MESMA função que
+		// o bind usa, e não de uma segunda redação da regra. Ele é necessário
+		// aqui porque este é o ponto de recusa que o cliente JDBC alcança: o
+		// driver extrai o nome do FROM e o manda no corpo, então
+		// `FROM "telecom.service_view"` chega como o dataset
+		// `telecom.service_view`, que não está registrado — e a recusa acontece
+		// ANTES de o SQL ser analisado, de modo que o bind, onde a dica já
+		// existia, nunca roda. Um nome sem ponto não recebe complemento nenhum.
 		s.reject(w, r, http.StatusNotFound, datasetDesconhecido, protocol.ErrorDetail{
-			Code:    protocol.CodeUnknownDataset,
-			Message: fmt.Sprintf("dataset %q não está registrado neste servidor", req.Dataset),
+			Code: protocol.CodeUnknownDataset,
+			Message: fmt.Sprintf("dataset %q não está registrado neste servidor%s",
+				req.Dataset, binder.DottedDatasetNameHint(req.Dataset)),
 		})
 		return
 	}
@@ -82,12 +92,27 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ceilingOfRequest, fail := rowCeiling(req, d.sch.MaxRows)
+	// Os limites de consulta — `query.maxRows`, `query.timeout` e
+	// `query.maxTimeout` — são declarados POR DATASET no YAML, então quem os
+	// governa é o dataset que a consulta vai LER, e não o handle por onde ela
+	// entrou. Desde que o `FROM <schema>.<tabela>` resolve o dataset dono, os
+	// dois podem ser diferentes: aplicar os do handle faria de um dataset com
+	// teto alto a porta para ler, sob o teto dele, um dataset cujo YAML declara
+	// teto baixo — o YAML deixaria de valer para a tabela de que ele fala.
+	//
+	// O handle continua governando tudo o mais: é ele que o `d.nome` leva para
+	// as métricas, para o log e para o registro de queries em voo.
+	limits := d
+	if owner, ok := s.byNome[s.eng.TargetDataset(d.nome, req.SQL)]; ok {
+		limits = owner
+	}
+
+	ceilingOfRequest, fail := rowCeiling(req, limits.sch.MaxRows)
 	if fail != nil {
 		s.reject(w, r, http.StatusBadRequest, d.nome, *fail)
 		return
 	}
-	ctx, cancel, prazo, fail := s.contextoOfConsulta(r, req, d.sch)
+	ctx, cancel, prazo, fail := s.contextoOfConsulta(r, req, limits.sch)
 	if fail != nil {
 		s.reject(w, r, http.StatusBadRequest, d.nome, *fail)
 		return
@@ -97,7 +122,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// número fixo: `query.timeout` é a declaração de quanto tempo uma consulta
 	// deste dataset costuma levar, então tudo que a excede é, por definição
 	// dele mesmo, fora do comum.
-	longa := prazo > d.sch.Timeout
+	longa := prazo > limits.sch.Timeout
 
 	// A vaga é tomada DEPOIS de toda validação barata e ANTES de tocar o
 	// Store: recusar cedo custa nada, e o §81 é explícito em preferir rejeitar
@@ -139,7 +164,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 				Message: fmt.Sprintf(
 					"as %d vagas de consulta longa estão ocupadas (runtime.query.maxLongRunning); "+
 						"peça um timeoutMs de até %d ms para entrar pelo pool geral",
-					s.cfg.MaxLongRunning(), d.sch.Timeout.Milliseconds()),
+					s.cfg.MaxLongRunning(), limits.sch.Timeout.Milliseconds()),
 			})
 			return
 		}

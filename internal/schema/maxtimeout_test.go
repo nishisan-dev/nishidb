@@ -11,6 +11,7 @@ import (
 func specWithQueryBlock(queryBlock string) []byte {
 	return []byte(`version: 1
 name: d
+schemaName: telecom
 materialization:
   key:
     field: id

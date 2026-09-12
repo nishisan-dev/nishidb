@@ -17,6 +17,7 @@ import (
 // — o denominador (todos) e o numerador (autenticados).
 const specServices = `version: 1
 name: %s
+schemaName: telecom
 materialization:
   key:
     field: customerId

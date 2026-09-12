@@ -473,10 +473,15 @@ func (s *DatasetSpec) DeriveHistory() *DatasetSpec {
 		return nil
 	}
 	h := &DatasetSpec{
-		Version:   1,
-		Name:      s.History.TableName(s.Name),
-		IsHistory: true,
-		Query:     s.Query,
+		Version: 1,
+		Name:    s.History.TableName(s.Name),
+		// O schema é HERDADO, e não declarado: a histórica é outra tabela do
+		// MESMO dataset, como os contadores e as de meta, e o desenho é que
+		// tudo que um dataset publica vive num schema só. Ela também não vem
+		// de arquivo nenhum, então não haveria onde declarar.
+		SchemaName: s.SchemaName,
+		IsHistory:  true,
+		Query:      s.Query,
 		// O bloco viaja para a spec derivada porque é a IRMÃ quem roda a
 		// retenção: o motor vive no Store dela, e quem sobe a goroutine
 		// percorre a lista de datasets perguntando a cada um pela própria

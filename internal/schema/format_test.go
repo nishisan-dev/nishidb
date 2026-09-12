@@ -9,7 +9,7 @@ import (
 
 // yamlWithField monta uma spec mínima com um campo extra declarado.
 func yamlWithField(decl string) string {
-	return "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
+	return "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n" +
 		"schema:\n  include: [id, alvo]\n  fields:\n    id:\n      type: string\n" +
 		"    alvo:\n" + decl
 }

@@ -56,6 +56,7 @@ type Contado interface {
 // sozinho as confundiria.
 const metaTableSpec = `version: 1
 name: ` + TableMetaCounters + `
+schemaName: ` + schema.SyntheticSchemaName + `
 materialization:
   key:
     field: name

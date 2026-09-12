@@ -20,6 +20,7 @@ package binder
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
@@ -194,8 +195,8 @@ func Bind(stmt *parser.SelectStmt, sc *schema.Compiled, params []types.Value) (*
 	}
 	// Case-sensitive: identificadores são case-sensitive em toda a v1.
 	if stmt.Dataset != sc.Name {
-		return nil, errAt(stmt.DatasetPos, "dataset %q desconhecido (este handle é de %q)",
-			stmt.Dataset, sc.Name)
+		return nil, errAt(stmt.DatasetPos, "dataset %q desconhecido (este handle é de %q)%s",
+			stmt.Dataset, sc.Name, wholeQuotedNameHint(stmt))
 	}
 	if len(params) != stmt.ParamCount {
 		return nil, errInPos("a query tem %d parâmetros, foram fornecidos %d",
@@ -216,6 +217,83 @@ func Bind(stmt *parser.SelectStmt, sc *schema.Compiled, params []types.Value) (*
 		return nil, err
 	}
 	return bq, nil
+}
+
+// wholeQuotedNameHint devolve o complemento da mensagem de "dataset
+// desconhecido" para quem citou um nome QUALIFICADO inteiro entre aspas —
+// `FROM "_meta.counters"` —, e string vazia em todo o resto.
+//
+// A recusa em si está certa: pelo SQL padrão as aspas envolvem UM
+// identificador, e `"_meta.counters"` nomeia uma tabela cujo nome tem um ponto,
+// não a tabela `counters` do schema `_meta`. O que faltava era dizer isso: a
+// mensagem sozinha manda o operador procurar um dataset que ele nunca quis
+// abrir. É o erro de quem copia o nome já qualificado de uma ferramenta
+// gráfica e o cola entre aspas inteiro.
+//
+// A detecção é pela presença do ponto no nome com Namespace vazio, e não por
+// um sinalizador de "veio entre aspas" propagado do lexer, porque na AST que o
+// parser produz as duas condições coincidem: identificador nu é ASCII de
+// [A-Za-z0-9_] (isIdentStart/isIdentPart no lexer) e o '.' sai do lexer como
+// TokenDot, que o parser consome como separador e grava em Namespace. Um ponto
+// DENTRO de stmt.Dataset, portanto, só chega aqui vindo de TokenQuotedIdent.
+// Isso vale para o caminho Parse → Bind; uma SelectStmt montada à mão pelo
+// chamador não passa por essa garantia — e é por isso que o texto de
+// DottedDatasetNameHint enuncia a regra das aspas em vez de afirmar que o
+// chamador as escreveu.
+func wholeQuotedNameHint(stmt *parser.SelectStmt) string {
+	if stmt.Namespace != "" {
+		return ""
+	}
+	return DottedDatasetNameHint(stmt.Dataset)
+}
+
+// DottedDatasetNameHint devolve o complemento da recusa de um dataset
+// DESCONHECIDO cujo nome traz um ponto — `_meta.counters`,
+// `telecom.service_view` —, e string vazia em todo o resto.
+//
+// É o complemento de UMA regra servido a DOIS pontos de recusa, que é o que
+// impede a regra de existir em duas redações. O binder recusa quando o nome do
+// FROM não é o do handle (wholeQuotedNameHint); o servidor recusa antes disso,
+// quando o `dataset` do corpo de POST /v1/query não está registrado — e é por
+// esse segundo caminho que o cliente JDBC passa, porque ele extrai o nome do
+// FROM e o manda no corpo (SqlScanner), de modo que o bind nunca chega a rodar.
+//
+// A dica não estraga nome legítimo nenhum: um dataset chamado `a.b` é
+// INCONSTRUÍVEL. O `name` do YAML tem de casar com [a-z0-9_]+ (isIdentName,
+// spec.go:504-515, checado em spec.go:736-737) e Config.LoadDatasetSpecs recusa
+// a carga se esse `name` não for idêntico ao nome do arquivo
+// (config.go:733-736). Um nome com ponto, portanto, nunca é o de um dataset que
+// existe — só é alcançado onde a recusa já era certa.
+//
+// O texto enuncia a REGRA das aspas ("um nome citado inteiro entre aspas é um
+// identificador só"), e não a autoria do chamador: quem chega aqui pela rota
+// HTTP mandou uma string num campo do corpo, e o servidor não tem como saber se
+// ela foi copiada de um FROM citado inteiro. Afirmar as aspas ali seria afirmar
+// o que o código não sustenta.
+//
+// Um nome sem ponto devolve string vazia: `FROM inexistente` não tem nada a ver
+// com aspas, e sugerir que tem mandaria o operador corrigir o que não está
+// errado.
+func DottedDatasetNameHint(name string) string {
+	// Corte no PRIMEIRO ponto, com as duas partes não vazias. Em `"a.b.c"` a
+	// sugestão sai `"a"."b.c"`, e não três níveis: o FROM aceita no máximo
+	// namespace.tabela (parser.parseSelect), e sugerir uma forma que a
+	// gramática recusa trocaria uma recusa por outra.
+	i := strings.IndexByte(name, '.')
+	if i <= 0 || i == len(name)-1 {
+		return ""
+	}
+	return "; nome de dataset nunca tem ponto — um nome citado INTEIRO entre aspas" +
+		" é UM identificador, e não o par schema.tabela; se o ponto separa os dois," +
+		" cite cada parte: " +
+		quoteIdent(name[:i]) + "." + quoteIdent(name[i+1:])
+}
+
+// quoteIdent devolve name entre aspas duplas, dobrando as aspas internas — é o
+// escape que o lexer desfaz (scanQuoted), então o que sai daqui é colável de
+// volta na query.
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // binder acumula o estado de uma passada. Os campos Slot só podem ser

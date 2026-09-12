@@ -698,6 +698,53 @@ func (c *Config) ListDatasets() ([]string, error) {
 	return names, nil
 }
 
+// LoadDatasetSpecs lê TODO o datasets.directory e devolve as specs já
+// validadas como CONJUNTO, indexadas pelo nome do arquivo.
+//
+// É a porta ÚNICA entre o diretório e as specs, e ela existe porque as regras
+// de conjunto — unicidade de groupId e de schemaName — não são propriedade de
+// nenhum arquivo: schema.Load enxerga um YAML por vez. Antes dela o servidor
+// montava o mapa dentro do próprio New e o CLI abria um arquivo por comando,
+// o que deixava as duas regras valendo só para quem subisse o servidor. Elas
+// são propriedade do DIRETÓRIO, não do processo que o lê: um `FROM
+// telecom.tabela` ambíguo continua ambíguo quer quem pergunte seja o servidor,
+// o `nishidb query` ou o `nishidb ingest`.
+//
+// A leitura é ESTRITA: um YAML que não parseia derruba a chamada nomeando o
+// arquivo, mesmo quando o comando pediu outro dataset. O diretório é a
+// configuração do processo, e configuração quebrada é recusada, não
+// contornada.
+//
+// Não faz I/O de dados nem toma flock: são alguns arquivos YAML lidos uma vez
+// por comando, antes de qualquer Store abrir.
+func (c *Config) LoadDatasetSpecs() (map[string]*schema.DatasetSpec, error) {
+	names, err := c.ListDatasets()
+	if err != nil {
+		return nil, err
+	}
+	specs := make(map[string]*schema.DatasetSpec, len(names))
+	for _, name := range names {
+		spec, err := schema.Load(c.DatasetSpecPath(name), c.QueryDefaults())
+		if err != nil {
+			return nil, err
+		}
+		// O nome do arquivo é o nome do dataset em todo o resto do sistema —
+		// é ele que nomeia o diretório de dados e o rótulo das métricas. Um
+		// YAML que declara outro `name` faria os dois divergirem em silêncio.
+		if spec.Name != name {
+			return nil, fmt.Errorf("dataset %q: o YAML declara name %q", name, spec.Name)
+		}
+		specs[name] = spec
+	}
+	if err := ValidateGroupUniqueness(specs); err != nil {
+		return nil, err
+	}
+	if err := ValidateSchemaUniqueness(specs); err != nil {
+		return nil, err
+	}
+	return specs, nil
+}
+
 // ValidateGroupUniqueness recusa dois datasets que consumam o MESMO tópico com
 // o MESMO groupId no mesmo cluster.
 //
@@ -734,6 +781,66 @@ func ValidateGroupUniqueness(specs map[string]*schema.DatasetSpec) error {
 				other, name, key.topic, key.group)
 		}
 		seen[key] = name
+	}
+	return nil
+}
+
+// ValidateSchemaUniqueness recusa dois datasets que declarem o MESMO
+// schemaName.
+//
+// É a irmã da ValidateGroupUniqueness, e pelo mesmo motivo: validação de
+// CONJUNTO não cabe em schema.validate, que vê um arquivo por vez.
+//
+// O que ela impede: o schemaName é o container SQL em que as tabelas do
+// dataset serão apresentadas ao cliente — é o primeiro nível do catálogo que
+// o /v1/metadata e o driver JDBC vão expor. Repetido entre dois datasets, o
+// catálogo teria dois containers de mesmo nome com tabelas diferentes dentro,
+// e qual deles o cliente enxergaria dependeria da ordem de carga do diretório
+// — que é alfabética por acaso da implementação, nunca contrato. É a mesma
+// classe de defeito do groupId duplicado: nada quebra, tudo responde, e a
+// resposta é de outro dataset.
+//
+// A recusa deixou de ser preventiva: o motor RESOLVE o qualificador de um
+// `FROM telecom.tabela` contra os schemas declarados (query.Execute, pelo
+// Catalog). Dois datasets no mesmo schema fariam a mesma consulta abrir a
+// tabela de um ou de outro conforme a ordem de carga do diretório — que nunca
+// foi contrato.
+//
+// Ela é UMA das três recusas que sustentam a unicidade do par (schema,
+// tabela). As outras duas são de schema.validateCounters, e são sobre as
+// tabelas de DENTRO de um dataset: o contador não pode se chamar como o
+// próprio dataset nem como a tabela irmã do histórico. As três juntas é que
+// fazem o par endereçar uma tabela e só uma no servidor — o motor ainda
+// recusa o par ambíguo em runtime, mas como rede, não como barreira.
+//
+// A tabela IRMÃ do histórico NÃO entra nesta conta, e isso é desenho: ela
+// herda o schemaName do dataset base (schema.DeriveHistory) porque é outra
+// TABELA do mesmo dataset, e não tem YAML próprio — ListDatasets, que é quem
+// alimenta o mapa, nunca a enumera. Duas tabelas do mesmo dataset no mesmo
+// schema é o que se quer; dois DATASETS no mesmo schema é a colisão.
+//
+// A ordem alfabética do laço é o que faz um diretório com dois defeitos
+// reportar sempre o mesmo primeiro erro — o laço de um mapa não tem ordem.
+func ValidateSchemaUniqueness(specs map[string]*schema.DatasetSpec) error {
+	seen := make(map[string]string, len(specs))
+
+	names := make([]string, 0, len(specs))
+	for n := range specs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		schemaName := specs[name].SchemaName
+		if other, dup := seen[schemaName]; dup {
+			return fmt.Errorf(
+				"datasets %q e %q declaram o mesmo schemaName %q: o schema é o container em que as "+
+					"tabelas de cada dataset serão apresentadas no catálogo, e repetido ele deixa de "+
+					"identificar um dataset — qual dos dois o cliente enxergaria dependeria da ordem de "+
+					"carga do diretório; dê a cada dataset um schemaName próprio",
+				other, name, schemaName)
+		}
+		seen[schemaName] = name
 	}
 	return nil
 }

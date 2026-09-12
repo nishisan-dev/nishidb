@@ -150,6 +150,7 @@ func TestCompileNaoCarregaDicionarioEmUniversoFechado(t *testing.T) {
 		{"include explícito", `
 version: 1
 name: fechado
+schemaName: telecom
 materialization:
   key:
     field: id

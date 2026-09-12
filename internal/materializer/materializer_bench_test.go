@@ -123,6 +123,7 @@ func BenchmarkApplyStaleNullStore(b *testing.B) {
 const benchInSeqYAML = `
 version: 1
 name: radius_bench
+schemaName: telecom
 materialization:
   key:
     field: id

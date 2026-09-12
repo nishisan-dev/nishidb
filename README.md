@@ -319,6 +319,7 @@ dataset:
 ```yaml
 version: 1
 name: radius_sessions
+schemaName: telecom
 
 materialization:
   key:
@@ -357,6 +358,42 @@ schema:
       type: string
       alias: username
 ```
+
+`schemaName` é o schema SQL em que **todas** as tabelas deste dataset
+aparecem para o cliente — a tabela base, a histórica, as de contador e as de
+meta. É **obrigatório e não tem default**: o dataset sem a chave **não sobe**.
+Adivinhar o nome do dataset entregaria `radius_sessions.radius_sessions`, e
+deixar em branco entregaria a schema nula que o cliente mostra hoje; as duas
+foram consideradas e recusadas, porque a chave existe justamente para desfazer
+a ambiguidade entre datasets de um mesmo servidor. A gramática é `[a-z0-9_]+`,
+e o prefixo `_` é recusado — ele é reservado aos espaços de nome do produto
+(`_meta`, `_counters`). Não confunda com o bloco `schema:` logo abaixo, que
+declara os **campos**: um é o container das tabelas, o outro é o conteúdo de
+uma delas.
+
+O schema é **único no servidor**: dois datasets do mesmo `datasets.directory`
+não podem declarar o mesmo `schemaName`, e o par repetido derruba a carga
+nomeando o schema e os **dois** datasets. A razão é que o schema é o container
+em que as tabelas de cada dataset **serão apresentadas no catálogo** que o
+cliente SQL lê — repetido, o catálogo teria dois containers de mesmo nome com
+tabelas diferentes dentro, e qual deles o cliente enxergaria dependeria da
+ordem em que o diretório foi lido, que nunca foi contrato. E o schema é
+**endereço**: `SELECT * FROM telecom.por_olt` abre a tabela do dataset dono do
+schema `telecom`, seja qual for o dataset da conexão — repetido, a mesma
+consulta responderia de um ou de outro. A recusa do `schemaName` repetido vale
+para o servidor e para os comandos locais (`ingest`, `query`, `counters`,
+`offsets`), que leem o mesmo diretório: ela é da **carga** da configuração, não
+do SQL.
+
+No SQL, um qualificador que não é schema declarado é **recusado**, nomeando os
+que existem — isso é do motor de consulta, e só os comandos que executam SQL
+(`query`, e o servidor) chegam a ele.
+
+A tabela **histórica não entra na conta do `schemaName` único**: ela herda o
+schema do dataset que a declara, porque é outra tabela do mesmo dataset. Ela
+entra, sim, na conta dos **nomes de tabela dentro do schema** — um contador não
+pode se chamar como ela (`events_history`, pelo `history.suffix`) nem como o
+próprio dataset, e o YAML é recusado na subida se isso acontecer.
 
 Um campo **não declarado** aqui continua sendo aceito (`unknownFields:
 include`) e vira coluna `auto`, mas só é consultável pelo **nome original** —
@@ -1342,11 +1379,16 @@ evento atrasado. Sem isso o contador está certo sobre um estado errado.
 ### SQL suportado (v1)
 
 ```sql
-SELECT <colunas | *> FROM <dataset>
+SELECT <colunas | *> FROM <tabela>
   [WHERE <predicado>]
   [ORDER BY <chave> [, <chave>]*]
   [LIMIT <n>]
   [OFFSET <n>]
+
+<tabela> := <nome>                   -- a base do dataset da conexão
+          | <schema> "." <nome>      -- endereço completo, qualquer dataset
+          | "_counters" "." <nome>   -- atalho: no dataset da conexão
+          | "_meta" "." <nome>       -- atalho: no dataset da conexão
 
 <chave> := <coluna> [ASC | DESC] [NULLS (FIRST | LAST)]
 
@@ -1360,6 +1402,46 @@ SELECT <colunas | *> FROM <dataset>
 Comparadores `=`, `!=`, `>`, `>=`, `<`, `<=`; `AND`, `OR`, parênteses;
 `IS NULL` / `IS NOT NULL`; `LIKE` e `NOT LIKE`; alias e campos entre aspas
 duplas (obrigatórias para nomes com hífen, como `"Acct-Status-Type"`).
+
+**O `FROM` qualificado pelo schema é endereço de servidor, não de conexão.**
+O par `schema.tabela` endereça uma tabela em qualquer dataset:
+`SELECT * FROM telecom.por_olt` abre o contador `por_olt`
+do dataset que declara o schema `telecom`, mesmo que a conexão tenha sido
+aberta contra outro dataset. Que o par endereça **uma** tabela e não duas vem
+de três recusas na **carga da configuração** — `schemaName` único entre
+datasets, e nome de contador distinto do nome do dataset e do da tabela
+histórica —, não da forma do catálogo; por isso o motor ainda recusa um par
+ambíguo em runtime, como rede. Vale para a base e para as views, e é a forma que
+um cliente SQL gera sozinho a partir do catálogo (é o que o DBeaver monta ao
+clicar na tabela). O dataset da requisição continua sendo o default das formas
+NÃO qualificadas — `FROM <nome>` e os atalhos `_counters.<nome>` /
+`_meta.<nome>`, que sempre significam "neste dataset".
+
+Qualificador que não é schema declarado é **recusado**, listando os que
+existem; schema certo com tabela que não existe é recusado listando as tabelas
+daquele schema. Nenhum dos dois é erro interno: o cliente recebe erro de bind
+com a posição do nome ofensor.
+
+**As aspas envolvem UM identificador, e isso vale também no `FROM`.**
+`FROM "telecom.por_olt"` pede uma tabela cujo *nome* contém um ponto, e não a
+`por_olt` do schema `telecom` — para qualificar, cite cada parte:
+`FROM "telecom"."por_olt"`. As formas `telecom.por_olt` e `"telecom".por_olt`
+também valem; o que não vale é o nome inteiro entre aspas, e a recusa **mostra
+a forma certa** em vez de só dizer que o dataset não existe. É o erro de quem
+copia o nome já qualificado de uma ferramenta gráfica e o cola entre aspas.
+
+A mesma correção sai pelos **dois** pontos em que essa consulta pode ser
+recusada: o bind, quando o nome citado inteiro não é o do handle, e o
+`404 UNKNOWN_DATASET` do `POST /v1/query`, quando o nome chega no campo
+`dataset` do corpo — que é o caminho do driver JDBC, porque ele lê o nome do
+`FROM` e o manda no corpo, e aí a recusa acontece antes de o SQL ser analisado.
+Nome desconhecido **sem** ponto recebe a mensagem de sempre, sem falar de aspas.
+
+Os limites `query.maxRows`, `query.timeout` e `query.maxTimeout` são do
+**dataset lido**, não do da conexão: numa consulta `FROM telecom.tabela` valem
+os declarados no YAML de quem é dono do schema `telecom`, venha a requisição
+pelo handle que vier. Uma conexão com teto alto não vira porta para ler, sob
+esse teto, um dataset que declarou teto baixo.
 
 `LIKE` vale só para coluna de **texto** — outro tipo é recusado no bind, com a
 posição da coluna, nunca com resultado vazio. `%` casa qualquer sequência e `_`
@@ -1390,11 +1472,46 @@ O namespace `_meta` responde o que o dataset tem, por SQL, sem precisar de
 suporte em cliente nenhum:
 
 ```sql
+SELECT id, name, schema, kind, columns FROM _meta.tables ORDER BY id
 SELECT name, type, auto, index, indexed, parent, occurrences, typeMismatches, coercions FROM _meta.fields
 SELECT name FROM _meta.fields WHERE parent = 'persistent'
 SELECT name, rows, total, groupBy, condition, groups, refused FROM _meta.counters
 SELECT partition, appliedOffset, highWatermark, lag, state FROM _meta.kafka ORDER BY partition
 ```
+
+`_meta.tables` lista **toda tabela consultável do dataset**, a começar por ela
+mesma: a base como `TABLE` no schema declarado no YAML, os contadores como
+`VIEW` no mesmo schema, e as tabelas de meta como `VIEW` no schema `_meta`. É a
+primeira pergunta de quem chega a um dataset que não conhece, e a resposta não
+exige rota HTTP nem suporte em cliente nenhum.
+
+`id` é o endereço do **atalho** — `_counters.por_olt`, `_meta.kafka`, ou só o
+nome na tabela base —, e é a chave da tabela: `name` sozinho não é único,
+porque um contador pode se chamar `tables` e aparecer ao lado desta. O `FROM`
+aceita também o par `schema.name`, que é o endereço completo (ver abaixo).
+`namespace` é NULL só na tabela base, que não tem atalho com prefixo; `columns`
+é a contagem de colunas descritíveis (os nomes estão na `_meta.fields`); e
+`description` é NULL em toda linha hoje — nada declara descrição de tabela, e o
+catálogo não inventa uma. NULL aqui é ausência: a chave simplesmente não sai na
+linha NDJSON.
+
+O `GET /v1/metadata` publica **a mesma lista**, por dataset, no campo `tables`
+— com `name`, `schema`, `namespace`, `kind`, `description` e as colunas de cada
+tabela, cada uma já com o código `jdbc` que o servidor calcula. O dataset ganhou
+também `schema`, o `schemaName` declarado no YAML. É de onde o driver JDBC monta
+a árvore de um cliente SQL, que não escreve SQL de catálogo sozinho. As duas
+saídas vêm da mesma enumeração do motor: o que a `_meta.tables` responde por SQL
+e o que o `/v1/metadata` publica no wire não podem divergir.
+
+Divergem na FORMA de uma ausência, e só nisso: `namespace` e `description`, que
+a `_meta.tables` publica como NULL, saem no JSON como `""` — os campos do
+documento são strings, não ponteiros, e no wire deste documento só o `alias` de
+uma coluna é nulo. Quem ler os dois canais em sequência não deve esperar `null`
+no JSON.
+
+Os dois campos são **aditivos**: `columns` continua sendo a lista completa da
+tabela base — as mesmas colunas que saem na linha de `kind: TABLE` —, e um
+cliente compilado antes deles lê o documento como lia.
 
 `_meta.counters` lista os contadores mantidos na escrita do dataset, com a
 definição e os números vivos; `_counters.<nome>`, uma tabela por contador
@@ -1594,6 +1711,43 @@ IntelliJ funcionarem:
 jdbc:nishidb://db01:9142/radius_sessions?tls=true&tlsCaFile=/etc/nishidb/ca.pem
 ```
 
+A árvore que a ferramenta mostra sai do `schemaName` e do catálogo publicado no
+`/v1/metadata` — o driver não descobre tabela por conta própria. Para o dataset
+acima, se ele declarasse dois contadores:
+
+```
+telecom                        (schema: o schemaName do YAML)
+├── Tables
+│   └── radius_sessions        a tabela base
+└── Views
+    ├── autenticados_por_olt   um contador declarado em `counters:`
+    └── autenticados_por_pon   outro
+_meta                          (schema do motor; descreve o dataset da conexão)
+└── Views
+    ├── counters
+    ├── fields
+    ├── kafka
+    └── tables
+```
+
+As quatro do `_meta` existem em todo dataset declarado, com contador ou sem,
+com Kafka ou sem: "este dataset não consome de Kafka" é uma resposta, e
+`SELECT * FROM _meta.kafka` nunca pode ser erro. A tabela **histórica** é a
+exceção — ela publica só `fields` e `tables`, porque contador e ingestão são do
+dataset base.
+
+O `TABLE_SCHEM` de cada linha é preenchido, e é ele que faz a ferramenta gerar
+`SELECT ... FROM telecom.autenticados_por_olt` ao clicar na tabela — a forma
+qualificada, que o servidor resolve contra o dataset dono do schema. Não há
+catálogo: o endereço tem dois níveis, o de cima é o schema, e `getCatalogs`
+responde vazio. As tabelas do `_meta` saem como `VIEW`, e nunca como
+`SYSTEM TABLE`: objeto de sistema é escondido por default nas ferramentas
+gráficas, e tabela que existe para ser descoberta não pode nascer invisível.
+
+Contra um servidor **anterior** a estes campos o driver volta à árvore de
+sempre — uma linha `TABLE` por dataset, sem schema e sem views —, sem lançar
+nada.
+
 **Python — client DB-API 2.0** ([clients/python](clients/python)), pacote
 `nishidb`, Python 3.10+, também sem dependência de runtime. É o que faz
 `pandas.read_sql` e as ferramentas de BI funcionarem.
@@ -1638,6 +1792,9 @@ Detalhes de cada um em [clients/python/README.md](clients/python/README.md).
   ambiente da rodada declarados.
 - [Aceite do M5](docs/aceite-m5.md) — autenticação e TLS (Fase 11); a rodada
   operacional no piloto (Fase C) segue pendente.
+- [Aceite do schema declarado](docs/aceite-schema-declarado.md) — o `schemaName`,
+  o catálogo, a `_meta.tables` e a árvore do cliente SQL; o aceite pelo DBeaver
+  real segue pendente.
 - [Rodada de aceite](benchmark/baselines/aceite-8m-20260815.md) — 8M entidades
   com consultas concorrentes, corpus de referência.
 - [Débitos abertos](docs/debitos.md) — o que ficou para o M2, M3, M4 e M5, com dono.

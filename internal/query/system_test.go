@@ -14,6 +14,7 @@ import (
 const yamlWithExpiration = `
 version: 1
 name: alarmes
+schemaName: telecom
 materialization:
   key:
     field: id

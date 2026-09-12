@@ -12,6 +12,7 @@ import (
 const specPoliticasYAML = `
 version: 1
 name: %s
+schemaName: telecom
 materialization:
   key:
     field: id

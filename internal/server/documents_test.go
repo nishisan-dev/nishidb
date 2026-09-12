@@ -2,10 +2,12 @@ package server_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -633,6 +635,7 @@ func TestMetadataPublicaAColunaDerivada(t *testing.T) {
 // campo json.
 const specWithExtract = `version: 1
 name: d
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -661,4 +664,335 @@ func serverWithExtract(t *testing.T) *server.Server {
 	}
 	run(t, srv)
 	return srv
+}
+
+// tableOf acha a linha de `tables` pelo endereço do atalho — `_meta.tables`,
+// `_counters.por_olt`, ou só o nome na base —, que é o mesmo `id` pelo qual a
+// `_meta.tables` endereça a tabela por SQL.
+func tableOf(t *testing.T, d protocol.DatasetMeta, id string) protocol.TableMeta {
+	t.Helper()
+	for _, tab := range d.Tables {
+		if idOfTable(tab) == id {
+			return tab
+		}
+	}
+	t.Fatalf("a tabela %q não saiu no /v1/metadata do dataset %q: %s", id, d.Name, idsOfTables(d))
+	return protocol.TableMeta{}
+}
+
+// idOfTable monta o endereço do ATALHO a partir da linha, pela mesma regra da
+// `_meta.tables`: namespace vazio é a base, aberta só pelo nome.
+func idOfTable(tab protocol.TableMeta) string {
+	if tab.Namespace == "" {
+		return tab.Name
+	}
+	return tab.Namespace + "." + tab.Name
+}
+
+func idsOfTables(d protocol.DatasetMeta) string {
+	ids := make([]string, 0, len(d.Tables))
+	for _, tab := range d.Tables {
+		ids = append(ids, idOfTable(tab))
+	}
+	return strings.Join(ids, ",")
+}
+
+// counterBlock declara UM contador sobre o campo indexado do specConsultavel.
+//
+// Ele existe para que a lista do catálogo tenha a linha `_counters.<nome>`: é a
+// ÚNICA em que o Schema (o do dataset) difere do Namespace, e é o ramo de
+// query.catalogEntries que escolhe o container da árvore. Um fixture sem
+// contador deixa esse ramo fora da lista, e um teste que se anuncia como "a
+// lista INTEIRA" passaria com ele quebrado.
+const counterBlock = `counters:
+  - name: por_status
+    groupBy: [status]
+`
+
+// serverWithCounter sobe o servidor do specConsultavel com o contador declarado.
+// O dataset é povoado ANTES do `counters:`, como no counters_test: é o servidor
+// que constrói o contador na abertura.
+func serverWithCounter(t *testing.T, n int) *server.Server {
+	t.Helper()
+	a := newEnvWithStorage(t, blockPadrao, "")
+	a.writeDataset("d", strings.ReplaceAll(specConsultavel, "%s", "d")+counterBlock)
+	seed(t, a, "d", n)
+	srv, err := server.Novo(a.load(), server.Options{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	run(t, srv)
+	return srv
+}
+
+// O /v1/metadata é de onde o driver JDBC monta a árvore do cliente SQL, e até
+// aqui ele só publicava as colunas da tabela BASE: nem contador nem tabela de
+// meta apareciam, e a lista completa só saía por `SELECT ... FROM _meta.tables`
+// — que nenhuma ferramenta que monta árvore escreve sozinha.
+//
+// O teste cobra as três informações que a árvore precisa e que o driver não
+// tem como derivar: o SCHEMA em que cada tabela mora (que para as do `_meta`
+// não é o do dataset), o NAMESPACE do atalho (que não sai de (schema, nome)) e
+// o código JDBC de cada coluna — calculado no servidor, pelo mesmo columnMeta
+// que já serve as colunas da base.
+//
+// O fixture declara um contador de propósito: sem ele a lista não tem nenhuma
+// linha em que Schema e Namespace divirjam, e o ramo do catálogo que põe o
+// contador no schema do DATASET — e não no `_virtual` da spec sintética dele —
+// não é exercitado por este canal.
+func TestMetadataPublicaOSchemaEOCatalogoDeTabelas(t *testing.T) {
+	srv := serverWithCounter(t, 3)
+
+	m := readJSON[protocol.Metadata](t, srv, "/v1/metadata")
+	if len(m.Datasets) != 1 {
+		t.Fatalf("datasets = %d, quer 1", len(m.Datasets))
+	}
+	d := m.Datasets[0]
+	if d.Schema != "telecom" {
+		t.Fatalf("schema = %q, quer telecom (o schemaName declarado no YAML)", d.Schema)
+	}
+
+	// A lista INTEIRA e em ordem, e não um Contains: o que se cobra é a
+	// enumeração, e uma asserção que só procurasse a base passaria com o
+	// catálogo errado ao redor dela. A ordem é a do Catalog — base, contadores,
+	// `_meta` por nome.
+	const wantIDs = "d,_counters.por_status,_meta.counters,_meta.fields,_meta.kafka,_meta.tables"
+	if got := idsOfTables(d); got != wantIDs {
+		t.Fatalf("tabelas = %s, quero %s", got, wantIDs)
+	}
+
+	// O contador mora no schema do DATASET, ao lado da base — é tabela do
+	// usuário —, e é alcançado pelo atalho `_counters`. É a única linha em que
+	// os dois endereços não coincidem.
+	counter := tableOf(t, d, "_counters.por_status")
+	if counter.Schema != "telecom" || counter.Namespace != "_counters" || counter.Kind != "VIEW" {
+		t.Errorf("o contador saiu como %+v; quero schema telecom, namespace _counters e kind VIEW", counter)
+	}
+
+	base := tableOf(t, d, "d")
+	if base.Schema != "telecom" || base.Namespace != "" || base.Kind != "TABLE" {
+		t.Errorf("a base saiu como %+v; quero schema telecom, namespace vazio e kind TABLE", base)
+	}
+	// A base publica as MESMAS colunas do campo `columns` do dataset: é o
+	// mesmo elemento do catálogo servindo os dois campos. A comparação é do
+	// JSON dos dois blocos porque o Alias é ponteiro, e depois de decodificado
+	// cada bloco tem o seu — comparar as structs compararia endereços.
+	if a, b := reserialize(t, base.Columns), reserialize(t, d.Columns); a != b {
+		t.Errorf("as colunas da base divergem entre os dois campos.\ntables:\n%s\ncolumns:\n%s", a, b)
+	}
+
+	// A tabela de meta mora no schema `_meta`, e não no do dataset: é o que a
+	// árvore do cliente separa em dois containers.
+	fields := tableOf(t, d, "_meta.fields")
+	if fields.Schema != "_meta" || fields.Namespace != "_meta" || fields.Kind != "VIEW" {
+		t.Errorf("a _meta.fields saiu como %+v; quero schema e namespace _meta e kind VIEW", fields)
+	}
+	if fields.Description != "" {
+		t.Errorf("description = %q; hoje não há onde declará-la e o catálogo não inventa uma", fields.Description)
+	}
+
+	// O `jdbc` de TODA coluna de TODA tabela: é calculado no servidor
+	// (DescriptorOf) e o driver não sabe derivá-lo do nome do tipo.
+	for _, tab := range d.Tables {
+		if len(tab.Columns) == 0 {
+			t.Errorf("a tabela %q saiu sem colunas", idOfTable(tab))
+		}
+		for _, c := range tab.Columns {
+			if c.JDBC == "" {
+				t.Errorf("a coluna %s.%s saiu sem código jdbc", idOfTable(tab), c.Name)
+			}
+		}
+	}
+	// Uma coluna nomeada, para que o laço acima não passe com um catálogo que
+	// publicasse OTHER para tudo.
+	name := columnOf(t, fields, "name")
+	if name.Type != "string" || name.JDBC != protocol.JDBCVarchar {
+		t.Errorf("_meta.fields.name = %+v, quer string/%s", name, protocol.JDBCVarchar)
+	}
+}
+
+func columnOf(t *testing.T, tab protocol.TableMeta, name string) protocol.ColumnMeta {
+	t.Helper()
+	for _, c := range tab.Columns {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("a coluna %q não saiu na tabela %q", name, idOfTable(tab))
+	return protocol.ColumnMeta{}
+}
+
+// rowsOfMetaTables roda `SELECT ... FROM _meta.tables ORDER BY id` pela rota
+// de consulta e devolve uma linha por tabela, no formato
+// `id|schema|name|namespace|kind|colunas`. `namespace` é NULL na base — e NULL
+// é ausência no wire —, o que sai como campo vazio, do mesmo jeito que o
+// /v1/metadata o publica.
+func rowsOfMetaTables(t *testing.T, srv *server.Server, dataset string) []string {
+	t.Helper()
+	resp := consulta(t, srv, `{"dataset":"`+dataset+
+		`","sql":"SELECT id, schema, name, namespace, kind, columns FROM _meta.tables ORDER BY id"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("a consulta foi recusada (%d): %s", resp.StatusCode, failOf(t, resp).Message)
+	}
+	rows, reader := result(t, resp)
+	if reader.End() == nil {
+		t.Fatal("o stream não trouxe a linha de fecho")
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		var l map[string]any
+		if err := json.Unmarshal([]byte(row), &l); err != nil {
+			t.Fatalf("linha ilegível: %v", err)
+		}
+		text := func(col string) string {
+			v, _ := l[col].(string)
+			return v
+		}
+		columns, ok := l["columns"].(float64)
+		if !ok {
+			t.Fatalf("linha sem contagem de colunas: %s", row)
+		}
+		out = append(out, fmt.Sprintf("%s|%s|%s|%s|%s|%d",
+			text("id"), text("schema"), text("name"), text("namespace"), text("kind"), int(columns)))
+	}
+	return out
+}
+
+// rowsOfMetadata põe o `tables` do /v1/metadata no MESMO formato, ordenado
+// por id — é a única forma de os dois documentos serem comparáveis linha a
+// linha.
+func rowsOfMetadata(t *testing.T, srv *server.Server, dataset string) []string {
+	t.Helper()
+	m := readJSON[protocol.Metadata](t, srv, "/v1/metadata?dataset="+dataset)
+	if len(m.Datasets) != 1 {
+		t.Fatalf("o /v1/metadata filtrado trouxe %d datasets", len(m.Datasets))
+	}
+	out := make([]string, 0, len(m.Datasets[0].Tables))
+	for _, tab := range m.Datasets[0].Tables {
+		out = append(out, fmt.Sprintf("%s|%s|%s|%s|%s|%d",
+			idOfTable(tab), tab.Schema, tab.Name, tab.Namespace, tab.Kind, len(tab.Columns)))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// O /v1/metadata e a `_meta.tables` respondem à MESMA pergunta — que tabelas
+// este dataset tem — por dois canais, e este projeto trata duas derivações do
+// mesmo fato como a origem de "uma ferramenta que discorda do SQL sem nada
+// estar quebrado". As duas saem do query.Engine.Catalog, e é isto que o teste
+// cobra.
+//
+// A comparação é da lista INTEIRA e de todos os campos que as duas publicam, e
+// não de um Contains: montar o `tables` a partir dos registros do motor em vez
+// do Catalog produz uma lista PLAUSÍVEL — ela erra a linha que o Catalog
+// acrescenta à parte (`_meta.fields`, que não está em registro nenhum) e o
+// schema das demais, que no registro é o namespace e não o container da
+// árvore.
+//
+// Os dois lados são exercitados nos DOIS datasets do fixture com histórico,
+// porque as listas são diferentes (a irmã não recebe `_meta.counters` nem
+// `_meta.kafka`, débito 117): um oráculo que valesse só para o base passaria
+// com a irmã servindo o catálogo do base.
+func TestMetadataEMetaTablesNaoPodemDiscordarDoCatalogo(t *testing.T) {
+	srv := serverWithHistory(t, specWithHistory)
+	for _, dataset := range []string{"eventos", "eventos_history"} {
+		bySQL := rowsOfMetaTables(t, srv, dataset)
+		byHTTP := rowsOfMetadata(t, srv, dataset)
+		if len(bySQL) < 3 {
+			t.Fatalf("%s: a _meta.tables trouxe %d linhas; com menos de três o oráculo não distingue nada",
+				dataset, len(bySQL))
+		}
+		if strings.Join(bySQL, "\n") != strings.Join(byHTTP, "\n") {
+			t.Errorf("%s: o /v1/metadata e a _meta.tables discordam.\npor SQL:\n%s\npor HTTP:\n%s",
+				dataset, strings.Join(bySQL, "\n"), strings.Join(byHTTP, "\n"))
+		}
+	}
+}
+
+// previousDatasetMeta é o DatasetMeta como ele era ANTES de `schema` e
+// `tables` entrarem: os mesmos nomes de chave, na mesma forma. Ele está
+// escrito à mão, e não derivado do protocol.DatasetMeta, porque é exatamente
+// isso que um cliente compilado contra a versão anterior tem em mãos — derivá-lo
+// do tipo corrente faria o oráculo acompanhar a mudança que ele existe para
+// vigiar.
+type previousDatasetMeta struct {
+	Name             string                `json:"name"`
+	Key              string                `json:"key"`
+	MaxRows          int                   `json:"maxRows"`
+	TimeoutMs        int64                 `json:"timeoutMs"`
+	DefaultTimeoutMs int64                 `json:"defaultTimeoutMs"`
+	MaxCols          int                   `json:"maxCols"`
+	OnMaxCols        string                `json:"onMaxCols"`
+	MaxNestedCols    int                   `json:"maxNestedCols"`
+	Columns          []protocol.ColumnMeta `json:"columns"`
+}
+
+// Os campos novos são ADITIVOS: um cliente que não os conhece continua lendo o
+// documento como antes. É a condição para publicá-los sem quebrar o driver e o
+// client Python já instalados — os dois decodificam por chave e ignoram o que
+// não conhecem.
+//
+// O que o teste protege é o OUTRO lado da aditividade, que é o que se perde por
+// descuido: mover informação para o bloco novo. Esvaziar `columns` porque "agora
+// está em tables", ou trocar `name` pelo par (schema, name), continuaria
+// decodificando limpo num cliente antigo e o deixaria sem colunas nenhuma.
+func TestOClienteAnteriorAosCamposNovosContinuaLendoOMetadata(t *testing.T) {
+	srv := serverWithData(t, 3, blockPadrao+"query:\n  defaultMaxRows: 777\n  defaultTimeout: 9s\n")
+
+	var body struct {
+		Datasets []previousDatasetMeta `json:"datasets"`
+	}
+	if err := json.Unmarshal([]byte(fetch(t, srv, "/v1/metadata")), &body); err != nil {
+		t.Fatalf("um cliente anterior não decodificou o documento: %v", err)
+	}
+	if len(body.Datasets) != 1 {
+		t.Fatalf("datasets = %d, quer 1", len(body.Datasets))
+	}
+	d := body.Datasets[0]
+	// `name` continua sendo o nome do DATASET, e não o par com o schema: é por
+	// ele que o cliente anterior monta o `?dataset=` e o corpo do /v1/query.
+	if d.Name != "d" || d.Key != "id" {
+		t.Errorf("name/key = %q/%q, quer d/id", d.Name, d.Key)
+	}
+	if d.MaxRows != 777 || d.TimeoutMs != 9000 || d.DefaultTimeoutMs != 9000 {
+		t.Errorf("limites = %d linhas, teto %d ms, padrão %d ms; quero 777/9000/9000",
+			d.MaxRows, d.TimeoutMs, d.DefaultTimeoutMs)
+	}
+	if d.MaxCols != 65535 || d.OnMaxCols != "ignore" || d.MaxNestedCols == 0 {
+		t.Errorf("teto de campos = %d/%q/%d", d.MaxCols, d.OnMaxCols, d.MaxNestedCols)
+	}
+	// `columns` continua sendo a lista COMPLETA da tabela base, e não uma lista
+	// vazia com o conteúdo mudado de lugar. Os nomes saem ORDENADOS para a
+	// comparação: a ordem da lista é a de FieldID, e o que este teste protege é
+	// o CONJUNTO — nenhuma coluna mudou de lugar para o bloco novo.
+	names := make([]string, 0, len(d.Columns))
+	byName := map[string]protocol.ColumnMeta{}
+	for _, c := range d.Columns {
+		names = append(names, c.Name)
+		byName[c.Name] = c
+	}
+	sort.Strings(names)
+	if got := strings.Join(names, ","); got != "id,ip,porta,status" {
+		t.Errorf("columns = %s, quero id,ip,porta,status", got)
+	}
+	// O conteúdo de cada coluna também continua inteiro: alias, código JDBC e
+	// índice declarado são o que o driver anterior lê de cada uma.
+	status := byName["status"]
+	if status.Alias == nil || *status.Alias != "estado" {
+		t.Errorf("o alias de status sumiu: %+v", status)
+	}
+	if status.JDBC != protocol.JDBCVarchar || status.Index != "bitmap" {
+		t.Errorf("status = %+v, quer %s / bitmap", status, protocol.JDBCVarchar)
+	}
+}
+
+// reserialize devolve o JSON de um valor já decodificado, para comparar blocos
+// cujo conteúdo tem ponteiro — comparar as structs compararia endereços.
+func reserialize(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

@@ -125,6 +125,7 @@ func TestMetaKafkaTrazAIdentidadeDoYAML(t *testing.T) {
 
 const specWithKafkaDesligado = `version: 1
 name: eventos
+schemaName: telecom
 source:
   type: kafka
   kafka:

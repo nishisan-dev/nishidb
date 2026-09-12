@@ -19,6 +19,7 @@ import (
 
 const targetYAML = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -239,6 +240,7 @@ var _ executor.RowIterator = (executor.RowIterator)(nil)
 
 const targetWithExtract = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id
@@ -300,6 +302,7 @@ func TestCampoDeTopoTemParentNulo(t *testing.T) {
 // o que faz as colunas de contador terem sobre o que falar.
 const targetWithDerivedYAML = `version: 1
 name: eventos
+schemaName: telecom
 materialization:
   key:
     field: id

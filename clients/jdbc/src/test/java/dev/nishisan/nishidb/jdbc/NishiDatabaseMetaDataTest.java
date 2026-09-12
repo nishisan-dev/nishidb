@@ -2,6 +2,7 @@ package dev.nishisan.nishidb.jdbc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -32,27 +33,74 @@ class NishiDatabaseMetaDataTest {
                 + ",\"index\":\"" + indice + "\",\"auto\":" + auto + "}";
     }
 
-    private static final String META = "{\"datasets\":["
-            + "{\"name\":\"zebras\",\"key\":\"id\",\"maxRows\":10,\"timeoutMs\":100,\"columns\":["
-            + coluna("id", null, "string", "VARCHAR", false, 0, 0, "none", false) + "]},"
-            + "{\"name\":\"eventos\",\"key\":\"service_id\",\"maxRows\":1000,\"timeoutMs\":30000,"
-            + "\"columns\":["
-            + coluna("service_id", null, "string", "VARCHAR", false, 0, 0, "none", false) + ","
+    private static String tabela(String nome, String schema, String namespace, String tipo,
+            String colunas) {
+        return "{\"name\":\"" + nome + "\",\"schema\":\"" + schema + "\",\"namespace\":\""
+                + namespace + "\",\"kind\":\"" + tipo + "\",\"description\":\"\",\"columns\":["
+                + colunas + "]}";
+    }
+
+    private static final String COLUNA_ID =
+            coluna("id", null, "string", "VARCHAR", false, 0, 0, "none", false);
+
+    private static final String COLUNAS_EVENTOS =
+            coluna("service_id", null, "string", "VARCHAR", false, 0, 0, "none", false) + ","
             + coluna("status", "estado", "string", "VARCHAR", true, 0, 0, "bitmap", false) + ","
             + coluna("payload", null, "json", "VARCHAR", true, 0, 0, "none", true) + ","
-            + coluna("quando", null, "timestamp", "TIMESTAMP", true, 24, 3, "none", false)
-            + "]}]}";
+            + coluna("quando", null, "timestamp", "TIMESTAMP", true, 24, 3, "none", false);
+
+    /**
+     * As tabelas do {@code _meta}, que TODO dataset publica.
+     *
+     * <p>Elas aparecem uma vez em cada elemento de {@code datasets} porque o
+     * atalho {@code _meta.x} significa "no dataset da requisição" — é o
+     * catálogo do servidor que é assim, e não o fixture inventando repetição.
+     * O driver tem de mostrá-las UMA vez na árvore.
+     */
+    private static final String TABELAS_DE_META =
+            tabela("fields", "_meta", "_meta", "VIEW",
+                    coluna("name", null, "string", "VARCHAR", false, 0, 0, "none", false)) + ","
+            + tabela("tables", "_meta", "_meta", "VIEW",
+                    coluna("name", null, "string", "VARCHAR", false, 0, 0, "none", false));
+
+    private static final String META = "{\"datasets\":["
+            + "{\"name\":\"zebras\",\"schema\":\"zoo\",\"key\":\"id\",\"maxRows\":10,"
+            + "\"timeoutMs\":100,\"columns\":[" + COLUNA_ID + "],\"tables\":["
+            + tabela("zebras", "zoo", "", "TABLE", COLUNA_ID) + "," + TABELAS_DE_META + "]},"
+            + "{\"name\":\"eventos\",\"schema\":\"telecom\",\"key\":\"service_id\","
+            + "\"maxRows\":1000,\"timeoutMs\":30000,"
+            + "\"columns\":[" + COLUNAS_EVENTOS + "],\"tables\":["
+            + tabela("eventos", "telecom", "", "TABLE", COLUNAS_EVENTOS) + ","
+            + tabela("por_olt", "telecom", "_counters", "VIEW",
+                    coluna("olt", null, "string", "VARCHAR", false, 0, 0, "none", false) + ","
+                    + coluna("total", null, "int64", "BIGINT", false, 19, 0, "none", false)) + ","
+            + TABELAS_DE_META + "]}]}";
+
+    /**
+     * O MESMO documento como um binário anterior a {@code tables} o responde:
+     * sem o campo, e sem o {@code schema} do dataset.
+     *
+     * <p>Os dois campos são aditivos e nasceram juntos. Um driver que assuma
+     * que eles existem quebra contra o servidor que o operador ainda não
+     * atualizou — e é esse servidor que este fixture representa.
+     */
+    private static final String META_SEM_TABLES = "{\"datasets\":["
+            + "{\"name\":\"zebras\",\"key\":\"id\",\"maxRows\":10,\"timeoutMs\":100,"
+            + "\"columns\":[" + COLUNA_ID + "]},"
+            + "{\"name\":\"eventos\",\"key\":\"service_id\",\"maxRows\":1000,\"timeoutMs\":30000,"
+            + "\"columns\":[" + COLUNAS_EVENTOS + "]}]}";
 
     private static final String STATS = "{\"process\":{\"version\":\"v1.4.2-3-gabc\",\"query\":{}},"
             + "\"datasets\":[]}";
 
     private String stats = STATS;
+    private String metadata = META;
 
     private void comMetadata(Consumer<DatabaseMetaData> corpo) throws Exception {
         HttpServer srv = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         srv.createContext("/", (HttpExchange ex) -> {
             String c = ex.getRequestURI().getPath();
-            responde(ex, "/v1/stats".equals(c) ? stats : META);
+            responde(ex, "/v1/stats".equals(c) ? stats : metadata);
         });
         srv.start();
         try {
@@ -86,18 +134,253 @@ class NishiDatabaseMetaDataTest {
         return out;
     }
 
-    /** As tabelas saem ORDENADAS por nome, como o contrato manda. */
+    /**
+     * A árvore inteira, na ordem do contrato e com o TABLE_SCHEM preenchido.
+     *
+     * <p>A base sai como TABLE no schema do dataset; o contador e as tabelas
+     * do {@code _meta} saem como VIEW — o contador no schema do dataset, as de
+     * meta no schema {@code _meta}. A ordem é TABLE_TYPE, TABLE_CAT,
+     * TABLE_SCHEM, TABLE_NAME; o TABLE_CAT é nulo em toda linha, então o que
+     * se vê aqui é tipo, schema e nome.
+     *
+     * <p>É o TABLE_SCHEM que faz a ferramenta gerar {@code FROM telecom.x} —
+     * medido no DBeaver antes desta implementação existir. Devolvê-lo nulo faz
+     * o SQL gerado cair no dataset da conexão, que é outra tabela.
+     *
+     * <p>As duas linhas do {@code _meta} saem UMA vez, e não uma por dataset:
+     * o documento as repete em cada elemento de {@code datasets} porque o
+     * atalho é relativo ao dataset da requisição.
+     */
     @Test
-    void asTabelasSaemNaOrdemDoContrato() throws Exception {
+    void listaBaseEViewsComSchema() throws Exception {
         comMetadata(m -> {
             try (ResultSet rs = m.getTables(null, null, null, null)) {
                 assertEquals(10, rs.getMetaData().getColumnCount());
-                List<String> nomes = new ArrayList<>();
-                while (rs.next()) {
-                    nomes.add(rs.getString("TABLE_NAME"));
-                    assertEquals("TABLE", rs.getString("TABLE_TYPE"));
+                assertEquals(List.of(
+                        "TABLE|telecom|eventos",
+                        "TABLE|zoo|zebras",
+                        "VIEW|_meta|fields",
+                        "VIEW|_meta|tables",
+                        "VIEW|telecom|por_olt"), arvore(rs));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    /** Tipo, schema e nome de cada linha, na ordem em que o driver as devolveu. */
+    private static List<String> arvore(ResultSet rs) throws SQLException {
+        List<String> out = new ArrayList<>();
+        while (rs.next()) {
+            assertNull(rs.getString("TABLE_CAT"), "o NishiDB não tem catálogo");
+            out.add(rs.getString("TABLE_TYPE") + "|" + rs.getString("TABLE_SCHEM") + "|"
+                    + rs.getString("TABLE_NAME"));
+        }
+        return out;
+    }
+
+    /**
+     * O filtro por tipo, que é como a ferramenta abre a pasta de views.
+     *
+     * <p>{@code null} traz tudo — é o contrato, e é a primeira chamada que a
+     * ferramenta faz. Uma lista traz o que ela enumera, e a lista VAZIA não
+     * traz nada: ela enumera zero tipos.
+     */
+    @Test
+    void filtraPorTipoDeTabela() throws Exception {
+        comMetadata(m -> {
+            try {
+                assertEquals(List.of("TABLE|telecom|eventos", "TABLE|zoo|zebras"),
+                        arvoreDe(m.getTables(null, null, null, new String[] {"TABLE"})));
+                assertEquals(List.of("VIEW|_meta|fields", "VIEW|_meta|tables",
+                        "VIEW|telecom|por_olt"),
+                        arvoreDe(m.getTables(null, null, null, new String[] {"VIEW"})));
+                assertEquals(5, arvoreDe(m.getTables(null, null, null,
+                        new String[] {"TABLE", "VIEW"})).size());
+                assertEquals(5, arvoreDe(m.getTables(null, null, null, null)).size());
+                assertEquals(List.of(), arvoreDe(m.getTables(null, null, null, new String[] {})));
+                assertEquals(List.of(),
+                        arvoreDe(m.getTables(null, null, null, new String[] {"SYSTEM TABLE"})));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    /**
+     * O padrão de SCHEMA, que até aqui era ignorado.
+     *
+     * <p>{@code null} e {@code %} são "tudo", e o nome exato restringe à
+     * pasta que a ferramenta abriu.
+     */
+    @Test
+    void filtraPeloPadraoDeSchema() throws Exception {
+        comMetadata(m -> {
+            try {
+                assertEquals(List.of("TABLE|telecom|eventos", "VIEW|telecom|por_olt"),
+                        arvoreDe(m.getTables(null, "telecom", null, null)));
+                assertEquals(List.of("VIEW|_meta|fields", "VIEW|_meta|tables"),
+                        arvoreDe(m.getTables(null, "_meta", null, null)));
+                assertEquals(5, arvoreDe(m.getTables(null, "%", null, null)).size());
+                assertEquals(5, arvoreDe(m.getTables(null, null, null, null)).size());
+                assertEquals(List.of(), arvoreDe(m.getTables(null, "nada", null, null)));
+                // Schema E nome juntos: os dois filtros valem na mesma chamada.
+                assertEquals(List.of("VIEW|telecom|por_olt"),
+                        arvoreDe(m.getTables(null, "telecom", "por%", null)));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    private static List<String> arvoreDe(ResultSet rs) throws SQLException {
+        try (rs) {
+            return arvore(rs);
+        }
+    }
+
+    /**
+     * Os schemas saem DISTINTOS e ordenados, e o padrão filtra.
+     *
+     * <p>É deles que a ferramenta monta as pastas da árvore. O {@code _meta}
+     * chega repetido em cada dataset do documento e tem de sair uma vez só.
+     */
+    @Test
+    void osSchemasSaemDistintosEOrdenados() throws Exception {
+        comMetadata(m -> {
+            try {
+                assertEquals(List.of("_meta", "telecom", "zoo"), coluna1De(m.getSchemas()));
+                assertEquals(List.of("telecom"), coluna1De(m.getSchemas(null, "tele%")));
+                assertEquals(List.of("_meta", "telecom", "zoo"), coluna1De(m.getSchemas(null, null)));
+                assertEquals(List.of(), coluna1De(m.getSchemas(null, "nada")));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    private static List<String> coluna1De(ResultSet rs) throws SQLException {
+        try (rs) {
+            return coluna1(rs);
+        }
+    }
+
+    /**
+     * getColumns cobre a VIEW, pelo mesmo documento e com o mesmo tipo JDBC.
+     *
+     * <p>O código do tipo vem calculado do servidor, no campo {@code jdbc} —
+     * o driver não rededuz tipo a partir do nome.
+     */
+    @Test
+    void colunasDaViewSaemComTipoJdbc() throws Exception {
+        comMetadata(m -> {
+            try (ResultSet rs = m.getColumns(null, "telecom", "por_olt", null)) {
+                assertTrue(rs.next());
+                assertEquals("telecom", rs.getString("TABLE_SCHEM"));
+                assertEquals("por_olt", rs.getString("TABLE_NAME"));
+                assertEquals("olt", rs.getString("COLUMN_NAME"));
+                assertEquals(Types.VARCHAR, rs.getInt("DATA_TYPE"));
+                assertEquals(1, rs.getInt("ORDINAL_POSITION"));
+
+                assertTrue(rs.next());
+                assertEquals("total", rs.getString("COLUMN_NAME"));
+                assertEquals(Types.BIGINT, rs.getInt("DATA_TYPE"));
+                // A posição é dentro da TABELA, e não dentro do dataset: a
+                // view é a segunda tabela do `eventos` e a coluna continua
+                // sendo a segunda dela.
+                assertEquals(2, rs.getInt("ORDINAL_POSITION"));
+                assertFalse(rs.next());
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    /**
+     * O ORDINAL_POSITION reinicia em CADA tabela e conta a coluna descartada.
+     *
+     * <p>São as duas propriedades que o contrato pede, e nenhuma das duas
+     * aparece numa chamada que filtra uma tabela só e não filtra coluna: ali o
+     * laço externo roda uma vez e nada é descartado. Por isso esta chamada
+     * pede o SCHEMA inteiro — {@code telecom} tem a base e a view — e a de
+     * baixo passa um padrão de coluna.
+     *
+     * <p>Contar a coluna descartada é o que faz a posição ser a do SCHEMA da
+     * tabela, e não a desta resposta: quem pedir só o campo {@code status}
+     * recebe a posição que ele ocupa na tabela (2), que é a mesma que uma
+     * chamada sem filtro devolveria.
+     */
+    @Test
+    void oOrdinalPositionEhPorTabelaEContaAColunaDescartada() throws Exception {
+        comMetadata(m -> {
+            try (ResultSet rs = m.getColumns(null, "telecom", null, null)) {
+                assertEquals(List.of(
+                        "telecom|eventos|service_id|1",
+                        "telecom|eventos|status|2",
+                        "telecom|eventos|payload|3",
+                        "telecom|eventos|quando|4",
+                        "telecom|por_olt|olt|1",
+                        "telecom|por_olt|total|2"), posicoes(rs));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        comMetadata(m -> {
+            try (ResultSet rs = m.getColumns(null, "telecom", "eventos", "status")) {
+                assertEquals(List.of("telecom|eventos|status|2"), posicoes(rs));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        comMetadata(m -> {
+            // O padrão que descarta a PRIMEIRA coluna: sem contar a
+            // descartada, `quando` sairia em 1.
+            try (ResultSet rs = m.getColumns(null, "telecom", "eventos", "q%")) {
+                assertEquals(List.of("telecom|eventos|quando|4"), posicoes(rs));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    /** Schema, tabela, coluna e a posição de cada linha, na ordem devolvida. */
+    private static List<String> posicoes(ResultSet rs) throws SQLException {
+        List<String> out = new ArrayList<>();
+        while (rs.next()) {
+            out.add(rs.getString("TABLE_SCHEM") + "|" + rs.getString("TABLE_NAME") + "|"
+                    + rs.getString("COLUMN_NAME") + "|" + rs.getInt("ORDINAL_POSITION"));
+        }
+        return out;
+    }
+
+    /**
+     * Servidor anterior a {@code tables}: a árvore de sempre, e nada lança.
+     *
+     * <p>Nenhuma view é inventada e nenhum schema aparece — o documento não
+     * tem os dois campos. Assumir que {@code tables} existe deixaria este
+     * servidor sem tabela nenhuma para mostrar.
+     */
+    @Test
+    void metadataSemTablesDegradaSemErro() throws Exception {
+        metadata = META_SEM_TABLES;
+        comMetadata(m -> {
+            try {
+                assertEquals(List.of("TABLE|null|eventos", "TABLE|null|zebras"),
+                        arvoreDe(m.getTables(null, null, null, null)));
+                assertEquals(List.of(), arvoreDe(m.getTables(null, null, null,
+                        new String[] {"VIEW"})));
+                assertEquals(List.of(), coluna1De(m.getSchemas()));
+                // O padrão de schema continua respondendo: "" e % pegam a
+                // linha SEM schema, que é o que o JDBC manda.
+                assertEquals(2, arvoreDe(m.getTables(null, "%", null, null)).size());
+                assertEquals(2, arvoreDe(m.getTables(null, "", null, null)).size());
+                // E as colunas continuam saindo pelo campo `columns` do dataset.
+                try (ResultSet rs = m.getColumns(null, null, "eventos", null)) {
+                    assertTrue(rs.next());
+                    assertEquals("service_id", rs.getString("COLUMN_NAME"));
+                    assertNull(rs.getString("TABLE_SCHEM"));
+                    assertEquals(1, rs.getInt("ORDINAL_POSITION"));
                 }
-                assertEquals(List.of("eventos", "zebras"), nomes);
             } catch (SQLException e) {
                 throw new IllegalStateException(e);
             }
@@ -117,9 +400,11 @@ class NishiDatabaseMetaDataTest {
                 assertEquals(List.of("eventos"), nomesDe(m.getTables(null, null, "even%", null)));
                 assertEquals(List.of("zebras"), nomesDe(m.getTables(null, null, "_ebras", null)));
                 assertEquals(List.of(), nomesDe(m.getTables(null, null, "nada%", null)));
-                assertEquals(2, nomesDe(m.getTables(null, null, "%", null)).size());
-                // Um tipo que não é TABLE não devolve nada, e não devolve erro.
-                assertEquals(List.of(), nomesDe(m.getTables(null, null, null, new String[] {"VIEW"})));
+                assertEquals(5, nomesDe(m.getTables(null, null, "%", null)).size());
+                // Um tipo que o catálogo não usa não devolve nada, e não
+                // devolve erro.
+                assertEquals(List.of(),
+                        nomesDe(m.getTables(null, null, null, new String[] {"SYNONYM"})));
             } catch (SQLException e) {
                 throw new IllegalStateException(e);
             }
@@ -179,12 +464,20 @@ class NishiDatabaseMetaDataTest {
         });
     }
 
-    /** A chave do dataset é ganho real: é ela que a ferramenta desenha. */
+    /**
+     * A chave do dataset é ganho real: é ela que a ferramenta desenha.
+     *
+     * <p>E ela sai NO SCHEMA do dataset: quem cruza esta lista com a do
+     * {@link DatabaseMetaData#getTables} pelo par (schema, nome) — que é como
+     * uma ferramenta liga a chave à tabela da árvore — não acha a linha se
+     * aqui o TABLE_SCHEM sair nulo.
+     */
     @Test
-    void aChaveDoDatasetSaiComoChavePrimaria() throws Exception {
+    void aChaveDoDatasetSaiComoChavePrimariaNoSchemaDoDataset() throws Exception {
         comMetadata(m -> {
             try (ResultSet rs = m.getPrimaryKeys(null, null, "eventos")) {
                 assertTrue(rs.next());
+                assertEquals("telecom", rs.getString("TABLE_SCHEM"));
                 assertEquals("eventos", rs.getString("TABLE_NAME"));
                 assertEquals("service_id", rs.getString("COLUMN_NAME"));
                 assertEquals(1, rs.getInt("KEY_SEQ"));
@@ -195,12 +488,16 @@ class NishiDatabaseMetaDataTest {
         });
     }
 
-    /** O índice sai com a ressalva de que é DECLARADO, não plano escolhido. */
+    /**
+     * O índice sai com a ressalva de que é DECLARADO, não plano escolhido — e
+     * no schema do dataset, pela razão da chave primária.
+     */
     @Test
-    void oIndiceSaiComARessalvaDeQueEhDeclarado() throws Exception {
+    void oIndiceSaiComARessalvaDeQueEhDeclaradoENoSchemaDoDataset() throws Exception {
         comMetadata(m -> {
             try (ResultSet rs = m.getIndexInfo(null, null, "eventos", false, true)) {
                 assertTrue(rs.next());
+                assertEquals("telecom", rs.getString("TABLE_SCHEM"));
                 assertEquals("status", rs.getString("COLUMN_NAME"));
                 assertTrue(rs.getString("INDEX_NAME").contains("bitmap"), rs.getString("INDEX_NAME"));
                 assertTrue(rs.getString("INDEX_NAME").contains("declarado"), rs.getString("INDEX_NAME"));
@@ -209,6 +506,64 @@ class NishiDatabaseMetaDataTest {
                 throw new IllegalStateException(e);
             }
         });
+    }
+
+    /**
+     * As duas listas HONRAM o schema que receberam.
+     *
+     * <p>Elas passaram a publicar o TABLE_SCHEM, e um método que publica o
+     * campo sem filtrar por ele afirma um schema que não conferiu: pedir a
+     * chave de {@code zoo.eventos} devolveria a de {@code telecom.eventos}.
+     * {@code null} continua sendo "não restrinja", que é o que a ferramenta
+     * manda quando já sabe a tabela.
+     */
+    @Test
+    void aChaveEOIndiceHonramOSchemaRecebido() throws Exception {
+        comMetadata(m -> {
+            try {
+                assertEquals(1, linhas(m.getPrimaryKeys(null, "telecom", "eventos")));
+                assertEquals(0, linhas(m.getPrimaryKeys(null, "zoo", "eventos")));
+                assertEquals(0, linhas(m.getPrimaryKeys(null, "", "eventos")));
+                assertEquals(1, linhas(m.getPrimaryKeys(null, null, "eventos")));
+
+                assertEquals(1, linhas(m.getIndexInfo(null, "telecom", "eventos", false, true)));
+                assertEquals(0, linhas(m.getIndexInfo(null, "zoo", "eventos", false, true)));
+                assertEquals(0, linhas(m.getIndexInfo(null, "", "eventos", false, true)));
+                assertEquals(1, linhas(m.getIndexInfo(null, null, "eventos", false, true)));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    /**
+     * O servidor SEM schema: a string vazia é quem pega as linhas dele.
+     *
+     * <p>É a outra metade do contrato do argumento — a linha sem schema tem de
+     * ser alcançável, e o nome de um schema não pode alcançá-la.
+     */
+    @Test
+    void aChaveDoServidorSemSchemaSaiPelaStringVazia() throws Exception {
+        metadata = META_SEM_TABLES;
+        comMetadata(m -> {
+            try {
+                assertEquals(1, linhas(m.getPrimaryKeys(null, "", "eventos")));
+                assertEquals(1, linhas(m.getPrimaryKeys(null, null, "eventos")));
+                assertEquals(0, linhas(m.getPrimaryKeys(null, "telecom", "eventos")));
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    private static int linhas(ResultSet rs) throws SQLException {
+        int n = 0;
+        try (rs) {
+            while (rs.next()) {
+                n++;
+            }
+        }
+        return n;
     }
 
     /**
@@ -242,13 +597,18 @@ class NishiDatabaseMetaDataTest {
     }
 
     /**
-     * Catálogo e schema saem VAZIOS COM A FORMA CERTA — a errata D3.
+     * O catálogo sai VAZIO COM A FORMA CERTA — a errata D3.
      *
-     * <p>O produto não tem nenhum dos dois. Lançar aqui faria a ferramenta
-     * mostrar erro ao abrir a árvore de navegação, antes da primeira consulta.
+     * <p>O produto não tem catálogo: o endereço qualificado tem dois níveis,
+     * e o de cima é o schema. Lançar aqui faria a ferramenta mostrar erro ao
+     * abrir a árvore de navegação, antes da primeira consulta.
+     *
+     * <p>Os TIPOS são TABLE e VIEW, e nunca SYSTEM TABLE: o DBeaver esconde
+     * objeto de sistema por default, e as tabelas do {@code _meta} existem
+     * justamente para serem descobertas.
      */
     @Test
-    void catalogoESchemaSaemVaziosComAFormaCerta() throws Exception {
+    void oCatalogoSaiVazioEOsTiposSaoTabelaEView() throws Exception {
         comMetadata(m -> {
             try (ResultSet cat = m.getCatalogs(); ResultSet sch = m.getSchemas();
                     ResultSet tipos = m.getTableTypes()) {
@@ -257,9 +617,9 @@ class NishiDatabaseMetaDataTest {
                 assertEquals(List.of(), coluna1(cat));
 
                 assertEquals(2, sch.getMetaData().getColumnCount());
-                assertEquals(List.of(), coluna1(sch));
+                assertEquals("TABLE_SCHEM", sch.getMetaData().getColumnName(1));
 
-                assertEquals(List.of("TABLE"), coluna1(tipos));
+                assertEquals(List.of("TABLE", "VIEW"), coluna1(tipos));
             } catch (SQLException e) {
                 throw new IllegalStateException(e);
             }
@@ -317,6 +677,14 @@ class NishiDatabaseMetaDataTest {
                 assertFalse(m.supportsPositionedUpdate());
                 assertFalse(m.supportsPositionedDelete());
                 assertEquals(Connection.TRANSACTION_NONE, m.getDefaultTransactionIsolation());
+
+                // O schema é a exceção entre os cinco supportsSchemasIn*: os
+                // outros quatro são DDL, procedimento e privilégio, que o
+                // produto não tem; a consulta ACEITA o qualificador.
+                assertTrue(m.supportsSchemasInDataManipulation());
+                assertFalse(m.supportsSchemasInTableDefinitions());
+                assertFalse(m.supportsCatalogsInDataManipulation());
+                assertEquals("schema", m.getSchemaTerm());
 
                 assertTrue(m.allTablesAreSelectable());
                 assertTrue(m.supportsMixedCaseIdentifiers());

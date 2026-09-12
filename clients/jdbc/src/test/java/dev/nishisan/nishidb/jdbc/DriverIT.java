@@ -174,25 +174,81 @@ class DriverIT {
             assertEquals("\"", m.getIdentifierQuoteString());
             assertFalse(m.supportsTransactions());
 
-            // Catálogo e schema: vazios, mas com a forma certa.
+            // Catálogo: vazio, mas com a forma certa. O produto não tem
+            // catálogo — o endereço qualificado tem dois níveis.
             try (ResultSet rs = m.getCatalogs()) {
                 assertEquals(1, rs.getMetaData().getColumnCount());
             }
+            // Schemas: os do servidor REAL. O do dataset é o `schemaName` do
+            // YAML, e o `_meta` é onde as tabelas que descrevem o motor moram.
+            List<String> schemas = new ArrayList<>();
             try (ResultSet rs = m.getSchemas()) {
-                assertFalse(rs.next());
-            }
-            try (ResultSet rs = m.getTableTypes()) {
-                assertTrue(rs.next());
-                assertEquals("TABLE", rs.getString(1));
-            }
-
-            List<String> tabelas = new ArrayList<>();
-            try (ResultSet rs = m.getTables(null, null, null, null)) {
                 while (rs.next()) {
-                    tabelas.add(rs.getString("TABLE_NAME"));
+                    schemas.add(rs.getString("TABLE_SCHEM"));
                 }
             }
-            assertTrue(tabelas.contains("todos_os_tipos"), "getTables não listou o dataset: " + tabelas);
+            assertTrue(schemas.contains("telecom"),
+                    "getSchemas não trouxe o schemaName do dataset: " + schemas);
+            assertTrue(schemas.contains("_meta"), "getSchemas não trouxe o _meta: " + schemas);
+
+            List<String> tipos = new ArrayList<>();
+            try (ResultSet rs = m.getTableTypes()) {
+                while (rs.next()) {
+                    tipos.add(rs.getString(1));
+                }
+            }
+            assertEquals(List.of("TABLE", "VIEW"), tipos);
+
+            // A árvore: a base como TABLE no schema do dataset, e as tabelas
+            // do _meta como VIEW no schema _meta.
+            List<String> tabelas = new ArrayList<>();
+            List<String> views = new ArrayList<>();
+            // O endereço qualificado sai DA ÁRVORE, e não escrito à mão: é ele
+            // que vai virar o FROM logo abaixo, e escrever o schema no teste
+            // faria a asserção provar a string do teste, não a do driver.
+            String enderecoDaBase = null;
+            try (ResultSet rs = m.getTables(null, null, null, null)) {
+                while (rs.next()) {
+                    String qualificado = rs.getString("TABLE_SCHEM") + "."
+                            + rs.getString("TABLE_NAME");
+                    if ("VIEW".equals(rs.getString("TABLE_TYPE"))) {
+                        views.add(qualificado);
+                    } else {
+                        tabelas.add(qualificado);
+                        if ("todos_os_tipos".equals(rs.getString("TABLE_NAME"))) {
+                            enderecoDaBase = qualificado;
+                        }
+                    }
+                }
+            }
+            assertTrue(tabelas.contains("telecom.todos_os_tipos"),
+                    "getTables não listou a base no schema do dataset: " + tabelas);
+            assertTrue(views.contains("_meta.tables"),
+                    "getTables não listou as tabelas do _meta como view: " + views);
+
+            // O filtro por tipo é como a ferramenta abre a pasta de views.
+            try (ResultSet rs = m.getTables(null, null, null, new String[] {"VIEW"})) {
+                while (rs.next()) {
+                    assertEquals("VIEW", rs.getString("TABLE_TYPE"));
+                }
+            }
+            // E o de schema restringe à pasta aberta.
+            try (ResultSet rs = m.getTables(null, "_meta", null, null)) {
+                assertTrue(rs.next(), "getTables com o padrão de schema _meta não trouxe linha");
+                do {
+                    assertEquals("_meta", rs.getString("TABLE_SCHEM"));
+                } while (rs.next());
+            }
+
+            // O PAGAMENTO: o SQL que a ferramenta monta a partir do (schema,
+            // nome) desta árvore tem de EXECUTAR no servidor. É o que o driver
+            // promete ao preencher o TABLE_SCHEM — e por isso o FROM é MONTADO
+            // com o endereço que a árvore devolveu.
+            assertNotNull(enderecoDaBase, "a base não apareceu na árvore: " + tabelas);
+            String sql = "SELECT id FROM " + enderecoDaBase + " LIMIT 1";
+            try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+                assertTrue(rs.next(), "o SELECT montado da árvore não devolveu linha: " + sql);
+            }
 
             // getColumns publica o nome do CAMPO; o alias vai no REMARKS. O
             // dataset tem um campo com alias justamente para provar isso.
@@ -209,12 +265,21 @@ class DriverIT {
             assertTrue(colunas > 10, "getColumns devolveu " + colunas + " colunas");
             assertTrue(viuAlias, "o alias do campo não apareceu no REMARKS de getColumns");
 
+            // A chave e o índice descrevem a MESMA tabela que a árvore
+            // publica: o TABLE_SCHEM das duas listas é o schema do dataset, e
+            // é por ele que a ferramenta liga a chave à tabela da árvore.
             try (ResultSet rs = m.getPrimaryKeys(null, null, "todos_os_tipos")) {
                 assertTrue(rs.next());
                 assertEquals("id", rs.getString("COLUMN_NAME"));
+                assertEquals(enderecoDaBase,
+                        rs.getString("TABLE_SCHEM") + "." + rs.getString("TABLE_NAME"),
+                        "a chave primária não caiu na tabela da árvore");
             }
             try (ResultSet rs = m.getIndexInfo(null, null, "todos_os_tipos", false, true)) {
                 assertTrue(rs.next(), "o dataset declara índice em dois campos");
+                assertEquals(enderecoDaBase,
+                        rs.getString("TABLE_SCHEM") + "." + rs.getString("TABLE_NAME"),
+                        "o índice não caiu na tabela da árvore");
             }
             try (ResultSet rs = m.getTypeInfo()) {
                 assertTrue(rs.next(), "getTypeInfo saiu vazio");
@@ -235,6 +300,71 @@ class DriverIT {
                     }
                 }
                 assertEquals(5, lidas);
+            }
+        }
+    }
+
+    /**
+     * O SQL COM CADA PARTE CITADA executa — é o que o duplo clique na árvore
+     * gera.
+     *
+     * <p>A ferramenta gráfica não monta {@code schema.tabela} cru: ela cita
+     * cada parte com o {@link DatabaseMetaData#getIdentifierQuoteString()} e
+     * manda {@code "telecom"."todos_os_tipos"}. O scanner do driver tira o
+     * dataset do FROM, e enquanto o ramo das aspas não abandonava o palpite no
+     * nome qualificado ele mandava ao servidor o dataset {@code _meta} — e
+     * abrir qualquer view do metadado morria com "dataset não está
+     * registrado", com a árvore montada e nada abrindo.
+     *
+     * <p>O endereço vem DA ÁRVORE e as aspas vêm do metadata: escrever os dois
+     * à mão faria o teste provar a string do teste, e não o par que o driver
+     * publica.
+     */
+    @Test
+    void oSqlComCadaParteCitadaDaArvoreExecuta() throws SQLException {
+        try (Connection c = conecta()) {
+            DatabaseMetaData m = c.getMetaData();
+            String aspa = m.getIdentifierQuoteString();
+            String base = null;
+            String view = null;
+            try (ResultSet rs = m.getTables(null, null, null, null)) {
+                while (rs.next()) {
+                    String endereco = aspa + rs.getString("TABLE_SCHEM") + aspa + "."
+                            + aspa + rs.getString("TABLE_NAME") + aspa;
+                    if ("VIEW".equals(rs.getString("TABLE_TYPE"))) {
+                        // `_meta.tables` nomeadamente: é a view que sempre tem
+                        // linha (ela se lista), e um teste que pegasse a
+                        // primeira view qualquer poderia cair numa vazia e
+                        // confundir "não abriu" com "abriu e não tem dado".
+                        if ("_meta".equals(rs.getString("TABLE_SCHEM"))
+                                && "tables".equals(rs.getString("TABLE_NAME"))) {
+                            view = endereco;
+                        }
+                    } else if ("todos_os_tipos".equals(rs.getString("TABLE_NAME"))) {
+                        base = endereco;
+                    }
+                }
+            }
+            assertNotNull(base, "a base não apareceu na árvore");
+            assertNotNull(view, "a view _meta.tables não apareceu na árvore");
+
+            try (Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT * FROM " + base + " LIMIT 1")) {
+                assertTrue(rs.next(), "o SELECT citado parte a parte não devolveu linha: " + base);
+            }
+            // O caso que quebrava: a view do _meta, que é o motivo de a árvore
+            // existir. O dataset da conexão não é `_meta`, então só o abandono
+            // do palpite faz o motor resolver o namespace.
+            try (Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT * FROM " + view + " LIMIT 1")) {
+                assertTrue(rs.next(), "o SELECT na view do _meta não devolveu linha: " + view);
+            }
+            // E com a primeira parte citada e a segunda nua, que é a outra
+            // forma que a ferramenta emite ao completar nome à mão.
+            try (Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery(
+                            "SELECT * FROM " + aspa + "_meta" + aspa + ".tables LIMIT 1")) {
+                assertTrue(rs.next(), "o SELECT em \"_meta\".tables não devolveu linha");
             }
         }
     }

@@ -529,6 +529,7 @@ func TestPlanTipoPromovidoNaoUsaIndice(t *testing.T) {
 const vlanYAML = `
 version: 1
 name: redes
+schemaName: telecom
 materialization:
   key:
     field: id
