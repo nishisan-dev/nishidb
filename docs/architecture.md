@@ -839,6 +839,37 @@ Ela mora em `internal/query`, e não em `internal/query/meta` ao lado da
 importar `query`; e não num pacote à parte como `internal/counters` e
 `internal/metakafka`, porque não costura o motor a subsistema nenhum.
 
+### O mesmo catálogo no `/v1/metadata`
+
+O `/v1/metadata` publica, por dataset, o `schema` declarado e o campo `tables`
+— a enumeração inteira, cada linha com `name`, `schema`, `namespace`, `kind`,
+`description` e as colunas já traduzidas para o wire pelo mesmo `columnMeta` que
+serve as colunas da base (o código `jdbc` é calculado no servidor; o driver não
+sabe derivá-lo). É o canal de quem monta ÁRVORE: um cliente SQL não escreve
+`SELECT ... FROM _meta.tables` sozinho.
+
+**Os dois canais saem do mesmo `Engine.Catalog`**, e isso é a decisão, não um
+detalhe: duas derivações da mesma enumeração divergem, e a divergência aparece
+como uma ferramenta que discorda do SQL sem nada estar quebrado — a mesma classe
+do painel que discorda do JSON no `/v1/stats`. A prova é
+`TestMetadataEMetaTablesNaoPodemDiscordarDoCatalogo`, que compara as duas saídas
+linha a linha, no dataset base e na irmã histórica (as listas são diferentes, e
+um oráculo de um dataset só passaria com a irmã servindo o catálogo do base).
+
+Os campos são **aditivos**, e o que o teste de aditividade protege é o lado que
+se perde por descuido — mover informação para o bloco novo: `columns` continua
+sendo a lista completa da tabela base, e `name` continua sendo o nome do
+dataset, e não o par com o schema
+(`TestOClienteAnteriorAosCamposNovosContinuaLendoOMetadata`). O `namespace` viaja
+na linha porque não é reconstruível a partir de `(schema, name)`, e para as
+tabelas do `_meta` ele é o único endereço que existe.
+
+O que **não** foi resolvido aqui é o clamp do driver: `maxRows` e `timeoutMs`
+são por dataset, o servidor aplica os do dataset LIDO e o `NishiConnection`
+ainda clampa pelos do dataset da conexão. O mapa que faltava — qual dataset é
+dono de cada schema — passa a existir com estes campos; usá-lo é trabalho do
+driver, registrado no débito 118.
+
 ### O `FROM` qualificado pelo schema
 
 O `FROM` tem três formas, e cada uma resolve o dataset alvo de um jeito:

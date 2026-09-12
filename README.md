@@ -1479,6 +1479,18 @@ aceita também o par `schema.name`, que é o endereço completo (ver abaixo).
 `description` é NULL em toda linha hoje — nada declara descrição de tabela, e o
 catálogo não inventa uma.
 
+O `GET /v1/metadata` publica **a mesma lista**, por dataset, no campo `tables`
+— com `name`, `schema`, `namespace`, `kind`, `description` e as colunas de cada
+tabela, cada uma já com o código `jdbc` que o servidor calcula. O dataset ganhou
+também `schema`, o `schemaName` declarado no YAML. É de onde o driver JDBC monta
+a árvore de um cliente SQL, que não escreve SQL de catálogo sozinho. As duas
+saídas vêm da mesma enumeração do motor: o que a `_meta.tables` responde por SQL
+e o que o `/v1/metadata` publica no wire não podem divergir.
+
+Os dois campos são **aditivos**: `columns` continua sendo a lista completa da
+tabela base — as mesmas colunas que saem na linha de `kind: TABLE` —, e um
+cliente compilado antes deles lê o documento como lia.
+
 `_meta.counters` lista os contadores mantidos na escrita do dataset, com a
 definição e os números vivos; `_counters.<nome>`, uma tabela por contador
 declarado no YAML, lê os totais (ver "Contadores mantidos na escrita" acima).

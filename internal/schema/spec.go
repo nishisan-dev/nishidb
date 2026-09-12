@@ -61,15 +61,20 @@ type DatasetSpec struct {
 	// default faria `servicos.servicos`, e a ausência faria schema nula na
 	// árvore do cliente SQL. As duas foram olhadas e recusadas no desenho.
 	//
-	// HOJE o campo é declarado, validado e copiado para o Compiled, e nada
-	// além disso: nenhum caminho de consulta ou de ingestão o lê. O que a
-	// validação já estabelece é a gramática (`[a-z0-9_]+`) e a reserva do
-	// prefixo "_" — que é o que separa o que é do motor do que é do dado.
+	// A validação desta spec estabelece a gramática (`[a-z0-9_]+`) e a reserva
+	// do prefixo "_" — que é o que separa o que é do motor do que é do dado.
+	// Ela NÃO estabelece a unicidade entre datasets: isso é validação de
+	// CONJUNTO e não cabe aqui, que vê um arquivo por vez; quem recusa dois
+	// datasets no mesmo schema é config.ValidateSchemaUniqueness, na carga do
+	// diretório.
 	//
-	// O que ele AINDA NÃO faz, e é o destino desta chave: tornar a colisão de
-	// nomes irrepresentável em vez de detectada. Isso depende do catálogo e da
-	// unicidade do schema entre datasets, que ainda não existem; até lá, dois
-	// datasets podem declarar o mesmo schema e a subida aceita.
+	// O campo é LIDO em três lugares, e por isso a recusa acima deixou de ser
+	// preventiva: o motor resolve o qualificador de um `FROM telecom.tabela`
+	// contra os schemas declarados (query.Engine.Catalog), a `_meta.tables` o
+	// publica por SQL e o `/v1/metadata` o publica no wire, por dataset e por
+	// tabela. A tabela IRMÃ do histórico herda este schema (DeriveHistory), e é
+	// por isso que ela não entra na conta da unicidade: é outra tabela do mesmo
+	// dataset, não outro dataset.
 	SchemaName      string
 	Source          SourceSpec
 	Errors          ErrorsSpec

@@ -2,12 +2,14 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
+	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
@@ -37,24 +39,64 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		s.respondeJSON(w, protocol.Metadata{Datasets: []protocol.DatasetMeta{metaOfDataset(d)}})
+		meta, err := s.metaOfDataset(d)
+		if err != nil {
+			s.rejectCatalog(w, r, d, err)
+			return
+		}
+		s.respondeJSON(w, protocol.Metadata{Datasets: []protocol.DatasetMeta{meta}})
 		return
 	}
 
 	out := protocol.Metadata{Datasets: make([]protocol.DatasetMeta, 0, len(s.datasets))}
 	for _, d := range s.datasets {
-		out.Datasets = append(out.Datasets, metaOfDataset(d))
+		meta, err := s.metaOfDataset(d)
+		if err != nil {
+			// A resposta INTEIRA cai, e não só o dataset que falhou: um
+			// documento a que falta um dataset é indistinguível de um servidor
+			// que não o hospeda, e quem monta árvore a partir dele apagaria as
+			// tabelas dele da tela sem sintoma nenhum.
+			s.rejectCatalog(w, r, d, err)
+			return
+		}
+		out.Datasets = append(out.Datasets, meta)
 	}
 	s.respondeJSON(w, out)
 }
 
-func metaOfDataset(d *dataset) protocol.DatasetMeta {
-	// FieldsForMetadata, e não FieldsByID: a coluna derivada fica fora do
-	// SELECT * e este é o lugar onde ela é descoberta. Esconder aqui também
-	// deixaria o operador sem forma nenhuma de saber que ela existe.
-	fields := d.sch.FieldsForMetadata()
+// rejectCatalog recusa a rota quando o catálogo de um dataset não pôde ser
+// montado. É INTERNAL porque não há ação do cliente: todo dataset desta lista
+// foi registrado no motor na subida, então o Catalog só falha aqui se o
+// registro e a lista do servidor tiverem divergido — defeito, não uso.
+func (s *Server) rejectCatalog(w http.ResponseWriter, r *http.Request, d *dataset, err error) {
+	s.log.Warn("metadata.catalogo_falhou", "o catálogo do dataset não pôde ser montado",
+		"dataset", d.nome, "erro", err.Error())
+	s.reject(w, r, http.StatusInternalServerError, d.nome, protocol.ErrorDetail{
+		Code:    protocol.CodeInternal,
+		Message: "o catálogo do dataset " + d.nome + " não pôde ser montado",
+	})
+}
+
+// metaOfDataset descreve um dataset para o /v1/metadata.
+//
+// A enumeração das tabelas sai do query.Engine.Catalog — o MESMO que a
+// `_meta.tables` lê —, e não de uma varredura própria dos registros do motor.
+// As duas rotas respondem à mesma pergunta por canais diferentes, e duas
+// derivações do mesmo fato divergem: a divergência apareceria como uma árvore
+// de cliente SQL que discorda do `SELECT ... FROM _meta.tables` sem nada estar
+// quebrado. Ver TestMetadataEMetaTablesNaoPodemDiscordarDoCatalogo.
+//
+// O tipo JDBC de cada coluna é calculado AQUI, pelo columnMeta, porque o driver
+// não sabe derivá-lo do nome do tipo — é a mesma razão de o campo existir no
+// wire desde o começo.
+func (s *Server) metaOfDataset(d *dataset) (protocol.DatasetMeta, error) {
+	tables, err := s.eng.Catalog(d.nome)
+	if err != nil {
+		return protocol.DatasetMeta{}, err
+	}
 	m := protocol.DatasetMeta{
-		Name: d.nome,
+		Name:   d.nome,
+		Schema: d.sch.SchemaName,
 		// MaxRows e Timeout saem do COMPILADO, que é onde o default global já
 		// foi resolvido contra o que o YAML do dataset declara: quem consulta
 		// precisa do teto que vai valer, não de onde ele foi escrito.
@@ -68,15 +110,45 @@ func metaOfDataset(d *dataset) protocol.DatasetMeta {
 		MaxCols:          d.sch.MaxCols,
 		OnMaxCols:        d.sch.OnMaxCols,
 		MaxNestedCols:    d.sch.MaxNestedCols,
-		Columns:          make([]protocol.ColumnMeta, 0, len(fields)),
+		Tables:           make([]protocol.TableMeta, 0, len(tables)),
 	}
 	if d.sch.Key != nil {
 		m.Key = d.sch.Key.Name
 	}
-	for _, f := range fields {
-		m.Columns = append(m.Columns, columnMeta(f))
+	for _, t := range tables {
+		// As colunas do catálogo são as de FieldsForMetadata, e não as de
+		// FieldsByID: a coluna derivada fica fora do SELECT * e este é o lugar
+		// onde ela é descoberta. Esconder aqui também deixaria o operador sem
+		// forma nenhuma de saber que ela existe. Ver query.TableInfo.Columns.
+		tm := protocol.TableMeta{
+			Name:        t.Name,
+			Schema:      t.Schema,
+			Namespace:   t.Namespace,
+			Kind:        string(t.Kind),
+			Description: t.Description,
+			Columns:     make([]protocol.ColumnMeta, 0, len(t.Columns)),
+		}
+		for _, f := range t.Columns {
+			tm.Columns = append(tm.Columns, columnMeta(f))
+		}
+		// O campo Columns do dataset — o que o driver e o client Python já leem
+		// — é a MESMA lista da tabela base, e não uma segunda montagem a partir
+		// de d.sch: o slice é compartilhado, então não há como as duas
+		// discordarem. A base é a única linha de Kind TABLE do catálogo (a
+		// enumeração cria uma só, e todo o resto é VIEW).
+		if t.Kind == query.KindTable {
+			m.Columns = tm.Columns
+		}
+		m.Tables = append(m.Tables, tm)
 	}
-	return m
+	if m.Columns == nil {
+		// Catálogo sem tabela base é divergência entre o registro do motor e a
+		// lista do servidor. Publicar `"columns": null` aqui entregaria a um
+		// cliente anterior um dataset sem coluna nenhuma, que é uma resposta
+		// plausível e errada.
+		return protocol.DatasetMeta{}, fmt.Errorf("server: o catálogo de %q não tem tabela base", d.nome)
+	}
+	return m, nil
 }
 
 func columnMeta(f *schema.CompiledField) protocol.ColumnMeta {

@@ -142,6 +142,7 @@ inglês correspondente.
 | fonte | source | internal/query/meta/source.go |
 | iterador | iterator | internal/index/segindex/union.go |
 | tabela | table | internal/counters/table.go |
+| catálogo (a enumeração de toda tabela consultável de um dataset) | catalog | internal/query/catalog.go |
 | registro de virtuais | registry | internal/query/engine.go |
 | registro (linha) | record | internal/storage/encoding/record.go |
 | abertura | open | internal/counters/open.go |

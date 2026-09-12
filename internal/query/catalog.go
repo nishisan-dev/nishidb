@@ -96,12 +96,13 @@ type TableInfo struct {
 // slice de todos os campos e o ordena, e quem só precisa saber onde a tabela
 // mora não pode pagar isso. Ver catalogEntries.
 //
-// A `_meta.tables` já sai daqui (metatables.go); o /v1/metadata ainda monta a
-// resposta dele por conta própria, a partir do compilado do dataset, e passa a
-// sair daqui na tarefa seguinte do ciclo. Ela nasce
-// como função única justamente para que as duas não derivem cada uma a sua
-// lista — duas derivações do mesmo fato divergem, e a divergência aparece como
-// uma ferramenta que discorda do SQL sem nada estar quebrado.
+// Os DOIS consumidores saem daqui: a `_meta.tables` (metatables.go) e o campo
+// `tables` do /v1/metadata (internal/server/documents.go, que é de onde o
+// driver JDBC monta a árvore do cliente SQL). É uma função única justamente
+// para que as duas não derivem cada uma a sua lista — duas derivações do mesmo
+// fato divergem, e a divergência aparece como uma ferramenta que discorda do
+// SQL sem nada estar quebrado. Prova:
+// TestMetadataEMetaTablesNaoPodemDiscordarDoCatalogo, em internal/server.
 func (e *Engine) Catalog(dataset string) ([]TableInfo, error) {
 	entries, err := e.catalogEntries(dataset)
 	if err != nil {

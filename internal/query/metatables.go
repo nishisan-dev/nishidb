@@ -13,12 +13,15 @@ import (
 
 // TableMetaTables é a tabela `_meta.tables`: uma linha por tabela consultável
 // do dataset. É a resposta por SQL para "que tabelas existem" — e antes dela a
-// lista COMPLETA não saía de lugar nenhum. O `/v1/metadata` devolve os
+// lista COMPLETA não saía de lugar nenhum: o `/v1/metadata` devolvia os
 // datasets registrados no servidor, o base e a irmã histórica, com as colunas
-// de cada um (internal/server/documents.go): é a lista das tabelas BASE, sem
-// contador e sem tabela de meta, e nenhum cliente SQL a fala. O que faltava
-// nela só aparecia por engano, na mensagem de recusa de um `FROM` para tabela
-// desconhecida.
+// de cada um, e nada mais. O que faltava só aparecia por engano, na mensagem de
+// recusa de um `FROM` para tabela desconhecida.
+//
+// O `/v1/metadata` publica a mesma lista desde que ganhou o campo `tables`
+// (internal/server/documents.go), e as duas saem do MESMO Catalog: esta tabela
+// é o canal de quem fala SQL, e aquele campo o de quem monta árvore. Duas
+// derivações da mesma enumeração divergiriam.
 //
 // Ela mora no pacote query, e não em `internal/query/meta` ao lado da
 // `fields`, porque o conteúdo dela é o Catalog — e `internal/query/meta` não
