@@ -2595,9 +2595,17 @@ faria uma troca de molde descartar em silêncio todos os cronômetros. Ausência
 distinta de corrupção, e nenhuma das duas impede a abertura (§51): o que se
 perde são os cronômetros, e cada alarme recomeça a contar.
 
-Um alarme restaurado dispara marcado, com a **lacuna** do processo parado no
-evento. Sem ela, um disparo sobre um período que ninguém acompanhou seria
-indistinguível de um observado de ponta a ponta.
+Um alarme restaurado dispara marcado, com a **lacuna** no evento. Sem ela, um
+disparo sobre um período que ninguém acompanhou seria indistinguível de um
+observado de ponta a ponta.
+
+O que a lacuna mede depende de como o processo saiu, e a distinção foi aprendida
+no piloto: o encerramento gracioso GRAVA o estado, então o número é o tempo de
+parada; num crash sobra o último save, feito na última transição, e o número
+passa a ser "desde quando não há registro" — maior que a parada, e a resposta
+honesta, porque a lacuna real é desconhecida. Antes de o encerramento gravar,
+os dois casos se comportavam como o segundo, e um reinício de segundos depois de
+nove minutos quietos anunciava nove minutos de lacuna.
 
 **A emissão escreve uma linha por grupo vivo**, e o grupo com total ZERO sai —
 é o equipamento que apagou por inteiro, e é justamente a linha que interessa num

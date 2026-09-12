@@ -81,12 +81,30 @@ func (r *Runner) Start(ctx context.Context) {
 	}()
 }
 
-// Stop cancela o laço e AGUARDA a passada em voo.
+// Stop cancela o laço, AGUARDA a passada em voo e grava o estado.
 //
 // Cancelar sozinho devolveria o controle com uma varredura ainda lendo grupos e
 // ainda gravando o arquivo de estado. É idempotente e pode ser chamado sem
 // nunca ter havido laço — é o que permite a quem nos usa chamá-lo sem perguntar
 // se a configuração o ligou.
+//
+// # Por que gravar aqui, e não só nas transições
+//
+// O estado é gravado quando algo muda, e é o suficiente para o cronômetro
+// sobreviver. Mas o arquivo carrega TAMBÉM o savedAt, que é o que o evento
+// restaurado usa para dizer quanto tempo ninguém observou — e com gravação só
+// em transições esse instante fica na última mudança, não na parada.
+//
+// O defeito apareceu no piloto, num reinício de verdade: nove minutos sem
+// transição, parada de segundos, e o downtimeMs do evento anunciou nove
+// minutos de lacuna. O campo promete "quanto tempo ninguém observou" e
+// entregava "quanto tempo desde a última mudança de estado" — enganoso para
+// quem usa o número para decidir se confia no alarme.
+//
+// Gravar no encerramento gracioso põe o savedAt no instante da parada. Num
+// crash sobra o último save, e aí a lacuna é de fato desconhecida: um número
+// grande passa a ser a resposta honesta, em vez de um artefato da cadência de
+// transições.
 func (r *Runner) Stop() {
 	r.loop.mu.Lock()
 	cancel := r.loop.cancel
@@ -96,6 +114,13 @@ func (r *Runner) Stop() {
 		cancel()
 	}
 	r.loop.inKeep.Wait()
+	// Depois do Wait não há mais passada em voo, então isto não disputa o
+	// estado com ninguém.
+	if err := r.persist(r.now()); err != nil {
+		r.log.Warn("alarm.state_not_saved",
+			"o estado de sustentação não foi gravado no encerramento; os cronômetros voltam do último save e a lacuna do próximo evento será maior que a parada",
+			"dataset", r.dataset, "error", err.Error())
+	}
 }
 
 // Active diz se o laço está de pé. Vai para a observabilidade: "nenhum alarme

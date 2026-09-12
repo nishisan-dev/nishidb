@@ -373,3 +373,115 @@ func TestResolucaoPorAposentadoriaTambemDizDesdeQuando(t *testing.T) {
 		t.Errorf("groupKey = %q, quero OLT_A|3 renderizado da chave canônica", e.GroupKey)
 	}
 }
+
+// TestOEncerramentoGravaOEstadoComOInstanteDaParada corrige um defeito que só
+// apareceu no piloto, num reinício de verdade.
+//
+// O estado é gravado nas TRANSIÇÕES. Um processo que fica nove minutos sem
+// nenhuma e então é reiniciado tinha o seu savedAt nove minutos no passado — e
+// o downtimeMs do evento restaurado reportava nove minutos de lacuna para uma
+// parada de segundos. O campo promete "quanto tempo ninguém observou" e
+// entregava "quanto tempo desde a última mudança de estado", que é outra coisa,
+// e enganosa para quem usa o número para julgar se pode confiar no alarme.
+//
+// O encerramento gracioso passa a gravar. Num crash sobra o último save, que é
+// o melhor que se tem — mas aí a lacuna é de fato desconhecida, e um número
+// grande é a resposta honesta.
+func TestOEncerramentoGravaOEstadoComOInstanteDaParada(t *testing.T) {
+	path := filepath.Join(t.TempDir(), checkpoint.AlarmStateFileName)
+	f := newFakeCounter(t, defByPON("autenticados_por_pon"), grupo{olt: "OLT_A", slot: 3, total: 50, live: true})
+	r, _, clock := runnerDeTeste(t, f, path)
+
+	// Duas transições: entra em observação, e dispara ao cumprir o prazo. A
+	// SEGUNDA é a última — o disparo também é transição, e as passadas quietas
+	// têm de vir depois dele para o teste exercitar o defeito.
+	passada(t, r)
+	clock.advance(2 * time.Minute)
+	passada(t, r)
+	ultimaTransicao := t0.Add(2 * time.Minute)
+	depoisDaTransicao, err := checkpoint.LoadAlarmState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if depoisDaTransicao.SavedAtUnixMs != ultimaTransicao.UnixMilli() {
+		t.Fatalf("savedAt da transição = %d, quero %d", depoisDaTransicao.SavedAtUnixMs, ultimaTransicao.UnixMilli())
+	}
+
+	// Nove minutos de passadas SEM transição nenhuma: o arquivo não é
+	// reescrito, e é daí que vinha o número errado.
+	for i := 0; i < 9; i++ {
+		clock.advance(time.Minute)
+		passada(t, r)
+	}
+	semTransicao, err := checkpoint.LoadAlarmState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if semTransicao.SavedAtUnixMs != ultimaTransicao.UnixMilli() {
+		t.Fatalf("o arquivo foi reescrito sem transição (savedAt %d, esperava %d): "+
+			"o teste não exercita o defeito", semTransicao.SavedAtUnixMs, ultimaTransicao.UnixMilli())
+	}
+
+	// O encerramento grava com o instante da parada.
+	r.Stop()
+	naParada, err := checkpoint.LoadAlarmState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, quero := naParada.SavedAtUnixMs, ultimaTransicao.Add(9*time.Minute).UnixMilli(); got != quero {
+		t.Fatalf("savedAt da parada = %d, quero %d — o encerramento não gravou", got, quero)
+	}
+	// O cronômetro em si NÃO se move: o que muda é quando o estado foi salvo.
+	if len(naParada.Alarms) != 1 || naParada.Alarms[0].Groups[0].SinceUnixMs != t0.UnixMilli() {
+		t.Errorf("o `desde quando` foi alterado pela parada: %+v", naParada.Alarms)
+	}
+}
+
+// TestALacunaMedeAParadaENaoOTempoSemTransicao é o mesmo defeito visto de fora,
+// pelo número que vai no evento.
+func TestALacunaMedeAParadaENaoOTempoSemTransicao(t *testing.T) {
+	path := filepath.Join(t.TempDir(), checkpoint.AlarmStateFileName)
+	f := newFakeCounter(t, defByPON("autenticados_por_pon"), grupo{olt: "OLT_A", slot: 3, total: 50, live: true})
+
+	// Processo 1: observa a condição passar a valer, fica nove minutos sem
+	// transição e encerra graciosamente.
+	r1, _, clock1 := runnerDeTeste(t, f, path)
+	passada(t, r1)
+	clock1.advance(2 * time.Minute)
+	passada(t, r1) // dispara: última transição
+	for i := 0; i < 9; i++ {
+		clock1.advance(time.Minute)
+		passada(t, r1)
+	}
+	r1.Stop()
+
+	// Processo 2: sobe DEZ SEGUNDOS depois. A lacuna é de dez segundos, não de
+	// nove minutos e dez segundos.
+	def := defByPON("autenticados_por_pon")
+	defs, err := Compile("telecom", specWith(alarmeDe("total < 100")), []counter.Definition{def})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &sinkOfTest{}
+	clock2 := &clockOfTest{now: t0.Add(11*time.Minute + 10*time.Second)}
+	r2, err := New(defs, map[string]counters.Reader{"autenticados_por_pon": f},
+		Options{Sink: sink, StatePath: path, Now: clock2.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	passada(t, r2)
+	if len(sink.events) != 1 {
+		t.Fatalf("%d eventos, quero o disparo restaurado", len(sink.events))
+	}
+	e := sink.last()
+	if !e.Restored {
+		t.Fatal("o disparo não veio marcado como restaurado")
+	}
+	if got, quero := e.DowntimeMs, int64(10_000); got != quero {
+		t.Errorf("lacuna = %dms, quero %dms — o número está medindo o tempo sem transição, não a parada", got, quero)
+	}
+	// E o cronômetro continua sendo o original: a sustentação vale desde t0.
+	if !e.Since.Equal(t0) {
+		t.Errorf("since = %v, quero %v", e.Since, t0)
+	}
+}

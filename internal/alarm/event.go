@@ -65,9 +65,23 @@ type Event struct {
 	// Restored diz que o Since foi lido do disco, e não observado por este
 	// processo.
 	Restored bool
-	// DowntimeMs é quanto tempo o processo ficou sem observar, e só tem
-	// sentido com Restored. Sem ele, um disparo sobre um período que ninguém
-	// acompanhou é indistinguível de um observado de ponta a ponta.
+	// DowntimeMs é a distância entre o instante em que o estado foi salvo e
+	// esta observação, e só tem sentido com Restored. Sem ele, um disparo
+	// sobre um período que ninguém acompanhou é indistinguível de um observado
+	// de ponta a ponta.
+	//
+	// O que ele MEDE depende de como o processo saiu, e a diferença importa:
+	//
+	//   - encerramento gracioso: o Stop grava o estado, então o número é o
+	//     tempo de parada, com precisão de milissegundos.
+	//   - crash: sobra o último save, feito na última transição. O número
+	//     passa a ser "desde quando não há registro", que é MAIOR que a
+	//     parada — e é a resposta honesta, porque a lacuna real é
+	//     desconhecida.
+	//
+	// Antes de o Stop gravar, os dois casos se comportavam como o segundo, e o
+	// campo anunciava nove minutos de lacuna para uma parada de segundos — o
+	// defeito que o piloto encontrou em 12/09/2026.
 	DowntimeMs int64
 	// Enrichment são os resultados das consultas declaradas, na ordem. Só o
 	// disparo os carrega. Um bloco sem linhas traz o motivo, e nenhum deles

@@ -1460,7 +1460,9 @@ equipamento removido do inventário não é um equipamento recuperado.
 
 O cronômetro **sobrevive ao reinício**: o "desde quando" é gravado em
 `checkpoint/alarms.state`, e um alarme restaurado dispara com `"restored":true` e
-`"downtimeMs"` — quanto tempo ninguém estava observando. Mudar o `when` ou o
+`"downtimeMs"`. Num encerramento gracioso esse número é o tempo de parada; num
+crash é "desde quando não há registro", que é maior — a lacuna real é
+desconhecida, e um número grande é a resposta honesta. Mudar o `when` ou o
 `sustainedFor` no YAML invalida o cronômetro salvo daquele alarme.
 
 Para inspecionar o que está em curso, sem ler log:
