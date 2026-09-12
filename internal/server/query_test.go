@@ -933,9 +933,13 @@ func TestMetaFieldsRespondePelaRotaDeQuery(t *testing.T) {
 	}
 }
 
-// specComSchemaETeto é o specConsultavel com schemaName e `query.maxRows`
-// próprios: é o mínimo para provar de QUEM são os limites aplicados a uma
-// consulta que atravessa datasets.
+// specComSchemaETeto é o specConsultavel com schemaName e os TRÊS limites de
+// consulta próprios — `query.maxRows`, `query.timeout` e `query.maxTimeout`:
+// é o mínimo para provar de QUEM são os limites aplicados a uma consulta que
+// atravessa datasets. Os três entram porque o handler troca o dataset nos três,
+// e um fixture que declarasse só o `maxRows` deixaria os outros dois medidos
+// contra o default global, que é o mesmo dos dois lados — e uma fixture em que
+// os dois lados têm o mesmo número não distingue implementação nenhuma.
 const specComSchemaETeto = `version: 1
 name: %s
 schemaName: %s
@@ -944,6 +948,8 @@ materialization:
     field: id
 query:
   maxRows: %d
+  timeout: %s
+  maxTimeout: %s
 schema:
   fields:
     id:
@@ -951,6 +957,30 @@ schema:
     status:
       type: string
 `
+
+// serverComDoisDatasetsDeLimites sobe o servidor com os dois datasets que os
+// testes de limite usam: `alto` (schema `alto_schema`, tetos folgados) e
+// `baixo` (schema `baixo_schema`, tetos apertados), cada um com três linhas.
+//
+// O par é assimétrico de propósito, e em TODOS os limites: é a assimetria que
+// separa "aplicou o do dono" de "aplicou o do handle", e de "aplicou o mais
+// baixo dos dois".
+func serverComDoisDatasetsDeLimites(t *testing.T) *server.Server {
+	t.Helper()
+	a := newEnvWithStorage(t, blockPadrao, "")
+	a.writeDataset("alto", fmt.Sprintf(specComSchemaETeto, "alto", "alto_schema", 1000, "30s", "60s"))
+	a.writeDataset("baixo", fmt.Sprintf(specComSchemaETeto, "baixo", "baixo_schema", 10, "500ms", "1s"))
+	seed(t, a, "alto", 3)
+	seed(t, a, "baixo", 3)
+
+	cfg := a.load()
+	srv, err := server.Novo(cfg, server.Options{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	run(t, srv)
+	return srv
+}
 
 // TestOsLimitesSaoDoDatasetLidoENaoDoHandle: `query.maxRows` é declarado POR
 // DATASET no YAML, e desde que o `FROM <schema>.<tabela>` resolve o dataset
@@ -966,18 +996,7 @@ schema:
 //   - pelo handle `baixo`, pedir 500 linhas de `alto_schema.alto` (teto 1000) é
 //     ACEITO.
 func TestOsLimitesSaoDoDatasetLidoENaoDoHandle(t *testing.T) {
-	a := newEnvWithStorage(t, blockPadrao, "")
-	a.writeDataset("alto", fmt.Sprintf(specComSchemaETeto, "alto", "alto_schema", 1000))
-	a.writeDataset("baixo", fmt.Sprintf(specComSchemaETeto, "baixo", "baixo_schema", 10))
-	seed(t, a, "alto", 3)
-	seed(t, a, "baixo", 3)
-
-	cfg := a.load()
-	srv, err := server.Novo(cfg, server.Options{})
-	if err != nil {
-		t.Fatalf("subida: %v", err)
-	}
-	run(t, srv)
+	srv := serverComDoisDatasetsDeLimites(t)
 
 	resp := consulta(t, srv,
 		`{"dataset":"alto","sql":"SELECT id FROM baixo_schema.baixo","maxRows":500}`)
@@ -1001,6 +1020,57 @@ func TestOsLimitesSaoDoDatasetLidoENaoDoHandle(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		fecha(t, resp)
 		t.Fatalf("status = %d, quer 200: o teto do dataset LIDO é 1000", resp.StatusCode)
+	}
+	rows, l := result(t, resp)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, quer 3", len(rows))
+	}
+	if l.Failure() != nil {
+		t.Fatalf("fecho com falha: %+v", l.Failure())
+	}
+}
+
+// TestOTetoDeTimeoutEhDoDatasetLidoENaoDoHandle é o mesmo contrato do
+// `maxRows`, no SEGUNDO dos três lugares em que o handler troca o dataset: o
+// `query.maxTimeout`, que o contextoOfConsulta faz valer contra o `timeoutMs`
+// do request.
+//
+// Ele precisa existir por si porque a substituição é uma leitura SEPARADA: o
+// handler passa o dataset dono ao rowCeiling e ao contextoOfConsulta em duas
+// chamadas, e reverter só a segunda deixa o teste do `maxRows` verde. Sem esta
+// cobertura, o teto de prazo de um dataset seria contornável abrindo a conexão
+// pelo handle de outro — e `query.maxTimeout` é justamente o que impede uma
+// consulta de segurar vaga e storage por mais tempo do que o YAML admite.
+//
+// Os dois lados, pela mesma razão do teste do `maxRows`: o segundo é o que
+// separa "aplicou o do dono" de "aplicou o mais baixo dos dois".
+func TestOTetoDeTimeoutEhDoDatasetLidoENaoDoHandle(t *testing.T) {
+	srv := serverComDoisDatasetsDeLimites(t)
+
+	// Pelo handle `alto` (teto 60s), pedir 5s de `baixo` (teto 1s) é recusado.
+	resp := consulta(t, srv,
+		`{"dataset":"alto","sql":"SELECT id FROM baixo_schema.baixo","timeoutMs":5000}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 400: o teto de prazo do dataset LIDO é 1s", resp.StatusCode)
+	}
+	f := failOf(t, resp)
+	if f.Code != protocol.CodeBadRequest {
+		t.Fatalf("código = %q, quer %s", f.Code, protocol.CodeBadRequest)
+	}
+	// A mensagem nomeia o teto do DONO, em ms. Nomear o do handle mandaria o
+	// operador ajustar o YAML errado.
+	if !strings.Contains(f.Message, "1000 ms") {
+		t.Fatalf("a mensagem tem de nomear o teto do dataset lido: %q", f.Message)
+	}
+
+	// O simétrico: o handle de teto apertado lendo o dataset de teto folgado
+	// passa, com o prazo do DONO valendo.
+	resp = consulta(t, srv,
+		`{"dataset":"baixo","sql":"SELECT id FROM alto_schema.alto","timeoutMs":5000}`)
+	if resp.StatusCode != http.StatusOK {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 200: o teto de prazo do dataset LIDO é 60s", resp.StatusCode)
 	}
 	rows, l := result(t, resp)
 	if len(rows) != 3 {
