@@ -1477,7 +1477,8 @@ aceita também o par `schema.name`, que é o endereço completo (ver abaixo).
 `namespace` é NULL só na tabela base, que não tem atalho com prefixo; `columns`
 é a contagem de colunas descritíveis (os nomes estão na `_meta.fields`); e
 `description` é NULL em toda linha hoje — nada declara descrição de tabela, e o
-catálogo não inventa uma.
+catálogo não inventa uma. NULL aqui é ausência: a chave simplesmente não sai na
+linha NDJSON.
 
 O `GET /v1/metadata` publica **a mesma lista**, por dataset, no campo `tables`
 — com `name`, `schema`, `namespace`, `kind`, `description` e as colunas de cada
@@ -1486,6 +1487,12 @@ também `schema`, o `schemaName` declarado no YAML. É de onde o driver JDBC mon
 a árvore de um cliente SQL, que não escreve SQL de catálogo sozinho. As duas
 saídas vêm da mesma enumeração do motor: o que a `_meta.tables` responde por SQL
 e o que o `/v1/metadata` publica no wire não podem divergir.
+
+Divergem na FORMA de uma ausência, e só nisso: `namespace` e `description`, que
+a `_meta.tables` publica como NULL, saem no JSON como `""` — os campos do
+documento são strings, não ponteiros, e no wire deste documento só o `alias` de
+uma coluna é nulo. Quem ler os dois canais em sequência não deve esperar `null`
+no JSON.
 
 Os dois campos são **aditivos**: `columns` continua sendo a lista completa da
 tabela base — as mesmas colunas que saem na linha de `kind: TABLE` —, e um
