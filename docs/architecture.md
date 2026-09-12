@@ -1135,6 +1135,48 @@ verdade responde `/v1/query` em `chunked` e o de mentira respondia com
 **O que nenhum dos dois faz**, porque é o que o NishiDB é: escrita (os dados
 entram por ingestão), transação, e cursor rolável.
 
+### A árvore do cliente SQL
+
+O `getSchemas`, o `getTables` e o `getColumns` do driver JDBC saem do campo
+`tables` do `/v1/metadata`, e não mais da lista de datasets: a base como
+`TABLE` no schema declarado, o contador como `VIEW` no mesmo schema, e as
+tabelas do `_meta` como `VIEW` no schema `_meta`. O código do tipo de cada
+coluna é o `jdbc` que o servidor calculou — o driver não o rededuz do nome do
+tipo, pela razão de sempre: duas tabelas de tipos divergem no primeiro tipo
+novo.
+
+**É o `TABLE_SCHEM` que faz a ferramenta gerar `FROM <schema>.<tabela>`.** Foi
+o que o spike do DBeaver mediu, e é por isso que ele é o campo que paga o
+ciclo: publicá-lo nulo faria o SQL que a ferramenta monta cair no dataset da
+conexão, que para toda tabela de outro schema é outra tabela. O
+`supportsSchemasInDataManipulation` responde `true` pela mesma razão, e é a
+única dos cinco `supportsSchemasIn*` que responde — as outras quatro são DDL,
+procedimento e privilégio, que o produto não tem.
+
+**O `TABLE_CAT` continua nulo em toda linha**, e o `getCatalogs` continua
+vazio: o endereço qualificado tem dois níveis, e o de cima é o schema.
+
+**O `getTableTypes` responde `TABLE` e `VIEW`, e nunca `SYSTEM TABLE`.** O
+terceiro rótulo seria o natural para as tabelas do `_meta`, e é justamente o
+que não se pode usar — o mesmo spike mostrou que o DBeaver esconde objeto de
+sistema por default e que a opção que o revela não é achável na interface.
+Tabela que existe para ser descoberta não pode nascer invisível. A lista é
+fixa: ela diz o que o driver sabe publicar, e é respondida antes de a
+ferramenta perguntar quais tabelas existem.
+
+**As linhas do `_meta` saem uma vez, não uma por dataset.** O documento as
+publica dentro de cada elemento de `datasets`, porque o atalho `_meta.x`
+significa "no dataset da requisição" e o catálogo de cada dataset o inclui;
+elas descrevem a mesma tabela, então o driver corta a repetição pelo par
+(schema, nome).
+
+**Servidor anterior aos campos novos: a árvore de sempre.** `schema` e `tables`
+são aditivos, e um binário anterior responde sem os dois. Aí cada dataset volta
+a ser uma linha `TABLE` com `TABLE_SCHEM` nulo e as colunas do campo `columns`,
+que é exatamente o que o driver listava antes — nenhuma view inventada e nada
+lançado (`metadataSemTablesDegradaSemErro`, que fala com um fixture só seu — o
+resto da suíte usa o documento novo).
+
 ## O protocolo remoto
 
 ![Sequência do POST /v1/query: validação, semáforo, linha de schema, lotes de flush e o fecho que distingue fim de erro](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/sequence_query_http.puml)
