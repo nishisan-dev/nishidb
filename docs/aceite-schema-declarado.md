@@ -323,3 +323,20 @@ de identificadores em inglês), e nenhuma tarefa o tocou.
 6. **`make test-integration` continua quebrado**, e já estava antes do ciclo
    (`undefined: bancada` em `internal/kafka/integration_test.go`, resíduo do
    ciclo de identificadores). Nenhuma tarefa o tocou, por instrução.
+7. **As mensagens de erro novas nasceram em PT-BR, e isso é divergência
+   declarada.** O critério do débito 116 diz que "mensagem e chave de log novas
+   nascem em inglês", e o ciclo não o seguiu: as dezenas de mensagens que ele
+   introduziu — as recusas do `keyFormat`, as da validação dos contadores contra
+   o schema, as do `FROM` qualificado e as falhas internas da `_meta.tables` —
+   saíram todas em PT-BR. A decisão foi seguir a BASE, pela exceção que o
+   próprio critério de idioma prevê: o wire de erro deste servidor é PT-BR de
+   ponta a ponta, e traduzir só as novas deixaria o cliente lendo duas línguas
+   na mesma sessão, que é pior do que ler uma língua que o critério não
+   prefere. **Três delas atravessam o fio até os clients** — as recusas de
+   roteamento por schema (`internal/query/engine.go`: schema inexistente,
+   tabela inexistente no schema, e o par ambíguo), que saem por `binder.ErrorAt`
+   e chegam ao JDBC e ao Python como `message` de um erro de bind. A tradução
+   delas é trabalho do ciclo do débito 116, junto com o resto do wire, e não
+   deste: feita aqui, seria mudança de contrato de saída sem a decisão que o
+   próprio débito exige. Fica registrado para que a divergência seja lida como
+   escolha, e não como descuido.
