@@ -332,11 +332,13 @@ de identificadores em inglês), e nenhuma tarefa o tocou.
    próprio critério de idioma prevê: o wire de erro deste servidor é PT-BR de
    ponta a ponta, e traduzir só as novas deixaria o cliente lendo duas línguas
    na mesma sessão, que é pior do que ler uma língua que o critério não
-   prefere. **Três delas atravessam o fio até os clients** — as recusas de
+   prefere. **Quatro delas atravessam o fio até os clients** — as recusas de
    roteamento por schema (`internal/query/engine.go`: schema inexistente,
-   tabela inexistente no schema, e o par ambíguo), que saem por `binder.ErrorAt`
-   e chegam ao JDBC e ao Python como `message` de um erro de bind. A tradução
-   delas é trabalho do ciclo do débito 116, junto com o resto do wire, e não
-   deste: feita aqui, seria mudança de contrato de saída sem a decisão que o
-   próprio débito exige. Fica registrado para que a divergência seja lida como
-   escolha, e não como descuido.
+   tabela inexistente no schema, e o par ambíguo), mais o complemento de
+   `wholeQuotedNameHint` (`internal/query/binder/binder.go`, commit `5e6f204`)
+   que nomeia a forma certa quando um nome qualificado é citado INTEIRO entre
+   aspas. As quatro saem por `binder.ErrorAt` e chegam ao JDBC e ao Python como
+   `message` de um erro de bind. A tradução delas é trabalho do ciclo do débito
+   116, junto com o resto do wire, e não deste: feita aqui, seria mudança de
+   contrato de saída sem a decisão que o próprio débito exige. Fica registrado
+   para que a divergência seja lida como escolha, e não como descuido.

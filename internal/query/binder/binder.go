@@ -240,10 +240,15 @@ func Bind(stmt *parser.SelectStmt, sc *schema.Compiled, params []types.Value) (*
 // chamador não passa por essa garantia, e aí o complemento fala de aspas que
 // ninguém escreveu.
 //
-// Só é consultada no ramo que JÁ ia recusar a query, e por isso não estraga o
-// nome legítimo com ponto: nada proíbe um dataset chamado `a.b` (o nome é o do
-// arquivo YAML, config.ListDatasets), e `FROM "a.b"` contra o handle dele casa
-// com sc.Name e nem chega aqui.
+// Só é consultada no ramo que JÁ ia recusar a query, e por isso não estraga
+// nome legítimo nenhum: um dataset chamado `a.b` é inconstruível. O `name` do
+// YAML tem de casar com [a-z0-9_]+ (isIdentName, spec.go:504-515, checado em
+// spec.go:736-737), e Config.LoadDatasetSpecs recusa a carga se esse `name`
+// não for idêntico ao nome do arquivo (config.go:733-736) — o sc.Name que
+// chega até aqui é sempre esse valor já validado, nunca um nome de arquivo não
+// conferido. Não existe, portanto, um handle com ponto para `FROM "a.b"`
+// colidir; o complemento só é alcançado onde nenhum dataset legítimo poderia
+// estar.
 func wholeQuotedNameHint(stmt *parser.SelectStmt) string {
 	if stmt.Namespace != "" {
 		return ""
