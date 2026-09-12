@@ -385,17 +385,39 @@ func TestSpecSinteticaAtravessaAValidacaoComOSchemaReservado(t *testing.T) {
 // espaços de nome do produto, a maiúscula (que obrigaria o cliente a citar o
 // nome), o ponto (que inventaria um terceiro nível que a gramática do FROM não
 // tem) e o vazio explícito, que é ausência escrita à mão.
+//
+// Cada caso cobra o MOTIVO, e não só o `err != nil`: as três mensagens são
+// diferentes de propósito — quem esqueceu a chave precisa do exemplo, quem
+// escreveu `Telecom` precisa da faixa aceita, e quem escreveu `_meta` precisa
+// saber que a faixa é do produto. Um assert que só pergunta se houve erro
+// passa igual com as três trocadas entre si, e o operador é mandado corrigir a
+// coisa errada. Conferido por mutação: trocando as mensagens dos três ramos
+// entre si, os três subcasos acusam.
 func TestSpecRecusaSchemaNameInvalido(t *testing.T) {
-	for name, value := range map[string]string{
-		"prefixo reservado": "_meta",
-		"maiuscula":         "Telecom",
-		"com ponto":         "tele.com",
-		"vazio":             `""`,
+	for _, c := range []struct {
+		name, value string
+		want        []string
+	}{
+		// O `_meta` atravessa o isIdentName — `[a-z0-9_]+` aceita o underscore
+		// —, então é o ramo da RESERVA que tem de pegá-lo. Se a recusa saísse
+		// como "inválido", a mensagem mandaria trocar por um nome da mesma
+		// faixa que ele já respeita.
+		{"prefixo reservado", "_meta", []string{`schemaName "_meta"`, `o prefixo "_" é reservado`, CountersNamespace}},
+		{"maiuscula", "Telecom", []string{`schemaName "Telecom"`, "inválido", "[a-z0-9_]+"}},
+		{"com ponto", "tele.com", []string{`schemaName "tele.com"`, "inválido", "[a-z0-9_]+"}},
+		// O vazio é o único que não pode ecoar o valor — não há valor —, e é o
+		// que ensina a correção com um exemplo.
+		{"vazio", `""`, []string{"schemaName obrigatório", "schemaName: telecom"}},
 	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := Parse([]byte("version: 1\nname: servicos\nschemaName: "+value+"\n"+minimalMaterialization), BuiltinDefaults)
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Parse([]byte("version: 1\nname: servicos\nschemaName: "+c.value+"\n"+minimalMaterialization), BuiltinDefaults)
 			if err == nil {
-				t.Fatalf("schemaName %s tem de ser recusado", value)
+				t.Fatalf("schemaName %s tem de ser recusado", c.value)
+			}
+			for _, want := range c.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("a recusa tem de dizer o motivo, e não cita %q: %v", want, err)
+				}
 			}
 		})
 	}
