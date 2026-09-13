@@ -36,6 +36,10 @@ public final class Codigos {
     public static final String FORBIDDEN = "FORBIDDEN";
     public static final String WRITER_FAILED = "WRITER_FAILED";
     public static final String COMPACTION_BUSY = "COMPACTION_BUSY";
+    public static final String USER_EXISTS = "USER_EXISTS";
+    public static final String UNKNOWN_USER = "UNKNOWN_USER";
+    public static final String LAST_ADMIN = "LAST_ADMIN";
+    public static final String WEAK_PASSWORD = "WEAK_PASSWORD";
 
     private Codigos() {
     }

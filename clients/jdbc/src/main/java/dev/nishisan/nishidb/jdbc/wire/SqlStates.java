@@ -77,6 +77,9 @@ public final class SqlStates {
     private static final String OBJETO_EM_USO = "55006";
     private static final String AUTENTICACAO = "28000";
     private static final String IO_DO_SISTEMA = "58030";
+    private static final String OBJETO_DUPLICADO = "42710";
+    private static final String OBJETO_INEXISTENTE = "42704";
+    private static final String PRE_REQUISITO_DESATENDIDO = "55000";
     private static final String CORRUPCAO = "XX001";
     /** HY000 — código que este driver não conhece. Nunca degrada para INTERNAL. */
     public static final String DESCONHECIDO = "HY000";
@@ -151,6 +154,18 @@ public final class SqlStates {
             // sintaxe, e uma ferramenta que tratasse assim sugeriria corrigir o
             // SQL para quem precisa é de outra credencial.
             Map.entry(Codigos.FORBIDDEN, new Entrada(SEM_PRIVILEGIO, SQLNonTransientException::new)),
+
+            // Gestão de usuário. O driver é só leitura e nunca chama essas
+            // rotas, mas o código pode chegar a ele por qualquer caminho que
+            // repasse a resposta, e a tabela cobre o protocolo inteiro. Os
+            // três da classe 42/55 quebram a regra "classe 42 vira
+            // SQLSyntaxErrorException" pela mesma razão do FORBIDDEN: nada ali
+            // se resolve reescrevendo SQL.
+            Map.entry(Codigos.USER_EXISTS, new Entrada(OBJETO_DUPLICADO, SQLNonTransientException::new)),
+            Map.entry(Codigos.UNKNOWN_USER, new Entrada(OBJETO_INEXISTENTE, SQLNonTransientException::new)),
+            Map.entry(Codigos.LAST_ADMIN,
+                    new Entrada(PRE_REQUISITO_DESATENDIDO, SQLNonTransientException::new)),
+            Map.entry(Codigos.WEAK_PASSWORD, new Entrada(DADO_INVALIDO, SQLDataException::new)),
 
             // As três "o driver falou errado o protocolo" viram classe 08, e
             // não 42: o defeito é do CLIENTE ou do caminho de rede, não da

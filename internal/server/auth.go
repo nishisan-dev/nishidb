@@ -148,6 +148,13 @@ func (s *Server) buildMux() *router {
 	// continua sendo SQL (`_counters.<nome>`), pela rota de consulta.
 	rt.register("/v1/counters/audit", config.RoleAdmin, s.handleAuditOfCounters)
 	rt.register("/v1/counters/rebuild", config.RoleAdmin, s.handleRebuildOfCounters)
+	// Gestão de usuário (issue #40, users.go). A troca de senha é READ porque
+	// todo usuário troca a PRÓPRIA; a regra "só a própria, salvo ADMIN" mora
+	// no handler, que conhece o nome do principal.
+	rt.register("/v1/users/create", config.RoleAdmin, s.handleUserCreate)
+	rt.register("/v1/users/password", config.RoleRead, s.handleUserPassword)
+	rt.register("/v1/users/role", config.RoleAdmin, s.handleUserRole)
+	rt.register("/v1/users/delete", config.RoleAdmin, s.handleUserDelete)
 	return rt
 }
 

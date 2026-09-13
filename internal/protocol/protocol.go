@@ -268,6 +268,23 @@ const (
 	// comentário de codigoOfProtocolo no CLI).
 	CodeWriterFailed   = "WRITER_FAILED"
 	CodeCompactionBusy = "COMPACTION_BUSY"
+
+	// Os quatro códigos da gestão de usuário (issue #40, /v1/users/*). Nome e
+	// papel malformados usam BAD_PARAMETER; papel insuficiente, troca da
+	// senha de OUTRO usuário por um READ e gestão com a autenticação
+	// desligada usam FORBIDDEN; tabela com gravação falha usa WRITER_FAILED.
+	//
+	// CodeUserExists sai com 409: o nome já está na tabela.
+	CodeUserExists = "USER_EXISTS"
+	// CodeUnknownUser sai com 404. Só um ADMIN chega a vê-lo, então não
+	// enumera conta para quem não tem direito de listar a tabela.
+	CodeUnknownUser = "UNKNOWN_USER"
+	// CodeLastAdmin sai com 409: remover ou rebaixar o último ADMIN deixaria o
+	// servidor sem ninguém capaz de fazer gestão.
+	CodeLastAdmin = "LAST_ADMIN"
+	// CodeWeakPassword sai com 400: a senha nova está fora da política de
+	// tamanho. A mensagem nomeia a política, nunca a senha.
+	CodeWeakPassword = "WEAK_PASSWORD"
 )
 
 // TypeName é o nome do tipo como o operador o escreve no YAML (§17).
