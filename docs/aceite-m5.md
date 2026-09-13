@@ -101,8 +101,11 @@ existe ainda:
    (validado em produção sem exposição — `curl --cacert` + `-u`, 401 sem
    credencial, 403 de READ em `/v1/compact`), só depois o bind exposto de
    verdade, e só por último o firewall liberado.
-4. **Usuários `reader` e `admin` reais**, via `passwordFile` 0600 em
-   `/app/nishidb/secrets/`.
+4. **Usuários `reader` e `admin` reais**, na tabela de usuários do servidor
+   (`nishidb users create`). O `passwordFile` 0600 que este item previa saiu
+   com o bloco `server.authentication.users` na issue #40; no piloto, as senhas
+   dos arquivos de `/app/nishidb/secrets/` foram migradas para a tabela em
+   13/09/2026.
 5. **RUNBOOK atualizado** com o par binário+config como unidade de rollback,
    `no_proxy` para o IP do servidor, e a nova seção de credenciais.
 6. **Evidências datadas** substituindo esta seção: a versão do `/v1/stats` do
