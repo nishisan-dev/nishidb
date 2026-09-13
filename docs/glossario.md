@@ -481,7 +481,15 @@ inglês correspondente.
 | tópico (Kafka) | topic | internal/config, internal/kafka |
 | unicidade (dois datasets não podem consumir o mesmo tópico com o mesmo `consumer.groupId` no mesmo cluster) | uniqueness | internal/config |
 | segurança (os blocos `server.tls`, `server.authentication` e `server.loopback`, e a validação de FORMA deles) | security | internal/config, internal/server |
-| usuário / usuários (a credencial nomeada do bloco `server.authentication.users`) | user | internal/config |
+| usuário / usuários (uma linha da tabela de usuários do servidor) | user | internal/users, internal/server |
+| tabela de usuários (a fonte única de quem autentica, em `<storage.path>/_system/users.state`) | user table | internal/users |
+| credencial de bootstrap (o ADMIN gerado na primeira subida, com a senha num arquivo 0600) | bootstrap credential | internal/users |
+| verificador (o cache de verificação por geração e o teto de derivações argon2id) | verifier | internal/users |
+| geração (a versão em memória de uma linha da tabela de usuários, que invalida o cache de verificação) | generation | internal/users |
+| último ADMIN (o que não pode ser removido nem rebaixado) | last admin | internal/users, internal/protocol |
+| ator (quem pede a mutação na tabela de usuários, para a auditoria) | actor | internal/users |
+| principal (quem o middleware autenticou naquele request) | principal | internal/server |
+| gravação atômica (tmp → fsync → rename → fsync do diretório) | atomic write | internal/storage/atomicfile |
 | documento (o documento YAML que o yaml.v3 entrega, cujo nó de topo é o DocumentNode) | document | internal/config |
 | faltando (as chaves obrigatórias que o bloco ligado não trouxe) | missing | internal/config, internal/typeparse |
 | caminho (a trilha de chaves dentro do documento YAML que a recusa nomeia) | key path | internal/config, internal/schema |

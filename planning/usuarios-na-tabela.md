@@ -149,6 +149,15 @@ senha exige reiniciar. A issue #40 pede três coisas:
   - usuários criados ou alterados depois da atualização não existem para o binário antigo;
   - um YAML novo (sem `users`) com binário antigo recusa a subida. É fail-closed: nunca sobe sem senha.
 
+## Ajustes feitos na implementação
+
+- **Gestão offline cria o bootstrap.** Com `--config` e a tabela ausente, `users.Open` gera a credencial de bootstrap, como a subida faria. Assim a invariante "sempre existe um ADMIN" vale desde a primeira linha. O plano previa inicializar sem bootstrap, o que permitiria uma tabela só com READ.
+- **Nome e papel malformados usam `BAD_PARAMETER`**, e a gravação falha usa `WRITER_FAILED`; os códigos novos ficaram só os quatro. O mapeamento JDBC é `USER_EXISTS` 42710, `UNKNOWN_USER` 42704, `LAST_ADMIN` 55000 e `WEAK_PASSWORD` 22023. No Python, `USER_EXISTS` e `LAST_ADMIN` viram `IntegrityError`.
+- **Barreira ADMIN** é `Engine.RegisterAdminVirtual` mais `query.WithAdmin`, e a recusa vem antes do bind.
+- **O arquivo de bootstrap é gravado pelo `atomicfile`** (sobrescrita durável), e não com `O_EXCL`: uma queda entre a senha e a tabela precisa poder ser refeita na próxima subida.
+- **O diagrama** segue o padrão de nome da pasta: `docs/diagrams/usuarios_flow.puml`.
+- **Débitos**: 120 (teto de KDF disputável), 121 (papéis por dataset) e 122 (rollback para binário anterior). O 72 foi atualizado.
+
 ## Débitos novos (fim de `docs/debitos.md`, a partir do 120)
 
 - Semáforo de KDF disputável por tentativa inválida em massa: um usuário legítimo com cache frio espera. O rate-limit do débito 71 é o remédio.
