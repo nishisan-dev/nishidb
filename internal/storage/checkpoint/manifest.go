@@ -9,7 +9,8 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
-	"path/filepath"
+
+	"github.com/nishisan-dev/nishidb/internal/storage/atomicfile"
 )
 
 // ErrInManifest indica dataset sem manifest (cold start).
@@ -651,72 +652,25 @@ func decodeSchedule(payload []byte, m *Manifest) error {
 // produção).
 var writeTrace func(step string)
 
-// step executa a operação e, em sucesso, emite o evento — amarrar o trace à
-// execução garante que remover a operação também remove o evento (poder de
-// detecção contra a mutação "remove o Sync, mantém o emit").
-func step(name string, op func() error) error {
-	if err := op(); err != nil {
-		return err
-	}
-	if writeTrace != nil {
-		writeTrace(name)
-	}
-	return nil
-}
-
 // Write grava o manifest atomicamente.
 func Write(path string, m *Manifest) error {
 	return writeAtomic(path, m.encode())
 }
 
-// writeAtomic grava tmp → fsync → rename → fsync do diretório (a política
-// de rename durável do design §9/M18).
-//
-// É compartilhado pelo manifest.bin e pelo kafka.offsets de propósito: este é
-// o único caminho de durabilidade PROVADO do projeto (a ordem está travada
-// por TestWriteOrdemDeDurabilidade), e um segundo arquivo com uma segunda
-// cópia da sequência seria uma cópia que diverge na primeira correção.
+// writeAtomic delega ao atomicfile — o único caminho de durabilidade PROVADO
+// do projeto — com o modo 0644 de sempre dos arquivos do checkpoint. O
+// manifest.bin, o kafka.offsets e o alarms.state passam todos por aqui, e
+// TestWriteOrdemDeDurabilidade confere que o encanamento até o atomicfile
+// continua inteiro.
 func writeAtomic(path string, data []byte) error {
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return fmt.Errorf("checkpoint: criar %s: %w", tmp, err)
+	var hook atomicfile.Hook
+	if trace := writeTrace; trace != nil {
+		hook = func(step string) error {
+			trace(step)
+			return nil
+		}
 	}
-	if err := step("write", func() error {
-		_, werr := f.Write(data)
-		return werr
-	}); err != nil {
-		f.Close()
-		return fmt.Errorf("checkpoint: escrever %s: %w", tmp, err)
-	}
-	if err := step("fsync", f.Sync); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := step("rename", func() error {
-		return os.Rename(tmp, path)
-	}); err != nil {
-		return fmt.Errorf("checkpoint: rename de %s: %w", filepath.Base(path), err)
-	}
-	return step("dirsync", func() error {
-		return syncDir(filepath.Dir(path))
-	})
-}
-
-// syncDir força a durabilidade da entrada de diretório após um rename.
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	if err := d.Sync(); err != nil {
-		return fmt.Errorf("checkpoint: fsync do diretório %s: %w", dir, err)
-	}
-	return nil
+	return atomicfile.WriteWithHook(path, data, 0o644, hook)
 }
 
 // Load lê e valida o manifest. Ausência devolve ErrInManifest (cold start).
