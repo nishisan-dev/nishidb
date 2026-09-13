@@ -1370,16 +1370,14 @@ manual), e a config que a maioria dos deploys usa hoje — sem
 
 **HTTP Basic sobre TLS**, não um esquema próprio — mapeia 1:1 para
 `DriverManager` do JDBC (Fase 7) e para `basic_auth` de ferramentas de
-scrape. A senha do request é hasheada (SHA-256) e comparada contra o digest
-guardado com `subtle.ConstantTimeCompare` — os dois lados sempre 32 bytes,
-para que a comparação em tempo constante não vaze o comprimento da senha
-certa pela diferença de tamanho de slice. Usuário inexistente compara contra
-um digest fantasma fixo (`ghostCredential`), e a resposta de falha é
-**uma função só** (`rejectAuth`) para os três casos — header
-malformado, usuário inexistente, senha errada —, sempre com a MESMA
-mensagem e os MESMOS headers: o 401 é byte-idêntico entre "não existe" e
-"senha errada", provado por comparação de `Header()` completo, não só de
-duas chaves nomeadas.
+scrape. A senha do request é verificada contra o hash argon2id da tabela de
+usuários (`users.Store.Authenticate`, `internal/users/verifier.go`, seção
+abaixo). Usuário inexistente paga o MESMO KDF, contra um hash fantasma com os
+parâmetros dos hashes reais, e a resposta de falha é **uma função só**
+(`rejectAuth`) para os três casos — header malformado, usuário inexistente,
+senha errada —, sempre com a MESMA mensagem e os MESMOS headers: o 401 é
+byte-idêntico entre "não existe" e "senha errada", provado por comparação de
+`Header()` completo, não só de duas chaves nomeadas.
 
 **Sem lockout, com atraso fixo.** Não há contador por IP nem por usuário —
 isso abriria a porta para auto-DoS contra um username conhecido. Em vez
@@ -1391,9 +1389,10 @@ como débito (ver `debitos.md`).
 
 **Papéis: READ e ADMIN, com ADMIN ⊇ READ** (`roleAuthorized`,
 `internal/server/auth.go`) — um usuário ADMIN alcança toda rota READ;
-um usuário READ nunca alcança rota ADMIN. O enum é fechado desde o parse
-(`config.RoleRead`/`config.RoleAdmin`) e comparado por string EXATA: `role:
-read` ou `role: Read` no YAML são recusados na subida, não normalizados.
+um usuário READ nunca alcança rota ADMIN. O enum é fechado
+(`config.RoleRead`/`config.RoleAdmin`) e comparado por string EXATA: `read` ou
+`Read` são recusados pela tabela de usuários (`users.ValidateRole`), não
+normalizados.
 
 **O registro de rota é fail-closed por construção.** `router.registra` é a
 ÚNICA função que grava o papel exigido junto com o handler
@@ -1425,22 +1424,83 @@ regra oposta — o operador desligou a checagem inteira, não só o TLS —, e �
 essa mesma ausência de checagem que faz `POST /v1/compact` funcionar sem
 credencial no caso de uso central do §96 (modo manual).
 
-**Resolução de segredos na subida, nunca no parse.** O YAML só declara ONDE
-a senha mora — `passwordEnv` (nome da variável) ou `passwordFile` (caminho),
-nunca o valor — e a B1 garante XOR entre os dois; ler o valor de verdade é
-ativação (`resolveCredentials`/`resolvePassword`,
-`internal/server/security.go`), fail-fast ANTES de qualquer listener abrir.
-Uma env var ausente ou definida-e-vazia recusa a subida nomeando a variável
-(nunca o valor); um `passwordFile` group- ou world-readable (`modo&0o077 !=
-0`) recusa nomeando caminho e modo — uma senha não é uma CA pública, o
-descuido de permissão custa mais caro aqui do que no Kafka, de onde o molde
-veio. O conteúdo do arquivo tem o `\n`/`\r\n` final aparado (todo `echo
-senha > arquivo` termina em quebra de linha) e, se sobrar vazio depois de
-aparar, a subida recusa — um `touch senha.txt` de provisionamento não pode
-virar uma conta que autentica com qualquer senha em branco. Não há
-recarga a quente: `passwordEnv` não é recarregável por construção, e
-`passwordFile` fica para o débito nomeado "SIGHUP-reload" — o restart mede
-~0,28s no piloto, o que barateia a alternativa.
+### A tabela de usuários (issue #40)
+
+Os usuários NÃO moram no YAML. A fonte única de quem autentica é a tabela de
+usuários do servidor, `internal/users`, em `<storage.path>/_system/users.state`;
+o antigo `server.authentication.users` é recusado na subida com o roteiro de
+migração na mensagem (`validateServerSecurity`,
+`internal/config/config_security.go`).
+
+![Tabela de usuários: bootstrap, gestão com o servidor no ar, verificação com cache e a barreira ADMIN do _meta.users](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/usuarios_flow.puml)
+
+**Arquivo, não dataset.** São poucas linhas, e um Store traria dezenas de MiB
+de mmap, recovery e presença no catálogo, no health e na compactação — cada
+um pedindo exceção. O arquivo é regravado INTEIRO a cada mutação pelo
+`atomicfile` (tmp → fsync → rename → fsync do diretório), o mesmo caminho
+durável do `manifest.bin`, com magic, versão e crc32c. Dá a garantia de
+durabilidade que o dado tem: uma troca de senha que sobreviveu a um crash
+não volta à anterior, e uma que não chegou ao rename nunca foi confirmada
+(`TestQuedaNaGravacaoDaTabelaPreservaOQueChegouAoDisco`). O diretório tem flock
+próprio (`_system/LOCK`): a gestão offline com o servidor no ar sai com exit
+3.
+
+**Ordem de toda mutação: valida → monta a tabela nova → grava durável →
+publica o ponteiro → audita.** Publicar o ponteiro (`atomic.Pointer`) é o
+commit de visibilidade e vem por último, como a location no storage: ninguém
+autentica com uma senha que ainda não está no disco. Falha de gravação deixa
+a tabela FALHA para mutação até reabrir (`users.ErrWriterFailed`, a mesma
+doutrina do stickyErr): a queda pode ter vindo depois do rename, e a próxima
+mutação, montada a partir da memória, apagaria em silêncio uma mudança que
+talvez esteja no disco. A autenticação segue servindo pelo que publicou.
+
+**Bootstrap.** Com a autenticação ligada e a tabela ausente, a abertura gera
+o ADMIN `admin` com 24 bytes de `crypto/rand`, grava a senha em
+`_system/bootstrap-admin.password` (0600) e só DEPOIS grava a tabela — uma
+queda entre as duas deixa só o arquivo de senha, e a próxima subida
+sobrescreve os dois. O log (`users.bootstrap`) aponta o caminho, nunca a
+senha, e o stdout não recebe nada: a unit do systemd grava o stdout num
+arquivo que fica. Trocar a senha desse usuário, ou removê-lo, apaga o arquivo.
+Tabela ILEGÍVEL recusa a subida (`users.ErrCorruptUsers`) e nunca regera
+credencial: seria entregar um ADMIN novo a quem estragou o arquivo
+(`TestTabelaDeUsuariosIlegivelRecusaASubidaDoServidor`).
+
+**Verificação a cada request, sem pagar o KDF a cada request.** O hash é
+argon2id com sal próprio e os parâmetros gravados na linha (t=2, 19 MiB,
+p=1), o que deixa um custo novo entrar sem migração. O verificador guarda,
+por usuário, um HMAC-SHA256 da senha que já autenticou, com chave aleatória
+do processo, e a GERAÇÃO da linha naquele instante: um acerto compara em
+tempo constante e dispensa o KDF; qualquer mutação na linha muda a geração e
+invalida a entrada, inclusive a de uma autenticação que estava no meio do KDF
+quando a senha mudou (`TestAutenticacaoEmCursoDuranteATrocaNaoEnvenenaOCache`).
+Só o SUCESSO toma o atalho: senha errada paga o KDF mesmo com cache quente,
+senão o tempo diria que aquela conta existe
+(`TestSoOSucessoDispensaOKDFEOsFracassosPagamOMesmoPreco`). No máximo duas
+derivações correm ao mesmo tempo (~38 MiB transitórios), e a disputa desse
+teto por tentativa inválida em massa é o débito 120.
+
+**Gestão com o servidor no ar.** `POST /v1/users/create`, `/v1/users/role` e
+`/v1/users/delete` são ADMIN; `/v1/users/password` é READ, porque todo
+usuário troca a PRÓPRIA senha — e a regra "só a própria, salvo ADMIN" mora no
+handler, que conhece o nome do principal que `withAuth` pôs no context. A
+recusa para READ vem antes de consultar a tabela, para que FORBIDDEN e
+UNKNOWN_USER não revelem se um nome existe. Sem principal — autenticação
+desligada ou plano loopback — toda rota de usuário responde FORBIDDEN: não
+existe gestão anônima. O último ADMIN não é removido nem rebaixado
+(`LAST_ADMIN`). Cada mutação sai no log estruturado (`users.created`,
+`users.password_changed`, `users.role_changed`, `users.deleted`) com `actor`,
+`user`, `role` e `remote`; a gestão offline registra `actor` como
+`local:<usuário do sistema>`. Não há sessão: o Basic é verificado a cada
+request, então a troca vale a partir do request seguinte.
+
+**`_meta.users` é só-ADMIN no motor, não no servidor.** A tabela
+(`internal/metausers`) lista nome, papel, marca de bootstrap e quem criou e
+alterou quando, sem coluna de hash. Ela é registrada com
+`Engine.RegisterAdminVirtual`, e o motor a recusa com `query.ErrForbidden`,
+antes do bind, a toda consulta cujo context não traga `query.WithAdmin` — marca
+que só o `handleQuery` põe, e só para principal ADMIN. O plano loopback, o
+usuário READ e o chamador que esquecer caem na recusa sem código extra
+(`TestSemAMarcaDeAdminATabelaDeUsuariosEhRecusada`).
 
 **TLS.** O certificado é carregado uma vez na subida
 (`validateCertificateAtStartup`, `tls.LoadX509KeyPair`) e nunca relido do disco

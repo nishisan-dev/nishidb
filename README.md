@@ -1105,8 +1105,9 @@ separadas porque recriar é recuperação e desistir é alguém acordado.
 
 ### Segurança: autenticação e TLS (§74-77)
 
-Exemplo mínimo com os três blocos — TLS, usuários e o listener loopback
-opcional:
+Exemplo mínimo com os três blocos — TLS, autenticação e o listener loopback
+opcional. Os usuários não aparecem aqui: moram na tabela de usuários do
+servidor (abaixo).
 
 ```yaml
 server:
@@ -1118,13 +1119,6 @@ server:
     privateKeyFile: /etc/nishidb/tls/server.key
   authentication:
     enabled: true
-    users:
-      - username: reader
-        passwordFile: /etc/nishidb/secrets/reader   # chmod 600, senão a subida recusa
-        role: READ
-      - username: admin
-        passwordEnv: NISHIDB_ADMIN_PASSWORD          # nome da variável, nunca o valor
-        role: ADMIN
   loopback:
     enabled: true
     port: 9143   # painel/script/cron locais continuam sem credencial aqui
@@ -1138,8 +1132,9 @@ a senha em texto claro pela rede. O listener **loopback** é opcional
 (`server.loopback.enabled`, default desligado) e serve o MESMO protocolo sem
 TLS nem credencial, só em `127.0.0.1` — é o que mantém painel, script de
 atualização e cron locais funcionando sem senha mesmo com a porta exposta
-trancada. Uma rota **ADMIN** (`/v1/compact`, `/v1/checkpoint`) responde 403
-também no loopback: esse listener é READ-only por construção.
+trancada. Uma rota **ADMIN** (`/v1/compact`, `/v1/checkpoint`, a gestão de
+usuários) responde 403 também no loopback: esse listener é READ-only por
+construção.
 
 ```bash
 # rota de leitura, autenticada, sobre TLS
@@ -1165,6 +1160,77 @@ flag não existe (apareceria em `ps`) — a senha só entra por
 não existe em nenhum cliente do produto: `--tls-ca` aponta a CA que o
 cliente deve confiar, e um redirect de qualquer tipo é recusado, nunca
 seguido com a credencial junto.
+
+#### Usuários
+
+Os usuários moram na **tabela de usuários do servidor**, em
+`<storage.path>/_system/users.state` — a única fonte de quem autentica. Na
+primeira subida com `authentication.enabled: true` o servidor cria o ADMIN
+`admin`, grava a senha em `<storage.path>/_system/bootstrap-admin.password`
+(modo 0600) e registra só o caminho no log (evento `users.bootstrap`). Trocar
+a senha desse usuário, ou removê-lo, apaga o arquivo. Uma tabela ilegível
+recusa a subida: o servidor nunca regera um ADMIN por cima dela.
+
+```bash
+# primeira subida: a senha gerada está no arquivo que o log apontou
+cat /app/nishidb/dados/_system/bootstrap-admin.password
+
+# criar um usuário com o servidor no ar — a senha nova vem de arquivo ou do
+# stdin (-), nunca de flag
+NISHIDB_PASSWORD="$(cat /app/nishidb/dados/_system/bootstrap-admin.password)" \
+  nishidb users create --server 127.0.0.1:9142 --tls-ca /etc/nishidb/tls/ca.pem \
+  --user admin --name reader --role READ --new-password-file /etc/nishidb/secrets/reader
+
+# trocar a senha do admin de bootstrap (o arquivo gerado some)
+nishidb users password --server 127.0.0.1:9142 --tls-ca /etc/nishidb/tls/ca.pem \
+  --user admin --name admin --new-password-file -
+
+# listar — só ADMIN, nunca com o hash
+nishidb query --server 127.0.0.1:9142 --tls-ca /etc/nishidb/tls/ca.pem --user admin \
+  --dataset <qualquer> 'SELECT username, role, bootstrap, updatedAt, updatedBy FROM _meta.users'
+
+# recuperar a senha de um ADMIN perdida: com o servidor PARADO
+nishidb users password --config nishidb.yaml --name admin --new-password-file -
+```
+
+Um usuário READ troca a **própria** senha pela mesma rota; ADMIN troca a de
+qualquer um, cria, muda papel e remove. O último ADMIN não é removido nem
+rebaixado. A troca vale a partir do request seguinte — não há sessão, o Basic
+é verificado a cada request. A senha é guardada como hash argon2id com sal,
+nunca em texto claro, e nenhuma resposta, log ou `/v1/stats` a repete; cada
+mutação sai no log estruturado com quem fez (`actor`), sobre quem (`user`) e
+de onde (`remote`). Nome de usuário é `[a-z0-9_.-]`, até 64 bytes; senha, de
+12 a 1024 bytes. Com o servidor parado, `nishidb users … --config` faz o mesmo
+diretamente na tabela e cria a credencial de bootstrap se ela ainda não
+existir — é o caminho de provisionar antes da primeira subida.
+
+#### Migração do `server.authentication.users` (quebra de contrato)
+
+Até a v0.7.0 os usuários vinham do YAML. A partir desta versão o bloco
+`server.authentication.users` é **recusado na subida**, com o roteiro na
+própria mensagem — nunca ignorado em silêncio. Com o servidor parado:
+
+```bash
+# 1. recriar cada usuário do YAML na tabela, reaproveitando a senha
+nishidb users create --config nishidb.yaml --name reader --role READ \
+  --new-password-file /etc/nishidb/secrets/reader            # quem usava passwordFile
+printf '%s' "$NISHIDB_ADMIN_PASSWORD" | nishidb users create --config nishidb.yaml \
+  --name ops --role ADMIN --new-password-file -              # quem usava passwordEnv
+
+# 2. a primeira gestão criou também o "admin" de bootstrap: troque a senha ou remova
+nishidb users delete --config nishidb.yaml --name admin
+
+# 3. apagar o bloco users do nishidb.yaml e subir o servidor
+```
+
+Senha com menos de 12 bytes e nome fora de `[a-z0-9_.-]` são recusados na
+criação — a migração é o momento de trocá-los.
+
+**Rollback.** O `nishidb-update.sh` troca o par binário + YAML da release, e
+um binário anterior a esta versão autentica pelo bloco `users` do YAML dele,
+ignorando `_system/`. Usuários criados ou senhas trocadas depois da
+atualização não existem para ele; um YAML novo com o binário antigo recusa a
+subida — falha fechada, nunca subida sem senha (débito 122).
 
 **O que este README não cobre é a rodada no piloto** — certificado de uma CA
 real, usuários de verdade, a porta liberada no firewall. Isso é a Fase C do

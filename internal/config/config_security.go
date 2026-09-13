@@ -28,22 +28,12 @@ type TLSSpec struct {
 	PrivateKeyFile  string `yaml:"privateKeyFile"`
 }
 
-// UserSpec é um item de server.authentication.users (§75).
-//
-// Não há campo Password: a senha em si NUNCA atravessa o YAML — o §75 exige
-// recusa explícita de um `password` literal, e não há onde decodificá-lo
-// mesmo que viesse (validateUsers recusa a chave por não estar na
-// whitelist). PasswordEnv/PasswordFile guardam ONDE a credencial mora — nome
-// de variável de ambiente ou caminho de arquivo —, nunca o valor; resolver o
-// valor é ativação (B2, em server.New), não parse.
-type UserSpec struct {
-	Username     string `yaml:"username"`
-	PasswordEnv  string `yaml:"passwordEnv"`
-	PasswordFile string `yaml:"passwordFile"`
-	Role         string `yaml:"role"`
-}
-
 // AuthenticationSpec é server.authentication (§74-76).
+//
+// Os usuários NÃO moram aqui (issue #40): a fonte da verdade é a tabela de
+// usuários do servidor (internal/users), gerida com o servidor no ar. O
+// antigo server.authentication.users é recusado na subida com o roteiro de
+// migração — ver validateServerSecurity.
 //
 // Enabled é PONTEIRO — ao contrário de TLSSpec.Enabled e
 // LoopbackSpec.Enabled, que são bool simples. A diferença é a matriz de
@@ -61,8 +51,7 @@ type UserSpec struct {
 // independência do valor de Enabled (inclusive nil); AuthenticationEnabled()
 // responde "está LIGADA?", derivado do ponteiro.
 type AuthenticationSpec struct {
-	Enabled *bool      `yaml:"enabled"`
-	Users   []UserSpec `yaml:"users"`
+	Enabled *bool `yaml:"enabled"`
 }
 
 // LoopbackSpec é server.loopback — um SEGUNDO listener, sem TLS/auth,
@@ -135,10 +124,10 @@ const (
 //
 // A validação de FORMA roda sempre que o bloco está presente, independente
 // de `enabled` — mesma doutrina de storage.compaction.minimumLiveRatio
-// (débito 49): um YAML com `role` inválido não vira "certo" só porque
-// authentication está desligada; quem ligasse `enabled: true` meses depois
-// descobriria o erro só ali. As duas exceções são as próprias recusas 5 e 6,
-// que SÃO sobre a implicação de `enabled: true`.
+// (débito 49): uma chave errada não vira "certa" só porque o bloco está
+// desligado; quem ligasse `enabled: true` meses depois descobriria o erro só
+// ali. A exceção é a recusa de TLS sem certificado ou chave, que É sobre a
+// implicação de `enabled: true`.
 func validateServerSecurity(c *Config, root *yaml.Node, path string) error {
 	serverNode := child(documentRoot(root), "server")
 
@@ -167,16 +156,22 @@ func validateServerSecurity(c *Config, root *yaml.Node, path string) error {
 	// o bloco inteiro ausente). É o que AuthenticationDeclared expõe para a
 	// matriz do §77.
 	c.authenticationDeclared = authNode != nil
-	if err := knownKeys(authNode, "server.authentication", "enabled", "users"); err != nil {
-		return fmt.Errorf("configuração %s: %w", path, err)
-	}
-	if err := validateUsers(c.Server.Authentication.Users, child(authNode, "users"), path); err != nil {
-		return err
-	}
-	if c.AuthenticationEnabled() && len(c.Server.Authentication.Users) == 0 {
+	// O bloco users saiu do contrato (issue #40), e a recusa é NOMEADA, não a
+	// "chave desconhecida" genérica: quem atualiza o binário com o YAML antigo
+	// precisa do roteiro de migração na própria mensagem. Vale com qualquer
+	// `enabled`, inclusive `users: []` — um bloco presente é uma fonte da
+	// verdade que o servidor deixou de ler, e ignorá-lo em silêncio faria o
+	// operador acreditar que aquelas contas existem.
+	if child(authNode, "users") != nil {
 		return fmt.Errorf(
-			"configuração %s: server.authentication.enabled: true exige ao menos um item em server.authentication.users",
+			"configuração %s: server.authentication.users was removed: users now live in the server user table. "+
+				"Remove the block and start the server with authentication enabled: on first start it creates an "+
+				"ADMIN credential and logs where its password file is (event users.bootstrap); then recreate each "+
+				"user with `nishidb users create` (old passwords can be reused through --new-password-file)",
 			path)
+	}
+	if err := knownKeys(authNode, "server.authentication", "enabled"); err != nil {
+		return fmt.Errorf("configuração %s: %w", path, err)
 	}
 
 	if err := knownKeys(child(serverNode, "loopback"), "server.loopback", "enabled", "port"); err != nil {
@@ -202,65 +197,6 @@ func validateServerSecurity(c *Config, root *yaml.Node, path string) error {
 			path, *p, c.serverPort, c.Server.Bind)
 	}
 
-	return nil
-}
-
-// validateUsers recusa chave desconhecida em cada item de
-// server.authentication.users e as quatro condições de FORMA do §75 que
-// valem por usuário: username presente e único na lista, role no enum
-// fechado, e exatamente uma fonte de senha entre passwordEnv/passwordFile.
-//
-// usersNode é o nó cru da lista (para a whitelist manual); users é a mesma
-// lista já decodificada tipada (para as checagens semânticas). Os dois
-// existem porque decodificação tipada e whitelist manual enxergam o
-// documento de formas diferentes — ver comentário de knownKeys.
-func validateUsers(users []UserSpec, usersNode *yaml.Node, path string) error {
-	if usersNode != nil {
-		for i, item := range usersNode.Content {
-			keyPath := fmt.Sprintf("server.authentication.users[%d]", i)
-			if err := knownKeys(item, keyPath,
-				"username", "passwordEnv", "passwordFile", "role"); err != nil {
-				return fmt.Errorf("configuração %s: %w", path, err)
-			}
-		}
-	}
-
-	seen := make(map[string]bool, len(users))
-	for i, u := range users {
-		keyPath := fmt.Sprintf("server.authentication.users[%d]", i)
-
-		if u.Username == "" {
-			return fmt.Errorf("configuração %s: %s.username é obrigatório", path, keyPath)
-		}
-		if seen[u.Username] {
-			return fmt.Errorf("configuração %s: %s.username %q duplicado entre users", path, keyPath, u.Username)
-		}
-		seen[u.Username] = true
-
-		switch {
-		case u.PasswordEnv == "" && u.PasswordFile == "":
-			return fmt.Errorf("configuração %s: %s exige exatamente um entre passwordEnv e passwordFile (nenhum declarado)",
-				path, keyPath)
-		case u.PasswordEnv != "" && u.PasswordFile != "":
-			return fmt.Errorf("configuração %s: %s exige exatamente um entre passwordEnv e passwordFile (os dois declarados)",
-				path, keyPath)
-		}
-
-		// Comparação de string exata, de propósito: o enum é fechado e
-		// CASE-SENSITIVE — "read"/"Read" não casam com RoleRead ("READ"). Uma
-		// normalização de case pareceria conveniência, mas o middleware da B3
-		// compara o papel resolvido contra RoleRead/RoleAdmin com == simples;
-		// aceitar variação aqui só empurraria a mesma pergunta para lá, sem
-		// necessidade — melhor recusar cedo, no parse, nomeando o valor
-		// exato que o operador escreveu.
-		switch u.Role {
-		case RoleRead, RoleAdmin:
-		case "":
-			return fmt.Errorf("configuração %s: %s.role é obrigatório (%s|%s)", path, keyPath, RoleRead, RoleAdmin)
-		default:
-			return fmt.Errorf("configuração %s: %s.role %q inválido (%s|%s)", path, keyPath, u.Role, RoleRead, RoleAdmin)
-		}
-	}
 	return nil
 }
 

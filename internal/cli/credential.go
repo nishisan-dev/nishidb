@@ -26,19 +26,14 @@ import (
 //
 // NUNCA existe uma flag de senha: apareceria em `ps aux` para qualquer
 // usuário da máquina (§95). A senha entra SOMENTE por NISHIDB_PASSWORD (env,
-// que não sobrevive a um `ps`) ou --password-file — o mesmo desenho do
-// servidor (internal/server/security.go:resolvePassword — trailing newline
-// aparado), mas SEM a checagem de modo 0600 de lá: aquele arquivo é lido por
-// um PROCESSO SERVIDOR que pode compartilhar host com outros usuários e
-// datasets sensíveis; este é lido pelo comando do PRÓPRIO operador, na
-// máquina dele — exigir chmod aqui teria custo (mais um jeito de o comando
-// falhar) sem reduzir exposição real nenhuma, e por isso a doutrina diverge
-// aqui, deliberadamente.
+// que não sobrevive a um `ps`) ou --password-file, com a quebra de linha final
+// aparada. Não há checagem de modo 0600: o arquivo é lido pelo comando do
+// PRÓPRIO operador, na máquina dele — exigir chmod aqui teria custo (mais um
+// jeito de o comando falhar) sem reduzir exposição real nenhuma.
 
 // envPass é o ÚNICO nome de variável de ambiente aceito para a senha do
-// cliente — diferente de server.authentication.users.passwordEnv (que
-// NOMEIA uma variável arbitrária por usuário), aqui o cliente escolhe um
-// nome fixo, o que permite documentar "NISHIDB_PASSWORD" sem indireção
+// cliente — um nome fixo, e não um `passwordEnv` que nomeia uma variável
+// arbitrária, o que permite documentar "NISHIDB_PASSWORD" sem indireção
 // nenhuma.
 const envPass = "NISHIDB_PASSWORD"
 
@@ -94,7 +89,7 @@ func (f *remoteFlags) resolve() (remoteCredential, error) {
 		return remoteCredential{}, fmt.Errorf(
 			"--user exige uma senha por %s ou --password-file", envPass)
 	case hasUser && hasEnv && !hasFile && passwordFromEnv == "":
-		// Mesma distinção do servidor (security.go:resolvePassword): "ausente"
+		// Mesma distinção do kafka.env (internal/kafka/config.go): "ausente"
 		// e "definida e vazia" NÃO são a mesma coisa — o caso do container
 		// cujo orquestrador injeta a chave sem valor, e sem esta recusa o
 		// Basic sairia com senha vazia e o 401 do servidor não daria pista
@@ -115,8 +110,7 @@ func (f *remoteFlags) resolve() (remoteCredential, error) {
 		if err != nil {
 			return remoteCredential{}, fmt.Errorf("--password-file: %w", err)
 		}
-		// Mesma aparagem do servidor (security.go:resolvePassword): todo
-		// `echo senha > arquivo` termina em LF ou CRLF.
+		// Todo `echo senha > arquivo` termina em LF ou CRLF.
 		password = strings.TrimRight(string(b), "\r\n")
 		if password == "" {
 			return remoteCredential{}, fmt.Errorf(

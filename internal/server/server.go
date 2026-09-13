@@ -35,6 +35,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metaalarm"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
+	"github.com/nishisan-dev/nishidb/internal/metausers"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/budget"
@@ -42,6 +43,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/series"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
+	"github.com/nishisan-dev/nishidb/internal/users"
 )
 
 // dataset é um dataset aberto no processo.
@@ -166,15 +168,13 @@ type Server struct {
 	ln       net.Listener
 	pprofSrv *http.Server
 
-	// credenciais é o cache imutável de server.authentication.users já
-	// resolvido contra o ambiente (§74-77, resolveCredentials em
-	// security.go): username -> digest SHA-256 da senha + papel. Nil quando
-	// AuthenticationEnabled() é false — é o que withAuth
-	// (auth.go) lê para decidir entre o middleware de verdade e o
-	// passthrough puro.
-	credenciais map[string]credencial
+	// users é a tabela de usuários do servidor (issue #40, internal/users),
+	// aberta antes do bind com o flock de <storage.path>/_system. Nil quando
+	// AuthenticationEnabled() é false — é o que withAuth (auth.go) lê para
+	// decidir entre o middleware de verdade e o passthrough puro.
+	users *users.Store
 	// authFalhas conta nishidb_auth_failures_total por razão (Task B3). Só é
-	// incrementado quando o middleware de fato roda — com credenciais nil o
+	// incrementado quando o middleware de fato roda — com users nil o
 	// wrapper nunca chama rejectAuth, então a série simplesmente não
 	// aparece no scrape (comportamento igual ao de qualquer família lazy
 	// deste registry).
@@ -298,9 +298,16 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 			return nil, err
 		}
 	}
-	credenciais, err := resolveCredentials(cfg)
-	if err != nil {
-		return nil, err
+	// A tabela de usuários abre antes do bind, pela mesma razão do resto da
+	// segurança: tabela ilegível ou já aberta por outro processo recusa a
+	// subida sem listener nenhum aberto. Na primeira subida é aqui que nasce a
+	// credencial de bootstrap.
+	var userTable *users.Store
+	if cfg.AuthenticationEnabled() {
+		userTable, err = users.Open(users.Dir(cfg.Storage.Path), users.Options{Logger: log.Component("users")})
+		if err != nil {
+			return nil, err
+		}
 	}
 	for _, key := range cfg.IgnoredRuntimeKeys() {
 		log.Warn("config.sem_efeito",
@@ -323,7 +330,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
 		inVoo:       newInVoo(),
 		budget:      budget.NewGlobal(cfg.MemoryTarget()),
-		credenciais: credenciais,
+		users:       userTable,
 		tlsCert:     cert,
 	}
 	s.met = registerMetricsOfQuery(reg, s.eng, s.inVoo, s.budget)
@@ -336,6 +343,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 	// pela mesma razão — a falha do segundo não pode deixar o primeiro
 	// vazado, por isso o defer de limpeza abaixo cobre os dois.
 	if s.ln, err = net.Listen("tcp", cfg.Addr()); err != nil {
+		s.closeUsers(log)
 		return nil, fmt.Errorf("server: escutar em %s: %w", cfg.Addr(), err)
 	}
 	ok := false
@@ -357,6 +365,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		if err := s.closeDatasets(); err != nil {
 			log.Warn("datasets.close", "falha ao fechar datasets na subida abortada", "erro", err.Error())
 		}
+		s.closeUsers(log)
 	}()
 
 	if loopbackAddr != "" {
@@ -536,6 +545,9 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	if err := metaalarm.Register(s.eng, spec.Name, metaalarm.Source{
 		Groups: d.activeAlarmGroups,
 	}); err != nil {
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
+	if err := s.registerMetaUsers(spec.Name); err != nil {
 		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	// `_meta.tables` entra por último só por leitura: ela lista as tabelas
@@ -1026,7 +1038,35 @@ func (s *Server) encerra() error {
 	s.forAlarms()
 	s.forEmitters()
 	errs = append(errs, s.closeDatasets())
+	// A tabela de usuários fecha por último: até aqui o http.Server ainda
+	// podia estar drenando requests autenticados contra ela.
+	if s.users != nil {
+		errs = append(errs, s.users.Close())
+	}
 	return errors.Join(errs...)
+}
+
+// registerMetaUsers declara `_meta.users` sob o dataset, como tabela
+// só-ADMIN. Só existe com a autenticação ligada: sem tabela de usuários não há
+// o que listar, nem ADMIN para ler. A tabela é a mesma em qualquer dataset —
+// o handle da consulta só decide sob que nome ela é alcançada.
+func (s *Server) registerMetaUsers(dataset string) error {
+	if s.users == nil {
+		return nil
+	}
+	return metausers.Register(s.eng, dataset, metausers.Source{Users: s.users.Users})
+}
+
+// closeUsers solta o flock da tabela de usuários numa subida abortada. Não
+// devolve erro pela mesma razão do resto da limpeza de subida: o erro que
+// importa é o que abortou.
+func (s *Server) closeUsers(log *logging.Logger) {
+	if s.users == nil {
+		return
+	}
+	if err := s.users.Close(); err != nil {
+		log.Warn("users.close", "failed to close the user table on aborted startup", "error", err.Error())
+	}
 }
 
 // forAlarms cancela e AGUARDA o laço de alarmes de cada dataset. Idempotente e

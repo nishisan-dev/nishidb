@@ -112,6 +112,12 @@ func (s *Server) openHistory(base *dataset, log *logging.Logger) (*dataset, erro
 	if err := s.eng.RegisterMetaTables(specIrma.Name); err != nil {
 		return nil, closingStore(st, fmt.Errorf("tabela histórica de %q: %w", base.nome, err))
 	}
+	// A `_meta.users` não descreve dataset nenhum, e por isso vale sob a irmã
+	// também: quem abre a sessão JDBC no schema da histórica alcança a tabela
+	// de usuários pelo mesmo nome.
+	if err := s.registerMetaUsers(specIrma.Name); err != nil {
+		return nil, closingStore(st, fmt.Errorf("tabela histórica de %q: %w", base.nome, err))
+	}
 
 	var raw *schema.CompiledField
 	if h.RawPayload {

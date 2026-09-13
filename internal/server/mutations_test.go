@@ -167,9 +167,7 @@ func TestCompactComAdminEEnabledFalseFunciona(t *testing.T) {
 	// escreve) — desce ao helper de baixo, que aceita as duas partes
 	// separadas, para acrescentar `compaction: enabled: false` DENTRO do
 	// bloco `storage:` existente.
-	t.Setenv(varReaderAuth, passwordReaderAuth)
-	t.Setenv(varChefeAuth, passwordChefeAuth)
-	srv, _ := serverWithDataDiretorioEStorage(t, 3, blockAuth(""), "  compaction:\n    enabled: false\n")
+	srv := serverWithStorageAndUsers(t, 3, blockAuth(""), "  compaction:\n    enabled: false\n", authAccounts()...)
 
 	resp := postWithAuth(t, srv, "/v1/compact", "", "chefe", passwordChefeAuth)
 	if resp.StatusCode != http.StatusOK {

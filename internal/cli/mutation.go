@@ -110,9 +110,20 @@ func runCheckpoint(args []string, amb Context) int {
 // searchDocument usam (Task B6) — este É o ponto de costura único que a B5
 // já apontava para a credencial entrar.
 func postMutation(cmd, endereco, path, dataset string, cred remoteCredential, destination any, amb Context) int {
-	var corpo io.Reader
+	var body any
 	if dataset != "" {
-		b, err := json.Marshal(protocol.DatasetRequest{Dataset: dataset})
+		body = protocol.DatasetRequest{Dataset: dataset}
+	}
+	return postJSON(cmd, endereco, path, body, cred, destination, amb)
+}
+
+// postJSON é o POST de toda rota mutante: body == nil omite o corpo por
+// completo, qualquer outro valor vai como JSON. Recusa e credencial seguem o
+// caminho de postMutation, descrito acima.
+func postJSON(cmd, endereco, path string, body any, cred remoteCredential, destination any, amb Context) int {
+	var corpo io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
 		if err != nil {
 			notify(amb, "%s: %v\n", cmd, err)
 			return ExitUsageError

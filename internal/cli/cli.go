@@ -19,6 +19,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
 	"github.com/nishisan-dev/nishidb/internal/types"
+	"github.com/nishisan-dev/nishidb/internal/users"
 )
 
 // Exit codes — CONTRATO com quem chama o binário de um script. Cada um
@@ -73,6 +74,10 @@ USO
   nishidb compact    --server <host:porta> [dataset]
   nishidb checkpoint --server <host:porta> [dataset]
   nishidb counters   (--config <nishidb.yaml> | --server <host:porta>) --dataset <nome> [--audit | --rebuild]
+  nishidb users create   (--config <nishidb.yaml> | --server <host:porta>) --name <nome> --role READ|ADMIN --new-password-file <arquivo|->
+  nishidb users password (--config <nishidb.yaml> | --server <host:porta>) --name <nome> --new-password-file <arquivo|->
+  nishidb users role     (--config <nishidb.yaml> | --server <host:porta>) --name <nome> --role READ|ADMIN
+  nishidb users delete   (--config <nishidb.yaml> | --server <host:porta>) --name <nome>
   nishidb --version | version
 
 INGEST
@@ -145,7 +150,25 @@ COUNTERS
   --config exige o servidor PARADO (toma o flock do dataset, como offsets);
   --server usa as rotas ADMIN do servidor no ar.
 
-CREDENCIAL E TLS (query --server, status, datasets, inspect, compact, checkpoint, counters --server)
+USERS
+  A tabela de usuários do servidor: a única fonte de quem autentica (o
+  server.authentication.users do YAML não existe mais). Na primeira subida
+  com server.authentication.enabled: true o servidor cria o ADMIN "admin" e
+  grava a senha em <storage.path>/_system/bootstrap-admin.password (0600); o
+  log só aponta o caminho. Trocar essa senha apaga o arquivo.
+  create                 cria o usuário com --role e a senha de
+                         --new-password-file.
+  password               troca a senha. Com --server, um usuário READ só troca
+                         a PRÓPRIA; ADMIN troca a de qualquer um.
+  role                   muda o papel. O último ADMIN não é rebaixado.
+  delete                 remove o usuário. O último ADMIN não é removido.
+  A senha nova NUNCA é flag: vem de --new-password-file (- lê o stdin). A
+  listagem é SQL, só para ADMIN: SELECT * FROM _meta.users.
+  --config exige o servidor PARADO (toma o flock da tabela, exit 3 com o
+  servidor no ar) e é o caminho para recuperar a senha de um ADMIN perdida;
+  --server usa as rotas /v1/users/* do servidor no ar.
+
+CREDENCIAL E TLS (query --server, status, datasets, inspect, compact, checkpoint, counters --server, users --server)
   --user <nome>          usuário HTTP Basic (§74-77). A senha NUNCA é uma
                          flag — apareceria em "ps" para qualquer usuário da
                          máquina — e vem de exatamente UMA das duas fontes
@@ -198,6 +221,8 @@ func Run(args []string, amb Context) int {
 		return runCheckpoint(args[1:], amb)
 	case "counters":
 		return runCounters(args[1:], amb)
+	case "users":
+		return runUsers(args[1:], amb)
 	case "--version", "version":
 		_, _ = fmt.Fprintln(amb.Stdout, buildinfo.String())
 		return ExitOK
@@ -232,8 +257,16 @@ func errorCode(err error) int {
 		// a tabela de exit codes, que é contrato, para separar dois casos que
 		// pedem o mesmo do script que os lê.
 		return ExitResultTruncated
-	case errors.Is(err, types.ErrWriterFailed):
+	case errors.Is(err, types.ErrWriterFailed), errors.Is(err, users.ErrWriterFailed):
+		// users.ErrWriterFailed é o mesmo fato para a tabela de usuários: a
+		// gravação falhou depois de começar a mexer no disco, e só reabrir a
+		// tabela (reiniciar o processo) devolve a gestão.
 		return ExitWriter
+	case errors.Is(err, users.ErrUsersLocked), errors.Is(err, users.ErrCorruptUsers):
+		// A tabela de usuários travada pelo servidor no ar, ou ilegível, é a
+		// mesma decisão do dataset travado ou corrompido: o problema não está
+		// na linha de comando.
+		return ExitDataset
 	case errors.Is(err, storage.ErrDatasetLocked), errors.Is(err, storage.ErrDatasetCorrupt),
 		errors.Is(err, storage.ErrDatasetClosed), errors.Is(err, encoding.ErrCorrupt),
 		errors.Is(err, schema.ErrObsoleteIndexSpelling),

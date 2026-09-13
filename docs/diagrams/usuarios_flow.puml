@@ -1,0 +1,50 @@
+@startuml usuarios_flow
+title Tabela de usuários: bootstrap, gestão com o servidor no ar e verificação
+
+actor Operador
+participant "nishidb server" as S
+participant "withAuth\n(auth.go)" as A
+participant "users.Store" as U
+database "_system/users.state" as F
+database "_system/bootstrap-admin.password\n(0600)" as B
+participant "query.Engine" as Q
+
+== Primeira subida (autenticação ligada, tabela ausente) ==
+S -> U : Open(<storage.path>/_system)
+U -> U : flock _system/LOCK
+U -> B : grava a senha gerada (atomicfile, 0600)
+U -> F : grava a tabela com o ADMIN "admin"\n(tmp → fsync → rename → fsync do diretório)
+U --> S : log WARN users.bootstrap (só o caminho)
+note right of U
+  Tabela ilegível recusa a subida:
+  nunca regera um ADMIN por cima.
+end note
+
+== Request autenticado ==
+Operador -> A : HTTP Basic
+A -> U : Authenticate(nome, senha)
+alt cache quente e mesma geração
+  U --> A : papel (sem KDF)
+else caso contrário
+  U -> U : argon2id (teto de 2 derivações)\ninexistente paga o hash fantasma
+  U --> A : papel ou recusa
+end
+A -> A : principal no context do request
+
+== Gestão com o servidor no ar ==
+Operador -> S : POST /v1/users/password
+S -> U : SetPassword(ator, nome, senha)
+U -> F : grava a tabela nova (durável)
+U -> U : publica o ponteiro; geração nova\ninvalida o cache da linha
+U -> B : apaga o arquivo, se era o bootstrap
+U --> S : log users.password_changed (actor, user, remote)
+
+== Consulta a _meta.users ==
+Operador -> S : POST /v1/query  FROM _meta.users
+S -> Q : Execute(ctx com WithAdmin só se principal ADMIN)
+alt sem a marca de ADMIN
+  Q --> S : ErrForbidden → 403 FORBIDDEN
+else ADMIN
+  Q --> S : linhas sem hash
+end
+@enduml

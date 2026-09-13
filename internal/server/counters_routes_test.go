@@ -14,11 +14,10 @@ import (
 // autenticação — as rotas de auditoria e reconstrução são ADMIN.
 func serverWithServicesAutenticado(t *testing.T, n int) *server.Server {
 	t.Helper()
-	t.Setenv(varReaderAuth, passwordReaderAuth)
-	t.Setenv(varChefeAuth, passwordChefeAuth)
 	a := newEnvWithStorage(t, blockAuth(""), "")
 	a.writeDataset("servicos", fmt.Sprintf(specServices, "servicos"))
 	seedServices(t, a, "servicos", n)
+	provisionUsers(t, a, authAccounts()...)
 	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)

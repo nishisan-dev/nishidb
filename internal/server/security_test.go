@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/server"
+	"github.com/nishisan-dev/nishidb/internal/users"
 )
 
 // blocoExposto* montam server.tls/server.authentication no molde de
@@ -27,12 +29,8 @@ import (
 // rede aberta — o servidor não pode subir assim, e a mensagem tem de nomear
 // as três chaves que decidiram a recusa.
 func TestAuthSemTLSComBindExpostoRecusaASubida(t *testing.T) {
-	const variavel = "NISHIDB_TESTE_AUTHSEMTLS_ADMIN"
-	t.Setenv(variavel, "senha-bem-forte")
-
 	block := "\nserver:\n  bind: 0.0.0.0\n  port: %d\n" +
-		"  authentication:\n    enabled: true\n    users:\n" +
-		"      - username: admin\n        passwordEnv: " + variavel + "\n        role: ADMIN\n"
+		"  authentication:\n    enabled: true\n"
 	a := newEnvWith(t, block)
 	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
@@ -78,12 +76,8 @@ func TestBindExpostoSemSecaoDeAuthenticationRecusaASubida(t *testing.T) {
 // texto claro é texto claro mesmo que só o próprio host possa ler — mas não
 // merece recusa: é o caminho do painel local (piloto em produção).
 func TestLoopbackComAutenticacaoSemTLSSobeComAviso(t *testing.T) {
-	const variavel = "NISHIDB_TESTE_LOOPBACK_AUTH_SEM_TLS"
-	t.Setenv(variavel, "senha-bem-forte")
-
 	block := "\nserver:\n  bind: 127.0.0.1\n  port: %d\n" +
-		"  authentication:\n    enabled: true\n    users:\n" +
-		"      - username: op\n        passwordEnv: " + variavel + "\n        role: READ\n"
+		"  authentication:\n    enabled: true\n"
 	a := newEnvWith(t, block)
 	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
@@ -98,14 +92,11 @@ func TestLoopbackComAutenticacaoSemTLSSobeComAviso(t *testing.T) {
 // sem o aviso de bind exposto — a topologia está correta.
 func TestBindExpostoComAutenticacaoETLSSobeSemRecusa(t *testing.T) {
 	certPath, keyPath := generateCertOfTest(t)
-	const variavel = "NISHIDB_TESTE_EXPOSTO_COM_TLS_ADMIN"
-	t.Setenv(variavel, "senha-bem-forte")
 
 	block := fmt.Sprintf("\nserver:\n  bind: 0.0.0.0\n  port: %%d\n"+
 		"  tls:\n    enabled: true\n    certificateFile: %s\n    privateKeyFile: %s\n"+
-		"  authentication:\n    enabled: true\n    users:\n"+
-		"      - username: admin\n        passwordEnv: %s\n        role: ADMIN\n",
-		certPath, keyPath, variavel)
+		"  authentication:\n    enabled: true\n",
+		certPath, keyPath)
 	a := newEnvWith(t, block)
 	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
@@ -124,14 +115,11 @@ func TestBindExpostoComAutenticacaoETLSSobeSemRecusa(t *testing.T) {
 // combinação correta sobe em silêncio, sem nenhum dos dois avisos.
 func TestLoopbackComAutenticacaoETLSSobeSemAviso(t *testing.T) {
 	certPath, keyPath := generateCertOfTest(t)
-	const variavel = "NISHIDB_TESTE_LOOPBACK_COM_TLS_ADMIN"
-	t.Setenv(variavel, "senha-bem-forte")
 
 	block := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
 		"  tls:\n    enabled: true\n    certificateFile: %s\n    privateKeyFile: %s\n"+
-		"  authentication:\n    enabled: true\n    users:\n"+
-		"      - username: admin\n        passwordEnv: %s\n        role: ADMIN\n",
-		certPath, keyPath, variavel)
+		"  authentication:\n    enabled: true\n",
+		certPath, keyPath)
 	a := newEnvWith(t, block)
 	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
 
@@ -163,35 +151,80 @@ func TestBindExpostoComAuthenticationSecaoVaziaSobeComAviso(t *testing.T) {
 }
 
 // Violações simultâneas: bind exposto, autenticação ligada, TLS desligado, E
-// a variável de senha ausente do ambiente. A ORDEM documentada em
-// evaluateExposicaoEAuth/New (matriz antes de segredos, porque a
-// matriz é só leitura de config) diz que a recusa da matriz (célula "auth
-// sem TLS") tem de sair PRIMEIRO — nomeando as três chaves — sem que
-// resolveCredentials chegue a tocar o ambiente. Este teste pega uma
-// reordenação acidental futura: se alguém inverter a ordem, o erro passaria
-// a nomear a variável de ambiente em vez das três chaves da matriz.
+// a tabela de usuários ilegível. A ORDEM documentada em
+// evaluateExposicaoEAuth/Novo (matriz antes de segredos, porque a matriz é só
+// leitura de config) diz que a recusa da matriz (célula "auth sem TLS") tem
+// de sair PRIMEIRO — nomeando as três chaves — sem que a tabela de usuários
+// chegue a ser aberta. Este teste pega uma reordenação acidental futura: se
+// alguém inverter a ordem, o erro passaria a ser o da tabela corrompida em
+// vez das três chaves da matriz.
 func TestViolacoesSimultaneasSaemNaOrdemDaMatrizNaoNosSegredos(t *testing.T) {
-	const variavel = "NISHIDB_TESTE_ORDEM_VIOLACOES_SIMULTANEAS"
-	os.Unsetenv(variavel) //nolint:errcheck // ausência é o próprio setup do teste
-
 	block := "\nserver:\n  bind: 0.0.0.0\n  port: %d\n" +
-		"  authentication:\n    enabled: true\n    users:\n" +
-		"      - username: admin\n        passwordEnv: " + variavel + "\n        role: ADMIN\n"
+		"  authentication:\n    enabled: true\n"
 	a := newEnvWith(t, block)
 	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
+	dir := users.Dir(storagePathOf(a))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, users.StateFileName), []byte("tabela ilegível"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := server.Novo(a.load(), server.Options{})
 	if err == nil {
-		t.Fatal("quer recusa: bind exposto, auth ligada, tls desligado E env de senha ausente")
+		t.Fatal("quer recusa: bind exposto, auth ligada, tls desligado E tabela de usuários ilegível")
 	}
 	for _, key := range []string{"server.bind", "server.authentication.enabled", "server.tls.enabled"} {
 		if !strings.Contains(err.Error(), key) {
 			t.Errorf("a recusa que sai não é a da matriz, não nomeia %s: %v", key, err)
 		}
 	}
-	if strings.Contains(err.Error(), variavel) {
-		t.Errorf("a recusa nomeou a variável de ambiente: a resolução de segredos rodou antes da "+
-			"matriz, na ordem errada: %v", err)
+	if errors.Is(err, users.ErrCorruptUsers) {
+		t.Errorf("a recusa veio da tabela de usuários: ela foi aberta antes da matriz, na ordem errada: %v", err)
+	}
+}
+
+// Tabela de usuários ilegível com a topologia correta recusa a subida — nunca
+// sobe sem ninguém capaz de autenticar, e nunca regera a credencial de
+// bootstrap por cima de uma tabela estragada.
+func TestTabelaDeUsuariosIlegivelRecusaASubidaDoServidor(t *testing.T) {
+	a := newEnvWith(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n  authentication:\n    enabled: true\n")
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
+	dir := users.Dir(storagePathOf(a))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, users.StateFileName), []byte("tabela ilegível"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := server.Novo(a.load(), server.Options{})
+	if !errors.Is(err, users.ErrCorruptUsers) {
+		t.Fatalf("erro = %v, quer ErrCorruptUsers", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, users.BootstrapPasswordFileName)); !os.IsNotExist(err) {
+		t.Errorf("a subida recusada gerou credencial de bootstrap por cima da tabela estragada")
+	}
+}
+
+// Primeira subida com autenticação ligada: nasce o ADMIN de bootstrap, a senha
+// vai para o arquivo 0600 e o log só aponta o caminho.
+func TestPrimeiraSubidaComAutenticacaoGeraACredencialDeBootstrap(t *testing.T) {
+	a := newEnvWith(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n  authentication:\n    enabled: true\n")
+	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
+
+	saida := risesCapturandoLog(t, a)
+	path := filepath.Join(users.Dir(storagePathOf(a)), users.BootstrapPasswordFileName)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("arquivo de senha de bootstrap: %v", err)
+	}
+	if !strings.Contains(saida, "users.bootstrap") || !strings.Contains(saida, path) {
+		t.Errorf("o log de subida tem de nomear o evento e o caminho: %s", saida)
+	}
+	if password := strings.TrimSpace(string(raw)); strings.Contains(saida, password) {
+		t.Fatalf("a senha de bootstrap vazou no log de subida")
 	}
 }
 
@@ -236,53 +269,6 @@ func TestCertificadoOuChaveInvalidosRecusamASubidaNomeandoOCaminho(t *testing.T)
 			t.Errorf("a mensagem não nomeia o caminho da chave: %v", err)
 		}
 	})
-}
-
-// Prova de que a resolução de segredos (security.go) está de fato ligada ao
-// caminho de subida de server.Novo, e não só correta em isolamento
-// (security_internal_test.go já cobre resolvePassword em detalhe).
-func TestPasswordEnvAusenteRecusaASubidaDoServidor(t *testing.T) {
-	const variavel = "NISHIDB_TESTE_SUBIDA_SENHA_AUSENTE"
-	os.Unsetenv(variavel) //nolint:errcheck // ausência é o próprio setup do teste
-
-	block := "\nserver:\n  bind: 127.0.0.1\n  port: %d\n" +
-		"  authentication:\n    enabled: true\n    users:\n" +
-		"      - username: op\n        passwordEnv: " + variavel + "\n        role: READ\n"
-	a := newEnvWith(t, block)
-	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
-
-	_, err := server.Novo(a.load(), server.Options{})
-	if err == nil {
-		t.Fatal("quer recusa: passwordEnv não definida no ambiente")
-	}
-	if !strings.Contains(err.Error(), variavel) {
-		t.Errorf("a mensagem não nomeia a variável %s: %v", variavel, err)
-	}
-}
-
-func TestPasswordFileWorldReadableRecusaASubidaDoServidor(t *testing.T) {
-	dir := t.TempDir()
-	passwordPath := filepath.Join(dir, "senha.txt")
-	if err := os.WriteFile(passwordPath, []byte("segredo\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(passwordPath, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	block := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
-		"  authentication:\n    enabled: true\n    users:\n"+
-		"      - username: op\n        passwordFile: %s\n        role: READ\n", passwordPath)
-	a := newEnvWith(t, block)
-	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
-
-	_, err := server.Novo(a.load(), server.Options{})
-	if err == nil {
-		t.Fatal("quer recusa: passwordFile legível por group/world")
-	}
-	if !strings.Contains(err.Error(), passwordPath) {
-		t.Errorf("a mensagem não nomeia o caminho: %v", err)
-	}
 }
 
 // generateCertOfTest gera um par certificado/chave autoassinado (ECDSA

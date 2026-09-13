@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/users"
 )
 
 // Task B6 — credencial e TLS nos comandos remotos, ponta a ponta pelo
@@ -34,17 +36,14 @@ import (
 // security_test.go pela mesma razão.
 
 const (
-	varReaderCLI = "NISHIDB_TESTE_CLI_LEITOR"
-	varChefeCLI  = "NISHIDB_TESTE_CLI_CHEFE"
-
 	passwordReaderCLI = "senha-leitor-cli-bem-forte"
 	passwordChefeCLI  = "senha-chefe-cli-bem-forte"
 )
 
 // configWithTLSEAuth combina server.tls e server.authentication no MESMO
 // bloco — bind em 127.0.0.1 (loopback, então evaluateExposicaoEAuth
-// sobe de qualquer jeito), com um usuário READ e um ADMIN, no molde de
-// blockAuth (internal/server/auth_test.go).
+// sobe de qualquer jeito). Os usuários, um READ e um ADMIN, são criados na
+// tabela por newEnvRemoteWithTLSEAuth antes da subida.
 const configWithTLSEAuth = `version: 1
 storage:
   path: %s
@@ -59,13 +58,6 @@ server:
     privateKeyFile: %s
   authentication:
     enabled: true
-    users:
-      - username: leitor
-        passwordEnv: ` + varReaderCLI + `
-        role: READ
-      - username: chefe
-        passwordEnv: ` + varChefeCLI + `
-        role: ADMIN
 `
 
 func generateCertCLIOfTest(t *testing.T) (certPath, keyPath string) {
@@ -129,12 +121,24 @@ func newEnvRemoteWithTLSEAuth(t *testing.T) (a *envRemote, certPath string) {
 	amb := newEnv(t)
 	porta := portaLivre(t)
 	certPath, keyPath := generateCertCLIOfTest(t)
-	t.Setenv(varReaderCLI, passwordReaderCLI)
-	t.Setenv(varChefeCLI, passwordChefeCLI)
+	storagePath := filepath.Join(amb.dir, "dados")
 	corpo := fmt.Sprintf(configWithTLSEAuth,
-		filepath.Join(amb.dir, "dados"), filepath.Join(amb.dir, "datasets"), porta, certPath, keyPath)
+		storagePath, filepath.Join(amb.dir, "datasets"), porta, certPath, keyPath)
 	if err := os.WriteFile(amb.config, []byte(corpo), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	table, err := users.Open(users.Dir(storagePath), users.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = table.Close() }()
+	for _, u := range []struct{ name, password, role string }{
+		{"leitor", passwordReaderCLI, "READ"},
+		{"chefe", passwordChefeCLI, "ADMIN"},
+	} {
+		if err := table.Create(users.Actor{Name: "test"}, u.name, u.role, []byte(u.password)); err != nil {
+			t.Fatalf("criar %q: %v", u.name, err)
+		}
 	}
 	return &envRemote{env: amb, porta: porta}, certPath
 }

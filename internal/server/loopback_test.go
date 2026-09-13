@@ -56,19 +56,16 @@ func TestLoopbackHabilitadoSemPortaRecusaASubidaDoServidor(t *testing.T) {
 // (/v1/health), provando que é a MESMA definição servida por dois caminhos.
 func TestLoopbackRespondeSemCredencialComPrincipalAutenticadoSimultaneamente(t *testing.T) {
 	certPath, keyPath := generateCertTLSWithValidade(t, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
-	const variavel = "NISHIDB_TESTE_LOOPBACK_SIMULTANEO_LEITOR"
 	const password = "senha-bem-forte-de-teste"
-	t.Setenv(variavel, password)
 	loopbackPorta := portaLivre(t)
 
 	block := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
 		"  tls:\n    enabled: true\n    certificateFile: %s\n    privateKeyFile: %s\n"+
-		"  authentication:\n    enabled: true\n    users:\n"+
-		"      - username: leitor\n        passwordEnv: %s\n        role: READ\n"+
+		"  authentication:\n    enabled: true\n"+
 		"  loopback:\n    enabled: true\n    port: %d\n",
-		certPath, keyPath, variavel, loopbackPorta)
+		certPath, keyPath, loopbackPorta)
 
-	srv := serverWithData(t, 1, block)
+	srv := serverWithDataAndUsers(t, 1, block, account{name: "leitor", password: password, role: "READ"})
 	client := clienteTLSOfTest(t, certPath)
 
 	t.Run("principal sem credencial exige autenticacao", func(t *testing.T) {

@@ -153,9 +153,9 @@ func TestFlagsRemotasResolveMensagensNaoEcoamSenha(t *testing.T) {
 // não tinha case nenhum que casasse esta combinação (temUsuario && temEnv
 // && !temArquivo, com o VALOR vazio) e caía no caminho feliz com senha ==
 // "": o Basic saía com senha vazia, e o servidor respondia 401 sem nenhuma
-// pista, porque para o operador a variável "está setada". Espelha
-// resolvePassword (internal/server/security.go), que já distingue "ausente"
-// de "definida e vazia" para o MESMO cenário do lado do servidor.
+// pista, porque para o operador a variável "está setada". Espelha o kafka.env
+// (internal/kafka/config.go), que já distingue "ausente" de "definida e
+// vazia" para o MESMO cenário.
 func TestUserComNISHIDBPASSWORDDefinidaEVaziaEhRecusado(t *testing.T) {
 	t.Setenv(envPass, "")
 	f := flagsForTest(t, "--user", "chefe")

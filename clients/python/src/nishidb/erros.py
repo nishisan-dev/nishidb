@@ -47,6 +47,10 @@ UNAUTHENTICATED = "UNAUTHENTICATED"
 FORBIDDEN = "FORBIDDEN"
 WRITER_FAILED = "WRITER_FAILED"
 COMPACTION_BUSY = "COMPACTION_BUSY"
+USER_EXISTS = "USER_EXISTS"
+UNKNOWN_USER = "UNKNOWN_USER"
+LAST_ADMIN = "LAST_ADMIN"
+WEAK_PASSWORD = "WEAK_PASSWORD"
 
 
 # O sufixo `Error` que o N818 pede não cabe: esta classe nunca é LEVANTADA. Ela
@@ -211,6 +215,14 @@ CODIGOS: dict[str, type[Warning] | type[Error]] = {
     # 249; OperationalError é onde ela documenta "authentication error".
     UNAUTHENTICATED: OperationalError,
     FORBIDDEN: OperationalError,
+    # Gestão de usuário. O client é só leitura e não chama essas rotas, mas a
+    # tabela cobre o protocolo inteiro. Nome repetido e último ADMIN são
+    # violação de restrição da tabela — IntegrityError, a classe da PEP 249
+    # para isso.
+    USER_EXISTS: IntegrityError,
+    LAST_ADMIN: IntegrityError,
+    UNKNOWN_USER: ProgrammingError,
+    WEAK_PASSWORD: DataError,
     # Defeito do lado de lá.
     DATASET_CORRUPT: InternalError,
     INTERNAL: InternalError,

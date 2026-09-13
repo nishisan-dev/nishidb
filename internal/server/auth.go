@@ -9,8 +9,8 @@
 // teste (auth_internal_test.go), e agora tem produção de verdade
 // para exercitá-lo.
 //
-// Quando a autenticação está DESLIGADA (s.credenciais == nil, resolvido pela
-// B2 em Novo()), withAuth devolve o PRÓPRIO mux como http.Handler —
+// Quando a autenticação está DESLIGADA (s.users == nil, resolvido em
+// Novo()), withAuth devolve o PRÓPRIO mux como http.Handler —
 // não um wrapper que "deixa passar tudo", o mux em si. É o que garante
 // paridade byte a byte com o piloto de hoje: não há função nenhuma a mais no
 // caminho do request além do que já existia antes desta task.
@@ -28,8 +28,6 @@
 package server
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -150,11 +148,19 @@ func (s *Server) buildMux() *router {
 	// continua sendo SQL (`_counters.<nome>`), pela rota de consulta.
 	rt.register("/v1/counters/audit", config.RoleAdmin, s.handleAuditOfCounters)
 	rt.register("/v1/counters/rebuild", config.RoleAdmin, s.handleRebuildOfCounters)
+	// Gestão de usuário (issue #40, users.go). A troca de senha é READ porque
+	// todo usuário troca a PRÓPRIA; a regra "só a própria, salvo ADMIN" mora
+	// no handler, que conhece o nome do principal.
+	rt.register("/v1/users/create", config.RoleAdmin, s.handleUserCreate)
+	rt.register("/v1/users/password", config.RoleRead, s.handleUserPassword)
+	rt.register("/v1/users/role", config.RoleAdmin, s.handleUserRole)
+	rt.register("/v1/users/delete", config.RoleAdmin, s.handleUserDelete)
 	return rt
 }
 
-// withAuth é o wrapper único do §77: autentica (HTTP Basic contra
-// s.credenciais), autoriza por papel, e só então delega ao mux cru.
+// withAuth é o wrapper único do §77: autentica (HTTP Basic contra a tabela
+// de usuários, s.users), autoriza por papel, e só então delega ao mux cru,
+// com o principal autenticado no context do request.
 //
 // A ORDEM dentro do handler é a razão de existir das três regras do plano
 // (§77): a autenticação roda ANTES de qualquer coisa que o mux faria —
@@ -174,13 +180,13 @@ func (s *Server) buildMux() *router {
 // desconhecida ou método não aceito) segue direto para o mux, que resolve
 // 404/405 sozinho — não há handler nenhum ali para vazar dado sem checagem.
 func (s *Server) withAuth(rt *router) http.Handler {
-	if s.credenciais == nil {
+	if s.users == nil {
 		return rt.Raw()
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		role, ok := s.authenticate(w, r)
+		p, ok := s.authenticate(w, r)
 		if !ok {
-			return // 401 já escrito por s.autentica (via rejectAuth)
+			return // 401 já escrito por s.authenticate (via rejectAuth)
 		}
 		// rt.roleOfRota consulta o roteamento SEM executá-lo — é a mesma
 		// decisão que rt.mux.ServeHTTP tomaria a seguir, só que aqui só
@@ -192,12 +198,12 @@ func (s *Server) withAuth(rt *router) http.Handler {
 			case required == "":
 				s.rejectRecordWithoutRole(w, r, pattern)
 				return
-			case !roleAuthorized(role, required):
-				s.rejectAuthorization(w, r, pattern, role, required)
+			case !roleAuthorized(p.role, required):
+				s.rejectAuthorization(w, r, pattern, p.role, required)
 				return
 			}
 		}
-		rt.mux.ServeHTTP(w, r)
+		rt.mux.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), p)))
 	})
 }
 
@@ -264,7 +270,7 @@ const delayOfFail = 100 * time.Millisecond
 // tentativa, sem teto contra qualquer varredura de credencial.
 const (
 	reasonHeader   = "header"   // Authorization ausente, mal formado, ou sem "usuario:senha" decodificável
-	reasonUser     = "user"     // o usuário do request não está em server.authentication.users
+	reasonUser     = "user"     // o usuário do request não está na tabela de usuários
 	reasonPassword = "password" // o usuário existe; a senha não confere
 )
 
@@ -274,64 +280,42 @@ const (
 // usuário; ecoar esse valor cru no log vazaria a senha sob o rótulo "user".
 const unknownUserInLog = "desconhecido"
 
-// ghostCredential é o digest comparado contra um usuário INEXISTENTE, para
-// que o caminho de código de "usuário não existe" seja O MESMO de "senha
-// errada" até o ConstantTimeCompare — nenhum `if` a mais entre os dois casos
-// além do que decide QUAL digest é o alvo da comparação. O texto de origem
-// não precisa ser secreto: mesmo que uma senha real por coincidência fosse
-// igual a ele, ela só autenticaria contra um username que, por definição,
-// também não existe em s.credenciais — o resultado observável (401) seria o
-// mesmo de qualquer forma.
-var ghostCredential = sha256.Sum256([]byte("nishidb-credencial-fantasma-nunca-configurada-por-um-operador-de-verdade"))
-
-// authenticate resolve o HTTP Basic do request contra s.credenciais.
+// authenticate resolve o HTTP Basic do request contra a tabela de usuários.
 //
-// Devolve o papel do usuário autenticado e true quando a credencial confere.
-// Em qualquer outro caso já escreveu o 401 inteiro (atraso, métrica, log e
-// corpo) através de rejectAuth, e devolve false — o chamador só
-// precisa `return` sem tocar em w de novo.
-func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (role string, ok bool) {
+// Devolve o principal autenticado e true quando a credencial confere. Em
+// qualquer outro caso já escreveu o 401 inteiro (atraso, métrica, log e corpo)
+// através de rejectAuth, e devolve false — o chamador só precisa `return` sem
+// tocar em w de novo.
+//
+// O tempo constante entre "usuário não existe" e "senha errada" é da tabela
+// (users.Store.Authenticate): os dois caminhos pagam o mesmo KDF, o
+// inexistente contra um hash fantasma. Aqui só se decide a razão da métrica
+// e do log, e a resposta HTTP é a mesma para as duas.
+func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (principal, bool) {
 	username, password, hasCredential := r.BasicAuth()
 	if !hasCredential {
 		// Cobre header ausente, "Basic" sem payload, base64 inválido e
 		// payload decodificado sem ':' — r.BasicAuth devolve ok==false para
 		// todas as quatro formas, sem sequer expor um username candidato.
 		s.rejectAuth(w, r, reasonHeader, unknownUserInLog)
-		return "", false
+		return principal{}, false
 	}
 
-	cred, exists := s.credenciais[username]
-	target := ghostCredential
-	if exists {
-		target = cred.digestPassword
-	}
-
-	// sha256 dos DOIS lados ANTES do ConstantTimeCompare: cred.digestPassword (ou
-	// o fantasma) já são 32 bytes fixos (B2). A senha do request tem
-	// comprimento ARBITRÁRIO — compará-la crua contra um digest faria
-	// ConstantTimeCompare devolver "não bate" IMEDIATAMENTE por tamanho
-	// diferente (a doc do pacote: "If the lengths of x and y do not match, it
-	// returns 0 immediately"), o que vazaria pelo TEMPO o comprimento da
-	// senha certa — quanto mais curta a senha tentada, mais cedo o compare
-	// desistiria. Hashear os dois lados antes faz as duas entradas terem
-	// SEMPRE 32 bytes, fechando esse canal antes mesmo de chegar ao compare.
-	digest := sha256.Sum256([]byte(password))
-	combine := subtle.ConstantTimeCompare(digest[:], target[:]) == 1
-
-	if !exists || !combine {
+	role, ok, known := s.users.Authenticate(username, []byte(password))
+	if !ok {
 		reason := reasonUser
 		userInLog := unknownUserInLog
-		if exists {
-			// Só entra no log quando CASA com um usuário configurado (o
-			// dedo gordo mais comum é digitar a senha no campo de usuário; ecoar
+		if known {
+			// Só entra no log quando CASA com um usuário da tabela (o dedo
+			// gordo mais comum é digitar a senha no campo de usuário; ecoar
 			// esse valor cru vazaria a senha sob o rótulo "user").
 			reason = reasonPassword
 			userInLog = username
 		}
 		s.rejectAuth(w, r, reason, userInLog)
-		return "", false
+		return principal{}, false
 	}
-	return cred.role, true
+	return principal{username: username, role: role}, true
 }
 
 // rejectAuth é o ÚNICO ponto de saída de toda falha de autenticação:

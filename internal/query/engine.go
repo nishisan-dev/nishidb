@@ -43,6 +43,31 @@ type record struct {
 	// completo (schema sintético, store virtual, planner), e passa pelo MESMO
 	// pipeline que um dataset de verdade.
 	virtualTables map[string]map[string]*record
+	// adminOnly marca a tabela virtual que só uma consulta com WithAdmin no
+	// contexto pode abrir (RegisterAdminVirtual).
+	adminOnly bool
+}
+
+// ErrForbidden recusa a consulta a uma tabela só-ADMIN feita sem a marca de
+// ADMIN no contexto.
+var ErrForbidden = errors.New("query: this table requires the ADMIN role")
+
+type adminKey struct{}
+
+// WithAdmin marca o contexto de uma consulta feita por um principal ADMIN. É
+// a ÚNICA forma de abrir uma tabela registrada por RegisterAdminVirtual.
+//
+// A barreira mora no motor, e não em quem chama, pela mesma razão do desvio do
+// `_meta` no Execute: este é o ponto por onde todo caminho de consulta passa, e
+// um contexto sem a marca — o do plano loopback, o de um usuário READ, o de um
+// chamador que esqueceu — cai na recusa sem código extra em lugar nenhum.
+func WithAdmin(ctx context.Context) context.Context {
+	return context.WithValue(ctx, adminKey{}, true)
+}
+
+func isAdmin(ctx context.Context) bool {
+	v, _ := ctx.Value(adminKey{}).(bool)
+	return v
 }
 
 // Engine mantém os datasets registrados. Register é de configuração; Execute é
@@ -95,6 +120,17 @@ func (e *Engine) Register(name string, sch *schema.Compiled, st Store) error {
 // reserva; o nome da tabela tem de ser o Name do schema sintético, porque é
 // contra ele que o binder confere o FROM.
 func (e *Engine) RegisterVirtual(dataset, namespace, table string, sch *schema.Compiled, st Store) error {
+	return e.registerVirtual(dataset, namespace, table, sch, st, false)
+}
+
+// RegisterAdminVirtual é RegisterVirtual para uma tabela que só uma consulta
+// com WithAdmin no contexto pode abrir; as demais recebem ErrForbidden. É o
+// caso do `_meta.users`.
+func (e *Engine) RegisterAdminVirtual(dataset, namespace, table string, sch *schema.Compiled, st Store) error {
+	return e.registerVirtual(dataset, namespace, table, sch, st, true)
+}
+
+func (e *Engine) registerVirtual(dataset, namespace, table string, sch *schema.Compiled, st Store, adminOnly bool) error {
 	switch {
 	case !strings.HasPrefix(namespace, "_"):
 		return fmt.Errorf("query: namespace virtual %q sem o prefixo reservado \"_\"", namespace)
@@ -117,7 +153,7 @@ func (e *Engine) RegisterVirtual(dataset, namespace, table string, sch *schema.C
 	if _, exists := reg.virtualTables[namespace][table]; exists {
 		return fmt.Errorf("query: tabela virtual %s.%s já registrada em %q", namespace, table, dataset)
 	}
-	reg.virtualTables[namespace][table] = &record{sch: sch, store: st, planner: planner.New(st, &e.planStats)}
+	reg.virtualTables[namespace][table] = &record{sch: sch, store: st, planner: planner.New(st, &e.planStats), adminOnly: adminOnly}
 	return nil
 }
 
@@ -486,6 +522,11 @@ func (e *Engine) openVirtualTable(ctx context.Context, reg *record, dataset, nam
 	e.mu.RUnlock()
 	if err != nil {
 		return nil, err
+	}
+	// A recusa vem antes do bind: nem o schema da tabela, pela mensagem de uma
+	// coluna inexistente, chega a quem não pode lê-la.
+	if v.adminOnly && !isAdmin(ctx) {
+		return nil, fmt.Errorf("%w: %s.%s", ErrForbidden, namespace, stmt.Dataset)
 	}
 	bq, err := binder.Bind(stmt, v.sch, params)
 	if err != nil {
