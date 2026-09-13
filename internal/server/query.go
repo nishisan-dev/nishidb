@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
+	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/budget"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
@@ -208,6 +210,13 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	defer saiDoRecord()
 	defer func() { s.met.observa(d.nome, time.Since(start).Seconds()) }()
 
+	// A marca de ADMIN que abre as tabelas só-ADMIN (`_meta.users`) nasce
+	// aqui, do principal que o middleware autenticou, e de nenhum outro lugar:
+	// o plano loopback e a autenticação desligada não têm principal, e caem na
+	// recusa do motor.
+	if p, ok := principalFrom(r.Context()); ok && p.role == config.RoleAdmin {
+		ctx = query.WithAdmin(ctx)
+	}
 	it, err := s.eng.Execute(ctx, d.nome, req.SQL, params)
 	if err != nil {
 		status, fail := translateOpenError(err, req.SQL)
@@ -545,6 +554,8 @@ func translateOpenError(err error, sql string) (int, protocol.ErrorDetail) {
 		// 503, e não 500: o servidor está íntegro e a consulta pode ser
 		// repetida — a nova abre um snapshot que ainda não retém nada.
 		return http.StatusServiceUnavailable, protocol.ErrorDetail{Code: protocol.CodeSnapshotExpired, Message: err.Error()}
+	case errors.Is(err, query.ErrForbidden):
+		return http.StatusForbidden, protocol.ErrorDetail{Code: protocol.CodeForbidden, Message: err.Error()}
 	default:
 		// Inclui executor.ErrInvalidPlan, que é bug do binder/planner e não do
 		// cliente: 500 é a resposta honesta.

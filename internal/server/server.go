@@ -35,6 +35,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metaalarm"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
+	"github.com/nishisan-dev/nishidb/internal/metausers"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/budget"
@@ -546,6 +547,9 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	}); err != nil {
 		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
+	if err := s.registerMetaUsers(spec.Name); err != nil {
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
 	// `_meta.tables` entra por último só por leitura: ela lista as tabelas
 	// acima, e as linhas são montadas a cada consulta, a partir do catálogo do
 	// momento — registrá-la antes ou depois das outras dá a mesma resposta.
@@ -1040,6 +1044,17 @@ func (s *Server) encerra() error {
 		errs = append(errs, s.users.Close())
 	}
 	return errors.Join(errs...)
+}
+
+// registerMetaUsers declara `_meta.users` sob o dataset, como tabela
+// só-ADMIN. Só existe com a autenticação ligada: sem tabela de usuários não há
+// o que listar, nem ADMIN para ler. A tabela é a mesma em qualquer dataset —
+// o handle da consulta só decide sob que nome ela é alcançada.
+func (s *Server) registerMetaUsers(dataset string) error {
+	if s.users == nil {
+		return nil
+	}
+	return metausers.Register(s.eng, dataset, metausers.Source{Users: s.users.Users})
 }
 
 // closeUsers solta o flock da tabela de usuários numa subida abortada. Não
