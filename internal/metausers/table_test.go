@@ -55,7 +55,7 @@ func sampleRows() []users.UserView {
 
 type row map[string]string
 
-func queryRows(t *testing.T, ctx context.Context, eng *query.Engine, sql string) ([]row, []string, error) {
+func queryRows(ctx context.Context, t *testing.T, eng *query.Engine, sql string) ([]row, []string, error) {
 	t.Helper()
 	it, err := eng.Execute(ctx, "servicos", sql, nil)
 	if err != nil {
@@ -90,7 +90,7 @@ func queryRows(t *testing.T, ctx context.Context, eng *query.Engine, sql string)
 // Com a marca de ADMIN, a tabela responde nome, papel e quem mexeu quando.
 func TestAdminLeATabelaDeUsuariosSemOHash(t *testing.T) {
 	eng := engineWith(t, sampleRows)
-	got, names, err := queryRows(t, query.WithAdmin(context.Background()), eng, "SELECT * FROM _meta.users")
+	got, names, err := queryRows(query.WithAdmin(context.Background()), t, eng, "SELECT * FROM _meta.users")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,20 +123,20 @@ func TestSemAMarcaDeAdminATabelaDeUsuariosEhRecusada(t *testing.T) {
 		"SELECT username FROM _meta.users",
 		"SELECT coluna_que_nao_existe FROM _meta.users",
 	} {
-		_, _, err := queryRows(t, context.Background(), eng, sql)
+		_, _, err := queryRows(context.Background(), t, eng, sql)
 		if !errors.Is(err, query.ErrForbidden) {
 			t.Errorf("%s: erro = %v, quer ErrForbidden", sql, err)
 		}
 	}
 	// As outras tabelas do `_meta` continuam abertas para qualquer consulta.
-	if _, _, err := queryRows(t, context.Background(), eng, "SELECT name FROM _meta.fields"); err != nil {
+	if _, _, err := queryRows(context.Background(), t, eng, "SELECT name FROM _meta.fields"); err != nil {
 		t.Errorf("_meta.fields passou a exigir ADMIN: %v", err)
 	}
 }
 
 func TestTabelaDeUsuariosVaziaNaoEhErro(t *testing.T) {
 	ctx := query.WithAdmin(context.Background())
-	if got, _, err := queryRows(t, ctx, engineWith(t, nil), "SELECT username FROM _meta.users"); err != nil || len(got) != 0 {
+	if got, _, err := queryRows(ctx, t, engineWith(t, nil), "SELECT username FROM _meta.users"); err != nil || len(got) != 0 {
 		t.Fatalf("linhas = %+v, erro = %v", got, err)
 	}
 }

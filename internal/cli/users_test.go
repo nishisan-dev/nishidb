@@ -61,7 +61,7 @@ func authenticates(t *testing.T, a *env, name, password string) (string, bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer table.Close()
+	defer func() { _ = table.Close() }()
 	role, ok, _ := table.Authenticate(name, []byte(password))
 	return role, ok
 }

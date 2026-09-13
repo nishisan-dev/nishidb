@@ -131,7 +131,7 @@ func newEnvRemoteWithTLSEAuth(t *testing.T) (a *envRemote, certPath string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer table.Close()
+	defer func() { _ = table.Close() }()
 	for _, u := range []struct{ name, password, role string }{
 		{"leitor", passwordReaderCLI, "READ"},
 		{"chefe", passwordChefeCLI, "ADMIN"},

@@ -22,7 +22,7 @@ func openTest(t *testing.T, dir string, opts Options) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -96,7 +96,7 @@ func TestReaberturaNaoRegeraOBootstrap(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), DirName)
 	s := openTest(t, dir, Options{})
 	password := readBootstrapPassword(t, dir)
-	s.Close()
+	_ = s.Close()
 
 	s2 := openTest(t, dir, Options{})
 	if s2.BootstrapPasswordPath() != "" {
@@ -246,7 +246,7 @@ func TestQuedaNaGravacaoDaTabelaPreservaOQueChegouAoDisco(t *testing.T) {
 			if err := s.Create(admin, "outro", "READ", fresh); !errors.Is(err, ErrWriterFailed) {
 				t.Errorf("mutação depois da falha: erro = %v, quer ErrWriterFailed", err)
 			}
-			s.Close()
+			_ = s.Close()
 
 			reopened := openTest(t, dir, Options{})
 			if c.newOnDisk {
@@ -306,7 +306,7 @@ func TestSoOSucessoDispensaOKDFEOsFracassosPagamOMesmoPreco(t *testing.T) {
 	}
 	n := countKDF(t)
 
-	measure := func(name, user string, password []byte) int64 {
+	measure := func(_, user string, password []byte) int64 {
 		before := n.Load()
 		s.Authenticate(user, password)
 		return n.Load() - before

@@ -122,7 +122,7 @@ func Open(dir string, opts Options) (*Store, error) {
 	}
 	s.lock = lock
 	if err := s.verifier.init(); err != nil {
-		s.Close()
+		_ = s.Close()
 		return nil, err
 	}
 
@@ -131,11 +131,11 @@ func Open(dir string, opts Options) (*Store, error) {
 	case errors.Is(err, errStateAbsent):
 		users, err = s.bootstrap()
 		if err != nil {
-			s.Close()
+			_ = s.Close()
 			return nil, err
 		}
 	case err != nil:
-		s.Close()
+		_ = s.Close()
 		return nil, err
 	}
 	for i := range users {
@@ -439,7 +439,7 @@ func acquireLock(dir string) (*os.File, error) {
 				owner = " (pid " + pid + ")"
 			}
 		}
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("%w: %s%s", ErrUsersLocked, dir, owner)
 	}
 	if err := f.Truncate(0); err == nil {

@@ -527,6 +527,15 @@ func TestAtrasoFixoDeAproximadamente100msEmTodaFalhaDeAutenticacao(t *testing.T)
 	// O caminho de SUCESSO não paga o atraso — comparação contra o mesmo piso
 	// usado acima, não um teto próprio, para não introduzir um segundo número
 	// mágico.
+	//
+	// O primeiro acerto de um usuário paga a derivação argon2id, que sob -race
+	// passa sozinha do piso; esse custo é do hash, não do atraso de falha. Um
+	// acerto antes da medição aquece o cache de verificação, e o que se mede
+	// fica sendo só a pergunta do teste: o acerto não dorme.
+	warm := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
+	warm.SetBasicAuth("leitor", passwordReaderOfTest)
+	h.ServeHTTP(httptest.NewRecorder(), warm)
+
 	req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
 	req.SetBasicAuth("leitor", passwordReaderOfTest)
 	rec := httptest.NewRecorder()

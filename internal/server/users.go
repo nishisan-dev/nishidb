@@ -84,7 +84,7 @@ func (s *Server) handleUserRole(w http.ResponseWriter, r *http.Request) {
 		s.rejectUserError(w, r, err)
 		return
 	}
-	s.respondeJSON(w, protocol.UserResponse{Username: req.Username, Role: req.Role})
+	s.respondeJSON(w, protocol.UserResponse(req))
 }
 
 // handleUserDelete serve POST /v1/users/delete (ADMIN).

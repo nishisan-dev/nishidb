@@ -23,7 +23,7 @@ func userTableOfTest(t testing.TB, accounts ...testAccount) *users.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 	actor := users.Actor{Name: "test"}
 	for _, a := range accounts {
 		if err := st.Create(actor, a.name, a.role, []byte(a.password)); err != nil {

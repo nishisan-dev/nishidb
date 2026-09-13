@@ -39,7 +39,7 @@ func provisionUsers(t *testing.T, a *env, accounts ...account) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	for _, acc := range accounts {
 		if err := st.Create(users.Actor{Name: "test"}, acc.name, acc.role, []byte(acc.password)); err != nil {
 			t.Fatalf("criar %q: %v", acc.name, err)

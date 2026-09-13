@@ -59,11 +59,11 @@ func WriteWithHook(path string, data []byte, perm os.FileMode, hook Hook) error 
 		_, werr := f.Write(data)
 		return werr
 	}); err != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("atomicfile: escrever %s: %w", tmp, err)
 	}
 	if err := step(hook, StepFsync, f.Sync); err != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("atomicfile: fsync de %s: %w", tmp, err)
 	}
 	if err := f.Close(); err != nil {
@@ -96,7 +96,7 @@ func SyncDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	if err := d.Sync(); err != nil {
 		return fmt.Errorf("atomicfile: fsync do diretório %s: %w", dir, err)
 	}
