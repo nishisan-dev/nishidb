@@ -282,10 +282,14 @@ type schemaQualifiedTarget struct {
 // consulta qualificada custar microssegundos e custar meio milissegundo: ver o
 // godoc de catalogEntries e o BenchmarkExecuteFromQualified.
 //
-// O laço é sobre TODOS os datasets registrados, e é isso que faz o schema ser
-// endereço de servidor e não de conexão. O custo é uma enumeração por dataset
-// por consulta QUALIFICADA — os datasets são unidades e as tabelas de cada um
-// também, e o caminho já paga parse, bind e plano.
+// scope é o schema da CONEXÃO. Vazio, o laço é sobre TODOS os datasets
+// registrados, e o schema é endereço de servidor: é o caminho do handle por
+// dataset, que só o client Python ainda fala (débito 123). Preenchido, o laço
+// pula os datasets de outro schema — quem garante que o par pedido É do escopo
+// é o chamador (resolveFrom), que recusa o qualificador alheio antes, com a
+// posição dele. O custo é uma enumeração por dataset alcançável por consulta
+// que resolve — os datasets são unidades e as tabelas de cada um também, e o
+// caminho já paga parse, bind e plano.
 //
 // A lista sai SEM os schemas de prefixo "_", e é só isso que o filtro faz: ele
 // não é a barreira que impede `_meta` de ser endereço qualificado. Quem impede
@@ -298,18 +302,8 @@ type schemaQualifiedTarget struct {
 //
 // pos é a posição do nome DEPOIS do ponto (parser.SelectStmt.DatasetPos), o
 // mesmo token ofensor que as recusas de namespace apontam.
-func (e *Engine) resolveSchemaQualified(schemaName, table string, pos int) (schemaQualifiedTarget, error) {
-	e.mu.RLock()
-	names := make([]string, 0, len(e.datasets))
-	for n := range e.datasets {
-		names = append(names, n)
-	}
-	e.mu.RUnlock()
-	// A ordem alfabética é o que faz a lista das recusas e o desempate de uma
-	// eventual ambiguidade saírem sempre iguais: o laço de um mapa não tem
-	// ordem, e uma mensagem que muda entre duas execuções idênticas manda o
-	// operador procurar uma diferença que não existe.
-	sort.Strings(names)
+func (e *Engine) resolveSchemaQualified(scope, schemaName, table string, pos int) (schemaQualifiedTarget, error) {
+	names := e.datasetsInScope(scope)
 
 	var (
 		found          []schemaQualifiedTarget
@@ -377,8 +371,88 @@ func (e *Engine) resolveSchemaQualified(schemaName, table string, pos int) (sche
 	}
 }
 
-// Execute compila e abre a query. Erros de sintaxe e de bind saem AQUI, antes
-// de qualquer leitura de dado.
+// datasetsInScope lista, em ordem alfabética, os datasets registrados cujo
+// schema declarado é scope — ou todos, com scope vazio.
+//
+// A ordem alfabética é o que faz a lista das recusas e o desempate de uma
+// eventual ambiguidade saírem sempre iguais: o laço de um mapa não tem ordem, e
+// uma mensagem que muda entre duas execuções idênticas manda o operador
+// procurar uma diferença que não existe.
+func (e *Engine) datasetsInScope(scope string) []string {
+	e.mu.RLock()
+	names := make([]string, 0, len(e.datasets))
+	for n, reg := range e.datasets {
+		if scope == "" || reg.sch.SchemaName == scope {
+			names = append(names, n)
+		}
+	}
+	e.mu.RUnlock()
+	sort.Strings(names)
+	return names
+}
+
+// schemaTables lista, qualificados e em ordem, os endereços que a conexão ao
+// schema abre fora do `_meta` — é a lista que a recusa do schema alheio
+// oferece. Sai da MESMA enumeração do catálogo que a resolução lê.
+func (e *Engine) schemaTables(schemaName string) ([]string, error) {
+	var out []string
+	for _, n := range e.datasetsInScope(schemaName) {
+		entries, err := e.catalogEntries(n)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if entry.info.Schema == schemaName {
+				out = append(out, schemaName+"."+entry.info.Name)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// resolveFrom decide para onde o FROM aponta, e é a ÚNICA decisão de rota: o
+// Execute e o TargetDataset a chamam, para que a consulta e os limites que o
+// servidor aplica a ela não possam discordar sobre o dono.
+//
+// resolved=false quer dizer "o próprio handle, pela tabela base" — o nome
+// simples no caminho por dataset. O atalho `_ns.x` NÃO passa por aqui: quem o
+// desvia é o chamador, antes, porque ele não nomeia dataset nenhum.
+//
+// Com scoped, o schema da conexão é o do handle, e as duas formas que nomeiam
+// tabela resolvem DENTRO dele: `FROM x` é o par (schema da conexão, x) e
+// `FROM s.x` só é aceito com s igual ao schema da conexão. O qualificador
+// alheio é recusado apontando para ele, e não resolvido: a árvore da conexão
+// só mostra o schema dela, e um FROM que abrisse o que a árvore esconde seria o
+// falso negativo que a promessa do Catalog proíbe.
+func (e *Engine) resolveFrom(reg *record, scoped bool, stmt *parser.SelectStmt) (schemaQualifiedTarget, bool, error) {
+	if !scoped {
+		if stmt.Namespace == "" {
+			return schemaQualifiedTarget{}, false, nil
+		}
+		target, err := e.resolveSchemaQualified("", stmt.Namespace, stmt.Dataset, stmt.DatasetPos)
+		return target, err == nil, err
+	}
+	scope := reg.sch.SchemaName
+	if stmt.Namespace != "" && stmt.Namespace != scope {
+		tables, err := e.schemaTables(scope)
+		if err != nil {
+			return schemaQualifiedTarget{}, false, err
+		}
+		return schemaQualifiedTarget{}, false, binder.ErrorAt(stmt.NamespacePos,
+			"schema %q is outside this connection, whose schema is %q; it addresses %s and the %s tables",
+			stmt.Namespace, scope, strings.Join(tables, ", "), meta.Namespace)
+	}
+	target, err := e.resolveSchemaQualified(scope, scope, stmt.Dataset, stmt.DatasetPos)
+	return target, err == nil, err
+}
+
+// Execute compila e abre a query pelo handle de DATASET. Erros de sintaxe e de
+// bind saem AQUI, antes de qualquer leitura de dado.
+//
+// É o caminho do CLI local e do client Python, que ainda endereça o servidor
+// por dataset (débito 123); a conexão por schema — JDBC e `nishidb query
+// --server` — entra pelo ExecuteInSchema.
 //
 // O FROM tem TRÊS formas, e cada uma resolve o dataset alvo de um jeito:
 //
@@ -408,6 +482,30 @@ func (e *Engine) resolveSchemaQualified(schemaName, table string, pos int) (sche
 // por dataset, e quem pode consultar já podia mandar outro dataset no campo da
 // requisição.
 func (e *Engine) Execute(ctx context.Context, dataset, sql string, params []types.Value) (executor.RowIterator, error) {
+	return e.execute(ctx, dataset, false, sql, params)
+}
+
+// ExecuteInSchema é o Execute da CONEXÃO POR SCHEMA: o handle é o dataset base
+// do schema, e o escopo de resolução é o schema declarado por ele.
+//
+// As três formas do FROM mudam de significado assim:
+//
+//   - `FROM x` — a tabela x DO SCHEMA DA CONEXÃO: a base, a irmã do histórico
+//     ou um contador, pelo nome com que a árvore a mostra.
+//   - `FROM _ns.x` — o atalho, sem mudança: a tabela virtual x do handle.
+//   - `FROM s.x` — endereço completo, aceito só com s igual ao schema da
+//     conexão; o schema alheio é recusado (BIND), nomeando o schema da conexão
+//     e os endereços que ela abre.
+//
+// É o que faz a árvore e o SQL dizerem a mesma coisa: o /v1/metadata?schema=
+// publica o schema da conexão e o `_meta`, e o que ele não publica esta função
+// não abre. Prova: TestTheConnectionTreeAndTheConnectionSqlAgree, em
+// internal/server.
+func (e *Engine) ExecuteInSchema(ctx context.Context, dataset, sql string, params []types.Value) (executor.RowIterator, error) {
+	return e.execute(ctx, dataset, true, sql, params)
+}
+
+func (e *Engine) execute(ctx context.Context, dataset string, scoped bool, sql string, params []types.Value) (executor.RowIterator, error) {
 	e.mu.RLock()
 	reg, ok := e.datasets[dataset]
 	e.mu.RUnlock()
@@ -433,30 +531,29 @@ func (e *Engine) Execute(ctx context.Context, dataset, sql string, params []type
 			return meta.Open(ctx, stmt, reg.sch, caps, params)
 		}
 		return e.openVirtualTable(ctx, reg, dataset, stmt.Namespace, stmt, params)
+	}
 
-	case stmt.Namespace != "":
-		target, err := e.resolveSchemaQualified(stmt.Namespace, stmt.Dataset, stmt.DatasetPos)
-		if err != nil {
-			return nil, err
-		}
-		e.mu.RLock()
-		owner, ok := e.datasets[target.dataset]
-		e.mu.RUnlock()
-		if !ok {
-			// O dataset saiu do registro entre a resolução e agora. Não há
-			// caminho que faça isso hoje (Register não tem par que remova),
-			// mas o mapa é lido fora do lock em dois momentos e a alternativa
-			// seria desreferenciar nil.
-			return nil, fmt.Errorf("query: dataset %q não registrado", target.dataset)
-		}
-		if target.namespace == "" {
-			return e.openTable(ctx, owner, stmt, params)
-		}
-		return e.openVirtualTable(ctx, owner, target.dataset, target.namespace, stmt, params)
-
-	default:
+	target, resolved, err := e.resolveFrom(reg, scoped, stmt)
+	switch {
+	case err != nil:
+		return nil, err
+	case !resolved:
 		return e.openTable(ctx, reg, stmt, params)
 	}
+	e.mu.RLock()
+	owner, ok := e.datasets[target.dataset]
+	e.mu.RUnlock()
+	if !ok {
+		// O dataset saiu do registro entre a resolução e agora. Não há
+		// caminho que faça isso hoje (Register não tem par que remova), mas o
+		// mapa é lido fora do lock em dois momentos e a alternativa seria
+		// desreferenciar nil.
+		return nil, fmt.Errorf("query: dataset %q não registrado", target.dataset)
+	}
+	if target.namespace == "" {
+		return e.openTable(ctx, owner, stmt, params)
+	}
+	return e.openVirtualTable(ctx, owner, target.dataset, target.namespace, stmt, params)
 }
 
 // TargetDataset devolve o dataset que esta consulta vai LER: o dono do schema,
@@ -481,17 +578,34 @@ func (e *Engine) Execute(ctx context.Context, dataset, sql string, params []type
 // com a posição do token ofensor. Duplicar a recusa aqui daria duas mensagens
 // para o mesmo defeito, e a dela seria a pior.
 func (e *Engine) TargetDataset(dataset, sql string) string {
+	return e.targetDataset(dataset, false, sql)
+}
+
+// TargetDatasetInSchema é o TargetDataset do ExecuteInSchema: a mesma
+// resolução com o escopo do schema da conexão, para que o servidor aplique os
+// limites do dataset que o ExecuteInSchema vai de fato abrir.
+func (e *Engine) TargetDatasetInSchema(dataset, sql string) string {
+	return e.targetDataset(dataset, true, sql)
+}
+
+func (e *Engine) targetDataset(dataset string, scoped bool, sql string) string {
+	e.mu.RLock()
+	reg, ok := e.datasets[dataset]
+	e.mu.RUnlock()
+	if !ok {
+		return dataset
+	}
 	stmt, err := parser.Parse(sql)
 	if err != nil || stmt == nil {
 		return dataset
 	}
 	// O atalho `_ns.x` não nomeia dataset nenhum — significa "o da requisição"
 	// —, e é o mesmo desvio que o Execute faz primeiro.
-	if stmt.Namespace == "" || meta.Reconhece(stmt) {
+	if meta.Reconhece(stmt) {
 		return dataset
 	}
-	target, err := e.resolveSchemaQualified(stmt.Namespace, stmt.Dataset, stmt.DatasetPos)
-	if err != nil {
+	target, resolved, err := e.resolveFrom(reg, scoped, stmt)
+	if err != nil || !resolved {
 		return dataset
 	}
 	return target.dataset
@@ -530,6 +644,11 @@ func (e *Engine) openVirtualTable(ctx context.Context, reg *record, dataset, nam
 	}
 	bq, err := binder.Bind(stmt, v.sch, params)
 	if err != nil {
+		// Pelo nome simples da conexão por schema não há qualificador escrito,
+		// e o nome que o binder usa já é o que o usuário digitou.
+		if stmt.Namespace == "" {
+			return nil, err
+		}
 		return nil, renameTableVirtual(err, stmt.Namespace, stmt.Dataset)
 	}
 	plan := v.planner.Plan(bq)

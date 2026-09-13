@@ -76,8 +76,8 @@ it::sobe_servidor
 
 echo "== rodando os testes do driver contra o servidor real =="
 cd "$RAIZ/clients/jdbc"
-NISHIDB_IT_URL="jdbc:nishidb://127.0.0.1:$PORTA/todos_os_tipos?tls=true&tlsCaFile=$TMP/cert.pem" \
-NISHIDB_IT_URL_SEM_CA="jdbc:nishidb://127.0.0.1:$PORTA/todos_os_tipos?tls=true" \
+NISHIDB_IT_URL="jdbc:nishidb://127.0.0.1:$PORTA/telecom?tls=true&tlsCaFile=$TMP/cert.pem" \
+NISHIDB_IT_URL_SEM_CA="jdbc:nishidb://127.0.0.1:$PORTA/telecom?tls=true" \
 NISHIDB_IT_USER="leitor" \
 NISHIDB_IT_PASSWORD="$SENHA" \
 NISHIDB_IT_LINHAS="$LINHAS" \

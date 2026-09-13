@@ -147,7 +147,7 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		if p.cur.Type == lexer.TokenDot {
 			return nil, p.errAt(p.cur.Pos, "nome no FROM tem no máximo dois níveis (namespace.tabela); o NishiDB não tem catálogo")
 		}
-		st.Namespace, st.Dataset, st.DatasetPos = name, table, tablePos
+		st.Namespace, st.NamespacePos, st.Dataset, st.DatasetPos = name, pos, table, tablePos
 	} else {
 		st.Dataset, st.DatasetPos = name, pos
 	}

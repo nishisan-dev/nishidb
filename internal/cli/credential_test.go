@@ -153,7 +153,7 @@ func TestQueryRemotaComTLSEAuthFuncionaDePontaAPonta(t *testing.T) {
 	risesWithEntry(t, a, corpus(t, 20))
 
 	t.Setenv("NISHIDB_PASSWORD", passwordReaderCLI)
-	code := a.run("query", "--server", "https://"+a.endereco(), "--dataset", "radius_sessions",
+	code := a.run("query", "--server", "https://"+a.endereco(), "--schema", "telecom",
 		"--user", "leitor", "--tls-ca", certPath,
 		"SELECT id FROM radius_sessions LIMIT 3")
 	if code != 0 {
@@ -227,7 +227,7 @@ func TestQueryRemotaComTLSSemCredencialSaiComExit1EMensagemDoServidor(t *testing
 	a, certPath := newEnvRemoteWithTLSEAuth(t)
 	risesWithEntry(t, a, corpus(t, 5))
 
-	code := a.run("query", "--server", "https://"+a.endereco(), "--dataset", "radius_sessions",
+	code := a.run("query", "--server", "https://"+a.endereco(), "--schema", "telecom",
 		"--tls-ca", certPath, "SELECT id FROM radius_sessions")
 	if code != 1 {
 		t.Fatalf("exit = %d, quer 1: %s", code, a.stderr.String())
@@ -349,7 +349,7 @@ func TestComandoRemotoNaoSegueRedirectENuncaReenviaCredencial(t *testing.T) {
 func TestNenhumComandoRemotoAceitaFlagDePassword(t *testing.T) {
 	a := newEnvRemote(t, 10)
 	casos := [][]string{
-		{"query", "--server", a.endereco(), "--dataset", "radius_sessions", "--password", "x", "SELECT 1"},
+		{"query", "--server", a.endereco(), "--schema", "telecom", "--password", "x", "SELECT 1"},
 		{"status", "--server", a.endereco(), "--password", "x"},
 		{"datasets", "--server", a.endereco(), "--password", "x"},
 		{"inspect", "--server", a.endereco(), "--password", "x", "radius_sessions"},

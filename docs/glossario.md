@@ -147,6 +147,7 @@ inglês correspondente.
 | espécie da tabela (TABLE para a base, VIEW para contador e tabela de meta) | kind | internal/query/catalog.go |
 | tabela de meta (a tabela do namespace `_meta` que descreve o dataset: `fields`, `counters`, `kafka`, `tables`) | meta table | internal/query/metatables.go, internal/query/meta |
 | tabela de sistema (o rótulo `SYSTEM TABLE` do JDBC, que este produto NÃO publica: as tabelas de meta saem como VIEW, porque o cliente gráfico esconde objeto de sistema por default) | system table | clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/NishiDatabaseMetaData.java |
+| schema da conexão (o schema que a URL do JDBC e o `nishidb query --server --schema` nomeiam; é o escopo da árvore e da resolução do FROM) | connection schema | internal/query/engine.go, internal/server/connection_schema.go, clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/NishiUrl.java |
 | árvore (do cliente SQL: schemas → tabelas → colunas que o driver JDBC publica a partir do catálogo) | tree | clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/NishiDatabaseMetaData.java |
 | registro de virtuais | registry | internal/query/engine.go |
 | registro (linha) | record | internal/storage/encoding/record.go |

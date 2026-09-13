@@ -63,10 +63,13 @@ class NishiDatabaseMetaDataTest {
             + tabela("tables", "_meta", "_meta", "VIEW",
                     coluna("name", null, "string", "VARCHAR", false, 0, 0, "none", false));
 
+    /**
+     * O {@code /v1/metadata?schema=telecom} como o servidor o responde: os
+     * datasets do schema da conexão — o base e a irmã do histórico, nessa
+     * ordem —, cada um com o seu catálogo. Nenhum dataset de outro schema: o
+     * recorte é do servidor, e o driver só o apresenta.
+     */
     private static final String META = "{\"datasets\":["
-            + "{\"name\":\"zebras\",\"schema\":\"zoo\",\"key\":\"id\",\"maxRows\":10,"
-            + "\"timeoutMs\":100,\"columns\":[" + COLUNA_ID + "],\"tables\":["
-            + tabela("zebras", "zoo", "", "TABLE", COLUNA_ID) + "," + TABELAS_DE_META + "]},"
             + "{\"name\":\"eventos\",\"schema\":\"telecom\",\"key\":\"service_id\","
             + "\"maxRows\":1000,\"timeoutMs\":30000,"
             + "\"columns\":[" + COLUNAS_EVENTOS + "],\"tables\":["
@@ -74,21 +77,10 @@ class NishiDatabaseMetaDataTest {
             + tabela("por_olt", "telecom", "_counters", "VIEW",
                     coluna("olt", null, "string", "VARCHAR", false, 0, 0, "none", false) + ","
                     + coluna("total", null, "int64", "BIGINT", false, 19, 0, "none", false)) + ","
-            + TABELAS_DE_META + "]}]}";
-
-    /**
-     * O MESMO documento como um binário anterior a {@code tables} o responde:
-     * sem o campo, e sem o {@code schema} do dataset.
-     *
-     * <p>Os dois campos são aditivos e nasceram juntos. Um driver que assuma
-     * que eles existem quebra contra o servidor que o operador ainda não
-     * atualizou — e é esse servidor que este fixture representa.
-     */
-    private static final String META_SEM_TABLES = "{\"datasets\":["
-            + "{\"name\":\"zebras\",\"key\":\"id\",\"maxRows\":10,\"timeoutMs\":100,"
-            + "\"columns\":[" + COLUNA_ID + "]},"
-            + "{\"name\":\"eventos\",\"key\":\"service_id\",\"maxRows\":1000,\"timeoutMs\":30000,"
-            + "\"columns\":[" + COLUNAS_EVENTOS + "]}]}";
+            + TABELAS_DE_META + "]},"
+            + "{\"name\":\"eventos_history\",\"schema\":\"telecom\",\"key\":\"id\",\"maxRows\":10,"
+            + "\"timeoutMs\":100,\"columns\":[" + COLUNA_ID + "],\"tables\":["
+            + tabela("eventos_history", "telecom", "", "TABLE", COLUNA_ID) + "," + TABELAS_DE_META + "]}]}";
 
     private static final String STATS = "{\"process\":{\"version\":\"v1.4.2-3-gabc\",\"query\":{}},"
             + "\"datasets\":[]}";
@@ -96,15 +88,21 @@ class NishiDatabaseMetaDataTest {
     private String stats = STATS;
     private String metadata = META;
 
+    /** As query strings que o driver mandou em GET /v1/metadata. */
+    private final List<String> metadataQueries = new ArrayList<>();
+
     private void comMetadata(Consumer<DatabaseMetaData> corpo) throws Exception {
         HttpServer srv = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         srv.createContext("/", (HttpExchange ex) -> {
             String c = ex.getRequestURI().getPath();
+            if ("/v1/metadata".equals(c)) {
+                metadataQueries.add(ex.getRequestURI().getQuery());
+            }
             responde(ex, "/v1/stats".equals(c) ? stats : metadata);
         });
         srv.start();
         try {
-            String url = "jdbc:nishidb://127.0.0.1:" + srv.getAddress().getPort() + "/eventos";
+            String url = "jdbc:nishidb://127.0.0.1:" + srv.getAddress().getPort() + "/telecom";
             try (Connection c = DriverManager.getConnection(url, new Properties())) {
                 corpo.accept(c.getMetaData());
             } catch (SQLException e) {
@@ -148,8 +146,11 @@ class NishiDatabaseMetaDataTest {
      * o SQL gerado cair no dataset da conexão, que é outra tabela.
      *
      * <p>As duas linhas do {@code _meta} saem UMA vez, e não uma por dataset:
-     * o documento as repete em cada elemento de {@code datasets} porque o
-     * atalho é relativo ao dataset da requisição.
+     * o documento as repete em cada elemento de {@code datasets} (o base e a
+     * irmã) porque o atalho é relativo ao dataset da requisição.
+     *
+     * <p>E a árvore é a do SCHEMA DA CONEXÃO: o driver pede o documento
+     * recortado pelo schema da URL, e toda chamada ao metadata leva o recorte.
      */
     @Test
     void listaBaseEViewsComSchema() throws Exception {
@@ -158,7 +159,7 @@ class NishiDatabaseMetaDataTest {
                 assertEquals(10, rs.getMetaData().getColumnCount());
                 assertEquals(List.of(
                         "TABLE|telecom|eventos",
-                        "TABLE|zoo|zebras",
+                        "TABLE|telecom|eventos_history",
                         "VIEW|_meta|fields",
                         "VIEW|_meta|tables",
                         "VIEW|telecom|por_olt"), arvore(rs));
@@ -166,6 +167,10 @@ class NishiDatabaseMetaDataTest {
                 throw new IllegalStateException(e);
             }
         });
+        assertFalse(metadataQueries.isEmpty());
+        for (String q : metadataQueries) {
+            assertEquals("schema=telecom", q);
+        }
     }
 
     /** Tipo, schema e nome de cada linha, na ordem em que o driver as devolveu. */
@@ -190,7 +195,7 @@ class NishiDatabaseMetaDataTest {
     void filtraPorTipoDeTabela() throws Exception {
         comMetadata(m -> {
             try {
-                assertEquals(List.of("TABLE|telecom|eventos", "TABLE|zoo|zebras"),
+                assertEquals(List.of("TABLE|telecom|eventos", "TABLE|telecom|eventos_history"),
                         arvoreDe(m.getTables(null, null, null, new String[] {"TABLE"})));
                 assertEquals(List.of("VIEW|_meta|fields", "VIEW|_meta|tables",
                         "VIEW|telecom|por_olt"),
@@ -217,7 +222,8 @@ class NishiDatabaseMetaDataTest {
     void filtraPeloPadraoDeSchema() throws Exception {
         comMetadata(m -> {
             try {
-                assertEquals(List.of("TABLE|telecom|eventos", "VIEW|telecom|por_olt"),
+                assertEquals(List.of("TABLE|telecom|eventos", "TABLE|telecom|eventos_history",
+                        "VIEW|telecom|por_olt"),
                         arvoreDe(m.getTables(null, "telecom", null, null)));
                 assertEquals(List.of("VIEW|_meta|fields", "VIEW|_meta|tables"),
                         arvoreDe(m.getTables(null, "_meta", null, null)));
@@ -240,7 +246,8 @@ class NishiDatabaseMetaDataTest {
     }
 
     /**
-     * Os schemas saem DISTINTOS e ordenados, e o padrão filtra.
+     * Os schemas saem DISTINTOS e ordenados, e o padrão filtra: o {@code _meta}
+     * e o schema da conexão, e nenhum outro.
      *
      * <p>É deles que a ferramenta monta as pastas da árvore. O {@code _meta}
      * chega repetido em cada dataset do documento e tem de sair uma vez só.
@@ -249,9 +256,9 @@ class NishiDatabaseMetaDataTest {
     void osSchemasSaemDistintosEOrdenados() throws Exception {
         comMetadata(m -> {
             try {
-                assertEquals(List.of("_meta", "telecom", "zoo"), coluna1De(m.getSchemas()));
+                assertEquals(List.of("_meta", "telecom"), coluna1De(m.getSchemas()));
                 assertEquals(List.of("telecom"), coluna1De(m.getSchemas(null, "tele%")));
-                assertEquals(List.of("_meta", "telecom", "zoo"), coluna1De(m.getSchemas(null, null)));
+                assertEquals(List.of("_meta", "telecom"), coluna1De(m.getSchemas(null, null)));
                 assertEquals(List.of(), coluna1De(m.getSchemas(null, "nada")));
             } catch (SQLException e) {
                 throw new IllegalStateException(e);
@@ -319,6 +326,7 @@ class NishiDatabaseMetaDataTest {
                         "telecom|eventos|status|2",
                         "telecom|eventos|payload|3",
                         "telecom|eventos|quando|4",
+                        "telecom|eventos_history|id|1",
                         "telecom|por_olt|olt|1",
                         "telecom|por_olt|total|2"), posicoes(rs));
             } catch (SQLException e) {
@@ -354,40 +362,6 @@ class NishiDatabaseMetaDataTest {
     }
 
     /**
-     * Servidor anterior a {@code tables}: a árvore de sempre, e nada lança.
-     *
-     * <p>Nenhuma view é inventada e nenhum schema aparece — o documento não
-     * tem os dois campos. Assumir que {@code tables} existe deixaria este
-     * servidor sem tabela nenhuma para mostrar.
-     */
-    @Test
-    void metadataSemTablesDegradaSemErro() throws Exception {
-        metadata = META_SEM_TABLES;
-        comMetadata(m -> {
-            try {
-                assertEquals(List.of("TABLE|null|eventos", "TABLE|null|zebras"),
-                        arvoreDe(m.getTables(null, null, null, null)));
-                assertEquals(List.of(), arvoreDe(m.getTables(null, null, null,
-                        new String[] {"VIEW"})));
-                assertEquals(List.of(), coluna1De(m.getSchemas()));
-                // O padrão de schema continua respondendo: "" e % pegam a
-                // linha SEM schema, que é o que o JDBC manda.
-                assertEquals(2, arvoreDe(m.getTables(null, "%", null, null)).size());
-                assertEquals(2, arvoreDe(m.getTables(null, "", null, null)).size());
-                // E as colunas continuam saindo pelo campo `columns` do dataset.
-                try (ResultSet rs = m.getColumns(null, null, "eventos", null)) {
-                    assertTrue(rs.next());
-                    assertEquals("service_id", rs.getString("COLUMN_NAME"));
-                    assertNull(rs.getString("TABLE_SCHEM"));
-                    assertEquals(1, rs.getInt("ORDINAL_POSITION"));
-                }
-            } catch (SQLException e) {
-                throw new IllegalStateException(e);
-            }
-        });
-    }
-
-    /**
      * O padrão LIKE é implementado no driver, e {@code null} casa TUDO.
      *
      * <p>Confundir null com "nenhum" faria a árvore da ferramenta aparecer
@@ -397,8 +371,9 @@ class NishiDatabaseMetaDataTest {
     void oPadraoLikeCasaComoOJdbcManda() throws Exception {
         comMetadata(m -> {
             try {
-                assertEquals(List.of("eventos"), nomesDe(m.getTables(null, null, "even%", null)));
-                assertEquals(List.of("zebras"), nomesDe(m.getTables(null, null, "_ebras", null)));
+                assertEquals(List.of("eventos", "eventos_history"),
+                        nomesDe(m.getTables(null, null, "even%", null)));
+                assertEquals(List.of("eventos"), nomesDe(m.getTables(null, null, "_ventos", null)));
                 assertEquals(List.of(), nomesDe(m.getTables(null, null, "nada%", null)));
                 assertEquals(5, nomesDe(m.getTables(null, null, "%", null)).size());
                 // Um tipo que o catálogo não usa não devolve nada, e não
@@ -513,7 +488,7 @@ class NishiDatabaseMetaDataTest {
      *
      * <p>Elas passaram a publicar o TABLE_SCHEM, e um método que publica o
      * campo sem filtrar por ele afirma um schema que não conferiu: pedir a
-     * chave de {@code zoo.eventos} devolveria a de {@code telecom.eventos}.
+     * chave de {@code fault.eventos} devolveria a de {@code telecom.eventos}.
      * {@code null} continua sendo "não restrinja", que é o que a ferramenta
      * manda quando já sabe a tabela.
      */
@@ -522,34 +497,14 @@ class NishiDatabaseMetaDataTest {
         comMetadata(m -> {
             try {
                 assertEquals(1, linhas(m.getPrimaryKeys(null, "telecom", "eventos")));
-                assertEquals(0, linhas(m.getPrimaryKeys(null, "zoo", "eventos")));
+                assertEquals(0, linhas(m.getPrimaryKeys(null, "fault", "eventos")));
                 assertEquals(0, linhas(m.getPrimaryKeys(null, "", "eventos")));
                 assertEquals(1, linhas(m.getPrimaryKeys(null, null, "eventos")));
 
                 assertEquals(1, linhas(m.getIndexInfo(null, "telecom", "eventos", false, true)));
-                assertEquals(0, linhas(m.getIndexInfo(null, "zoo", "eventos", false, true)));
+                assertEquals(0, linhas(m.getIndexInfo(null, "fault", "eventos", false, true)));
                 assertEquals(0, linhas(m.getIndexInfo(null, "", "eventos", false, true)));
                 assertEquals(1, linhas(m.getIndexInfo(null, null, "eventos", false, true)));
-            } catch (SQLException e) {
-                throw new IllegalStateException(e);
-            }
-        });
-    }
-
-    /**
-     * O servidor SEM schema: a string vazia é quem pega as linhas dele.
-     *
-     * <p>É a outra metade do contrato do argumento — a linha sem schema tem de
-     * ser alcançável, e o nome de um schema não pode alcançá-la.
-     */
-    @Test
-    void aChaveDoServidorSemSchemaSaiPelaStringVazia() throws Exception {
-        metadata = META_SEM_TABLES;
-        comMetadata(m -> {
-            try {
-                assertEquals(1, linhas(m.getPrimaryKeys(null, "", "eventos")));
-                assertEquals(1, linhas(m.getPrimaryKeys(null, null, "eventos")));
-                assertEquals(0, linhas(m.getPrimaryKeys(null, "telecom", "eventos")));
             } catch (SQLException e) {
                 throw new IllegalStateException(e);
             }

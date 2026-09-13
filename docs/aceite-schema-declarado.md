@@ -66,8 +66,8 @@ a árvore a partir dele.
 | O driver JDBC monta a árvore: base como `TABLE` no schema declarado, contador como `VIEW` no mesmo schema, tabelas de meta como `VIEW` no `_meta`, todas com `TABLE_SCHEM` preenchido | `NishiDatabaseMetaDataTest#listaBaseEViewsComSchema`, `NishiDatabaseMetaDataTest#osSchemasSaemDistintosEOrdenados` |
 | O filtro de tipo e o de padrão de schema funcionam como o JDBC manda | `NishiDatabaseMetaDataTest#filtraPorTipoDeTabela`, `NishiDatabaseMetaDataTest#filtraPeloPadraoDeSchema`, `NishiDatabaseMetaDataTest#oPadraoLikeCasaComoOJdbcManda` |
 | `getColumns` cobre as views pelo mesmo documento, com `ORDINAL_POSITION` por TABELA | `NishiDatabaseMetaDataTest#colunasDaViewSaemComTipoJdbc`, `NishiDatabaseMetaDataTest#oOrdinalPositionEhPorTabelaEContaAColunaDescartada` |
-| A chave primária e o índice saem no mesmo schema da tabela que o `getTables` publica, e honram o schema recebido | `NishiDatabaseMetaDataTest#aChaveDoDatasetSaiComoChavePrimariaNoSchemaDoDataset`, `NishiDatabaseMetaDataTest#oIndiceSaiComARessalvaDeQueEhDeclaradoENoSchemaDoDataset`, `NishiDatabaseMetaDataTest#aChaveEOIndiceHonramOSchemaRecebido`, `NishiDatabaseMetaDataTest#aChaveDoServidorSemSchemaSaiPelaStringVazia` |
-| Servidor anterior aos campos novos: a árvore de sempre, nenhuma view inventada, nada lançado | `NishiDatabaseMetaDataTest#metadataSemTablesDegradaSemErro` (com fixture só seu) |
+| A chave primária e o índice saem no mesmo schema da tabela que o `getTables` publica, e honram o schema recebido | `NishiDatabaseMetaDataTest#aChaveDoDatasetSaiComoChavePrimariaNoSchemaDoDataset`, `NishiDatabaseMetaDataTest#oIndiceSaiComARessalvaDeQueEhDeclaradoENoSchemaDoDataset`, `NishiDatabaseMetaDataTest#aChaveEOIndiceHonramOSchemaRecebido` (e o caso do servidor sem schema, que saiu com a conexão por schema — ver [aceite-conexao-por-schema.md](aceite-conexao-por-schema.md)) |
+| Servidor anterior aos campos novos: a árvore de sempre, nenhuma view inventada, nada lançado | **Substituído** pela conexão por schema: o driver passou a exigir o `?schema=`, que só existe no servidor que publica `tables`, e o fallback e o seu teste saíram (ver [aceite-conexao-por-schema.md](aceite-conexao-por-schema.md)) |
 | Contra o binário REAL: os schemas são os do servidor, os tipos são `TABLE` e `VIEW`, e o `FROM` montado a partir do par (schema, nome) que a árvore devolveu executa | `DriverIT#aSequenciaQueUmaFerramentaFazAoAbrirAConexao` |
 
 ## As mutações: o vermelho e o verde de cada uma
@@ -104,7 +104,7 @@ defeito foi revertido, a suíte voltou ao verde. Nenhuma ficou no código
 | O schema da linha do contador sai da spec sintética, no canal HTTP | `TestMetadataPublicaOSchemaEOCatalogoDeTabelas` | `{Name:por_status Schema:_virtual Namespace:_counters}`; e `TestMetadataEMetaTablesNaoPodemDiscordarDoCatalogo` continuou VERDE, como tem de continuar — um oráculo de concordância não é oráculo de correção |
 | `TABLE_SCHEM` nulo nas linhas `VIEW` do driver | 3 testes JUnit | `VIEW\|null\|por_olt` no lugar de `VIEW\|telecom\|por_olt` — e o SQL que a ferramenta monta passa a cair no dataset da conexão |
 | `acceptsType` devolve sempre `true` | 3 testes JUnit | pedir `{"TABLE"}` trouxe as views, e pedir `{"VIEW"}` trouxe as bases |
-| A degradação quebra (o driver assume que `tables` existe) | `NishiDatabaseMetaDataTest#metadataSemTablesDegradaSemErro` | árvore vazia contra o servidor anterior aos campos novos |
+| A degradação quebra (o driver assume que `tables` existe) | o teste da degradação (removido depois, com o fallback, pela conexão por schema) | árvore vazia contra o servidor anterior aos campos novos |
 | A deduplicação das linhas do `_meta` é removida | 4 testes JUnit | cada tabela do `_meta` saiu uma vez por dataset do servidor |
 | `ORDINAL_POSITION` é contado fora do laço por tabela, ou incrementado depois do filtro de coluna | `NishiDatabaseMetaDataTest#oOrdinalPositionEhPorTabelaEContaAColunaDescartada` | `telecom\|por_olt\|olt\|5` no lugar de `1`, e `telecom\|eventos\|status\|1` no lugar de `\|2` |
 | O nome do teste JUnit citado na arquitetura ganha um sufixo; e, numa segunda mutação, a classe citada é trocada por outra | `TestEvidenciasCitadasNosDocumentosExistem` | "cita ⟨classe⟩#⟨método⟩, que não existe na suíte", nas duas — o nome ofensor não é reproduzido aqui de propósito, porque este documento também é varrido pelo gate |
@@ -240,15 +240,17 @@ caminhos diferentes.
 Corrigido em `44a3f70`: o ramo das aspas passa a aplicar a mesma regra, com o
 ponto procurado a partir do índice logo APÓS a aspa de fechamento (procurar do
 miolo tiraria o palpite de `FROM "_meta.counters"`, que é um identificador só e
-cuja recusa é do servidor). As cinco formas entram no `SqlScannerTest` —
-`SqlScannerTest#nomeQualificadoComAPrimeiraParteCitadaAbandonaOPalpite`,
-`SqlScannerTest#nomeQualificadoCitadoInteiroContinuaSendoUmIdentificadorSo`,
-`SqlScannerTest#nomeCitadoSemPontoDepoisContinuaSendoPalpiteValido`,
-`SqlScannerTest#aContagemDePlaceholdersNaoMudaComAFormaDoNome` e
-`SqlScannerTest#apenasOPrimeiroFromContaTambemComNomeCitado` —, e o caminho
-inteiro ganhou um caso contra o binário real,
+cuja recusa é do servidor). As cinco formas entraram no `SqlScannerTest`, e o
+caminho inteiro ganhou um caso contra o binário real,
 `DriverIT#oSqlComCadaParteCitadaDaArvoreExecuta`, que monta o endereço a partir
 da árvore e das aspas que o metadata declara.
+
+> **Depois:** a conexão por schema ([aceite-conexao-por-schema.md](aceite-conexao-por-schema.md))
+> tirou o palpite do driver inteiro — o corpo leva o schema da URL e o servidor
+> resolve o `FROM` dentro dele —, e o `SqlScanner` ficou só com a contagem de
+> `?` (`SqlScannerTest#aContagemDePlaceholdersNaoMudaComAFormaDoNome` continua
+> cobrando as cinco formas). O `DriverIT#oSqlComCadaParteCitadaDaArvoreExecuta`
+> ficou, e é ele que impede o defeito de voltar por outro caminho.
 
 **E o que ele ensina vale mais que a correção: o defeito atravessou nove
 revisões e toda a verificação deste ciclo.** A razão é precisa, e vale escrever

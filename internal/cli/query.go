@@ -24,10 +24,11 @@ func runQuery(args []string, amb Context) int {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
-		argConfig = fs.String("config", "", "caminho do nishidb.yaml")
-		dataset   = fs.String("dataset", "", "nome do dataset")
-		limit     = fs.Int("limit", -1, "sobrepõe o LIMIT da query")
-		server    = fs.String("server", "", "consulta pelo protocolo remoto em vez de abrir o dataset local")
+		argConfig  = fs.String("config", "", "caminho do nishidb.yaml")
+		dataset    = fs.String("dataset", "", "nome do dataset (consulta local, com --config)")
+		schemaName = fs.String("schema", "", "schema da conexão (consulta remota, com --server)")
+		limit      = fs.Int("limit", -1, "sobrepõe o LIMIT da query")
+		server     = fs.String("server", "", "consulta pelo protocolo remoto em vez de abrir o dataset local")
 	)
 	var params listaOfParametros
 	fs.Var(&params, "param", "valor de um `?` posicional, no formato <tipo>:<valor> ("+tiposOfParametro+"); repetível, na ordem dos ?")
@@ -53,8 +54,13 @@ func runQuery(args []string, amb Context) int {
 	// ler: quem resolve caminho, teto e timeout é o servidor. Exigir --config
 	// obrigaria o operador a manter uma cópia da configuração do servidor na
 	// máquina de onde ele consulta.
+	//
+	// Os dois modos endereçam coisas diferentes, e a flag diz qual: o local
+	// abre um DATASET do disco, e o remoto é a conexão por SCHEMA — a mesma do
+	// driver JDBC, com a árvore e o FROM recortados pelo schema. A flag trocada
+	// é recusada nomeando a certa, e não aceita "por aproximação".
 	switch {
-	case *dataset == "":
+	case *server == "" && *dataset == "":
 		fmt.Fprintln(amb.Stderr, "query: --dataset é obrigatório")
 		return ExitUsageError
 	case *server == "" && *argConfig == "":
@@ -62,6 +68,15 @@ func runQuery(args []string, amb Context) int {
 		return ExitUsageError
 	case *server != "" && *argConfig != "":
 		fmt.Fprintln(amb.Stderr, "query: --config e --server são exclusivos; o --server usa a configuração do servidor")
+		return ExitUsageError
+	case *server != "" && *dataset != "":
+		_, _ = fmt.Fprintln(amb.Stderr, "query: --server addresses the schema, not the dataset; use --schema <schemaName>")
+		return ExitUsageError
+	case *server != "" && *schemaName == "":
+		_, _ = fmt.Fprintln(amb.Stderr, "query: --schema is required with --server")
+		return ExitUsageError
+	case *server == "" && *schemaName != "":
+		_, _ = fmt.Fprintln(amb.Stderr, "query: --schema only applies to --server; the local query (--config) takes --dataset")
 		return ExitUsageError
 	}
 	if fs.NArg() != 1 {
@@ -89,7 +104,7 @@ func runQuery(args []string, amb Context) int {
 	}
 
 	if *server != "" {
-		return remoteQuery(*server, *dataset, sql, params, cred, amb)
+		return remoteQuery(*server, *schemaName, sql, params, cred, amb)
 	}
 
 	cfg, err := nishiconfig.Load(*argConfig)

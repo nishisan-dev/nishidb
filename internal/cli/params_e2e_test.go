@@ -38,7 +38,7 @@ func countRows(saida string) []string {
 func umStatusOfCorpus(t *testing.T, a *env, conexao ...string) string {
 	t.Helper()
 	args := append([]string{"query"}, conexao...)
-	args = append(args, "--dataset", "radius_sessions", "SELECT status FROM radius_sessions LIMIT 1")
+	args = append(args, "SELECT status FROM radius_sessions LIMIT 1")
 	if code := a.run(args...); code != cli.ExitOK {
 		t.Fatalf("sondando o corpus: exit %d: %s", code, a.stderr.String())
 	}
@@ -73,16 +73,16 @@ func TestParamProduzOMesmoResultadoQueOLiteralPeloProtocoloRemoto(t *testing.T) 
 	a := newEnvRemote(t, 100000)
 	risesWithEntry(t, a, corpus(t, 200))
 
-	status := umStatusOfCorpus(t, a.env, "--server", a.endereco())
+	status := umStatusOfCorpus(t, a.env, "--server", a.endereco(), "--schema", "telecom")
 
-	if code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+	if code := a.run("query", "--server", a.endereco(), "--schema", "telecom",
 		"--param", "string:"+status,
 		"SELECT id, status FROM radius_sessions WHERE status = ?"); code != cli.ExitOK {
 		t.Fatalf("com ?: exit = %d: %s", code, a.stderr.String())
 	}
 	withParametro := a.stdout.String()
 
-	if code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+	if code := a.run("query", "--server", a.endereco(), "--schema", "telecom",
 		"SELECT id, status FROM radius_sessions WHERE status = '"+status+"'"); code != cli.ExitOK {
 		t.Fatalf("com literal: exit = %d: %s", code, a.stderr.String())
 	}
@@ -110,7 +110,7 @@ func TestParamFuncionaTambemNoCaminhoLocalComConfig(t *testing.T) {
 		t.Fatalf("ingest: %s", a.stderr.String())
 	}
 
-	status := umStatusOfCorpus(t, a, "--config", a.config)
+	status := umStatusOfCorpus(t, a, "--config", a.config, "--dataset", "radius_sessions")
 
 	code := a.run("query", "--config", a.config, "--dataset", "radius_sessions",
 		"--param", "string:"+status,

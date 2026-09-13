@@ -42,6 +42,9 @@ class NishiConnectionTest {
     /** Os corpos que o driver enviou em POST /v1/query, na ordem. */
     private final List<String> enviados = new ArrayList<>();
 
+    /** As query strings que o driver mandou em GET /v1/metadata, na ordem. */
+    private final List<String> metadataQueries = new ArrayList<>();
+
     private void comServidor(Consumer<Connection> corpo) throws Exception {
         HttpServer srv = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         srv.createContext("/", (HttpExchange ex) -> {
@@ -52,6 +55,7 @@ class NishiConnectionTest {
                 }
                 responde(ex, 200, STREAM);
             } else if ("/v1/metadata".equals(caminho)) {
+                metadataQueries.add(ex.getRequestURI().getQuery());
                 responde(ex, 200, META);
             } else {
                 responde(ex, 200, "{\"status\":\"UP\"}");
@@ -59,7 +63,7 @@ class NishiConnectionTest {
         });
         srv.start();
         try {
-            String url = "jdbc:nishidb://127.0.0.1:" + srv.getAddress().getPort() + "/eventos";
+            String url = "jdbc:nishidb://127.0.0.1:" + srv.getAddress().getPort() + "/telecom";
             try (Connection c = DriverManager.getConnection(url, new Properties())) {
                 corpo.accept(c);
             }
@@ -94,28 +98,61 @@ class NishiConnectionTest {
             }
         });
         assertEquals(1, enviados.size());
-        assertTrue(enviados.get(0).contains("\"dataset\":\"eventos\""), enviados.get(0));
+        assertTrue(enviados.get(0).contains("\"schema\":\"telecom\""), enviados.get(0));
         assertTrue(enviados.get(0).contains("\"sql\":\"SELECT id FROM eventos\""), enviados.get(0));
+        assertEquals(List.of("schema=telecom"), metadataQueries);
     }
 
     /**
-     * O dataset vai do FROM, e não da URL.
+     * O schema da URL vai em TODA consulta, qualquer que seja o FROM, e o
+     * corpo nunca leva {@code dataset}.
      *
-     * <p>É a decisão que permite a uma ferramenta consultar mais de um dataset
-     * pela MESMA conexão. O servidor confere, então um palpite errado vira erro
-     * e nunca dado de outra tabela.
+     * <p>Quem resolve o FROM é o servidor, dentro do schema da conexão: o
+     * driver não palpita nome nenhum a partir do SQL — nem da tabela simples,
+     * nem do nome qualificado, nem do citado.
      */
     @Test
-    void oDatasetVaiDoFromENaoDaUrl() throws Exception {
+    void oSchemaDaUrlVaiEmTodaConsulta() throws Exception {
+        List<String> consultas = List.of("SELECT id FROM outro", "SELECT id FROM fault.events",
+                "SELECT * FROM \"_meta\".tables");
         comServidor(c -> {
-            try (Statement st = c.createStatement();
-                    ResultSet rs = st.executeQuery("SELECT id FROM outro")) {
-                rs.next();
+            for (String sql : consultas) {
+                try (Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+                    rs.next();
+                } catch (SQLException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+        });
+        assertEquals(consultas.size(), enviados.size());
+        for (String corpo : enviados) {
+            assertTrue(corpo.contains("\"schema\":\"telecom\""), corpo);
+            assertFalse(corpo.contains("\"dataset\""), corpo);
+        }
+    }
+
+    /**
+     * getSchema devolve o schema da URL, e setSchema só aceita o mesmo.
+     *
+     * <p>Aceitar outro em silêncio faria a ferramenta acreditar que trocou de
+     * schema enquanto o servidor continua resolvendo no da URL.
+     */
+    @Test
+    void oSchemaDaConexaoEhFixadoPelaUrl() throws Exception {
+        comServidor(c -> {
+            try {
+                assertEquals("telecom", c.getSchema());
+                c.setSchema("telecom");
+                c.setSchema(null);
+                SQLException e = assertThrows(SQLException.class, () -> c.setSchema("fault"));
+                assertEquals("3F000", e.getSQLState());
+                assertTrue(e.getMessage().contains("telecom") && e.getMessage().contains("/fault"),
+                        e.getMessage());
+                assertEquals("telecom", c.getSchema());
             } catch (SQLException e) {
                 throw new IllegalStateException(e);
             }
         });
-        assertTrue(enviados.get(0).contains("\"dataset\":\"outro\""), enviados.get(0));
     }
 
     /**
@@ -255,17 +292,28 @@ class NishiConnectionTest {
         });
     }
 
-    /** O dataset da URL é conferido no connect, e não na primeira consulta. */
+    /**
+     * O schema da URL é conferido no connect, e não na primeira consulta — e a
+     * recusa ensina a forma da URL.
+     *
+     * <p>O servidor responde UNKNOWN_SCHEMA com a mensagem que nomeia o schema
+     * certo quando o caminho é o nome de um dataset (a URL da forma anterior);
+     * o driver acrescenta o que só ele sabe, a forma da URL.
+     */
     @Test
-    void datasetInexistenteFalhaNoConnect() throws Exception {
+    void schemaInexistenteFalhaNoConnectEnsinandoAFormaDaUrl() throws Exception {
         HttpServer srv = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        srv.createContext("/", ex -> responde(ex, 200, "{\"datasets\":[]}"));
+        srv.createContext("/", ex -> responde(ex, 404, "{\"error\":{\"code\":\"UNKNOWN_SCHEMA\","
+                + "\"message\":\"schema \\\"eventos\\\" is not registered on this server: \\\"eventos\\\" is a "
+                + "dataset, and the connection names its schema; use \\\"telecom\\\"\"}}"));
         srv.start();
         try {
-            String url = "jdbc:nishidb://127.0.0.1:" + srv.getAddress().getPort() + "/naoexiste";
+            String url = "jdbc:nishidb://127.0.0.1:" + srv.getAddress().getPort() + "/eventos";
             SQLException e = assertThrows(SQLException.class,
                     () -> DriverManager.getConnection(url, new Properties()));
-            assertTrue(e.getMessage().contains("naoexiste"), e.getMessage());
+            assertEquals("3F000", e.getSQLState(), e.getMessage());
+            assertTrue(e.getMessage().contains("use \"telecom\""), e.getMessage());
+            assertTrue(e.getMessage().contains("jdbc:nishidb://host[:porta]/schema"), e.getMessage());
         } finally {
             srv.stop(0);
         }

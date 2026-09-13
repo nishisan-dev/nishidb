@@ -22,20 +22,55 @@ import (
 // corpo mínimo hoje viraria um segundo formato depois, e o driver teria de
 // falar os dois.
 //
-// O filtro ?dataset= devolve a MESMA forma, com um elemento. Duas formas para
-// as duas perguntas obrigariam o cliente a aprender dois parsers.
+// Os filtros devolvem a MESMA forma. Duas formas para as perguntas obrigariam o
+// cliente a aprender dois parsers.
+//
+// O ?schema= é a árvore da CONEXÃO POR SCHEMA: os datasets que declaram aquele
+// schema — o base e, quando há, a irmã do histórico, que o herda —, na ordem
+// de s.datasets, com o base primeiro. É o recorte que faz a árvore do driver
+// dizer o mesmo que o ExecuteInSchema abre: o schema da conexão e o `_meta`,
+// nada de outro schema. O ?dataset= devolve um elemento, e ele e a chamada sem
+// filtro são do client Python, que ainda endereça por dataset (débito 123).
 func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.rejectSimples(w, r, http.MethodGet)
 		return
 	}
-	filtro := r.URL.Query().Get("dataset")
-	if filtro != "" {
-		d, ok := s.byNome[filtro]
+	schemaFilter := r.URL.Query().Get("schema")
+	datasetFilter := r.URL.Query().Get("dataset")
+	if schemaFilter != "" {
+		if datasetFilter != "" {
+			s.reject(w, r, http.StatusBadRequest, datasetDesconhecido, protocol.ErrorDetail{
+				Code:    protocol.CodeBadRequest,
+				Message: "?schema= and ?dataset= are exclusive; send only ?schema=",
+			})
+			return
+		}
+		if _, ok := s.bySchema[schemaFilter]; !ok {
+			s.reject(w, r, http.StatusNotFound, datasetDesconhecido, s.unknownSchema(schemaFilter))
+			return
+		}
+		out := protocol.Metadata{Datasets: make([]protocol.DatasetMeta, 0, 2)}
+		for _, d := range s.datasets {
+			if d.sch.SchemaName != schemaFilter {
+				continue
+			}
+			meta, err := s.metaOfDataset(d)
+			if err != nil {
+				s.rejectCatalog(w, r, d, err)
+				return
+			}
+			out.Datasets = append(out.Datasets, meta)
+		}
+		s.respondeJSON(w, out)
+		return
+	}
+	if datasetFilter != "" {
+		d, ok := s.byNome[datasetFilter]
 		if !ok {
 			s.reject(w, r, http.StatusNotFound, datasetDesconhecido, protocol.ErrorDetail{
 				Code:    protocol.CodeUnknownDataset,
-				Message: "dataset " + filtro + " não está registrado neste servidor",
+				Message: "dataset " + datasetFilter + " não está registrado neste servidor",
 			})
 			return
 		}

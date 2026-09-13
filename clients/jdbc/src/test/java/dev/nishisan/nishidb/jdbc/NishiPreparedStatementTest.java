@@ -117,7 +117,7 @@ class NishiPreparedStatementTest {
             }
         });
         String corpo = enviados.get(0);
-        assertTrue(corpo.contains("\"dataset\":\"radius_sessions\""), corpo);
+        assertTrue(corpo.contains("\"schema\":\"radius_sessions\""), corpo);
         assertTrue(corpo.contains("{\"type\":\"string\",\"value\":\"Stop\"}"), corpo);
         assertTrue(corpo.contains("{\"type\":\"string\",\"value\":\"i-br-sp-cmp-cmp-hl4-01\"}"), corpo);
     }

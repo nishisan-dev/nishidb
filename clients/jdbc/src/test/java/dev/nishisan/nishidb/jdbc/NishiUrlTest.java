@@ -18,7 +18,7 @@ class NishiUrlTest {
         NishiUrl u = NishiUrl.parse("jdbc:nishidb://db01:9142/radius_sessions");
         assertEquals("db01", u.host());
         assertEquals(9142, u.porta());
-        assertEquals("radius_sessions", u.dataset());
+        assertEquals("radius_sessions", u.schema());
     }
 
     /**
@@ -50,7 +50,7 @@ class NishiUrlTest {
         NishiUrl u = NishiUrl.parse("jdbc:nishidb://h/d?tls=true&user=leitor");
         assertEquals("true", u.propriedades().get("tls"));
         assertEquals("leitor", u.propriedades().get("user"));
-        assertEquals("d", u.dataset());
+        assertEquals("d", u.schema());
     }
 
     /**
@@ -69,14 +69,14 @@ class NishiUrlTest {
     }
 
     @Test
-    void urlSemDatasetEhRecusada() {
+    void urlSemSchemaEhRecusada() {
         assertThrows(SQLException.class, () -> NishiUrl.parse("jdbc:nishidb://db01:9142/"));
         assertThrows(SQLException.class, () -> NishiUrl.parse("jdbc:nishidb://db01:9142"));
     }
 
     /**
-     * Um caminho com mais de um segmento não é um dataset: o NishiDB não tem
-     * catálogo nem schema, e aceitar `/a/b` faria o usuário supor que tem.
+     * Um caminho com mais de um segmento não é um schema: o NishiDB não tem
+     * catálogo, e aceitar `/a/b` faria o usuário supor que tem.
      */
     @Test
     void caminhoComMaisDeUmSegmentoEhRecusado() {

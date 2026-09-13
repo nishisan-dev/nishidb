@@ -41,7 +41,14 @@ const MaxRequestBody = 1 << 20
 // MaxRows e TimeoutMs são PONTEIROS para separar "ausente" de "zero": ausente
 // herda o teto do dataset, e zero é um pedido explícito de nada, que precisa
 // ser recusado com a mesma clareza de um negativo.
+//
+// Schema e Dataset são exclusivos, e um dos dois é obrigatório. Schema é a
+// CONEXÃO POR SCHEMA — o endereço do driver JDBC e do `nishidb query
+// --server`: o servidor abre pelo dataset base do schema e resolve o FROM só
+// dentro dele. Dataset é o handle por dataset que só o client Python ainda
+// fala, e sai do wire quando ele migrar (débito 123).
 type Request struct {
+	Schema     string  `json:"schema"`
 	Dataset    string  `json:"dataset"`
 	SQL        string  `json:"sql"`
 	Parameters []Param `json:"parameters"`
@@ -195,10 +202,16 @@ const (
 	// da classe 42 (sintaxe).
 	CodeUnsupportedClause = "UNSUPPORTED_CLAUSE"
 	CodeUnknownDataset    = "UNKNOWN_DATASET"
-	CodeMethod            = "METHOD_NOT_ALLOWED"
-	CodeMediaType         = "UNSUPPORTED_MEDIA_TYPE"
-	CodeBodyTooLarge      = "REQUEST_TOO_LARGE"
-	CodeTooManyQueries    = "TOO_MANY_QUERIES"
+	// CodeUnknownSchema é o schema da conexão que nenhum dataset declara, no
+	// /v1/query e no /v1/metadata?schema=. Tem código próprio, e não o
+	// UNKNOWN_DATASET, porque a pergunta é outra — e porque a URL que nomeava o
+	// dataset ANTES da conexão por schema cai exatamente aqui: a mensagem
+	// reconhece o nome de dataset e ensina o schema correspondente.
+	CodeUnknownSchema  = "UNKNOWN_SCHEMA"
+	CodeMethod         = "METHOD_NOT_ALLOWED"
+	CodeMediaType      = "UNSUPPORTED_MEDIA_TYPE"
+	CodeBodyTooLarge   = "REQUEST_TOO_LARGE"
+	CodeTooManyQueries = "TOO_MANY_QUERIES"
 	// CodeTooManyLongQueries é a recusa do SUB-POOL de consulta longa
 	// (runtime.query.maxLongRunning), e tem código próprio em vez de reusar
 	// CodeTooManyQueries porque a AÇÃO do cliente é outra.

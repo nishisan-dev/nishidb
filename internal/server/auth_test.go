@@ -99,7 +99,7 @@ func assertStatusFechando(t *testing.T, resp *http.Response, quer int, rota stri
 
 // Regra 1 do §77: 401 antes de LER o corpo — nem o teto do
 // MaxRequestBody de anônimo é gasto. Se a ordem estivesse invertida
-// (readRequisicao antes da autenticação), este corpo sairia 413, não 401: o
+// (readRequest antes da autenticação), este corpo sairia 413, não 401: o
 // mesmo tamanho que TestCorpoAcimaDoTetoRecebe413 (query_test.go) já prova
 // que o servidor de fato rejeitaria se chegasse a ler.
 func TestOrdem401AntesDeLerOCorpo(t *testing.T) {

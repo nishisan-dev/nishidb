@@ -49,19 +49,19 @@ public final class ConnectionConfig {
     private final String url;
     private final String host;
     private final int porta;
-    private final String dataset;
+    private final String schema;
     private final String usuario;
     private final String senha;
     private final boolean tls;
     private final String tlsCaFile;
     private final int connectTimeoutMs;
 
-    private ConnectionConfig(String url, String host, int porta, String dataset, String usuario, String senha,
+    private ConnectionConfig(String url, String host, int porta, String schema, String usuario, String senha,
             boolean tls, String tlsCaFile, int connectTimeoutMs) {
         this.url = url;
         this.host = host;
         this.porta = porta;
-        this.dataset = dataset;
+        this.schema = schema;
         this.usuario = usuario;
         this.senha = senha;
         this.tls = tls;
@@ -82,7 +82,7 @@ public final class ConnectionConfig {
                     + "e o certificado não seria verificado", SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         int prazo = prazo(escolhe(props, daUrl, "connectTimeoutMs"));
-        return new ConnectionConfig(url, u.host(), u.porta(), u.dataset(), usuario, senha, tls, ca, prazo);
+        return new ConnectionConfig(url, u.host(), u.porta(), u.schema(), usuario, senha, tls, ca, prazo);
     }
 
     /** A URL como o usuário a escreveu — é o que getURL do metadata publica. */
@@ -98,8 +98,9 @@ public final class ConnectionConfig {
         return porta;
     }
 
-    public String dataset() {
-        return dataset;
+    /** O schema da conexão, o caminho da URL. */
+    public String schema() {
+        return schema;
     }
 
     public String usuario() {

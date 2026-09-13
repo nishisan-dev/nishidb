@@ -21,6 +21,7 @@ public final class Codigos {
     public static final String BIND = "BIND";
     public static final String UNSUPPORTED_CLAUSE = "UNSUPPORTED_CLAUSE";
     public static final String UNKNOWN_DATASET = "UNKNOWN_DATASET";
+    public static final String UNKNOWN_SCHEMA = "UNKNOWN_SCHEMA";
     public static final String METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED";
     public static final String UNSUPPORTED_MEDIA_TYPE = "UNSUPPORTED_MEDIA_TYPE";
     public static final String REQUEST_TOO_LARGE = "REQUEST_TOO_LARGE";

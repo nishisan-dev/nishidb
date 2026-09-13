@@ -9,7 +9,13 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * A URL de conexão do §70: {@code jdbc:nishidb://host[:porta]/dataset[?k=v]}.
+ * A URL de conexão do §70: {@code jdbc:nishidb://host[:porta]/schema[?k=v]}.
+ *
+ * <p>O caminho nomeia o <b>schema da conexão</b> — o {@code schemaName} que um
+ * dataset declara —, e não o dataset. É o schema que a árvore da ferramenta
+ * mostra e é dentro dele que o servidor resolve o {@code FROM}. A URL que
+ * nomeava o dataset (a forma anterior) é recusada pelo servidor no connect,
+ * com a mensagem que diz qual schema usar.
  *
  * <p>Parser à mão, e não {@link java.net.URI}: a URI do JDK exige um esquema
  * único no começo, e {@code jdbc:nishidb://...} tem dois. Quem usa URI acaba
@@ -28,15 +34,18 @@ public final class NishiUrl {
     /** A porta default, igual ao serverPortPadrao do servidor. */
     public static final int PORTA_PADRAO = 9142;
 
+    /** A forma da URL, para as mensagens que ensinam. */
+    static final String FORMA = PREFIXO + "host[:porta]/schema";
+
     private final String host;
     private final int porta;
-    private final String dataset;
+    private final String schema;
     private final Map<String, String> propriedades;
 
-    private NishiUrl(String host, int porta, String dataset, Map<String, String> propriedades) {
+    private NishiUrl(String host, int porta, String schema, Map<String, String> propriedades) {
         this.host = host;
         this.porta = porta;
-        this.dataset = dataset;
+        this.schema = schema;
         this.propriedades = Collections.unmodifiableMap(propriedades);
     }
 
@@ -48,8 +57,9 @@ public final class NishiUrl {
         return porta;
     }
 
-    public String dataset() {
-        return dataset;
+    /** O schema da conexão: o único segmento do caminho. */
+    public String schema() {
+        return schema;
     }
 
     /** As propriedades da query string, na ordem em que apareceram. */
@@ -79,7 +89,7 @@ public final class NishiUrl {
      */
     public static NishiUrl parse(String url) throws SQLException {
         if (!aceita(url)) {
-            throw new SQLException("a URL não é do NishiDB; a forma é " + PREFIXO + "host[:porta]/dataset",
+            throw new SQLException("a URL não é do NishiDB; a forma é " + FORMA,
                     SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         String resto = url.substring(PREFIXO.length());
@@ -104,22 +114,24 @@ public final class NishiUrl {
 
         int barra = resto.indexOf('/');
         if (barra < 0) {
-            throw new SQLException("a URL não nomeia o dataset; a forma é " + PREFIXO + "host[:porta]/dataset",
+            throw new SQLException("a URL não nomeia o schema; a forma é " + FORMA,
                     SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         String autoridade = resto.substring(0, barra);
         String caminho = resto.substring(barra + 1);
 
         if (caminho.isEmpty()) {
-            throw new SQLException("a URL não nomeia o dataset; a forma é " + PREFIXO + "host[:porta]/dataset",
+            throw new SQLException("a URL não nomeia o schema; a forma é " + FORMA,
                     SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         if (caminho.indexOf('/') >= 0) {
-            // O NishiDB não tem catálogo nem schema. Aceitar /a/b faria o
-            // usuário supor uma hierarquia que o produto não tem, e a falha
-            // só apareceria como "dataset desconhecido" depois de conectar.
-            throw new SQLException("o caminho da URL tem mais de um segmento: o NishiDB não tem catálogo nem schema, "
-                    + "e o único segmento é o nome do dataset", SqlStates.CONEXAO_NAO_ESTABELECIDA);
+            // O NishiDB não tem catálogo: a hierarquia é schema → tabela, e o
+            // schema é o único nível que a conexão fixa. Aceitar /a/b faria o
+            // usuário supor um nível que o produto não tem, e a falha só
+            // apareceria como "schema desconhecido" depois de conectar.
+            throw new SQLException("o caminho da URL tem mais de um segmento: o NishiDB não tem catálogo, "
+                    + "e o único segmento é o schema da conexão; a forma é " + FORMA,
+                    SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
 
         String host = autoridade;

@@ -61,6 +61,12 @@ public final class SqlStates {
     /** 0A000 — o driver não implementa este método ou esta conversão. */
     public static final String NAO_SUPORTADO = "0A000";
 
+    /**
+     * 3F000 — o schema da conexão não existe no servidor, ou a aplicação pediu
+     * outro que a URL não fixou.
+     */
+    public static final String INVALID_SCHEMA_NAME = "3F000";
+
     /** XX000 — defeito do próprio driver, não do servidor nem da aplicação. */
     public static final String INTERNO = "XX000";
 
@@ -97,6 +103,10 @@ public final class SqlStates {
             Map.entry(Codigos.BIND, new Entrada(BIND, SQLSyntaxErrorException::new)),
             Map.entry(Codigos.RESERVED_COLUMN, new Entrada(BIND, SQLSyntaxErrorException::new)),
             Map.entry(Codigos.UNKNOWN_DATASET, new Entrada(TABELA_INEXISTENTE, SQLSyntaxErrorException::new)),
+            // O schema da conexão (o caminho da URL) que o servidor não tem. É
+            // a classe 3F (invalid schema name), e não 42S02: não é a tabela do
+            // SQL que falta, é o endereço da própria conexão.
+            Map.entry(Codigos.UNKNOWN_SCHEMA, new Entrada(INVALID_SCHEMA_NAME, SQLNonTransientException::new)),
 
             // A cláusula ausente é FEATURE, não sintaxe: é a distinção inteira
             // que o código UNSUPPORTED_CLAUSE veio criar do lado do servidor, e

@@ -160,7 +160,7 @@ Ou por SQL, sem HTTP nem painel — os mesmos números, lidos das mesmas
 estruturas, uma linha por partição:
 
 ```bash
-nishidb query --server 127.0.0.1:9142 --dataset eventos "SELECT partition, appliedOffset, highWatermark, lag, lastBatchAt, queueRecords, state FROM _meta.kafka ORDER BY partition"
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de eventos> "SELECT partition, appliedOffset, highWatermark, lag, lastBatchAt, queueRecords, state FROM _meta.kafka ORDER BY partition"
 ```
 
 `highWatermark` e `lag` saem **NULL** quando a marca d'água do broker venceu ou

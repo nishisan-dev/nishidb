@@ -77,8 +77,10 @@ type TableInfo struct {
 //
 // O par (Schema, Name) É o endereço que o FROM aceita, com uma ressalva que
 // muda de linha para linha: o contador publicado como `(telecom, por_olt)` abre
-// por `FROM telecom.por_olt` de QUALQUER dataset do servidor, e o mesmo vale
-// para a base — são as linhas que moram no schema declarado. As linhas do
+// por `FROM telecom.por_olt` — e por `FROM por_olt` — numa conexão ao schema
+// `telecom` (ExecuteInSchema), e o mesmo vale para a base; numa conexão a outro
+// schema o par é recusado, porque a árvore dela não o mostra. No caminho por
+// dataset (Execute, débito 123) o par abre de qualquer handle. As linhas do
 // `_meta` que esta função também publica — `(_meta, fields)`, `(_meta, tables)`
 // e as registradas (`counters`, `kafka`) — NÃO são endereço de servidor:
 // `_meta` tem o prefixo reservado, o Execute desvia todo `FROM _x.y` para o

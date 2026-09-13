@@ -142,7 +142,12 @@ type Server struct {
 	// só lido depois: nenhum dataset entra ou sai com o processo de pé, então
 	// não precisa de lock.
 	byNome map[string]*dataset
-	met    *metricsOfQuery
+	// bySchema resolve o handle da CONEXÃO POR SCHEMA: o dataset base de cada
+	// schema declarado. A irmã do histórico herda o schema do base e NÃO entra
+	// aqui — é o base quem responde pelo atalho `_ns.x` da conexão. Mesmo
+	// ciclo de vida do byNome, sem lock.
+	bySchema map[string]*dataset
+	met      *metricsOfQuery
 	// vagas é o teto de consultas simultâneas do §80. Um canal com capacidade
 	// fixa, e não um contador: a aquisição não-bloqueante é o que permite
 	// REJEITAR na hora (§81) em vez de enfileirar — uma fila de espera
@@ -326,6 +331,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		reg:         reg,
 		eng:         query.NewEngine(),
 		byNome:      make(map[string]*dataset, len(names)),
+		bySchema:    make(map[string]*dataset, len(names)),
 		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
 		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
 		inVoo:       newInVoo(),
@@ -381,6 +387,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		}
 		s.datasets = append(s.datasets, d)
 		s.byNome[d.nome] = d
+		s.bySchema[d.sch.SchemaName] = d
 		// A irmã entra na lista logo depois do base, e não numa lista à parte:
 		// /v1/metadata, /v1/health e as métricas por dataset a tratam como
 		// qualquer outra, e é isso que a faz aparecer na árvore do DBeaver sem

@@ -24,9 +24,11 @@ import (
 //
 // O contrato de saída é o MESMO do caminho local: NDJSON cru no stdout, uma
 // line por row, e o exit code dizendo o que aconteceu. Um script que troca
-// `--config` por `--server` não muda mais nada.
-func remoteQuery(endereco, dataset, sql string, params []protocol.Param, cred remoteCredential, amb Context) int {
-	corpo, err := json.Marshal(protocol.Request{Dataset: dataset, SQL: sql, Parameters: params})
+// `--config` por `--server` não muda mais nada — além de a flag de endereço
+// passar a ser `--schema`: a consulta remota é a conexão por schema, a mesma do
+// driver JDBC.
+func remoteQuery(address, schemaName, sql string, params []protocol.Param, cred remoteCredential, amb Context) int {
+	corpo, err := json.Marshal(protocol.Request{Schema: schemaName, SQL: sql, Parameters: params})
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUsageError
@@ -41,7 +43,7 @@ func remoteQuery(endereco, dataset, sql string, params []protocol.Param, cred re
 		return ExitUsageError
 	}
 
-	url := normalizeAddress(endereco) + "/v1/query"
+	url := normalizeAddress(address) + "/v1/query"
 	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodPost, url, strings.NewReader(string(corpo)))
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
@@ -55,7 +57,7 @@ func remoteQuery(endereco, dataset, sql string, params []protocol.Param, cred re
 	// legítimo e faria o operador culpar o servidor.
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(amb.Stderr, "query: falando com %s: %v\n", endereco, err)
+		fmt.Fprintf(amb.Stderr, "query: falando com %s: %v\n", address, err)
 		return ExitUsageError
 	}
 	defer func() {
@@ -235,7 +237,7 @@ func serverHint(err error, cfgPath, dataset string, amb Context) {
 	}
 	fmt.Fprintf(amb.Stderr,
 		"  o dataset está aberto por um `nishidb server`: consulte por ele com\n"+
-			"    nishidb query --server <host>:<porta> --dataset %s '<SQL>'\n"+
+			"    nishidb query --server <host>:<porta> --schema <o schemaName de %s> '<SQL>'\n"+
 			"  (o --config %s vale para a consulta local, que exige o dataset livre)\n",
 		dataset, cfgPath)
 }

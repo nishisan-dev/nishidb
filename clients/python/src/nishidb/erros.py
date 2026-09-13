@@ -32,6 +32,7 @@ SYNTAX = "SYNTAX"
 BIND = "BIND"
 UNSUPPORTED_CLAUSE = "UNSUPPORTED_CLAUSE"
 UNKNOWN_DATASET = "UNKNOWN_DATASET"
+UNKNOWN_SCHEMA = "UNKNOWN_SCHEMA"
 METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
 UNSUPPORTED_MEDIA_TYPE = "UNSUPPORTED_MEDIA_TYPE"
 REQUEST_TOO_LARGE = "REQUEST_TOO_LARGE"
@@ -192,6 +193,7 @@ CODIGOS: dict[str, type[Warning] | type[Error]] = {
     BIND: ProgrammingError,
     RESERVED_COLUMN: ProgrammingError,
     UNKNOWN_DATASET: ProgrammingError,
+    UNKNOWN_SCHEMA: ProgrammingError,
     # "Isto não existe nesta versão" — separado de "você digitou errado".
     UNSUPPORTED_CLAUSE: NotSupportedError,
     # Problema com o valor.

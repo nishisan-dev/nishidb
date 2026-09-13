@@ -108,7 +108,7 @@ class NishiDriverTest {
         assertTrue(c.tls());
         assertEquals("h", c.host());
         assertEquals(9143, c.porta());
-        assertEquals("ds", c.dataset());
+        assertEquals("ds", c.schema());
     }
 
     /** Sem nada declarado, os defaults são os do §70 e do servidor. */

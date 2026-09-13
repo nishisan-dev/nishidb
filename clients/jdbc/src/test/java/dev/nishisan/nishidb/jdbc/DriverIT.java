@@ -179,17 +179,18 @@ class DriverIT {
             try (ResultSet rs = m.getCatalogs()) {
                 assertEquals(1, rs.getMetaData().getColumnCount());
             }
-            // Schemas: os do servidor REAL. O do dataset é o `schemaName` do
-            // YAML, e o `_meta` é onde as tabelas que descrevem o motor moram.
+            // Schemas: EXATAMENTE o da conexão e o `_meta`, do servidor REAL. O
+            // da conexão é o `schemaName` do YAML, que a URL nomeia; o `_meta` é
+            // onde as tabelas que descrevem o motor moram. Um schema a mais seria
+            // a árvore mostrando o que a conexão não abre.
             List<String> schemas = new ArrayList<>();
             try (ResultSet rs = m.getSchemas()) {
                 while (rs.next()) {
                     schemas.add(rs.getString("TABLE_SCHEM"));
                 }
             }
-            assertTrue(schemas.contains("telecom"),
-                    "getSchemas não trouxe o schemaName do dataset: " + schemas);
-            assertTrue(schemas.contains("_meta"), "getSchemas não trouxe o _meta: " + schemas);
+            assertEquals(List.of("_meta", "telecom"), schemas);
+            assertEquals("telecom", c.getSchema());
 
             List<String> tipos = new ArrayList<>();
             try (ResultSet rs = m.getTableTypes()) {
@@ -310,11 +311,12 @@ class DriverIT {
      *
      * <p>A ferramenta gráfica não monta {@code schema.tabela} cru: ela cita
      * cada parte com o {@link DatabaseMetaData#getIdentifierQuoteString()} e
-     * manda {@code "telecom"."todos_os_tipos"}. O scanner do driver tira o
-     * dataset do FROM, e enquanto o ramo das aspas não abandonava o palpite no
-     * nome qualificado ele mandava ao servidor o dataset {@code _meta} — e
-     * abrir qualquer view do metadado morria com "dataset não está
-     * registrado", com a árvore montada e nada abrindo.
+     * manda {@code "telecom"."todos_os_tipos"}. Enquanto o driver tirava o
+     * dataset do FROM, a parte citada virava palpite de dataset e abrir
+     * qualquer view do metadado morria com "dataset não está registrado", com a
+     * árvore montada e nada abrindo. Com a conexão por schema o driver manda o
+     * schema da URL e o servidor resolve o nome inteiro — este teste é o que
+     * impede o defeito de voltar por outro caminho.
      *
      * <p>O endereço vem DA ÁRVORE e as aspas vêm do metadata: escrever os dois
      * à mão faria o teste provar a string do teste, e não o par que o driver
@@ -353,8 +355,7 @@ class DriverIT {
                 assertTrue(rs.next(), "o SELECT citado parte a parte não devolveu linha: " + base);
             }
             // O caso que quebrava: a view do _meta, que é o motivo de a árvore
-            // existir. O dataset da conexão não é `_meta`, então só o abandono
-            // do palpite faz o motor resolver o namespace.
+            // existir, aberta pelo atalho sobre o dataset da conexão.
             try (Statement st = c.createStatement();
                     ResultSet rs = st.executeQuery("SELECT * FROM " + view + " LIMIT 1")) {
                 assertTrue(rs.next(), "o SELECT na view do _meta não devolveu linha: " + view);
@@ -367,6 +368,29 @@ class DriverIT {
                 assertTrue(rs.next(), "o SELECT em \"_meta\".tables não devolveu linha");
             }
         }
+    }
+
+    /**
+     * A URL da forma anterior — que nomeava o DATASET — falha no connect
+     * ENSINANDO o schema, contra o servidor real.
+     *
+     * <p>É a quebra de contrato da conexão por schema: sem fallback, mas sem
+     * deixar o operador com um "não existe" que não diz o que trocar. A
+     * mensagem traz o schema que o servidor conhece para aquele dataset e a
+     * forma da URL que só o driver conhece.
+     */
+    @Test
+    void aUrlQueNomeiaODatasetEnsinaOSchema() {
+        String velha = IntegracaoObrigatoriaTest.URL.replace("/telecom?", "/todos_os_tipos?");
+        assertFalse(velha.equals(IntegracaoObrigatoriaTest.URL),
+                "a URL do IT não tem a forma esperada: " + IntegracaoObrigatoriaTest.URL);
+        Properties p = new Properties();
+        p.setProperty("user", IntegracaoObrigatoriaTest.USUARIO);
+        p.setProperty("password", IntegracaoObrigatoriaTest.SENHA);
+        SQLException e = assertThrows(SQLException.class, () -> DriverManager.getConnection(velha, p));
+        assertEquals("3F000", e.getSQLState(), e.getMessage());
+        assertTrue(e.getMessage().contains("use \"telecom\""), e.getMessage());
+        assertTrue(e.getMessage().contains("host[:porta]/schema"), e.getMessage());
     }
 
     /**
@@ -414,9 +438,19 @@ class DriverIT {
                     () -> st.executeQuery("SELECT id FROM"));
             assertEquals("42601", sintaxe.getSQLState(), sintaxe.getMessage());
 
+            // Na conexão por schema o nome simples é tabela DO SCHEMA: a que
+            // não existe é recusada pelo bind, nomeando o schema da conexão.
             SQLException tabela = assertThrows(SQLException.class,
                     () -> st.executeQuery("SELECT id FROM nao_existe"));
-            assertEquals("42S02", tabela.getSQLState(), tabela.getMessage());
+            assertEquals("42000", tabela.getSQLState(), tabela.getMessage());
+            assertTrue(tabela.getMessage().contains("telecom"), tabela.getMessage());
+
+            // O schema que não é o da conexão é recusado, e não resolvido: a
+            // árvore desta conexão não o mostra.
+            SQLException alheio = assertThrows(SQLException.class,
+                    () -> st.executeQuery("SELECT id FROM fault.events"));
+            assertEquals("42000", alheio.getSQLState(), alheio.getMessage());
+            assertTrue(alheio.getMessage().contains("outside this connection"), alheio.getMessage());
         }
     }
 

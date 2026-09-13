@@ -445,7 +445,7 @@ func (b *benchE2E) waitCompactionCreditarBytesEscritos(partida float64, prazo ti
 func (b *benchE2E) consulta(sql string) map[string]int64 {
 	b.t.Helper()
 	var saida, err bytes.Buffer
-	code := cli.Run([]string{"query", "--server", b.endereco(), "--dataset", e2eDataset, sql},
+	code := cli.Run([]string{"query", "--server", b.endereco(), "--schema", "telecom", sql},
 		cli.Context{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &err, Ctx: context.Background()})
 	if code != 0 {
 		b.t.Fatalf("a consulta remota %q saiu com %d: %s", sql, code, err.String())

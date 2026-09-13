@@ -22,6 +22,11 @@ type SelectStmt struct {
 	// vazio quando o FROM traz um nome simples. É ADITIVO: nenhuma query
 	// existente muda de forma, e o campo zero significa "sem namespace".
 	Namespace string
+	// NamespacePos aponta para o qualificador, e só vale com Namespace. É o
+	// token ofensor quando o QUALIFICADOR é o erro — o schema fora da conexão —,
+	// e não a tabela; derivá-lo de DatasetPos erraria no nome citado, cujas
+	// aspas não entram no Namespace.
+	NamespacePos int
 	// Dataset é sempre o nome DEPOIS do ponto, quando há ponto. DatasetPos
 	// aponta para ele, e não para o qualificador: é dele que sai o
 	// "dataset desconhecido" do binder.

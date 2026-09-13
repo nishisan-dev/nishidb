@@ -93,6 +93,16 @@ class SqlStatesTest {
     }
 
     /**
+     * O schema desconhecido é a classe 3F (invalid schema name), e não 42S02:
+     * não é a tabela do SQL que falta, é o endereço da própria conexão.
+     */
+    @Test
+    void schemaDesconhecidoEhDaClasse3F() {
+        assertEquals("3F000", SqlStates.estadoDe(Codigos.UNKNOWN_SCHEMA));
+        assertEquals(SqlStates.INVALID_SCHEMA_NAME, SqlStates.estadoDe(Codigos.UNKNOWN_SCHEMA));
+    }
+
+    /**
      * Codigo desconhecido vira HY000 COM O CODIGO NA MENSAGEM, e jamais degrada
      * para INTERNAL.
      *

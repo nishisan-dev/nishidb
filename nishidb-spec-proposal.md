@@ -1767,7 +1767,7 @@ nishidb-jdbc.jar
 Connection string:
 
 ```text
-jdbc:nishidb://db01:9142/radius_sessions
+jdbc:nishidb://db01:9142/telecom
 ```
 
 ---
@@ -3054,7 +3054,7 @@ properties.setProperty(
 try (
     Connection connection =
         DriverManager.getConnection(
-            "jdbc:nishidb://localhost:9142/radius_sessions",
+            "jdbc:nishidb://localhost:9142/telecom",
             properties
         );
 

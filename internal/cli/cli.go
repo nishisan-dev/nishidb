@@ -65,7 +65,7 @@ const usage = `nishidb — engine de materialização e consulta
 USO
   nishidb ingest  --config <nishidb.yaml> --dataset <nome> --input <arquivo|-> [--checkpoint-every N]
   nishidb query   --config <nishidb.yaml> --dataset <nome> [--limit N] '<SQL>'
-  nishidb query   --server <host:porta>    --dataset <nome> [--limit N] '<SQL>'
+  nishidb query   --server <host:porta>    --schema <schemaName> [--limit N] '<SQL>'
   nishidb server  --config <nishidb.yaml> [--log-format json|texto] [--log-level N] [--pprof <addr>]
   nishidb offsets --config <nishidb.yaml> --dataset <nome> (--show | --reset earliest|latest | --set p:o,...) [--yes]
   nishidb status   --server <host:porta>

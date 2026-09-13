@@ -59,21 +59,32 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, fail, status := s.readRequisicao(w, r)
+	req, fail, status := s.readRequest(w, r)
 	if fail != nil {
 		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
 
-	d, ok := s.byNome[req.Dataset]
-	if !ok {
+	// A conexão por schema abre pelo dataset BASE do schema, e o motor resolve
+	// o FROM só dentro dele (ExecuteInSchema). O caminho por dataset, abaixo, é
+	// o do client Python e sai com ele (débito 123).
+	scoped := req.Schema != ""
+	var d *dataset
+	var ok bool
+	if scoped {
+		if d, ok = s.bySchema[req.Schema]; !ok {
+			// O nome NÃO entra na métrica, pela mesma razão do dataset abaixo.
+			s.reject(w, r, http.StatusNotFound, datasetDesconhecido, s.unknownSchema(req.Schema))
+			return
+		}
+	} else if d, ok = s.byNome[req.Dataset]; !ok {
 		// O nome NÃO entra na métrica: ele é entrada do cliente, e um label
 		// alimentado por entrada do cliente é uma série nova por requisição.
 		//
 		// O complemento sai de binder.DottedDatasetNameHint, a MESMA função que
 		// o bind usa, e não de uma segunda redação da regra. Ele é necessário
-		// aqui porque este é o ponto de recusa que o cliente JDBC alcança: o
-		// driver extrai o nome do FROM e o manda no corpo, então
+		// aqui porque este é o ponto de recusa que o client Python alcança: ele
+		// extrai o nome do FROM e o manda no corpo, então
 		// `FROM "telecom.service_view"` chega como o dataset
 		// `telecom.service_view`, que não está registrado — e a recusa acontece
 		// ANTES de o SQL ser analisado, de modo que o bind, onde a dica já
@@ -104,8 +115,12 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	//
 	// O handle continua governando tudo o mais: é ele que o `d.nome` leva para
 	// as métricas, para o log e para o registro de queries em voo.
+	target := s.eng.TargetDataset
+	if scoped {
+		target = s.eng.TargetDatasetInSchema
+	}
 	limits := d
-	if owner, ok := s.byNome[s.eng.TargetDataset(d.nome, req.SQL)]; ok {
+	if owner, ok := s.byNome[target(d.nome, req.SQL)]; ok {
 		limits = owner
 	}
 
@@ -217,7 +232,11 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if p, ok := principalFrom(r.Context()); ok && p.role == config.RoleAdmin {
 		ctx = query.WithAdmin(ctx)
 	}
-	it, err := s.eng.Execute(ctx, d.nome, req.SQL, params)
+	execute := s.eng.Execute
+	if scoped {
+		execute = s.eng.ExecuteInSchema
+	}
+	it, err := execute(ctx, d.nome, req.SQL, params)
 	if err != nil {
 		status, fail := translateOpenError(err, req.SQL)
 		s.reject(w, r, status, d.nome, fail)
@@ -249,7 +268,7 @@ func isJSON(ct string) bool {
 	return strings.EqualFold(strings.TrimSpace(ct), protocol.ContentTypeJSON)
 }
 
-// readRequisicao decodifica o corpo com teto de tamanho e SEM tolerar chave
+// readRequest decodifica o corpo com teto de tamanho e SEM tolerar chave
 // desconhecida.
 //
 // A estritez é o oposto da doutrina do nishidb.yaml, e de propósito: o arquivo
@@ -257,7 +276,10 @@ func isJSON(ct string) bool {
 // operador a manter dois arquivos, mas aqui um `maxRow` com typo aceito em
 // silêncio faria o cliente acreditar que limitou o resultado. O caminho é
 // versionado (/v1) justamente para que campo novo venha com contrato novo.
-func (s *Server) readRequisicao(w http.ResponseWriter, r *http.Request) (protocol.Request, *protocol.ErrorDetail, int) {
+//
+// `schema` e `dataset` são exclusivos pela mesma razão: com os dois, o
+// servidor teria de escolher em silêncio qual endereço o cliente quis.
+func (s *Server) readRequest(w http.ResponseWriter, r *http.Request) (protocol.Request, *protocol.ErrorDetail, int) {
 	var req protocol.Request
 	r.Body = http.MaxBytesReader(w, r.Body, protocol.MaxRequestBody)
 
@@ -277,8 +299,13 @@ func (s *Server) readRequisicao(w http.ResponseWriter, r *http.Request) (protoco
 		}, http.StatusBadRequest
 	}
 	switch {
-	case req.Dataset == "":
-		return req, &protocol.ErrorDetail{Code: protocol.CodeBadRequest, Message: `"dataset" é obrigatório`}, http.StatusBadRequest
+	case req.Schema != "" && req.Dataset != "":
+		return req, &protocol.ErrorDetail{
+			Code:    protocol.CodeBadRequest,
+			Message: `"schema" and "dataset" are exclusive; send only "schema"`,
+		}, http.StatusBadRequest
+	case req.Schema == "" && req.Dataset == "":
+		return req, &protocol.ErrorDetail{Code: protocol.CodeBadRequest, Message: `"schema" is required`}, http.StatusBadRequest
 	case strings.TrimSpace(req.SQL) == "":
 		return req, &protocol.ErrorDetail{Code: protocol.CodeBadRequest, Message: `"sql" é obrigatório`}, http.StatusBadRequest
 	}

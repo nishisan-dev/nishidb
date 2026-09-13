@@ -10,7 +10,7 @@ participant "executor\nRowIterator" as exe
 participant "Store" as st
 participant "StreamWriter\n(NDJSON)" as w
 
-cli -> lex : Engine.Execute(ctx, dataset, SQL, params)
+cli -> lex : Engine.Execute(ctx, dataset, SQL, params)\n(ExecuteInSchema na conexão por schema:\nFROM resolvido só no schema do handle)
 lex -> par : tokens (0 alocação)
 par -> par : AST; cadeias AND/OR\nITERATIVAS (left-leaning)
 note right of par

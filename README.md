@@ -1020,13 +1020,15 @@ uma decisão sobre autenticação — ver a próxima seção — em vez de só a
 ```bash
 # consultar COM a ingestão de pé
 curl -sS -H 'Content-Type: application/json' \
-  -d '{"dataset":"radius_sessions",
+  -d '{"schema":"telecom",
        "sql":"SELECT id, ip FROM radius_sessions WHERE status = ? LIMIT 100",
        "parameters":[{"type":"string","value":"Stop"}]}' \
   127.0.0.1:9142/v1/query
 
-# o mesmo pelo CLI, com o parâmetro (as flags vêm ANTES da query)
-nishidb query --server 127.0.0.1:9142 --dataset radius_sessions \
+# o mesmo pelo CLI, com o parâmetro (as flags vêm ANTES da query); o remoto
+# endereça o SCHEMA da conexão, como o driver JDBC — o local (--config) segue
+# abrindo o dataset por --dataset
+nishidb query --server 127.0.0.1:9142 --schema telecom \
   --param string:Stop \
   'SELECT id, ip FROM radius_sessions WHERE status = ? LIMIT 100'
 ```
@@ -1187,7 +1189,7 @@ nishidb users password --server 127.0.0.1:9142 --tls-ca /etc/nishidb/tls/ca.pem 
 
 # listar — só ADMIN, nunca com o hash
 nishidb query --server 127.0.0.1:9142 --tls-ca /etc/nishidb/tls/ca.pem --user admin \
-  --dataset <qualquer> 'SELECT username, role, bootstrap, updatedAt, updatedBy FROM _meta.users'
+  --schema <qualquer> 'SELECT username, role, bootstrap, updatedAt, updatedBy FROM _meta.users'
 
 # recuperar a senha de um ADMIN perdida: com o servidor PARADO
 nishidb users password --config nishidb.yaml --name admin --new-password-file -
@@ -1340,15 +1342,15 @@ contrato.
 A leitura é SQL, numa tabela por contador no namespace `_counters`:
 
 ```bash
-nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT olt, total FROM _counters.autenticados_por_olt ORDER BY total ASC LIMIT 5"
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT olt, total FROM _counters.autenticados_por_olt ORDER BY total ASC LIMIT 5"
 ```
 
 ```bash
-nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT groupKey, total FROM _counters.autenticados_por_olt WHERE groupKey = 'PRCTA_G1M10'"
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT groupKey, total FROM _counters.autenticados_por_olt WHERE groupKey = 'PRCTA_G1M10'"
 ```
 
 ```bash
-nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT olt, slot, port, total FROM _counters.autenticados_por_pon WHERE olt = 'PRCTA_G1M10' ORDER BY total ASC LIMIT 3"
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT olt, slot, port, total FROM _counters.autenticados_por_pon WHERE olt = 'PRCTA_G1M10' ORDER BY total ASC LIMIT 3"
 ```
 
 Cada tabela tem `groupKey` (o texto do grupo — a própria OLT num `groupBy` de
@@ -1416,7 +1418,7 @@ Quais contadores um dataset tem, e como estão, também sai por SQL — a tabela
 `_meta.counters` existe em todo dataset, vazia quando não há `counters:`:
 
 ```bash
-nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT name, rows, total, groups, maxGroups, refused, auditDivergent, auditAt FROM _meta.counters"
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT name, rows, total, groups, maxGroups, refused, auditDivergent, auditAt FROM _meta.counters"
 ```
 
 `rows` é quantas linhas vivas apontam para algum grupo do contador e `total`
@@ -1534,7 +1536,7 @@ desconhecida, e um número grande é a resposta honesta. Mudar o `when` ou o
 Para inspecionar o que está em curso, sem ler log:
 
 ```bash
-nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT groupKey, state, since FROM _meta.alarms ORDER BY since ASC"
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT groupKey, state, since FROM _meta.alarms ORDER BY since ASC"
 ```
 
 `state` é `firing` (já anunciado) ou `pending` (ainda contando o prazo).
@@ -1909,12 +1911,27 @@ repositório e falando o mesmo fio.
 IntelliJ funcionarem:
 
 ```
-jdbc:nishidb://db01:9142/radius_sessions?tls=true&tlsCaFile=/etc/nishidb/ca.pem
+jdbc:nishidb://db01:9142/telecom?tls=true&tlsCaFile=/etc/nishidb/ca.pem
 ```
 
+**A URL nomeia o schema da conexão** — o `schemaName` que um dataset declara —,
+e não o dataset. A árvore mostra só esse schema e o `_meta`, e o servidor
+resolve o `FROM` no MESMO escopo: `FROM radius_sessions` é a tabela do schema
+da conexão, `FROM telecom.radius_sessions` também, e `FROM fault.events` numa
+conexão `telecom` é recusado (SQLSTATE 42000), nomeando o schema da conexão e os
+endereços que ela abre. Para consultar outro schema, abre-se outra conexão.
+`getSchema()` devolve o schema da URL; `setSchema` com outro é recusado
+(3F000), porque o escopo é fixado pela URL.
+
+> **Quebra de contrato (conexão por schema, issue #57):** a URL que nomeava o
+> dataset (`jdbc:nishidb://db01:9142/radius_sessions`) deixou de resolver, sem
+> fallback. O connect com ela falha com SQLSTATE 3F000 e a mensagem diz qual
+> schema usar — `"radius_sessions" is a dataset, and the connection names its
+> schema; use "telecom"` — mais a forma da URL.
+
 A árvore que a ferramenta mostra sai do `schemaName` e do catálogo publicado no
-`/v1/metadata` — o driver não descobre tabela por conta própria. Para o dataset
-acima, se ele declarasse dois contadores:
+`/v1/metadata?schema=<schema da conexão>` — o driver não descobre tabela por
+conta própria. Para o dataset acima, se ele declarasse dois contadores:
 
 ```
 telecom                        (schema: o schemaName do YAML)
@@ -1939,15 +1956,14 @@ dataset base.
 
 O `TABLE_SCHEM` de cada linha é preenchido, e é ele que faz a ferramenta gerar
 `SELECT ... FROM telecom.autenticados_por_olt` ao clicar na tabela — a forma
-qualificada, que o servidor resolve contra o dataset dono do schema. Não há
+qualificada, que o servidor resolve dentro do schema da conexão. Não há
 catálogo: o endereço tem dois níveis, o de cima é o schema, e `getCatalogs`
 responde vazio. As tabelas do `_meta` saem como `VIEW`, e nunca como
 `SYSTEM TABLE`: objeto de sistema é escondido por default nas ferramentas
 gráficas, e tabela que existe para ser descoberta não pode nascer invisível.
 
-Contra um servidor **anterior** a estes campos o driver volta à árvore de
-sempre — uma linha `TABLE` por dataset, sem schema e sem views —, sem lançar
-nada.
+O driver exige um servidor com a conexão por schema: contra um binário anterior
+o connect falha, em vez de montar uma árvore que o servidor não sustenta.
 
 **Python — client DB-API 2.0** ([clients/python](clients/python)), pacote
 `nishidb`, Python 3.10+, também sem dependência de runtime. É o que faz

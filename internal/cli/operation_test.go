@@ -507,7 +507,7 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 	// asserção parecia existir sem exercer nada.
 	for i := 0; i < 2; i++ {
 		if code := a.run("query", "--server", a.endereco(),
-			"--dataset", "radius_sessions",
+			"--schema", "telecom",
 			"SELECT id FROM radius_sessions WHERE id = 'chave que nao existe'"); code != 0 {
 			t.Fatalf("consulta de aquecimento saiu %d: %s", code, a.stderr.String())
 		}
@@ -851,7 +851,7 @@ func TestStatusPublicaOsContadoresDoMotorDoProcesso(t *testing.T) {
 		t.Helper()
 		for i := 0; i < vezes; i++ {
 			if code := a.run("query", "--server", a.endereco(),
-				"--dataset", "radius_sessions", sql); code != quer {
+				"--schema", "telecom", sql); code != quer {
 				t.Fatalf("exit = %d, quer %d para %q: %s", code, quer, sql, a.stderr.String())
 			}
 		}

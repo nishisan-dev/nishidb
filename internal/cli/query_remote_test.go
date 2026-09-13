@@ -108,6 +108,34 @@ func portaLivre(t *testing.T) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
+// A flag diz o que cada modo endereça: o remoto é a conexão por schema, o
+// local abre um dataset. A flag trocada é recusada nomeando a certa, antes de
+// qualquer conexão — por isso nenhum servidor sobe aqui.
+func TestRemoteQueryAddressesTheSchemaNotTheDataset(t *testing.T) {
+	a := newEnvRemote(t, 100000)
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"dataset com --server", []string{"--server", a.endereco(), "--dataset", "radius_sessions"}, "use --schema"},
+		{"--server sem --schema", []string{"--server", a.endereco()}, "--schema is required"},
+		{"--schema com --config", []string{"--config", a.config, "--dataset", "radius_sessions", "--schema", "telecom"}, "only applies to --server"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			args := append([]string{"query"}, c.args...)
+			args = append(args, "SELECT id FROM radius_sessions")
+			if code := a.run(args...); code != cli.ExitUsageError {
+				t.Fatalf("exit = %d, quer %d", code, cli.ExitUsageError)
+			}
+			if !strings.Contains(a.stderr.String(), c.want) {
+				t.Fatalf("a recusa não contém %q:\n%s", c.want, a.stderr.String())
+			}
+		})
+	}
+}
+
 // O débito 54, fim a fim: com o servidor no ar, a consulta LOCAL é barrada
 // pelo flock e a REMOTA responde. É a diferença entre alternar servidor e
 // consulta e operar as duas ao mesmo tempo.
@@ -130,7 +158,7 @@ func TestConsultaRemotaFuncionaComOServidorNoAr(t *testing.T) {
 	}
 
 	// Remota: responde, com o servidor de pé e sem tocar no flock.
-	code = a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+	code = a.run("query", "--server", a.endereco(), "--schema", "telecom",
 		"SELECT id FROM radius_sessions LIMIT 3")
 	if code != 0 {
 		t.Fatalf("consulta remota saiu %d: %s", code, a.stderr.String())
@@ -160,7 +188,7 @@ func TestOsExitCodesDaConsultaRemota(t *testing.T) {
 
 	t.Run("truncado no teto do dataset", func(t *testing.T) {
 		// maxRows: 3 no YAML do dataset contra 50 linhas materializadas.
-		code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+		code := a.run("query", "--server", a.endereco(), "--schema", "telecom",
 			"SELECT id FROM radius_sessions")
 		if code != 5 {
 			t.Fatalf("exit = %d, quer 5 (truncado)", code)
@@ -171,7 +199,7 @@ func TestOsExitCodesDaConsultaRemota(t *testing.T) {
 	})
 
 	t.Run("erro de query", func(t *testing.T) {
-		code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+		code := a.run("query", "--server", a.endereco(), "--schema", "telecom",
 			"SELECT coluna_que_nao_existe FROM radius_sessions")
 		if code != 2 {
 			t.Fatalf("exit = %d, quer 2", code)
@@ -182,7 +210,7 @@ func TestOsExitCodesDaConsultaRemota(t *testing.T) {
 	})
 
 	t.Run("sintaxe com posição", func(t *testing.T) {
-		code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+		code := a.run("query", "--server", a.endereco(), "--schema", "telecom",
 			"SELECT FROM radius_sessions")
 		if code != 2 {
 			t.Fatalf("exit = %d, quer 2", code)
@@ -192,16 +220,42 @@ func TestOsExitCodesDaConsultaRemota(t *testing.T) {
 		}
 	})
 
-	t.Run("dataset desconhecido", func(t *testing.T) {
-		code := a.run("query", "--server", a.endereco(), "--dataset", "fantasma",
+	t.Run("schema desconhecido", func(t *testing.T) {
+		code := a.run("query", "--server", a.endereco(), "--schema", "fantasma",
 			"SELECT id FROM fantasma")
 		if code != 1 {
 			t.Fatalf("exit = %d, quer 1", code)
 		}
 	})
 
+	// O nome do DATASET no lugar do schema é o engano de quem vinha da forma
+	// anterior, e a recusa do servidor chega ao operador ensinando o schema.
+	t.Run("dataset no lugar do schema", func(t *testing.T) {
+		code := a.run("query", "--server", a.endereco(), "--schema", "radius_sessions",
+			"SELECT id FROM radius_sessions")
+		if code != 1 {
+			t.Fatalf("exit = %d, quer 1", code)
+		}
+		if !strings.Contains(a.stderr.String(), `use "telecom"`) {
+			t.Fatalf("a recusa não ensina o schema:\n%s", a.stderr.String())
+		}
+	})
+
+	// Na conexão por schema o nome simples é a tabela do schema, e o schema
+	// qualificado resolve igual.
+	t.Run("nome simples e qualificado pelo schema", func(t *testing.T) {
+		for _, sql := range []string{
+			"SELECT id FROM radius_sessions LIMIT 1",
+			"SELECT id FROM telecom.radius_sessions LIMIT 1",
+		} {
+			if code := a.run("query", "--server", a.endereco(), "--schema", "telecom", sql); code != 0 {
+				t.Fatalf("%q saiu %d: %s", sql, code, a.stderr.String())
+			}
+		}
+	})
+
 	t.Run("servidor inalcançável", func(t *testing.T) {
-		code := a.run("query", "--server", "127.0.0.1:1", "--dataset", "radius_sessions",
+		code := a.run("query", "--server", "127.0.0.1:1", "--schema", "telecom",
 			"SELECT id FROM radius_sessions")
 		if code != 1 {
 			t.Fatalf("exit = %d, quer 1", code)
@@ -222,7 +276,7 @@ func TestLimitValeNaConsultaRemota(t *testing.T) {
 	}
 	a.risesServer(t)
 
-	if code := a.run("query", "--server", a.endereco(), "--dataset", "radius_sessions",
+	if code := a.run("query", "--server", a.endereco(), "--schema", "telecom",
 		"--limit", "2", "SELECT id FROM radius_sessions"); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
 	}

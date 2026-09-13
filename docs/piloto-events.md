@@ -175,7 +175,7 @@ faria o mesmo dataset servido de dois hosts produzir bytes diferentes.
 A janela agora é consultável:
 
 ```bash
-nishidb query --server 127.0.0.1:9142 --dataset events \
+nishidb query --server 127.0.0.1:9142 --schema fault \
   "SELECT identifier, lastSeen FROM events WHERE lastSeen >= 'Aug 23, 2026 08:00:00 PM' LIMIT 20"
 ```
 

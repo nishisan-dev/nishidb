@@ -27,10 +27,10 @@ import (
 // readRequisicaoDataset decodifica o corpo OPCIONAL de POST /v1/compact e POST
 // /v1/checkpoint.
 //
-// Difere de readRequisicao (query.go) num ponto: corpo AUSENTE (io.EOF na
+// Difere de readRequest (query.go) num ponto: corpo AUSENTE (io.EOF na
 // primeira leitura, o que um POST sem Content-Length ou com Content-Length:
 // 0 produz) não é erro aqui — é o pedido de "todos os datasets", a forma
-// mais comum de chamar as duas rotas. readRequisicao não tem esse caso porque
+// mais comum de chamar as duas rotas. readRequest não tem esse caso porque
 // /v1/query não tem leitura implícita de "todos".
 func (s *Server) readRequisicaoDataset(w http.ResponseWriter, r *http.Request) (protocol.DatasetRequest, *protocol.ErrorDetail, int) {
 	var req protocol.DatasetRequest

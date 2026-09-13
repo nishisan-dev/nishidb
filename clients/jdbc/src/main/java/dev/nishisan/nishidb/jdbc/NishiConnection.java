@@ -3,6 +3,8 @@ package dev.nishisan.nishidb.jdbc;
 import dev.nishisan.nishidb.jdbc.json.JsonValue;
 import dev.nishisan.nishidb.jdbc.wire.SqlStates;
 import dev.nishisan.nishidb.jdbc.wire.Transporte;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.CallableStatement;
@@ -15,6 +17,7 @@ import java.sql.ResultSet;
 import java.sql.SQLClientInfoException;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLNonTransientConnectionException;
 import java.sql.SQLWarning;
 import java.sql.SQLXML;
 import java.sql.Savepoint;
@@ -45,7 +48,7 @@ public final class NishiConnection implements Connection {
 
     private final Transporte transporte;
     private final ConnectionConfig cfg;
-    private final String datasetPadrao;
+    private final String schema;
     private final int maxRowsDoDataset;
     private final long timeoutMsDoDataset;
     private final List<NishiStatement> abertos = new ArrayList<>();
@@ -57,22 +60,33 @@ public final class NishiConnection implements Connection {
                 Transporte.clienteHttp(Duration.ofMillis(cfg.connectTimeoutMs()), cfg.contextoTls()),
                 cfg.base(), cfg.autorizacao());
         this.cfg = cfg;
-        this.datasetPadrao = cfg.dataset();
+        this.schema = cfg.schema();
 
         JsonValue meta;
         try {
-            meta = transporte.documento("/v1/metadata?dataset="
-                    + java.net.URLEncoder.encode(cfg.dataset(), java.nio.charset.StandardCharsets.UTF_8));
+            meta = transporte.documento(metadataPath(schema));
         } catch (SQLException e) {
             transporte.close();
+            if (SqlStates.INVALID_SCHEMA_NAME.equals(e.getSQLState())) {
+                // A mensagem do servidor já diz qual schema usar quando o
+                // caminho é o nome de um dataset — a URL da forma anterior. O
+                // que só o driver sabe é a forma da URL, e é ela que vai junto.
+                throw new SQLNonTransientConnectionException(
+                        e.getMessage() + "; a URL nomeia o schema: " + NishiUrl.FORMA,
+                        e.getSQLState(), e);
+            }
             throw e;
         }
         List<JsonValue> datasets = meta.itensDe("datasets");
         if (datasets.isEmpty()) {
+            // O servidor responde 404 UNKNOWN_SCHEMA para o schema que não
+            // tem, então um 200 vazio é o servidor fora do protocolo.
             transporte.close();
-            throw new SQLException("o dataset \"" + cfg.dataset() + "\" não está registrado neste servidor",
-                    "42S02");
+            throw new SQLException("o servidor devolveu o schema \"" + schema + "\" sem dataset nenhum",
+                    SqlStates.PROTOCOLO_VIOLADO);
         }
+        // O primeiro elemento é o dataset BASE do schema (o servidor publica
+        // o base antes da irmã do histórico): é dele que saem os tetos.
         JsonValue d = datasets.get(0);
         this.maxRowsDoDataset = (int) d.inteiroOu("maxRows", 0);
         this.timeoutMsDoDataset = d.inteiroOu("timeoutMs", 0);
@@ -86,9 +100,14 @@ public final class NishiConnection implements Connection {
         return cfg;
     }
 
-    /** O dataset da URL — o palpite de quando o SQL não nomeia um no FROM. */
-    String datasetPadrao() {
-        return datasetPadrao;
+    /** O schema da conexão — o caminho da URL, que vai em toda consulta. */
+    String schema() {
+        return schema;
+    }
+
+    /** O /v1/metadata recortado pelo schema da conexão. */
+    static String metadataPath(String schema) {
+        return "/v1/metadata?schema=" + URLEncoder.encode(schema, StandardCharsets.UTF_8);
     }
 
     int maxRowsDoDataset() {
@@ -314,7 +333,7 @@ public final class NishiConnection implements Connection {
 
     // --------------------------------------------------------- catálogo
 
-    /** O NishiDB não tem catálogo nem schema: as duas respostas são vazio. */
+    /** O NishiDB não tem catálogo: a resposta é vazio, e o pedido não muda nada. */
     @Override
     public void setCatalog(String catalogo) throws SQLException {
         exigeAberta();
@@ -326,15 +345,29 @@ public final class NishiConnection implements Connection {
         return "";
     }
 
+    /**
+     * O schema da conexão é FIXADO pela URL: pedir o mesmo não faz nada, e
+     * pedir outro é recusado.
+     *
+     * <p>Aceitar em silêncio faria a ferramenta acreditar que trocou de schema
+     * enquanto o servidor continua resolvendo o {@code FROM} no da URL — a
+     * consulta seguinte falharia com um erro que parece de SQL. {@code null} é
+     * ignorado: não pede schema nenhum.
+     */
     @Override
     public void setSchema(String schema) throws SQLException {
         exigeAberta();
+        if (schema != null && !schema.equals(this.schema)) {
+            throw new SQLException("o schema da conexão é \"" + this.schema + "\", fixado pela URL; para consultar \""
+                    + schema + "\", abra uma conexão a " + NishiUrl.PREFIXO + "host[:porta]/" + schema,
+                    SqlStates.INVALID_SCHEMA_NAME);
+        }
     }
 
     @Override
     public String getSchema() throws SQLException {
         exigeAberta();
-        return "";
+        return schema;
     }
 
     // ------------------------------------------------------------ ciclo

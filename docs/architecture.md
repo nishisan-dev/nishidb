@@ -1191,15 +1191,21 @@ significa "no dataset da requisição" e o catálogo de cada dataset o inclui;
 elas descrevem a mesma tabela, então o driver corta a repetição pelo par
 (schema, nome).
 
-**Servidor anterior aos campos novos: a árvore de sempre.** `schema` e `tables`
-são aditivos, e um binário anterior responde sem os dois. Aí cada dataset volta
-a ser uma linha `TABLE` com `TABLE_SCHEM` nulo e as colunas do campo `columns`,
-que é exatamente o que o driver listava antes — nenhuma view inventada e nada
-lançado (`NishiDatabaseMetaDataTest#metadataSemTablesDegradaSemErro`, que fala
-com um fixture só seu — o resto da suíte usa o documento novo). A citação vem
-qualificada pela classe porque é assim que o
-`TestEvidenciasCitadasNosDocumentosExistem` confere um teste JUnit: um nome
-camelCase solto é indistinguível de um identificador qualquer citado em prosa.
+**A árvore é a do schema da conexão.** A URL nomeia o schema
+(`jdbc:nishidb://host:9142/telecom`), e o driver pede o
+`/v1/metadata?schema=telecom`: os datasets daquele schema — o base e a irmã do
+histórico —, e nenhum outro. O `getSchemas` responde o schema da conexão e o
+`_meta`, e o servidor resolve o `FROM` no MESMO escopo (`ExecuteInSchema`): o
+nome simples é tabela do schema da conexão, e o schema alheio é recusado. É o
+que faz a árvore e o SQL dizerem a mesma coisa — a ferramenta não mostra o que a
+conexão não abre, nem a conexão abre o que a ferramenta esconde
+(`TestTheConnectionTreeAndTheConnectionSqlAgree`;
+`NishiDatabaseMetaDataTest#listaBaseEViewsComSchema` cobra o recorte do lado do
+driver). Não há mais leitura de servidor sem `tables`: o `?schema=` e o campo
+saem do mesmo servidor. A citação JUnit vem qualificada pela classe porque é
+assim que o `TestEvidenciasCitadasNosDocumentosExistem` confere um teste JUnit:
+um nome camelCase solto é indistinguível de um identificador qualquer citado em
+prosa.
 
 ## O protocolo remoto
 

@@ -185,7 +185,11 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
             List<JsonValue> columns) {}
 
     /**
-     * TODA tabela consultável do servidor, sem repetição, na ordem do fio.
+     * TODA tabela que a conexão consulta, sem repetição, na ordem do fio: as do
+     * schema da conexão e as do {@code _meta}. O recorte é do servidor
+     * ({@code /v1/metadata?schema=}), e é o mesmo escopo em que ele resolve o
+     * {@code FROM} — a árvore não mostra o que a conexão não abre, nem esconde
+     * o que ela abre.
      *
      * <p>Cada elemento de {@code datasets} publica em {@code tables} o
      * catálogo inteiro do dataset: a base como {@code TABLE} no schema
@@ -199,7 +203,9 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
      * descrevem a mesma tabela — o nome, o schema e as colunas são os mesmos
      * em todos os datasets —, então a primeira ocorrência de cada par
      * (schema, nome) é a que sai. Sem isto a ferramenta mostraria o
-     * {@code _meta} com uma cópia de cada tabela por dataset do servidor.
+     * {@code _meta} com uma cópia de cada tabela por dataset do schema — o base
+     * e a irmã do histórico publicam as duas. O base vem primeiro no fio, e é
+     * a cópia dele que sai.
      *
      * <p><b>De onde vem o direito de cortar por (schema, nome).</b> A chave
      * vale para TODA linha, e não só para as do {@code _meta}: duas tabelas
@@ -210,26 +216,18 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
      * {@code validateCounters} ({@code internal/schema/counter.go}) recusa,
      * dentro de um dataset, o contador que se chame como o próprio dataset ou
      * como a tabela irmã do histórico. As três recusas juntas são o que faz o
-     * par endereçar uma tabela e só uma no servidor inteiro; a repetição do
+     * par endereçar uma tabela e só uma no schema; a repetição do
      * {@code _meta} é a única que sobra para cortar aqui.
      *
-     * <p><b>Servidor sem o campo.</b> {@code tables} é aditivo, e um binário
-     * anterior responde sem ele. Aí cada dataset vira UMA entrada — a base,
-     * com o nome do dataset, o {@code columns} do próprio dataset e schema
-     * nulo —, que é exatamente o que este driver listava antes de a lista
-     * existir. Nenhuma view é inventada e nada lança.
+     * <p>Não há leitura de servidor sem o campo {@code tables}: o recorte por
+     * {@code ?schema=} e o campo saem do mesmo servidor, e um binário anterior
+     * aos dois recusa a conexão antes de a árvore ser pedida.
      */
     private List<CatalogTable> catalogTables() throws SQLException {
         List<CatalogTable> out = new ArrayList<>();
         Set<String> seen = new HashSet<>();
         for (JsonValue d : datasets()) {
-            List<JsonValue> tables = d.itensDe("tables");
-            if (tables.isEmpty()) {
-                out.add(new CatalogTable(textOrNull(d, "schema"), d.textoOu("name", ""),
-                        "TABLE", datasetRemarks(d), d.itensDe("columns")));
-                continue;
-            }
-            for (JsonValue t : tables) {
+            for (JsonValue t : d.itensDe("tables")) {
                 String schema = textOrNull(t, "schema");
                 String name = t.textoOu("name", "");
                 // A chave é o endereço qualificado: nem schema nem nome
@@ -596,17 +594,14 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
     }
 
     /**
-     * Os schemas em que as tabelas do servidor moram, DISTINTOS e ordenados.
+     * Os schemas que a conexão enxerga, DISTINTOS e ordenados: o {@code _meta}
+     * e o schema da conexão, e nenhum outro.
      *
      * <p>São as pastas da árvore da ferramenta, e é sobre elas que ela pede as
      * tabelas de cada uma. Saem da MESMA montagem de catálogo que o
      * {@link #getTables} usa, e não de uma leitura própria do documento: duas
      * derivações da mesma lista divergiriam, e a divergência apareceria como
      * uma pasta que abre vazia.
-     *
-     * <p>O {@code _meta} chega repetido — uma vez por dataset —, e aqui sai uma
-     * vez só. Um servidor anterior ao campo {@code tables} não diz schema
-     * nenhum, e então esta lista sai VAZIA, exatamente como saía antes.
      *
      * <p>O {@code catalogo} é ignorado, pela razão do {@link #getCatalogs()}.
      */
@@ -1541,8 +1536,13 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
         return alvo.isInstance(this);
     }
 
+    /**
+     * Os datasets do SCHEMA DA CONEXÃO — o base e, quando há, a irmã do
+     * histórico. É o recorte que faz a árvore mostrar só o schema da conexão e
+     * o {@code _meta}, que é o que o servidor abre para ela.
+     */
     private List<JsonValue> datasets() throws SQLException {
-        return conexao.transporte().documento("/v1/metadata").itensDe("datasets");
+        return conexao.transporte().documento(NishiConnection.metadataPath(conexao.schema())).itensDe("datasets");
     }
 
     private ResultSet resultado(List<Molduras.Coluna> colunas, List<Object[]> linhas) {

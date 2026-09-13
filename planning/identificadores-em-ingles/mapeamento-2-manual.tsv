@@ -946,3 +946,4 @@ internal/schema	var	TestSpecRecusaSchemaNameInvalido.nome	name	renomeado no test
 internal/schema	var	TestSpecRecusaSchemaNameInvalido.valor	value	renomeado no teste de recusa do schemaName, código novo do ciclo do schema declarado (11/09/2026)
 internal/counters	const	maxColumnsOfAgrupamento	maxGroupingColumns	renomeado ao tocar a Table na extração do TableSchema, ciclo dos alarmes de contador (12/09/2026)
 internal/counters	func	nameOfTipo	typeName	renomeado ao tocar a Table na extração do TableSchema, ciclo dos alarmes de contador (12/09/2026)
+internal/server	func	readRequisicao	readRequest	renomeado na conexão por schema, issue #57 (13/09/2026)

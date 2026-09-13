@@ -9,10 +9,19 @@ participant "RowIterator" as it
 participant "StreamWriter\n(buffer FIXO de 64 KiB)" as w
 participant "http.Flusher" as fl
 
-cli -> h : POST /v1/query\n{dataset, sql, parameters, maxRows?, timeoutMs?}
+cli -> h : POST /v1/query\n{schema, sql, parameters, maxRows?, timeoutMs?}
 
 group Validação — nada foi escrito ainda, o status ainda é livre
   h -> h : método, Content-Type, corpo <= 1 MiB\ne chave desconhecida RECUSADA
+  h -> h : schema → dataset BASE do schema (bySchema)
+  note right of h
+    Schema desconhecido sai 404 UNKNOWN_SCHEMA;
+    o nome de um DATASET no lugar do schema
+    (a URL da forma anterior) recebe o schema
+    certo na mensagem. `dataset` no corpo é o
+    caminho do client Python (débito 123), e
+    os dois juntos saem 400.
+  end note
   h -> h : parameters → types.Value\n(string | int64 | double | boolean)
   h -> h : maxRows/timeoutMs só podem ENCURTAR
   note right of h
@@ -36,11 +45,14 @@ alt sem vaga
   end note
 end
 
-h -> eng : Execute(ctx, dataset, sql, params)
+h -> eng : ExecuteInSchema(ctx, base do schema, sql, params)
 note right of eng
-  Erro de sintaxe e de bind sai AQUI,
-  antes de qualquer leitura de dado:
-  vira 400 com linha e coluna.
+  O FROM resolve DENTRO do schema da conexão:
+  nome simples é tabela do schema, e o schema
+  alheio é recusado — o mesmo recorte do
+  /v1/metadata?schema=. Erro de sintaxe e de
+  bind sai AQUI, antes de qualquer leitura de
+  dado: vira 400 com linha e coluna.
 end note
 eng --> h : RowIterator (fonte aberta, nenhuma row lida)
 

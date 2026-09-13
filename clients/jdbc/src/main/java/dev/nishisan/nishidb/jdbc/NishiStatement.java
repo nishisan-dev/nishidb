@@ -72,10 +72,9 @@ public class NishiStatement implements Statement {
         }
         fechaResultadoAnterior();
 
-        SqlScanner escaneado = SqlScanner.de(sql);
-        String dataset = escaneado.dataset() == null ? conexao.datasetPadrao() : escaneado.dataset();
-
-        JsonWriter corpo = new JsonWriter().texto("dataset", dataset).texto("sql", sql);
+        // O schema da conexão vai em TODA consulta, e o servidor resolve o
+        // FROM dentro dele: o driver não palpita dataset nenhum a partir do SQL.
+        JsonWriter corpo = new JsonWriter().texto("schema", conexao.schema()).texto("sql", sql);
         if (parametros != null) {
             corpo.bruto("parameters", parametros);
         }
