@@ -396,81 +396,13 @@ func TestFormaDoRatioEhValidadaMesmoComACompactionDesligada(t *testing.T) {
 // server.loopback ganham forma no parse. As oito recusas abaixo seguem a
 // mesma doutrina do bloco de compaction logo acima: FORMA validada no PARSE,
 // independente de qualquer `enabled`, exceto quando a própria recusa É sobre
-// a implicação de `enabled: true` (TLS exigindo cert/key, authentication
-// exigindo users).
+// a implicação de `enabled: true` (TLS exigindo cert/key). Os usuários saíram
+// do YAML com a issue #40: o bloco antigo é recusado com o roteiro de
+// migração.
 //
 // A resolução de segredos (ler a env var, ler o arquivo de senha) e a matriz
 // de recusa do §77 (auth sem TLS com bind exposto etc.) NÃO são desta tarefa
 // — ficam para a ativação, em server.Novo (B2 do plano do ciclo).
-
-// TestSenhaLiteralNoYAMLEhRecusada fecha o §75: "senha literal no YAML não
-// deve ser aceita" é uma exigência de RECUSA EXPLÍCITA, e não de silêncio.
-// `password` nunca foi campo de UserSpec — por isso a mesma whitelist manual
-// que a recusa 7 exercita já a nomeia como chave desconhecida.
-//
-// O usuário já traz passwordEnv E role válidos: se o teste falhasse por
-// QUALQUER outro motivo (fonte de senha ausente, role ruim), a mensagem já
-// conteria "password" como substring de "passwordEnv" e a asserção passaria
-// pelo motivo ERRADO. Com as outras chaves corretas, a única forma de haver
-// erro é a whitelist recusando a chave `password` em si.
-func TestSenhaLiteralNoYAMLEhRecusada(t *testing.T) {
-	body := "server:\n  authentication:\n    enabled: true\n    users:\n" +
-		"      - username: grafana\n        passwordEnv: NISHIDB_GRAFANA_PASSWORD\n        password: hunter2\n        role: READ\n"
-	_, err := Load(writeConfig(t, body))
-	if err == nil {
-		t.Fatal("password literal foi aceita")
-	}
-	if !strings.Contains(err.Error(), "password: chave desconhecida") {
-		t.Errorf("erro = %v, quer nomear a chave password como desconhecida", err)
-	}
-}
-
-func TestRoleForaDoEnumEhRecusado(t *testing.T) {
-	body := "server:\n  authentication:\n    enabled: true\n    users:\n" +
-		"      - username: grafana\n        passwordEnv: NISHIDB_GRAFANA_PASSWORD\n        role: SUPERUSER\n"
-	_, err := Load(writeConfig(t, body))
-	if err == nil {
-		t.Fatal("role fora do enum {READ, ADMIN} foi aceita")
-	}
-	if !strings.Contains(err.Error(), "role") || !strings.Contains(err.Error(), "SUPERUSER") {
-		t.Errorf("erro = %v, quer nomear a chave role e o valor recebido", err)
-	}
-}
-
-// TestUsuarioExigeExatamenteUmaFonteDeSenha cobre as duas pontas: nenhuma
-// fonte declarada e as duas ao mesmo tempo são igualmente inválidas — a
-// credencial precisa morar em EXATAMENTE um lugar.
-func TestUsuarioExigeExatamenteUmaFonteDeSenha(t *testing.T) {
-	cases := map[string]string{
-		"nenhuma": "      - username: grafana\n        role: READ\n",
-		"ambas":   "      - username: grafana\n        passwordEnv: NISHIDB_GRAFANA_PASSWORD\n        passwordFile: /run/secrets/grafana\n        role: READ\n",
-	}
-	for name, user := range cases {
-		t.Run(name, func(t *testing.T) {
-			body := "server:\n  authentication:\n    enabled: true\n    users:\n" + user
-			_, err := Load(writeConfig(t, body))
-			if err == nil {
-				t.Fatalf("%s fontes de senha foi aceito", name)
-			}
-			if !strings.Contains(err.Error(), "passwordEnv") || !strings.Contains(err.Error(), "passwordFile") {
-				t.Errorf("erro = %v, quer nomear passwordEnv e passwordFile", err)
-			}
-		})
-	}
-}
-
-func TestUsernameDuplicadoEntreUsersEhRecusado(t *testing.T) {
-	body := "server:\n  authentication:\n    enabled: true\n    users:\n" +
-		"      - username: grafana\n        passwordEnv: A\n        role: READ\n" +
-		"      - username: grafana\n        passwordEnv: B\n        role: ADMIN\n"
-	_, err := Load(writeConfig(t, body))
-	if err == nil {
-		t.Fatal("username duplicado entre users foi aceito")
-	}
-	if !strings.Contains(err.Error(), "username") || !strings.Contains(err.Error(), "grafana") {
-		t.Errorf("erro = %v, quer nomear username e o valor duplicado", err)
-	}
-}
 
 func TestTLSLigadoSemCertificadoOuChaveEhRecusado(t *testing.T) {
 	cases := map[string]string{
@@ -491,21 +423,42 @@ func TestTLSLigadoSemCertificadoOuChaveEhRecusado(t *testing.T) {
 	}
 }
 
-func TestAuthenticationLigadaSemUsersEhRecusada(t *testing.T) {
+// O bloco users saiu do contrato. A recusa tem de nomear o bloco e ensinar a
+// migração em qualquer forma em que ele apareça — inclusive vazio e com a
+// autenticação desligada, porque um bloco presente e ignorado faria o
+// operador acreditar em contas que não existem.
+func TestBlocoUsersNoYAMLEhRecusadoComORoteiroDeMigracao(t *testing.T) {
 	cases := map[string]string{
-		"ausente": "server:\n  authentication:\n    enabled: true\n",
-		"vazia":   "server:\n  authentication:\n    enabled: true\n    users: []\n",
+		"ligada com usuario": "server:\n  authentication:\n    enabled: true\n    users:\n" +
+			"      - username: grafana\n        passwordEnv: A\n        role: READ\n",
+		"desligada com usuario": "server:\n  authentication:\n    enabled: false\n    users:\n" +
+			"      - username: grafana\n        passwordFile: /run/secrets/grafana\n        role: ADMIN\n",
+		"lista vazia": "server:\n  authentication:\n    enabled: true\n    users: []\n",
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, body))
 			if err == nil {
-				t.Fatalf("authentication.enabled: true sem users foi aceito (%s)", name)
+				t.Fatal("o bloco server.authentication.users foi aceito")
 			}
-			if !strings.Contains(err.Error(), "server.authentication") {
-				t.Errorf("erro = %v, quer nomear server.authentication", err)
+			for _, want := range []string{"server.authentication.users was removed", "nishidb users create", "users.bootstrap"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("erro = %v, quer citar %q", err, want)
+				}
 			}
 		})
+	}
+}
+
+// Sem usuários no YAML, autenticação ligada é a configuração normal: quem
+// autentica é a tabela de usuários do servidor.
+func TestAuthenticationLigadaSemUsuariosNoYAMLEhAceita(t *testing.T) {
+	c, err := Load(writeConfig(t, "server:\n  authentication:\n    enabled: true\n"))
+	if err != nil {
+		t.Fatalf("authentication.enabled: true sem usuários no YAML foi recusada: %v", err)
+	}
+	if !c.AuthenticationEnabled() {
+		t.Error("AuthenticationEnabled() = false com enabled: true")
 	}
 }
 
@@ -518,7 +471,6 @@ func TestChaveDesconhecidaNosBlocosDeSegurancaEhRecusada(t *testing.T) {
 	cases := map[string]string{
 		"tls":            "server:\n  tls:\n    enabld: true\n",
 		"authentication": "server:\n  authentication:\n    enbaled: true\n",
-		"users":          "server:\n  authentication:\n    enabled: true\n    users:\n      - usernme: grafana\n        passwordEnv: A\n        role: READ\n",
 		"loopback":       "server:\n  loopback:\n    enabld: true\n",
 	}
 	for name, body := range cases {
@@ -648,47 +600,6 @@ func TestLoopbackNaMesmaPortaDoDefaultImplicitoEhRecusado(t *testing.T) {
 	}
 }
 
-// TestPasswordEnvVazioExplicitoTemOMesmoTratamentoDeAusente blinda o
-// comportamento atual contra uma migração futura de PasswordEnv para
-// ponteiro (*string): hoje `passwordEnv: ""` decodifica para a MESMA string
-// vazia que o campo ausente produziria, e as duas devem continuar caindo na
-// mesma recusa ("nenhuma fonte declarada") com a MESMA mensagem — nunca
-// serem tratadas como "fonte declarada, porém vazia".
-func TestPasswordEnvVazioExplicitoTemOMesmoTratamentoDeAusente(t *testing.T) {
-	body := "server:\n  authentication:\n    enabled: true\n    users:\n" +
-		"      - username: grafana\n        passwordEnv: \"\"\n        role: READ\n"
-	_, err := Load(writeConfig(t, body))
-	if err == nil {
-		t.Fatal("passwordEnv vazio explícito foi aceito")
-	}
-	if !strings.Contains(err.Error(), "nenhum declarado") {
-		t.Errorf("erro = %v, quer a MESMA mensagem do caso ausente (\"nenhum declarado\")", err)
-	}
-}
-
-// TestRoleEhCaseSensitive trava a escolha atual: o enum fechado {READ,
-// ADMIN} não normaliza case. Não é limitação a corrigir — ver o comentário
-// no switch de validateUsers — mas uma variação de case aceita em silêncio
-// autorizaria um papel que o middleware da B3 nunca reconheceria como válido
-// (ele compara a string exata), então a recusa nomeando o valor recebido
-// importa tanto quanto a recusa de um valor fora do enum.
-func TestRoleEhCaseSensitive(t *testing.T) {
-	cases := []string{"read", "Read", "admin", "Admin"}
-	for _, value := range cases {
-		t.Run(value, func(t *testing.T) {
-			body := "server:\n  authentication:\n    enabled: true\n    users:\n" +
-				"      - username: grafana\n        passwordEnv: A\n        role: " + value + "\n"
-			_, err := Load(writeConfig(t, body))
-			if err == nil {
-				t.Fatalf("role %q (case diferente do enum) foi aceito", value)
-			}
-			if !strings.Contains(err.Error(), "role") || !strings.Contains(err.Error(), value) {
-				t.Errorf("erro = %v, quer nomear role e o valor recebido %q", err, value)
-			}
-		})
-	}
-}
-
 // TestServerSemBlocosDeSegurancaContinuaValido é o teste de COMPATIBILIDADE:
 // o YAML de hoje — inclusive o do piloto, que não conhece tls/authentication/
 // loopback — precisa continuar carregando exatamente como antes desta tarefa.
@@ -719,13 +630,6 @@ func TestBlocosDeSegurancaValidosSaoCarregados(t *testing.T) {
 		"    privateKeyFile: /etc/nishidb/tls/server.key\n" +
 		"  authentication:\n" +
 		"    enabled: true\n" +
-		"    users:\n" +
-		"      - username: reader\n" +
-		"        passwordEnv: NISHIDB_READER_PASSWORD\n" +
-		"        role: READ\n" +
-		"      - username: admin\n" +
-		"        passwordFile: /run/secrets/nishidb-admin\n" +
-		"        role: ADMIN\n" +
 		"  loopback:\n" +
 		"    enabled: true\n" +
 		"    port: 9143\n"
@@ -742,17 +646,6 @@ func TestBlocosDeSegurancaValidosSaoCarregados(t *testing.T) {
 	}
 	if !c.AuthenticationEnabled() {
 		t.Error("AuthenticationEnabled() = false com authentication.enabled: true")
-	}
-	if len(c.Server.Authentication.Users) != 2 {
-		t.Fatalf("Users = %+v, quer 2 usuários", c.Server.Authentication.Users)
-	}
-	reader := c.Server.Authentication.Users[0]
-	if reader.Username != "reader" || reader.PasswordEnv != "NISHIDB_READER_PASSWORD" || reader.Role != "READ" {
-		t.Errorf("users[0] = %+v", reader)
-	}
-	admin := c.Server.Authentication.Users[1]
-	if admin.Username != "admin" || admin.PasswordFile != "/run/secrets/nishidb-admin" || admin.Role != "ADMIN" {
-		t.Errorf("users[1] = %+v", admin)
 	}
 	if !c.LoopbackEnabled() {
 		t.Error("LoopbackEnabled() = false com loopback.enabled: true")
@@ -796,9 +689,8 @@ func TestAuthenticationDeclaradaDistingueOsTresEstados(t *testing.T) {
 			enabled:  false,
 		},
 		{
-			name: "presente com enabled true",
-			body: "server:\n  authentication:\n    enabled: true\n    users:\n" +
-				"      - username: grafana\n        passwordEnv: A\n        role: READ\n",
+			name:     "presente com enabled true",
+			body:     "server:\n  authentication:\n    enabled: true\n",
 			declared: true,
 			enabled:  true,
 		},
@@ -816,25 +708,5 @@ func TestAuthenticationDeclaradaDistingueOsTresEstados(t *testing.T) {
 				t.Errorf("AuthenticationEnabled() = %v, quer %v", got, tc.enabled)
 			}
 		})
-	}
-}
-
-// TestFormaDosUsersEhValidadaMesmoComAuthenticationDesligadaExplicitamente
-// cruza os dois eixos que este ajuste introduz — `enabled: false` EXPLÍCITO e
-// a forma de cada user —, no mesmo espírito de
-// TestFormaDoRatioEhValidadaMesmoComACompactionDesligada: o ponteiro em
-// Enabled muda COMO se pergunta "está ligada?", mas não muda a doutrina de
-// que forma é validada no parse, independente de ativação (débito 49). Um
-// `role` inválido não vira aceitável só porque authentication está desligada
-// por decisão explícita do operador.
-func TestFormaDosUsersEhValidadaMesmoComAuthenticationDesligadaExplicitamente(t *testing.T) {
-	body := "server:\n  authentication:\n    enabled: false\n    users:\n" +
-		"      - username: grafana\n        passwordEnv: A\n        role: SUPERUSER\n"
-	_, err := Load(writeConfig(t, body))
-	if err == nil {
-		t.Fatal("role inválido foi aceito com authentication.enabled: false")
-	}
-	if !strings.Contains(err.Error(), "role") || !strings.Contains(err.Error(), "SUPERUSER") {
-		t.Errorf("erro = %v, quer nomear a chave role e o valor recebido", err)
 	}
 }

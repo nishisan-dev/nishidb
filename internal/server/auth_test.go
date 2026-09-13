@@ -21,32 +21,25 @@ import (
 // mecanismo de papel, atraso fixo — mora lá, mais rápido e sem listener.
 
 const (
-	varReaderAuth = "NISHIDB_TESTE_AUTENTICACAO_LEITOR"
-	varChefeAuth  = "NISHIDB_TESTE_AUTENTICACAO_CHEFE"
-
 	passwordReaderAuth = "senha-leitor-bem-forte"
 	passwordChefeAuth  = "senha-chefe-bem-forte"
 )
 
-// blockAuth é o bloco `server:` com dois usuários — "leitor" (READ) e
-// "chefe" (ADMIN) — no loopback (auth ligada sem TLS é aviso, não recusa,
-// célula 1 da matriz do §77 — security_test.go).
+// blockAuth é o bloco `server:` com a autenticação ligada no loopback (auth
+// ligada sem TLS é aviso, não recusa, célula 1 da matriz do §77 —
+// security_test.go).
 func blockAuth(maisConfig string) string {
 	return "\nserver:\n  bind: 127.0.0.1\n  port: %d\n" +
-		"  authentication:\n    enabled: true\n    users:\n" +
-		"      - username: leitor\n        passwordEnv: " + varReaderAuth + "\n        role: READ\n" +
-		"      - username: chefe\n        passwordEnv: " + varChefeAuth + "\n        role: ADMIN\n" +
+		"  authentication:\n    enabled: true\n" +
 		maisConfig
 }
 
-// serverWithAuth sobe um servidor de verdade com autenticação
-// ligada e n linhas materializadas no dataset "d", pelo mesmo caminho de
-// serverWithData (query_test.go).
+// serverWithAuth sobe um servidor de verdade com autenticação ligada, dois
+// usuários na tabela — "leitor" (READ) e "chefe" (ADMIN) — e n linhas
+// materializadas no dataset "d".
 func serverWithAuth(t *testing.T, n int, maisConfig string) *server.Server {
 	t.Helper()
-	t.Setenv(varReaderAuth, passwordReaderAuth)
-	t.Setenv(varChefeAuth, passwordChefeAuth)
-	return serverWithData(t, n, blockAuth(maisConfig))
+	return serverWithDataAndUsers(t, n, blockAuth(maisConfig), authAccounts()...)
 }
 
 // consultaWithAuth faz o POST /v1/query com Basic opcional (usuario == ""
@@ -274,13 +267,12 @@ func TestAuthFailuresTotalApareceNoScrapePorRazao(t *testing.T) {
 // escrita e leitura que recordOfServer (compaction_test.go) já existe
 // para proteger sob -race.
 func TestAuthRecusadaLogaSemVazarAuthorizationHeader(t *testing.T) {
-	t.Setenv(varReaderAuth, passwordReaderAuth)
 	block := "\nserver:\n  bind: 127.0.0.1\n  port: %d\n" +
-		"  authentication:\n    enabled: true\n    users:\n" +
-		"      - username: leitor\n        passwordEnv: " + varReaderAuth + "\n        role: READ\n"
+		"  authentication:\n    enabled: true\n"
 
 	a := newEnvWith(t, block)
 	a.writeDataset("d", strings.ReplaceAll(specWithoutKafka, "%s", "d"))
+	provisionUsers(t, a, account{name: "leitor", password: passwordReaderAuth, role: "READ"})
 
 	record := &recordOfServer{}
 	srv, err := server.Novo(a.load(), server.Options{Log: logging.New(record, logging.FormatJSON, slog.LevelInfo)})

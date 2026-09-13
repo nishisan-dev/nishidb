@@ -29,9 +29,9 @@ credencial. A descrição completa do mecanismo está em
 
 | Entregável | Estado | Evidência |
 |---|---|---|
-| `server.tls`/`server.authentication`/`server.loopback` com forma validada no parse (§74-75) | **Atendido** | `TestSenhaLiteralNoYAMLEhRecusada`, `TestRoleForaDoEnumEhRecusado`, `TestRoleEhCaseSensitive`, `TestUsernameDuplicadoEntreUsersEhRecusado`, `TestTLSLigadoSemCertificadoOuChaveEhRecusado`, `TestAuthenticationLigadaSemUsersEhRecusada`, `TestChaveDesconhecidaNosBlocosDeSegurancaEhRecusada`, `TestLoopbackNaMesmaPortaDoServerPrincipalEhRecusado`, `TestLoopbackNaMesmaPortaDoDefaultImplicitoEhRecusado`, `TestPasswordEnvVazioExplicitoTemOMesmoTratamentoDeAusente` |
+| `server.tls`/`server.authentication`/`server.loopback` com forma validada no parse (§74-75) | **Atendido** | `TestTLSLigadoSemCertificadoOuChaveEhRecusado`, `TestChaveDesconhecidaNosBlocosDeSegurancaEhRecusada`, `TestLoopbackNaMesmaPortaDoServerPrincipalEhRecusado`, `TestLoopbackNaMesmaPortaDoDefaultImplicitoEhRecusado`, `TestBlocoUsersNoYAMLEhRecusadoComORoteiroDeMigracao`. Os testes de forma do antigo `server.authentication.users` saíram com a issue #40, que tirou os usuários do YAML |
 | A matriz de recusa do §77 (bind × auth × TLS decide se o servidor sobe) | **Atendido** | `TestAuthSemTLSComBindExpostoRecusaASubida` (oráculo central), `TestBindExpostoSemSecaoDeAuthenticationRecusaASubida`, `TestBindExpostoComAutenticacaoETLSSobeSemRecusa`, `TestBindExpostoComAuthenticationSecaoVaziaSobeComAviso`, `TestLoopbackComAutenticacaoSemTLSSobeComAviso`, `TestLoopbackComAutenticacaoETLSSobeSemAviso` |
-| Resolução de segredos na subida (env/arquivo), fail-fast | **Atendido** | `TestPasswordEnvAusenteRecusaASubidaDoServidor`, `TestPasswordFileWorldReadableRecusaASubidaDoServidor`, `TestResolveSenhaComPasswordFileGroupOuWorldReadableRecusaNomeandoCaminhoEModo`, `TestResolveSenhaComPasswordFileVazioOuSoNewlineRecusaNomeandoOCaminho`, `TestResolveCredenciaisMapeiaUsernameParaDigestEPapel` |
+| Resolução de segredos na subida, fail-fast | **Substituído (issue #40)** | A senha deixou de vir de env/arquivo declarado no YAML: a tabela de usuários é lida antes do bind, e ilegível recusa a subida. `TestTabelaCorrompidaRecusaAAberturaSemGerarCredencial`, `TestPrimeiraAberturaGeraAdminDeBootstrapComArquivo0600` |
 | Middleware HTTP Basic com papéis READ/ADMIN | **Atendido** | `TestMutantesExigemAutenticacao` (401), `TestMutantesRecusamPapelREAD` (403), `TestPapelReadEAdminAlcancamTodasAsRotasDeLeitura`, `TestPapelAutorizadoAdminAlcancaRead` |
 | 401 byte-idêntico entre usuário inexistente e senha errada | **Atendido** | `TestAutenticacao401EhByteIdenticoEntreUsuarioInexistenteESenhaErrada` |
 | Sem lockout; atraso fixo em toda falha | **Atendido** | `TestAtrasoFixoDeAproximadamente100msEmTodaFalhaDeAutenticacao` |
@@ -53,8 +53,6 @@ não só a tabela acima, que é por entregável:
 - **Recusa de subida** (a matriz do §77 e as recusas de forma do parse):
   `TestAuthSemTLSComBindExpostoRecusaASubida`,
   `TestBindExpostoSemSecaoDeAuthenticationRecusaASubida`,
-  `TestPasswordEnvAusenteRecusaASubidaDoServidor`,
-  `TestPasswordFileWorldReadableRecusaASubidaDoServidor`,
   `TestLoopbackHabilitadoSemPortaRecusaASubidaDoServidor`,
   `TestCertificadoOuChaveInvalidosRecusamASubidaNomeandoOCaminho`.
 - **401/403**: `TestMutantesExigemAutenticacao` (401 em rota mutante sem
