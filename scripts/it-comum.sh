@@ -128,6 +128,13 @@ it::sobe_servidor() {
   # declarada), então a porta é sorteada e a tentativa de bind é o teste: o
   # net.Listen falha rápido e claro se ela estiver ocupada.
   local tentativa pronto fim
+  # O leitor entra pela tabela de usuários, com o servidor ainda parado — o
+  # mesmo caminho da gestão offline do operador. O nishidb.yaml da ingestão já
+  # aponta o storage.path que o servidor vai usar; a primeira gestão cria a
+  # tabela com o ADMIN de bootstrap, que o IT não usa.
+  "$TMP/nishidb" users create --config "$TMP/nishidb.yaml" --name leitor --role READ \
+    --new-password-file "$TMP/senha.txt" > "$TMP/usuarios.log" 2>&1 ||
+    { echo "erro: criar o usuário leitor falhou" >&2; cat "$TMP/usuarios.log" >&2; exit 1; }
   for tentativa in 1 2 3 4 5; do
     PORTA=$(( (RANDOM % 40000) + 20000 ))
     cat > "$TMP/nishidb.yaml" <<YAML
@@ -145,10 +152,6 @@ server:
     privateKeyFile: $TMP/key.pem
   authentication:
     enabled: true
-    users:
-      - username: leitor
-        passwordFile: $TMP/senha.txt
-        role: READ
 YAML
     "$TMP/nishidb" server --config "$TMP/nishidb.yaml" > "$TMP/servidor.log" 2>&1 &
     SERVIDOR_PID=$!
