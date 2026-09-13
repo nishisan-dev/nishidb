@@ -1368,6 +1368,12 @@ operador que desligou o laço automático de compaction e opera na mão (modo
 manual), e a config que a maioria dos deploys usa hoje — sem
 `server.authentication` nenhuma — não pode deixar essa rota morta.
 
+A exceção são as rotas de gestão de usuário (`/v1/users/*`, issue #40): o
+passthrough também as alcança, mas o handler exige um principal autenticado e,
+sem ele, responde FORBIDDEN — não existe gestão de usuário anônima, nem com a
+autenticação desligada nem no plano loopback. Ver "A tabela de usuários",
+abaixo.
+
 **HTTP Basic sobre TLS**, não um esquema próprio — mapeia 1:1 para
 `DriverManager` do JDBC (Fase 7) e para `basic_auth` de ferramentas de
 scrape. A senha do request é verificada contra o hash argon2id da tabela de
