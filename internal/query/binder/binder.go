@@ -353,7 +353,7 @@ func (b *binder) run() (*BoundQuery, error) {
 	// b.markReferenced(f.ID) que a resolução faz, a coluna não teria slot e o
 	// executor ordenaria por um valor que nunca leu.
 	if len(b.stmt.OrderBy) > 0 {
-		keys, err := b.ordering()
+		keys, err := b.ordering(cols)
 		if err != nil {
 			return nil, err
 		}
@@ -401,9 +401,7 @@ func (b *binder) projection() ([]BoundColumn, error) {
 	}
 
 	cols := make([]BoundColumn, 0, len(b.stmt.Projection))
-	// seen só materializa em projeção grande; até o limiar a varredura linear
-	// sobre cols resolve sem alocar nada.
-	var seen map[string]struct{}
+	var aliases []int
 	derivedCount := 0
 	for _, ref := range b.stmt.Projection {
 		if ref.Qualifier != "" {
@@ -412,34 +410,24 @@ func (b *binder) projection() ([]BoundColumn, error) {
 			if err != nil {
 				return nil, err
 			}
-			seen = nil // o conjunto cresceu por fora; recalcula no limiar
+			if ref.Alias != "" {
+				aliases = append(aliases, len(cols)-1)
+			}
 			continue
 		}
 		f, err := b.column(ref.Name, ref.Pos)
 		if err != nil {
 			return nil, err
 		}
-		if isDuplicate(cols, seen, ref.Name) {
-			// `SELECT id, id` vira objeto JSON com chave repetida: válido para
-			// o formato, e o consumidor COLAPSA em silêncio — o usuário pede
-			// duas colunas e recebe uma. A posição é a da segunda ocorrência,
-			// que é a que ele apaga para corrigir.
-			return nil, errAt(ref.Pos, "coluna %q aparece mais de uma vez na projeção", ref.Name)
-		}
 		b.markReferenced(f.ID)
-		// Nome de saída é o que o usuário ESCREVEU: `SELECT status` rotula
-		// "status" mesmo que o campo se chame Acct-Status-Type.
-		cols = append(cols, BoundColumn{Field: f, Name: ref.Name})
-		switch {
-		case seen != nil:
-			seen[ref.Name] = struct{}{}
-		case len(cols) == projectionMapThreshold:
-			seen = make(map[string]struct{}, len(b.stmt.Projection))
-			for i := range cols {
-				seen[cols[i].Name] = struct{}{}
-			}
+		name := ref.Name
+		if ref.Alias != "" {
+			name = ref.Alias
+			aliases = append(aliases, len(cols))
 		}
+		cols = append(cols, BoundColumn{Field: f, Name: name})
 	}
+	normalizeProjectionNames(cols, aliases)
 	return cols, nil
 }
 
@@ -510,45 +498,18 @@ func (b *binder) qualifiedProjection(cols []BoundColumn, ref parser.ColumnRef, d
 			return nil, 0, errAt(ref.Pos, "o campo %q não extrai o caminho %q", ref.Qualifier, ref.Name)
 		}
 		name := ref.Qualifier + "." + ref.Name
-		if isDuplicate(cols, nil, name) {
-			return nil, 0, errAt(ref.Pos, "coluna %q aparece mais de uma vez na projeção", name)
+		if ref.Alias != "" {
+			name = ref.Alias
 		}
 		b.markReferenced(f.ID)
 		return append(cols, BoundColumn{Field: f, Name: name}), derivedCount + 1, nil
 	}
 
 	for _, f := range children {
-		if isDuplicate(cols, nil, f.Name) {
-			return nil, 0, errAt(ref.Pos, "coluna %q aparece mais de uma vez na projeção", f.Name)
-		}
 		b.markReferenced(f.ID)
 		cols = append(cols, BoundColumn{Field: f, Name: f.Name})
 	}
 	return cols, derivedCount + len(children), nil
-}
-
-// projectionMapThreshold é onde a checagem de nome repetido troca varredura
-// linear por mapa. A projeção real tem unidades de colunas, e aí a varredura é
-// mais barata e não aloca; o mapa existe porque o número de nomes DISTINTOS
-// que bindam com sucesso não é pequeno (FieldID é uint16, e cada campo
-// responde por nome e alias), e o custo quadrático transformaria uma query de
-// algumas centenas de KB em segundos de CPU.
-const projectionMapThreshold = 32
-
-// isDuplicate usa o mapa quando ele existe e a varredura enquanto não existe.
-// As duas responderiam igual em qualquer ponto: o mapa é semeado com o que a
-// varredura já tinha visto.
-func isDuplicate(cols []BoundColumn, seen map[string]struct{}, name string) bool {
-	if seen != nil {
-		_, ok := seen[name]
-		return ok
-	}
-	for i := range cols {
-		if cols[i].Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // column resolve nome original OU alias. Nunca chama ResolveUnknown: aquilo é
@@ -640,18 +601,31 @@ func (b *binder) leaf(e parser.Expr) (BoundExpr, error) {
 	}
 }
 
-// ordering resolve as chaves do ORDER BY contra o schema.
+// ordering procura primeiro nos rótulos finais da projeção e depois no schema.
+// Referências qualificadas continuam resolvendo diretamente o caminho aninhado.
 //
 // Chave REPETIDA é recusada, e não colapsada: `ORDER BY a, a DESC` é
 // contraditório e aceitar em silêncio uma das duas leituras seria escolher pelo
-// usuário. É a mesma doutrina que já recusa coluna repetida na projeção.
-func (b *binder) ordering() ([]BoundOrderKey, error) {
+// usuário. A duplicação na projeção, por sua vez, recebe sufixos de saída.
+func (b *binder) ordering(cols []BoundColumn) ([]BoundOrderKey, error) {
 	out := make([]BoundOrderKey, 0, len(b.stmt.OrderBy))
 	seen := make(map[types.FieldID]struct{}, len(b.stmt.OrderBy))
 	for _, k := range b.stmt.OrderBy {
-		f, err := b.maybeQualifiedColumn(k.Qualifier, k.Column, k.ColumnPos)
-		if err != nil {
-			return nil, err
+		var f *schema.CompiledField
+		if k.Qualifier == "" {
+			for _, c := range cols {
+				if c.Name == k.Column {
+					f = c.Field
+					break
+				}
+			}
+		}
+		if f == nil {
+			var err error
+			f, err = b.maybeQualifiedColumn(k.Qualifier, k.Column, k.ColumnPos)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if _, duplicate := seen[f.ID]; duplicate {
 			return nil, errAt(k.ColumnPos, "coluna %q aparece duas vezes no ORDER BY", f.Name)

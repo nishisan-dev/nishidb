@@ -671,7 +671,7 @@ func TestConsultasSimultaneasDentroDoTeto(t *testing.T) {
 // A coluna que colide com a chave de moldura é recusada ANTES do primeiro
 // byte: depois dele, a row seria indistinguível de uma linha de controle e não
 // haveria mais como recusar nada.
-func TestColunaComNomeReservadoEhRecusada(t *testing.T) {
+func TestReservedOutputColumnCanBeAliased(t *testing.T) {
 	a := newEnvWith(t, blockPadrao)
 	a.writeDataset("d", `version: 1
 name: d
@@ -705,7 +705,7 @@ schema:
 	}
 
 	// E a mesma coluna com alias passa: a colisão é de NOME DE SAÍDA.
-	resp = consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d"}`)
+	resp = consulta(t, srv, `{"dataset":"d","sql":"SELECT id, nishidb AS value FROM d"}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}

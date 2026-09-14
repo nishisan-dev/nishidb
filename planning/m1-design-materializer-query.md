@@ -521,9 +521,23 @@ type BoundComparison struct {
 }
 ```
 
-Erros de bind (antes de tocar dados): coluna inexistente; **nome repetido na projeção**; tipo incomparável (tabela §3.6); LIMIT negativo; `ParamCount` ≠ len(params) na execução. Projeção `*` expande para todos os campos do schema na ordem de FieldID (nome de saída = alias se houver, senão original).
+Erros de bind (antes de tocar dados): coluna inexistente; tipo incomparável (tabela §3.6); LIMIT negativo; `ParamCount` ≠ len(params) na execução. Projeção `*` expande para todos os campos do schema na ordem de FieldID (nome de saída = alias se houver, senão original).
 
-**Repetição na projeção é recusada, e a chave é o nome de SAÍDA.** `SELECT a, a` produz um objeto JSON com a chave repetida: tecnicamente válido, e é por isso que dói — o consumidor colapsa as duas em silêncio, e o usuário recebe uma coluna a menos do que pediu, sem aviso. A recusa aponta a posição da **segunda** ocorrência, que é a que ele apaga. Já `SELECT id, service_id` (nome e alias do mesmo campo) continua legal: são duas chaves distintas na saída, nenhuma some, e é uma query que a v1 permite escrever desde sempre — recusar pelo `FieldID` quebraria a query legítima que existe hoje, não a hipotética que chegaria com `AS`. A checagem é varredura linear até `projectionMapThreshold` (32 colunas) e mapa acima dele: o número de nomes distintos que bindam com sucesso não é pequeno (`FieldID` é `uint16`, e cada campo responde por nome e alias), e o custo quadrático transformaria uma query de algumas centenas de KB em segundos de CPU.
+**Repetição na projeção recebe sufixos (issue #41).** O binder resolve todos os
+campos e expande os curingas aninhados, depois normaliza os nomes de saída.
+Aliases explícitos têm prioridade sobre nomes sem alias; entre aliases iguais,
+o primeiro mantém o nome. Todos os nomes pedidos ficam reservados e as demais
+ocorrências recebem o menor `_N` livre: `x, x, x_1` vira `x, x_2, x_1`.
+A ordem e a quantidade de colunas não mudam. Referências ao mesmo campo
+compartilham slot. A detecção de colisão usa varredura linear até
+`projectionMapThreshold` (32 colunas) e mapa acima dele; a numeração guarda o
+próximo índice por nome para não recomeçar a procura a cada duplicata.
+
+`ORDER BY` resolve os nomes finais antes do schema, enquanto `WHERE` e as
+referências de origem na projeção só usam o schema. Referências qualificadas
+continuam resolvendo caminhos aninhados. Os nomes finais ficam em
+`BoundColumn.Name`, resolvidos uma vez por consulta, antes do planner e do
+encoder. A regra substitui a antiga recusa de nomes repetidos.
 
 ### 3.5 Planner por regras (§63) — `internal/query/planner`
 

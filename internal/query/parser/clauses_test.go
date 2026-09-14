@@ -98,13 +98,13 @@ func TestColunaChamadaOrderContinuaValida(t *testing.T) {
 // A ColumnRef não registra se o identificador veio entre aspas, então um guard
 // escrito sobre st.Projection[0].Name dispararia aqui — o token tem de ser
 // examinado ANTES de virar nome.
-func TestColunaChamadaDistinctEntreAspasNaoDisparaAClausula(t *testing.T) {
-	_, err := parser.Parse(`SELECT "distinct" x FROM t`)
-	if err == nil {
-		t.Fatal("quer erro: dois nomes de coluna sem vírgula")
+func TestQuotedDistinctColumnAcceptsImplicitAlias(t *testing.T) {
+	st, err := parser.Parse(`SELECT "distinct" x FROM t`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if c := clauseOf(t, err); c != "" {
-		t.Errorf("Clause = %q, quer vazio: o nome estava entre aspas", c)
+	if st.Projection[0].Name != "distinct" || st.Projection[0].Alias != "x" {
+		t.Fatalf("projeção = %+v", st.Projection)
 	}
 }
 

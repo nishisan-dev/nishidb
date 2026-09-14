@@ -1788,11 +1788,50 @@ Não há sintaxe de `--param` que produza NULL, e é deliberado: `col = ?` com `
 nulo não tem semântica sem lógica trivalente, e o que se quer dizer é
 `IS NULL` — escrito na query, não passado como valor.
 
-Repetir uma coluna na projeção (`SELECT id, id`) é recusado no bind: a linha
-sairia com a chave repetida e o consumidor de JSON colapsaria as duas em
-silêncio — duas colunas pedidas, uma entregue. Pedir o mesmo campo pelo nome e
-pelo alias (`SELECT id, service_id`) continua valendo, porque aí são duas
-chaves distintas na saída.
+Aliases por consulta aceitam `AS` ou a forma implícita, inclusive em colunas
+aninhadas e tabelas virtuais:
+
+```sql
+SELECT olt AS equipamento, total quantidade
+FROM _counters.autenticados_por_olt
+ORDER BY equipamento;
+```
+
+O alias é o nome publicado no NDJSON, nos metadados JDBC e no `description`
+do Python. O tipo e a nulabilidade continuam sendo os do campo de origem.
+`WHERE` usa os nomes do schema, incluindo aliases YAML; o alias da consulta
+não cria um novo nome para filtros nem para outros itens do `SELECT`.
+
+**Todas as colunas pedidas são preservadas.** Nomes de saída repetidos recebem
+`_1`, `_2` etc. Aliases declarados na consulta, com ou sem `AS`, têm
+prioridade sobre nomes sem alias; entre aliases iguais, o primeiro mantém o nome. A ordem da projeção não muda:
+
+| Projeção | Nomes de saída |
+|---|---|
+| `a, a` | `a, a_1` |
+| `b, a AS b` | `b_1, b` |
+| `a AS x, b AS x` | `x, x_1` |
+| `a AS x, b AS x, c AS x_1` | `x, x_2, x_1` |
+
+Todos os nomes pedidos ficam reservados antes da numeração, que usa o menor
+índice livre. Os nomes distinguem maiúsculas e minúsculas. Essa regra substitui
+a antiga recusa de duplicatas na projeção (issue #41).
+
+`ORDER BY` resolve primeiro os nomes finais da saída, incluindo sufixos, e
+depois os nomes do schema. Em `SELECT b, a AS b ORDER BY b`, ordena por `a`;
+`ORDER BY b_1` ordena pelo `b` original. Caminhos como `doc.campo` continuam
+resolvendo a coluna aninhada; para ordenar pelo alias literal contendo ponto,
+use `ORDER BY "doc.campo"`.
+
+Aliases vazios ou aplicados a `*`/`pai.*` são recusados. Palavras reservadas
+exigem aspas duplas, inclusive o vocabulário contextual (`AS`, `ORDER`, `BY`,
+`ASC`, `DESC`, `NULLS`, `FIRST`, `LAST`, `OFFSET`, `LIKE`, `GROUP`, `JOIN`,
+`HAVING`, `DISTINCT`, `UNION`). Isso não muda nomes de campos já aceitos.
+Aspas internas se escrevem duplicadas: `SELECT id AS "com""aspas" FROM tabela`.
+A saída HTTP continua reservando `nishidb` para as molduras do protocolo;
+renomeie um campo com esse nome, por exemplo `nishidb AS valor`.
+As provas funcionais, de memória e por mutação estão no
+[aceite de aliases de projeção](docs/aceite-aliases-projecao.md).
 
 `ORDER BY` aceita até 16 chaves, com `ASC` (padrão) ou `DESC`. **Campo ausente
 vai por ÚLTIMO nas duas direções**, e `NULLS FIRST` inverte só os ausentes.

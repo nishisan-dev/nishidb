@@ -328,6 +328,9 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 		if p.cur.Type == lexer.TokenComma {
 			return p.errAt(p.cur.Pos, "'*' não pode ser combinado com colunas")
 		}
+		if p.cur.Type == lexer.TokenIdent || p.cur.Type == lexer.TokenQuotedIdent {
+			return p.errAt(p.cur.Pos, "wildcard projection cannot have an alias")
+		}
 		return nil
 	}
 
@@ -377,23 +380,16 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 				return p.errAt(p.cur.Pos, "nome na projeção tem no máximo dois níveis (field.caminho)")
 			}
 		}
+		// DISTINCT precisa ser reconhecido antes do alias implícito. Quem
+		// nomeia a coluna literalmente pode usar aspas ou AS explícito.
+		if first && ref.Qualifier == "" && isWord(columnTok, "distinct") && p.cur.Type != lexer.TokenFrom && p.cur.Type != lexer.TokenComma && !isWord(p.cur, "as") {
+			return lexer.NewUnsupportedClauseSyntaxError(columnTok.Pos, "DISTINCT")
+		}
+		if err := p.parseProjectionAlias(&ref); err != nil {
+			return err
+		}
 		st.Projection = append(st.Projection, ref)
 		if p.cur.Type != lexer.TokenComma {
-			// DISTINCT é a única das sete que NÃO chega ao sítio principal:
-			// em `SELECT DISTINCT a FROM t` o identifier() a aceita como nome
-			// de coluna, e o erro nasce apontando para o `a`, que não tem
-			// culpa nenhuma.
-			//
-			// As quatro condições, todas necessárias: é a PRIMEIRA coluna
-			// (`SELECT a, distinct` é outra coisa); o token era BARE (quem
-			// escreveu "distinct" entre aspas quer a coluna); a palavra casa;
-			// e o que vem depois NÃO é FROM (`SELECT distinct FROM t`
-			// seleciona uma coluna chamada distinct e continua válido).
-			if first && p.cur.Type != lexer.TokenFrom {
-				if name, ok := unsupportedClause(columnTok); ok && name == "DISTINCT" {
-					return lexer.NewUnsupportedClauseSyntaxError(columnTok.Pos, name)
-				}
-			}
 			return nil
 		}
 		if err := p.advance(); err != nil {

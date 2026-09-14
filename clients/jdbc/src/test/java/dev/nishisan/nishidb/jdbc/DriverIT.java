@@ -106,6 +106,40 @@ class DriverIT {
         }
     }
 
+    @Test
+    void projectionAliasesAndSuffixesReachMetadataAndLookup() throws SQLException {
+        for (String limit : new String[] {"", " LIMIT 0"}) {
+            try (Connection c = conecta();
+                    PreparedStatement st = c.prepareStatement(
+                            "SELECT id, inteiro AS id, texto AS \"FROM\", inteiro amount "
+                                    + "FROM todos_os_tipos WHERE id = ? ORDER BY id" + limit)) {
+                st.setString(1, "borda-1");
+                try (ResultSet rs = st.executeQuery()) {
+                    ResultSetMetaData md = rs.getMetaData();
+                    String[] names = {"id_1", "id", "FROM", "amount"};
+                    int[] types = {Types.VARCHAR, Types.BIGINT, Types.VARCHAR, Types.BIGINT};
+                    assertEquals(4, md.getColumnCount());
+                    for (int i = 0; i < names.length; i++) {
+                        assertEquals(names[i], md.getColumnLabel(i + 1));
+                        assertEquals(names[i], md.getColumnName(i + 1));
+                        assertEquals(types[i], md.getColumnType(i + 1));
+                        assertEquals(i + 1, rs.findColumn(names[i]));
+                    }
+                    assertEquals(ResultSetMetaData.columnNoNulls, md.isNullable(1));
+                    assertEquals(ResultSetMetaData.columnNullable, md.isNullable(2));
+                    if (limit.isEmpty()) {
+                        assertTrue(rs.next());
+                        assertEquals("borda-1", rs.getString("id_1"));
+                        assertEquals(Long.MAX_VALUE, rs.getLong("id"));
+                        assertEquals(Long.MAX_VALUE, rs.getLong("amount"));
+                        assertEquals("linha com \"aspas\" e \\barra", rs.getString("FROM"));
+                    }
+                    assertFalse(rs.next());
+                }
+            }
+        }
+    }
+
     private static void assertArrayEqualsHello(byte[] b) {
         assertEquals("Hello", new String(b, java.nio.charset.StandardCharsets.UTF_8));
     }

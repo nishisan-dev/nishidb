@@ -506,6 +506,8 @@ inglês correspondente.
 | preencher (atribuir o índice do slot depois que o conjunto está fechado) | fill | internal/query/binder |
 | limiar (o tamanho de projeção em que a checagem troca varredura por mapa) | threshold | internal/query/binder |
 | repetido / repetição (nome que aparece mais de uma vez na projeção ou no ORDER BY) | duplicate | internal/query/binder |
+| alias de projeção (rótulo por consulta, antes da numeração) | projection alias | internal/query/parser, internal/query/binder |
+| nome final de saída (alias ou nome, com sufixo se repetido) | final projection name | internal/query/binder |
 | célula (a entrada da tabela de comparabilidade coluna × tipo de literal) | cell | internal/query/binder |
 | restrito (tipo cujo conjunto de operadores é limitado a `=` e `!=`) | restricted | internal/query/binder |
 | ordenação (as chaves do ORDER BY resolvidas contra o schema) | ordering | internal/query/binder |
