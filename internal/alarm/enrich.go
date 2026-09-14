@@ -20,6 +20,7 @@ import (
 // colapsando de uma vez — um cluster inteiro caindo — produziriam milhares de
 // consultas numa única varredura, e o remédio é dizer no evento que o
 // enriquecimento foi pulado, nunca deixar de alarmar.
+// @TODO: Deixar configurável, mas com teto de 1000. O operador pode querer mais, mas o teto protege o processo de um cenário de avalanche.
 const maxEnrichmentsPerSweep = 16
 
 // enrichTimeout é o prazo de UMA consulta de enriquecimento.
@@ -27,6 +28,7 @@ const maxEnrichmentsPerSweep = 16
 // Curto de propósito: o enriquecimento é auxiliar, e uma consulta que não
 // responde em segundos não pode segurar a varredura dos outros alarmes. O
 // desfecho de estourar é o bloco vazio com o motivo, que é informação.
+// @TODO: Deixar configurável.
 const enrichTimeout = 2 * time.Second
 
 // Executor é o que o enriquecimento precisa do motor de consulta.
