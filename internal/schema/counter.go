@@ -24,6 +24,7 @@ import (
 //	    maxGroups: 65536                 # opcional
 //	    retainEmptyGroups: 7d            # opcional; `never` mantém para sempre
 //	    alarms: [...]                    # opcional; ver alarm.go
+//	    metrics: [...]                   # opcional; ver counter_metric.go
 //	    emit: {...}                      # opcional; ver emit.go
 //
 // O `keyFormat` precisa de aspas: `{` abre mapa no YAML. Ausente, o groupKey
@@ -76,6 +77,9 @@ type CounterSpec struct {
 	// `alarms`. O When de cada um segue a mesma regra do Where: validado
 	// sintaticamente aqui, compilado contra o schema em internal/alarm.
 	Alarms []AlarmSpec
+	// Metrics são as métricas de janela declaradas, na ordem; nil quando não
+	// há bloco `metrics`. Ver counter_metric.go.
+	Metrics []CounterMetricSpec
 	// Emit é a emissão periódica por linha; nil quando não há bloco `emit`.
 	Emit *EmitSpec
 }
@@ -94,6 +98,7 @@ type rawCounter struct {
 	RetainEmptyGroups string
 	KeyFormat         *string
 	Alarms            []rawAlarm
+	Metrics           []rawMetric
 	Emit              *rawEmit
 	hasGroupBy        bool
 }
@@ -116,7 +121,7 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 	for i, item := range n.Content {
 		keyPath := fmt.Sprintf("counters[%d]", i)
 		keys, err := block(item, keyPath, "name", "groupBy", "where", "keyFormat",
-			"maxGroups", "retainEmptyGroups", "alarms", "emit")
+			"maxGroups", "retainEmptyGroups", "alarms", "metrics", "emit")
 		if err != nil {
 			return nil, err
 		}
@@ -145,6 +150,8 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 				err = decodeInto(value, keyPath+".retainEmptyGroups", &r.RetainEmptyGroups)
 			case "alarms":
 				r.Alarms, err = alarmsFromNode(value, keyPath+".alarms")
+			case "metrics":
+				r.Metrics, err = metricsFromNode(value, keyPath+".metrics")
 			case "emit":
 				r.Emit, err = emitFromNode(value, keyPath+".emit")
 			}
@@ -242,11 +249,30 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 				return nil, specErrf("%s.groupBy: coluna %q repetida", keyPath, col)
 			}
 			seenColumns[col] = true
+		}
+		c := CounterSpec{Name: r.Name, GroupBy: r.GroupBy, MaxGroups: DefaultMaxGroups, RetainEmptyGroups: DefaultRetainEmptyGroups}
+		if r.Alarms != nil {
+			if c.Alarms, err = validateAlarms(r.Alarms, keyPath+".alarms"); err != nil {
+				return nil, err
+			}
+		}
+		if r.Metrics != nil {
+			if c.Metrics, err = validateMetrics(r.Metrics, keyPath+".metrics"); err != nil {
+				return nil, err
+			}
+		}
+		// As colisões de nome vêm ANTES da checagem de cada coluna do groupBy:
+		// um groupBy `total` tem de ser recusado pela colisão com a coluna fixa,
+		// e não por um sintoma dela (não estar declarado, ter o tipo errado) —
+		// o sintoma some quando o operador declara a coluna, e a colisão não.
+		if err := validateCounterNames(keyPath, c); err != nil {
+			return nil, err
+		}
+		for _, col := range r.GroupBy {
 			if err := validateGroupingColumn(keyPath, col, columns, key, seq); err != nil {
 				return nil, err
 			}
 		}
-		c := CounterSpec{Name: r.Name, GroupBy: r.GroupBy, MaxGroups: DefaultMaxGroups, RetainEmptyGroups: DefaultRetainEmptyGroups}
 		if r.Where != nil {
 			w := strings.Join(strings.Fields(*r.Where), " ")
 			if w == "" {
@@ -272,11 +298,6 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 				return nil, err
 			}
 			c.RetainEmptyGroups = d
-		}
-		if r.Alarms != nil {
-			if c.Alarms, err = validateAlarms(r.Alarms, keyPath+".alarms"); err != nil {
-				return nil, err
-			}
 		}
 		if r.Emit != nil {
 			if c.Emit, err = validateEmit(r.Emit, keyPath+".emit", r.Name, seenFiles); err != nil {
@@ -314,11 +335,12 @@ func declaredColumns(fields map[string]FieldSpec) (map[string]string, error) {
 	return out, nil
 }
 
+// validateGroupingColumn confere uma coluna do groupBy contra o schema do
+// dataset. A colisão com as colunas fixas da tabela do contador NÃO é
+// conferida aqui: ela é de validateCounterNames, que vê a lista inteira de
+// colunas (CounterColumns) e roda antes.
 func validateGroupingColumn(keyPath, col string, columns map[string]string, key, seq string) error {
 	switch col {
-	case CounterKeyColumn, CounterTotalColumn:
-		return specErrf("%s.groupBy: coluna %q colide com a coluna %s da tabela %s.<name>; renomeie a coluna no schema",
-			keyPath, col, col, CountersNamespace)
 	case key:
 		return specErrf("%s.groupBy: coluna %q é a key do dataset — agrupar pela key é um grupo por entidade", keyPath, col)
 	case seq:

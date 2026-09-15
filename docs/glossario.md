@@ -554,6 +554,14 @@ inglês correspondente.
 | série (o arquivo NDJSON com uma linha por grupo por intervalo) | series | internal/series |
 | rotação / rotacionar (girar o arquivo de série ao cruzar o teto de tamanho) | rotate / rotation | internal/series |
 | guardar (quantos arquivos rotacionados são mantidos) | keep | internal/series, internal/schema |
+| métrica de janela (avg, min ou max do total de cada grupo numa janela de tempo, declarada no bloco `metrics:` do contador) | window metric | internal/schema |
+| janela da métrica (o intervalo de tempo que a métrica de janela cobre; distinta da janela do rowindex) | metric window | internal/schema |
+| agregado da janela (avg, min ou max sobre a janela da métrica; distinto do agregado do contador inteiro) | window aggregate | internal/schema |
+| balde (cada uma das fatias de largura igual em que a janela da métrica é dividida) | bucket | internal/schema |
+| coluna gerada (a coluna `<métrica>_<agregado>` que uma métrica de janela produz na tabela do contador) | generated column | internal/schema |
+| coluna fixa (`groupKey` e `total`, presentes em toda tabela de contador) | fixed column | internal/schema, internal/counters |
+| origem da coluna (o trecho do contador, colunas fixas, `groupBy` ou `metrics[i]`, que produz a coluna) | origin | internal/schema |
+| qualificação do alarme / qualificar (a condição `qualifyWhen` que habilita o alarme para o grupo; distinta do qualificador de coluna) | qualify / qualifyWhen | internal/schema |
 
 ## 4. Como usar
 

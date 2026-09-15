@@ -84,13 +84,20 @@ func TableSchema(def counter.Definition) (*schema.Compiled, error) {
 	if len(def.Names) != len(def.Columns) || len(def.Types) != len(def.Columns) {
 		return nil, fmt.Errorf("contadores: %q com Names, Types e Columns de tamanhos diferentes", def.Name)
 	}
+	// A colisão sai da MESMA lista de colunas que a validação do YAML usa
+	// (schema.CounterColumns), e não de uma relação própria de colunas fixas.
+	// Aqui ela é defensiva: toda Definition compilada de um YAML já foi
+	// recusada na subida se colidisse. Fica porque a Definition é montável sem
+	// YAML, e sem ela o schema sintético declararia a mesma coluna duas vezes.
+	// A tabela ainda não gera colunas de métrica, e por isso a lista é montada
+	// sem métricas.
+	if first, second, found := schema.FindCounterColumnCollision(def.Names, nil); found {
+		return nil, fmt.Errorf("counters: %q: %s collides with %s", def.Name, second, first)
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "version: 1\nname: %s\nschemaName: %s\nmaterialization:\n  key:\n    field: %s\nschema:\n  include: [%s",
 		def.Name, schema.SyntheticSchemaName, schema.CounterKeyColumn, schema.CounterKeyColumn)
 	for _, n := range def.Names {
-		if n == schema.CounterKeyColumn || n == schema.CounterTotalColumn {
-			return nil, fmt.Errorf("contadores: %q agrupa por %q, que colide com a coluna fixa da tabela", def.Name, n)
-		}
 		fmt.Fprintf(&sb, ", %s", n)
 	}
 	fmt.Fprintf(&sb, ", %s]\n  fields:\n    %s:\n      type: string\n", schema.CounterTotalColumn, schema.CounterKeyColumn)
