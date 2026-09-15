@@ -239,6 +239,7 @@ var seriesOfAlarm = []string{
 	metrics.MetAlarmGroupsFiring,
 	metrics.MetAlarmFiredTotal,
 	metrics.MetAlarmResolvedTotal,
+	metrics.MetAlarmDisqualifiedTotal,
 	metrics.MetAlarmEnrichFailedTotal,
 	metrics.MetAlarmEnrichSkippedTotal,
 }

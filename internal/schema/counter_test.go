@@ -131,8 +131,14 @@ func TestCountersRecusas(t *testing.T) {
 		{"tipo fora dos três", "counters:\n  - name: x\n    groupBy: [lastSeen]\n", "string, int64 e boolean"},
 		{"coluna key", "counters:\n  - name: x\n    groupBy: [customerId]\n", "key"},
 		{"coluna sequence", "counters:\n  - name: x\n    groupBy: [seq]\n", "sequence"},
-		{"coluna groupKey", "counters:\n  - name: x\n    groupBy: [groupKey]\n", "groupKey"},
-		{"coluna total", "counters:\n  - name: x\n    groupBy: [total]\n", "total"},
+		// As duas colunas são DECLARADAS no schema (as linhas antes de
+		// `counters:` continuam schema.fields de yamlWithCounters): sem isso a
+		// recusa exercitada seria "não declarada", e o caso passaria com a
+		// recusa de colisão desligada.
+		{"coluna groupKey", "    groupKey:\n      type: string\ncounters:\n  - name: x\n    groupBy: [groupKey]\n",
+			`counters[0].groupBy: groupBy column "groupKey" collides with fixed column "groupKey"`},
+		{"coluna total", "    total:\n      type: string\ncounters:\n  - name: x\n    groupBy: [total]\n",
+			`counters[0].groupBy: groupBy column "total" collides with fixed column "total"`},
 		{"where vazio", "counters:\n  - name: x\n    groupBy: [olt]\n    where: \"  \"\n", "counters[0].where"},
 		{"maxGroups zero", "counters:\n  - name: x\n    groupBy: [olt]\n    maxGroups: 0\n", "maxGroups"},
 		{"maxGroups negativo", "counters:\n  - name: x\n    groupBy: [olt]\n    maxGroups: -1\n", "maxGroups"},

@@ -34,7 +34,7 @@ de tabela desconhecida nomeia as que existem).
 
 ## Tarefas
 
-1. `internal/counters/meta.go`: `Contado`, `TableMeta`, fonte; `Retain`
+1. `internal/counters/meta.go`: `ListedCounter`, `TableMeta`, fonte; `Retain`
    registra `_meta.counters` sempre.
 2. `internal/query/engine.go`: roteamento e mensagem de recusa do `_meta`.
 3. Testes: tabela (lista, vazia, auditoria nula até a primeira, point lookup),

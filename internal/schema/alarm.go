@@ -20,6 +20,7 @@ import (
 //	    alarms:
 //	      - name: olt_down
 //	        when: "total < 100"        # condição sobre as colunas da tabela
+//	        qualifyWhen: "total > 10"  # opcional; condição que habilita o alarme
 //	        sustainedFor: 2m           # por quanto tempo ela tem de valer
 //	        enrich:                    # opcional
 //	          - name: servicos_da_olt   # identifica o bloco no evento
@@ -55,6 +56,12 @@ type AlarmSpec struct {
 	// When é a condição normalizada (espaços colapsados) sobre as colunas da
 	// tabela do contador. Nunca vazia.
 	When string
+	// QualifyWhen é a condição de qualificação do alarme, normalizada como o
+	// When; "" quando a chave não veio, que é o alarme sem qualificação. É a
+	// condição que habilita o alarme para o grupo. Como o When, aqui ela só é
+	// lida e recusada em branco: compilá-la contra a tabela do contador e
+	// decidir o que ela faz com um alarme em curso não é papel do schema.
+	QualifyWhen string
 	// SustainedFor é quanto tempo o When precisa valer antes de o alarme
 	// disparar. Sempre >= MinSustainedFor.
 	SustainedFor time.Duration
@@ -86,6 +93,7 @@ type EnrichSpec struct {
 type rawAlarm struct {
 	Name         string
 	When         *string
+	QualifyWhen  *string
 	SustainedFor string
 	Enrich       []rawEnrich
 }
@@ -109,7 +117,7 @@ func alarmsFromNode(n *yaml.Node, keyPath string) ([]rawAlarm, error) {
 	out := make([]rawAlarm, 0, len(n.Content))
 	for i, item := range n.Content {
 		path := fmt.Sprintf("%s[%d]", keyPath, i)
-		keys, err := block(item, path, "name", "when", "sustainedFor", "enrich")
+		keys, err := block(item, path, "name", "when", "qualifyWhen", "sustainedFor", "enrich")
 		if err != nil {
 			return nil, err
 		}
@@ -123,6 +131,10 @@ func alarmsFromNode(n *yaml.Node, keyPath string) ([]rawAlarm, error) {
 				var w string
 				err = decodeInto(value, path+".when", &w)
 				r.When = &w
+			case "qualifyWhen":
+				var q string
+				err = decodeInto(value, path+".qualifyWhen", &q)
+				r.QualifyWhen = &q
 			case "sustainedFor":
 				err = decodeInto(value, path+".sustainedFor", &r.SustainedFor)
 			case "enrich":
@@ -204,6 +216,16 @@ func validateAlarms(raws []rawAlarm, keyPath string) ([]AlarmSpec, error) {
 			return nil, specErrf("%s.when vazio — um alarme sem condição não tem o que observar", path)
 		}
 		a.When = w
+		// Ausente é "sem qualificação"; presente em branco é recusado, e não
+		// lido como ausente, pela mesma razão do when vazio: quem escreveu a
+		// chave quis uma condição, e a que ele escreveu não existe.
+		if r.QualifyWhen != nil {
+			q := strings.Join(strings.Fields(*r.QualifyWhen), " ")
+			if q == "" {
+				return nil, specErrf("%s.qualifyWhen is blank — omit the key for an alarm without qualification", path)
+			}
+			a.QualifyWhen = q
+		}
 		if r.SustainedFor == "" {
 			return nil, specErrf(
 				"%s.sustainedFor obrigatório — é o prazo que separa alarme de rajada", path)

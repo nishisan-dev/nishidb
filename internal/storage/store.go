@@ -1021,7 +1021,7 @@ func Open(opts Options) (*Store, error) {
 	spillDir := filepath.Join(opts.Dir, spill.DirName)
 	metaDir := filepath.Join(opts.Dir, "metadata")
 	dataDir := filepath.Join(opts.Dir, "data")
-	idxDir := filepath.Join(opts.Dir, "indexes")
+	idxDir := indexesDir(opts.Dir)
 	cpDir := filepath.Join(opts.Dir, "checkpoint")
 	for _, d := range []string{metaDir, dataDir, idxDir, cpDir, spillDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -2454,6 +2454,36 @@ func (s *Store) DiretorioOfSpill() string {
 // escreve é o laço de alarmes, fora do Checkpoint (ver checkpoint/alarms.go).
 func (s *Store) AlarmStatePath() string {
 	return filepath.Join(s.opts.Dir, "checkpoint", checkpoint.AlarmStateFileName)
+}
+
+// counterMetricsDirName é o subdiretório de indexes/ onde moram os arquivos das
+// métricas de janela dos contadores. É nome em disco: mudá-lo faz a subida
+// seguinte não achar a janela gravada e recomeçar do zero.
+const counterMetricsDirName = "counter_metrics"
+
+// CounterMetricsDir é o diretório base dos arquivos das métricas de janela dos
+// contadores deste dataset (<counter>/<metric>.win abaixo dele).
+//
+// Fica em indexes/, IRMÃO do diretório dos contadores, e pelas mesmas razões do
+// AlarmStatePath: sob o mesmo flock exclusivo, herdando a política de
+// filesystem do dataset, e sem um segundo lugar para o operador dimensionar.
+// Também como o estado de alarme, ele fica FORA da ordem de durabilidade do
+// passo 8 (§48): a telemetria de janela não descreve dado materializado nem
+// posição de consumo, e quem a escreve é o amostrador, fora do Checkpoint.
+//
+// Fora do diretório de CADA contador de propósito: a reconstrução de um
+// contador não pode depender de conhecer estes arquivos. O que impede um
+// contador reconstruído de herdar a janela de outro grupo é a identidade por
+// hash da chave gravada no próprio arquivo, e não a posição no disco.
+func (s *Store) CounterMetricsDir() string {
+	return filepath.Join(indexesDir(s.opts.Dir), counterMetricsDirName)
+}
+
+// indexesDir é o diretório indexes/ de um dataset. Uma função só para o Open,
+// que o cria, e para CounterMetricsDir, que tem de apontar para dentro dele: o
+// literal escrito em dois lugares divergiria no dia em que um dos dois mudasse.
+func indexesDir(datasetDir string) string {
+	return filepath.Join(datasetDir, "indexes")
 }
 
 // Lookup consulta o índice do campo; valor nunca visto devolve iterador vazio;

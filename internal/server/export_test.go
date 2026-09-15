@@ -1,0 +1,101 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/nishisan-dev/nishidb/internal/query/executor"
+)
+
+// StopSamplingAndAlarmsForTest para o laço do amostrador das métricas de janela
+// e o laço de alarmes do dataset, para que o teste conduza cada passada com
+// SampleCounterMetricsOnceForTest e EvaluateAlarmsOnceForTest.
+//
+// Existe porque as cadências reais derivam do YAML (a menor janela ÷ 60 e o
+// menor sustainedFor ÷ 4): a prova de uma janela de 24 h com prazo de 5 min
+// levaria minutos de relógio de parede, e SampleOnce/EvaluateOnce não são
+// thread-safe — chamá-los com o laço de pé seria corrida, não teste. Os dois
+// Stop aguardam a passada em voo, então nada disputa o estado depois daqui. O
+// encerra() continua parando e fechando os dois (Stop e Close são idempotentes).
+func (s *Server) StopSamplingAndAlarmsForTest(dataset string) {
+	d := s.byNome[dataset]
+	if d == nil {
+		return
+	}
+	if d.metrics != nil {
+		d.metrics.Stop()
+	}
+	if d.alarms != nil {
+		d.alarms.Stop()
+	}
+}
+
+// SampleCounterMetricsOnceForTest faz uma passada do amostrador do dataset.
+// Só depois de StopSamplingAndAlarmsForTest.
+func (s *Server) SampleCounterMetricsOnceForTest(dataset string) error {
+	d := s.byNome[dataset]
+	if d == nil || d.metrics == nil {
+		return fmt.Errorf("dataset %q has no window metric sampler", dataset)
+	}
+	return d.metrics.SampleOnce()
+}
+
+// EvaluateAlarmsOnceForTest faz uma varredura de alarmes do dataset. Só depois
+// de StopSamplingAndAlarmsForTest.
+func (s *Server) EvaluateAlarmsOnceForTest(dataset string) error {
+	d := s.byNome[dataset]
+	if d == nil || d.alarms == nil {
+		return fmt.Errorf("dataset %q has no alarm runner", dataset)
+	}
+	return d.alarms.EvaluateOnce()
+}
+
+// MetricsExpositionForTest devolve o texto do /metrics lido direto do
+// Registry, sem HTTP. É o único jeito de observar as séries ANTES do Run: o
+// HTTP só sobe no Run, e os laços sobem logo em seguida, então um scrape pela
+// porta nunca garante ter chegado antes da primeira passada.
+func (s *Server) MetricsExpositionForTest() string {
+	var b bytes.Buffer
+	if _, err := s.reg.WriteTo(&b); err != nil {
+		return fmt.Sprintf("# metrics exposition failed: %v\n", err)
+	}
+	return b.String()
+}
+
+// QueryRowsForTest roda a consulta pelo MESMO motor, pelo MESMO orçamento e
+// pelo MESMO escritor NDJSON da rota /v1/query, sem HTTP, e devolve uma linha
+// por row. Existe pela razão do MetricsExpositionForTest: é o único jeito de
+// ler uma tabela ANTES do Run, e portanto antes de qualquer passada dos laços.
+func (s *Server) QueryRowsForTest(dataset, sql string) ([]string, error) {
+	it, err := s.eng.Execute(context.Background(), dataset, sql, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = it.Close() }()
+	orc := s.budget.Query(s.cfg.MaxBufferPerQuery())
+	if !orc.Admit() {
+		return nil, errors.New("query budget refused the test query")
+	}
+	defer orc.Release()
+	var b bytes.Buffer
+	w := executor.NewStreamWriter(&b, executor.DefaultBufSize, orc)
+	for it.Next() {
+		if err := w.WriteRow(it.Row()); err != nil {
+			return nil, err
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return nil, err
+	}
+	if err := it.Err(); err != nil {
+		return nil, err
+	}
+	text := strings.TrimSpace(b.String())
+	if text == "" {
+		return nil, nil
+	}
+	return strings.Split(text, "\n"), nil
+}

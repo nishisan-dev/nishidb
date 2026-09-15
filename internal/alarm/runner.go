@@ -3,6 +3,7 @@ package alarm
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -12,8 +13,10 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/keyformat"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/query"
+	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
+	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -35,6 +38,12 @@ type Options struct {
 	// seria uma suíte que leva minutos ou que só prova a sustentação com
 	// prazos irrealistas.
 	Now func() time.Time
+	// Metrics é a fonte dos valores publicados das métricas de janela, lidos
+	// pela tabela PRÓPRIA do laço. nil é aceito: as colunas continuam no schema
+	// e saem NULL — e NULL compara falso, então um `qualifyWhen` sobre métrica
+	// nunca qualifica sem fonte. É o que o teste de lógica de passada usa
+	// quando não exercita métricas.
+	Metrics counters.MetricSource
 }
 
 // Runner observa os alarmes de um dataset.
@@ -115,13 +124,25 @@ type runnerCounter struct {
 	// format é o molde do groupKey, para renderizar o texto de um grupo que a
 	// varredura não viu mais.
 	format *keyformat.Format
-	alarms []*runnerAlarm
+	// metricColumns são as colunas das métricas de janela, na ordem declarada,
+	// com o FieldID que a tabela PRÓPRIA do laço lhes deu — é o payload dela
+	// que o evento lê.
+	metricColumns []metricColumn
+	alarms        []*runnerAlarm
+}
+
+// metricColumn é uma coluna gerada por métrica de janela na linha do contador.
+type metricColumn struct {
+	id   types.FieldID
+	name string
 }
 
 // runnerAlarm é um alarme com o avaliador e o estado por grupo.
 type runnerAlarm struct {
 	compiled *compiledAlarm
 	eval     counter.Evaluator
+	// qualifier avalia o `qualifyWhen`; nil quando o alarme não o declara.
+	qualifier counter.Evaluator
 	// trackers guarda estado SÓ dos grupos em observação, indexados pela chave
 	// canônica. Um contador por PON tem milhares de grupos saudáveis, e um
 	// tracker para cada faria a memória crescer com o inventário em vez de com
@@ -158,21 +179,30 @@ func New(defs []Definition, readers map[string]counters.Reader, opts Options) (*
 			return nil, fmt.Errorf("alarm: contador %q sem leitor", d.Counter)
 		}
 		rc := &runnerCounter{def: d, reader: reader}
-		var err error
 		// Tabela virtual PRÓPRIA do alarme: ela tem buffer e scratch, e
 		// compartilhar a das consultas poria dois donos no mesmo estado
-		// interno. Montá-la custa uma compilação de schema na subida.
-		if _, rc.store, err = counters.Table(d.def, reader); err != nil {
+		// interno. Montá-la custa uma compilação de schema na subida. Sem
+		// MetricSource as colunas das métricas existem e saem NULL.
+		sc, store, err := counters.Table(d.def, reader, d.metrics, opts.Metrics)
+		if err != nil {
 			return nil, fmt.Errorf("alarm: tabela do contador %q: %w", d.Counter, err)
+		}
+		rc.store = store
+		if rc.metricColumns, err = metricColumnsOf(sc, d.metrics); err != nil {
+			return nil, fmt.Errorf("alarm: counter %q: %w", d.Counter, err)
 		}
 		rc.names, rc.format = d.def.Names, d.def.Format
 		for i := range d.alarms {
 			a := &d.alarms[i]
-			rc.alarms = append(rc.alarms, &runnerAlarm{
+			ra := &runnerAlarm{
 				compiled: a,
 				eval:     a.newEvaluator(),
 				trackers: make(map[string]*tracker),
-			})
+			}
+			if a.newQualifier != nil {
+				ra.qualifier = a.newQualifier()
+			}
+			rc.alarms = append(rc.alarms, ra)
 		}
 		r.dataset = d.Dataset
 		r.counters = append(r.counters, rc)
@@ -184,6 +214,22 @@ func New(defs []Definition, readers map[string]counters.Reader, opts Options) (*
 	// janela de subida — justamente quando alguém está olhando.
 	r.publishSnapshot()
 	return r, nil
+}
+
+// metricColumnsOf resolve, no schema da tabela própria do laço, o FieldID de
+// cada coluna gerada pelas métricas, na ordem declarada.
+func metricColumnsOf(sc *schema.Compiled, metrics []schema.CounterMetricSpec) ([]metricColumn, error) {
+	var out []metricColumn
+	for _, m := range metrics {
+		for _, col := range m.Columns() {
+			f, ok := sc.FieldByName([]byte(col))
+			if !ok {
+				return nil, fmt.Errorf("column %q of metric %q has no FieldID in the counter table", col, m.Name)
+			}
+			out = append(out, metricColumn{id: f.ID, name: col})
+		}
+	}
+	return out, nil
 }
 
 // restore instala o estado durável lido do disco.
@@ -217,9 +263,11 @@ func (r *Runner) restore() {
 			continue
 		}
 		// A assinatura da regra é o que decide se o cronômetro ainda vale. Um
-		// prazo trocado no YAML invalida a medida: disparar com o cronômetro
+		// prazo, uma condição, uma qualificação ou a janela de uma métrica
+		// citada trocados no YAML invalidam a medida: disparar com o cronômetro
 		// antigo anunciaria uma sustentação que ninguém mediu.
-		if e.When != ra.compiled.when || e.SustainedFor != ra.compiled.sustainedFor {
+		if e.When != ra.compiled.when || e.QualifyWhen != ra.compiled.qualifyWhen ||
+			e.SustainedFor != ra.compiled.sustainedFor || e.MetricsFingerprint != ra.compiled.metricsFingerprint {
 			dropped += len(e.Groups)
 			continue
 		}
@@ -306,11 +354,29 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
 			// Leitura de mapa com string(chave) não copia a chave (otimização
 			// do compilador), e é o caminho de TODO grupo saudável.
 			tr, existed := ra.trackers[string(key)]
+			if !existed && !holds {
+				// O caso dominante: milhares de grupos em ordem, e nada a
+				// lembrar de nenhum deles. Criar tracker aqui seria lixo
+				// proporcional ao inventário, não ao problema.
+				continue
+			}
+			// A qualificação só é avaliada com a condição valendo. Com ela
+			// falsa o desfecho já está decidido — resolução por condição, ou
+			// nada —, e avaliar o qualifyWhen de todo grupo saudável seria
+			// pagar uma segunda avaliação por grupo do inventário para não
+			// mudar decisão nenhuma.
+			qualified := true
+			if holds && ra.qualifier != nil {
+				if qualified, err = ra.qualifier.Evaluate(rec.Payload); err != nil {
+					return fmt.Errorf("alarm: evaluating the qualifyWhen of %q on group %q: %w", ra.compiled.name, text, err)
+				}
+			}
 			if !existed {
-				if !holds {
-					// O caso dominante: milhares de grupos em ordem, e nada a
-					// lembrar de nenhum deles. Criar tracker aqui seria lixo
-					// proporcional ao inventário, não ao problema.
+				if !qualified {
+					// Condição valendo sobre grupo inelegível — a OLT que
+					// nunca teve ninguém. É o caso dominante do alarme
+					// qualificado, e pela mesma razão do anterior não ganha
+					// tracker.
 					continue
 				}
 				tr = &tracker{}
@@ -318,7 +384,8 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
 				ra.stats.tracked.Add(1)
 			}
 			tr.seen = r.pass
-			r.decide(rc, ra, tr, key, text, total, observation{present: true, conditionHolds: holds}, now)
+			r.decide(rc, ra, tr, key, text, total, rec.Payload,
+				observation{present: true, conditionHolds: holds, qualified: qualified}, now)
 		}
 	}
 	// Fase dois: os grupos com estado que a varredura NÃO viu desapareceram.
@@ -329,7 +396,7 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
 			if tr.seen == r.pass {
 				continue
 			}
-			r.decide(rc, ra, tr, []byte(k), nil, 0, observation{}, now)
+			r.decide(rc, ra, tr, []byte(k), nil, 0, nil, observation{}, now)
 		}
 	}
 	return nil
@@ -339,7 +406,11 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
 //
 // O tracker chega resolvido: quem varre já o procurou no mapa, e procurá-lo
 // aqui de novo custaria uma segunda busca por grupo.
-func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, text []byte, total int64, o observation, now time.Time) {
+//
+// payload é a linha do grupo que a observação avaliou; nil para o grupo que a
+// varredura não viu.
+func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, text []byte, total int64,
+	payload []byte, o observation, now time.Time) {
 	before := tr.phase
 	d := tr.evaluate(o, ra.compiled.sustainedFor, now)
 	if tr.phase != before {
@@ -360,8 +431,12 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 	case verdictCleared, verdictRetired:
 		ra.stats.resolved.Add(1)
 		ra.stats.firing.Add(-1)
+	case verdictDisqualified:
+		ra.stats.resolved.Add(1)
+		ra.stats.disqualified.Add(1)
+		ra.stats.firing.Add(-1)
 	}
-	e := r.event(rc, ra, key, text, total, d, now)
+	e := r.event(rc, ra, key, text, total, payload, d, now)
 	// Só o DISPARO enriquece. O enriquecimento existe para dar contexto ao
 	// problema; na resolução o fato relevante é que ele passou, e executar as
 	// consultas outra vez dobraria o custo para contar isso.
@@ -373,18 +448,20 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 
 // event monta o evento de uma decisão.
 func (r *Runner) event(rc *runnerCounter, ra *runnerAlarm, key, text []byte, total int64,
-	d decision, now time.Time) Event {
+	payload []byte, d decision, now time.Time) Event {
 	e := Event{
-		Dataset:      rc.def.Dataset,
-		Counter:      rc.def.Counter,
-		Alarm:        ra.compiled.name,
-		GroupKey:     string(text),
-		Total:        total,
-		Condition:    ra.compiled.when,
-		SustainedFor: ra.compiled.sustainedFor,
-		Since:        d.since,
-		At:           now,
-		Restored:     d.restored,
+		Dataset:          rc.def.Dataset,
+		Counter:          rc.def.Counter,
+		Alarm:            ra.compiled.name,
+		GroupKey:         string(text),
+		Total:            total,
+		Condition:        ra.compiled.when,
+		SustainedFor:     ra.compiled.sustainedFor,
+		QualifyCondition: ra.compiled.qualifyWhen,
+		Metrics:          r.metricsOf(rc, payload),
+		Since:            d.since,
+		At:               now,
+		Restored:         d.restored,
 	}
 	switch d.verdict {
 	case verdictFiring:
@@ -393,6 +470,8 @@ func (r *Runner) event(rc *runnerCounter, ra *runnerAlarm, key, text []byte, tot
 		e.State, e.Reason = StateResolved, ReasonConditionCleared
 	case verdictRetired:
 		e.State, e.Reason = StateResolved, ReasonGroupRetired
+	case verdictDisqualified:
+		e.State, e.Reason = StateResolved, ReasonDisqualified
 	}
 	if d.restored && r.savedAtUnixMs > 0 {
 		e.DowntimeMs = now.UnixMilli() - r.savedAtUnixMs
@@ -425,6 +504,47 @@ func (r *Runner) columnsOf(rc *runnerCounter, key []byte) []Column {
 	return out
 }
 
+// metricsOf lê do payload da linha as colunas das métricas de janela, na ordem
+// declarada.
+//
+// Lê o MESMO payload que a decisão avaliou, e não uma releitura da tabela: entre
+// as duas o amostrador pode publicar outro valor, e o evento mostraria um número
+// que não foi o que decidiu. Só os FieldIDs das métricas são aproveitados;
+// coluna ausente é NULL e não entra.
+//
+// Aloca, e está fora da passada saudável: só roda quando há evento a emitir.
+// Erro de leitura aqui não segura o evento — a mesma linha acabou de passar pelo
+// avaliador —, e o que se perde são as colunas a partir do defeito.
+func (r *Runner) metricsOf(rc *runnerCounter, payload []byte) []Column {
+	if payload == nil || len(rc.metricColumns) == 0 {
+		return nil
+	}
+	values := make([]string, len(rc.metricColumns))
+	present := make([]bool, len(rc.metricColumns))
+	found := 0
+	var fr encoding.FieldReader
+	fr.Reset(payload)
+	for id, v, ok := fr.Next(); ok; id, v, ok = fr.Next() {
+		for i, c := range rc.metricColumns {
+			if c.id == id {
+				values[i], present[i] = textOfValue(v), true
+				found++
+				break
+			}
+		}
+	}
+	if found == 0 {
+		return nil
+	}
+	out := make([]Column, 0, found)
+	for i, c := range rc.metricColumns {
+		if present[i] {
+			out = append(out, Column{Name: c.name, Value: values[i]})
+		}
+	}
+	return out
+}
+
 // groupKeyOf renderiza o texto do grupo a partir da chave canônica, pelo MESMO
 // molde que o contador usa — é o caso do grupo que a varredura não viu mais, e
 // cujo texto ninguém tem em mão.
@@ -453,11 +573,13 @@ func (r *Runner) persist(now time.Time) error {
 				continue
 			}
 			e := checkpoint.AlarmEntry{
-				Counter:      rc.def.Counter,
-				Alarm:        ra.compiled.name,
-				When:         ra.compiled.when,
-				SustainedFor: ra.compiled.sustainedFor,
-				Groups:       make([]checkpoint.GroupSince, 0, len(ra.trackers)),
+				Counter:            rc.def.Counter,
+				Alarm:              ra.compiled.name,
+				When:               ra.compiled.when,
+				QualifyWhen:        ra.compiled.qualifyWhen,
+				MetricsFingerprint: ra.compiled.metricsFingerprint,
+				SustainedFor:       ra.compiled.sustainedFor,
+				Groups:             make([]checkpoint.GroupSince, 0, len(ra.trackers)),
 			}
 			for k, tr := range ra.trackers {
 				e.Groups = append(e.Groups, checkpoint.GroupSince{
@@ -493,8 +615,9 @@ func valuesOf(key []byte, scratch []types.Value) ([]types.Value, error) {
 	return valuekey.DecodeComposite(key, scratch[:0])
 }
 
-// textOfValue rende um valor de coluna do groupBy como texto, no mesmo formato
-// que a coluna teria num SELECT.
+// textOfValue rende um valor de coluna da linha do contador — do groupBy ou de
+// uma métrica de janela — como texto, no mesmo formato que a coluna teria num
+// SELECT.
 func textOfValue(v types.Value) string {
 	switch v.Type {
 	case types.TypeString:
@@ -506,9 +629,20 @@ func textOfValue(v types.Value) string {
 			return "true"
 		}
 		return "false"
+	case types.TypeDouble:
+		// A média de uma métrica de janela. A grafia é a do NDJSON
+		// (executor.AppendValue): 'g', a forma mais curta que faz round-trip.
+		// O contrato do MetricReader garante valor finito com amostra, e o
+		// guarda cobre quem o quebrar: não-finito sai vazio, e não como NaN.
+		f := math.Float64frombits(uint64(v.I64))
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return ""
+		}
+		return strconv.FormatFloat(f, 'g', -1, 64)
 	default:
-		// groupBy aceita só os três tipos acima (validateGroupingColumn), e um
-		// tipo novo aqui exige decidir a renderização antes.
+		// groupBy aceita só string, int64 e boolean (validateGroupingColumn), e
+		// as métricas geram só int64 e double; um tipo novo aqui exige decidir a
+		// renderização antes.
 		return ""
 	}
 }

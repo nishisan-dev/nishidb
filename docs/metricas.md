@@ -1,6 +1,6 @@
 # Métricas expostas
 
-As **91 séries** declaradas em [`internal/metrics/names.go`](../internal/metrics/names.go),
+As **115 séries** declaradas em [`internal/metrics/names.go`](../internal/metrics/names.go),
 que é a fonte ÚNICA dos nomes — nenhum literal de nome de série existe fora
 dali, e `TestTodaMetricaDeclaradaEstaDocumentada` confere que esta página
 descreve todas elas.
@@ -22,7 +22,8 @@ naquela raspagem — ausência é ausência de medida, e nunca zero.
   reservado a ele), `gauge` sobe e desce, `histogram` traz `_bucket`, `_sum` e
   `_count`.
 - **labels** são os do produto, conjunto fechado: `dataset`, `partition`,
-  `categoria`, `motivo`, `counter`, `reason`, `estado`, `modo`. **Nenhum valor
+  `categoria`, `motivo`, `counter`, `alarm`, `metric`, `reason`, `estado`,
+  `modo`. **Nenhum valor
   de label vem de entrada do cliente** — todos saem do YAML ou de enums do
   código, porque label livre é cardinalidade sem teto.
 - **⚠️** marca a série que **não estava exposta** no processo de referência
@@ -214,9 +215,39 @@ Dez por contador declarado no bloco `counters:`, com o rótulo `counter`.
 | `nishidb_counter_audit_divergent_groups` | gauge | `counter`, `dataset` | divergências na última auditoria conclusiva — grupos, linhas sem grupo internado e os dois agregados; 0 até a primeira (ver o timestamp ao lado) |
 | `nishidb_counter_audit_last_success_timestamp` | gauge | `counter`, `dataset` | Unix timestamp da última auditoria conclusiva do contador; 0 até a primeira |
 
+### Métricas de janela do contador
+
+Só nos datasets com algum contador que declara `metrics:`. As quatro primeiras
+saem por métrica declarada, com os rótulos `counter` e `metric`; a do mapa de
+posições sai uma vez por contador; as três últimas são do dataset, porque a
+passada de amostragem é do dataset inteiro.
+
+Todas saem desde a subida, antes da primeira passada: o que existe desde a
+abertura é a SÉRIE, e não um valor zero. "A janela não mudou" tem de ser
+distinguível de "ninguém está amostrando", e é `nishidb_counter_metric_sampling`
+que responde a segunda pergunta — ela sai 0 até o laço subir. O valor de
+abertura das outras depende do disco: num dataset novo, `groups`,
+`restored_groups` e `sample_seconds` saem zerados; depois de um reinício,
+`groups` e `restored_groups` já saem com o que a restauração recuperou, e só
+`sample_seconds` espera a primeira passada. `resets_total` conta as recriações
+desta abertura, e por isso pode sair diferente de zero já na subida. As de bytes
+saem com o tamanho da abertura, porque o arquivo e o primeiro bloco em heap
+existem desde ela.
+
+| série | tipo | labels | o que responde |
+|---|---|---|---|
+| `nishidb_counter_metric_groups` | gauge | `counter`, `dataset`, `metric` | posições ocupadas por grupos vivos do contador; o mesmo número em todas as métricas dele |
+| `nishidb_counter_metric_heap_bytes` | gauge | `counter`, `dataset`, `metric` | estimativa das entradas da métrica em heap, em bytes; acompanha o máximo de grupos vivos simultâneos. Não inclui o mapa de posições, que tem série própria |
+| `nishidb_counter_metric_disk_bytes` | gauge | `counter`, `dataset`, `metric` | tamanho do arquivo mapeado da métrica, em bytes |
+| `nishidb_counter_metric_resets_total` | counter | `counter`, `dataset`, `metric` | recriações do arquivo da métrica por cabeçalho divergente ou ilegível; cada uma perdeu a janela da métrica. Mudar a `window` no YAML muda a largura do balde e também recria |
+| `nishidb_counter_metric_position_map_bytes` | gauge | `counter`, `dataset` | mapa id → posição do contador, em bytes; um por contador, compartilhado pelas métricas dele. Sai UMA vez por contador: somar uma série por métrica contaria o mesmo mapa mais de uma vez |
+| `nishidb_counter_metric_sampling` | gauge | `dataset` | 1 enquanto o laço de amostragem das métricas de janela está de pé. Zero com métrica declarada é a janela congelada: o laço ainda não subiu ou parou na primeira falha |
+| `nishidb_counter_metric_sample_seconds` | gauge | `dataset` | duração da última passada completa de amostragem, em segundos. Acima do intervalo de amostragem (a menor janela dividida por 60, entre 1 s e 10 s), as amostras atrasam |
+| `nishidb_counter_metric_restored_groups` | gauge | `dataset` | entradas que saíram da abertura com amostra na janela, somadas sobre as métricas. Zero depois de um reinício dentro da janela significa que a janela gravada não foi recuperada |
+
 ### Alarmes de contador
 
-Só nos datasets que declaram `alarms:` dentro de algum contador. As seis
+Só nos datasets que declaram `alarms:` dentro de algum contador. As sete
 primeiras saem por alarme declarado, com os rótulos `counter` e `alarm`; as três
 últimas são do dataset, porque a passada de varredura é do dataset inteiro.
 
@@ -229,7 +260,8 @@ responde a segunda pergunta.
 | `nishidb_alarm_groups_tracked` | gauge | `alarm`, `counter`, `dataset` | grupos em observação: a condição vale para eles, tenham ou não cumprido o prazo. Acompanha o problema, não o tamanho do inventário — se crescer com o número de grupos do contador, algo guarda estado que não deveria |
 | `nishidb_alarm_groups_firing` | gauge | `alarm`, `counter`, `dataset` | grupos com o alarme disparado agora |
 | `nishidb_alarm_fired_total` ⚠️ | counter | `alarm`, `counter`, `dataset` | disparos desde a subida |
-| `nishidb_alarm_resolved_total` | counter | `alarm`, `counter`, `dataset` | resoluções desde a subida, somando condição que passou e grupo aposentado; o motivo de cada uma está no evento de log, não na série |
+| `nishidb_alarm_resolved_total` | counter | `alarm`, `counter`, `dataset` | resoluções desde a subida, somando condição que passou, grupo aposentado e desqualificação; o motivo de cada uma está no evento de log |
+| `nishidb_alarm_disqualified_total` | counter | `alarm`, `counter`, `dataset` | resoluções por desqualificação desde a subida: o `qualifyWhen` ficou falso com a condição ainda valendo. É SUBCONJUNTO de `nishidb_alarm_resolved_total`, nunca somado a ele — a diferença entre as duas são as resoluções que dizem que o problema passou ou que o grupo saiu |
 | `nishidb_alarm_enrich_failed_total` ⚠️ | counter | `alarm`, `counter`, `dataset` | consultas de enriquecimento que falharam; o alarme saiu sem o bloco. Diferente de zero manda investigar a consulta declarada |
 | `nishidb_alarm_enrich_skipped_total` ⚠️ | counter | `alarm`, `counter`, `dataset` | consultas puladas pelo teto da passada; o alarme saiu sem o bloco. Diferente de zero significa avalanche de disparos, não consulta ruim — é por isso que não compartilha série com a de falha |
 | `nishidb_alarm_watching` | gauge | `dataset` | 1 enquanto o laço de varredura está de pé. Zero com alarme declarado significa que o laço parou na primeira falha |

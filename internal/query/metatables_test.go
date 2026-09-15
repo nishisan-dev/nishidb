@@ -8,8 +8,15 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
-// harnessWithMetaTables monta o retrato do que um servidor de verdade publica
-// — a base, um contador e as tabelas de meta — e registra a `_meta.tables`.
+// harnessWithMetaTables monta À MÃO um catálogo — a base, um contador e duas
+// tabelas de meta — e registra a `_meta.tables`.
+//
+// NÃO é o retrato completo do que um servidor publica: o servidor registra
+// também, por exemplo, a `_meta.alarms` e a `_meta.counter_metrics`, e este
+// harness não. Para o que se cobra aqui — a `_meta.tables` lista o que estiver
+// REGISTRADO — qualquer catálogo serve; a lista completa de cada processo é
+// cobrada na fiação dele (TestMetaTablesRespondePelaRotaDeConsultaDoServidor e
+// TestQueryLocalRespondeMetaTablesComOCatalogoDoDataset).
 //
 // Ela é registrada ANTES das outras DE PROPÓSITO, e é o contrário da ordem de
 // produção (servidor e CLI a registram depois de counters.Register e
@@ -30,11 +37,13 @@ func harnessWithMetaTables(t *testing.T) *harness {
 }
 
 // TestMetaTablesListaOCatalogo: é a resposta por SQL para "que tabelas
-// existem" — o `_meta` deste produto já responde `fields`, `counters` e
-// `kafka`, e faltava a que lista as tabelas.
+// existem" — o `_meta` deste produto responde também `fields`, `counters`,
+// `counter_metrics`, `kafka` e `alarms`, e faltava a que lista as tabelas.
 //
 // O `id` é o endereço do FROM, e a lista inteira é comparada: uma tabela a
-// mais ou a menos reprova, que é o que separa este teste de um `Contains`.
+// mais ou a menos reprova, que é o que separa este teste de um `Contains`. A
+// lista é a do catálogo montado à mão por harnessWithMetaTables, e não a de um
+// servidor.
 func TestMetaTablesListaOCatalogo(t *testing.T) {
 	h := harnessWithMetaTables(t)
 	rows := h.consultaOK("SELECT id, kind FROM _meta.tables ORDER BY id")

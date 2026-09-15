@@ -58,7 +58,7 @@ func OfYAML(k *schema.KafkaSpec) Declarada {
 }
 
 // Consumido é o que a tabela precisa do consumidor CORRENTE. Interface, e não
-// o *kafka.Consumidor, pela mesma razão do Leitor e do Contado em
+// o *kafka.Consumidor, pela mesma razão do Reader e do ListedCounter em
 // internal/counters: o teste da tabela não precisa de broker, e
 // *kafka.Consumidor a satisfaz.
 type Consumido interface {

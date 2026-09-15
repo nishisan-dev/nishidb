@@ -18,14 +18,21 @@ const (
 	// inventário não é um equipamento que voltou ao normal, e quem gera evento
 	// a partir disto trata os dois de formas diferentes.
 	ReasonGroupRetired = "group_retired"
+	// ReasonDisqualified: o grupo deixou de ser elegível — o `qualifyWhen`
+	// passou a ser falso com a condição ainda valendo. É distinto dos dois
+	// anteriores: a OLT morta há mais de um dia não voltou (a condição vale) e
+	// não saiu do inventário (o grupo existe); ela deixou de ser o assunto do
+	// alarme, e só volta a disparar depois de requalificar.
+	ReasonDisqualified = "disqualified"
 )
 
-// Column é uma coluna do groupBy do grupo alarmado.
+// Column é uma coluna da linha do grupo alarmado: do groupBy, em
+// Event.Columns, ou de uma métrica de janela, em Event.Metrics.
 //
 // O valor vai como TEXTO porque o canal é uma linha de log JSON, e é o mesmo
 // texto que a coluna teria num SELECT da tabela do contador. Quem precisar do
-// tipo o encontra em `_meta.counters`, que publica o groupBy de cada contador —
-// carregá-lo aqui duplicaria no evento um dado que já é consultável.
+// tipo o encontra em `_meta.counters` e `_meta.counter_metrics` — carregá-lo
+// aqui duplicaria no evento um dado que já é consultável.
 type Column struct {
 	Name  string
 	Value string
@@ -59,6 +66,19 @@ type Event struct {
 	// não é acionável.
 	Condition    string
 	SustainedFor time.Duration
+	// QualifyCondition é o `qualifyWhen` declarado; vazio quando o alarme não
+	// o declara. Vai no evento pelo mesmo motivo de Condition: um
+	// `disqualified` sem o limiar de elegibilidade não diz o que mudou.
+	QualifyCondition string
+	// Metrics são as colunas das métricas de janela do grupo no instante da
+	// decisão, na ordem declarada (métrica, depois agregado). Coluna sem
+	// amostra (NULL) não entra: um zero aqui afirmaria uma média que ninguém
+	// mediu. Vazio para o grupo aposentado, que a varredura não viu.
+	//
+	// São os números que explicam a decisão — `auth_24h_max` abaixo do limiar
+	// é o porquê de um `disqualified` —, e quem recebe o evento não tem como
+	// consultá-los depois: a janela terá andado.
+	Metrics []Column
 	// Since é quando a condição passou a valer, e At o instante do evento.
 	Since time.Time
 	At    time.Time

@@ -2,6 +2,7 @@ package counters_test
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -105,6 +106,13 @@ func openCounter(t *testing.T, def counter.Definition) *counter.Counter {
 // do contador sob ele.
 func engineWithCounter(t *testing.T, c *counter.Counter) *query.Engine {
 	t.Helper()
+	return engineWithCounterMetrics(t, c, nil, nil)
+}
+
+// engineWithDataset registra só o dataset de mentira sob o qual as tabelas
+// virtuais vivem.
+func engineWithDataset(t *testing.T) *query.Engine {
+	t.Helper()
 	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +125,15 @@ func engineWithCounter(t *testing.T, c *counter.Counter) *query.Engine {
 	if err := eng.Register("servicos", sc, fakestorage.New(fakestorage.Indexes{})); err != nil {
 		t.Fatal(err)
 	}
-	tsc, source, err := counters.Table(c.Def(), c)
+	return eng
+}
+
+// engineWithCounterMetrics é o engineWithCounter com as métricas declaradas do
+// contador e a fonte delas (nil deixa as colunas NULL).
+func engineWithCounterMetrics(t *testing.T, c *counter.Counter, metrics []schema.CounterMetricSpec, src counters.MetricSource) *query.Engine {
+	t.Helper()
+	eng := engineWithDataset(t)
+	tsc, source, err := counters.Table(c.Def(), c, metrics, src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,8 +173,10 @@ func render(c executor.ColView) string {
 	switch c.Val.Type {
 	case types.TypeString:
 		return string(c.Val.Bytes)
-	case types.TypeInt64:
+	case types.TypeInt64, types.TypeTimestamp:
 		return strconv.FormatInt(c.Val.I64, 10)
+	case types.TypeDouble:
+		return strconv.FormatFloat(math.Float64frombits(uint64(c.Val.I64)), 'g', -1, 64)
 	case types.TypeBool:
 		if c.Val.I64 != 0 {
 			return "true"
@@ -288,7 +306,7 @@ func TestTabelaRecusaColunaInexistenteNomeandoATabela(t *testing.T) {
 func TestTabelaRecusaDefinicaoQueColideComAsColunasFixas(t *testing.T) {
 	def := defByOLT("x")
 	def.Names = []string{"total"}
-	if _, _, err := counters.Table(def, nil); err == nil {
+	if _, _, err := counters.Table(def, nil, nil, nil); err == nil {
 		t.Fatal("coluna do groupBy chamada total tem de ser recusada")
 	}
 }

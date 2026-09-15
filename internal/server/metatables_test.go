@@ -50,7 +50,7 @@ func idsOfMetaTables(t *testing.T, srv *server.Server, dataset string) string {
 // registra mesmo sem contador e sem Kafka declarados.
 func TestMetaTablesRespondePelaRotaDeConsultaDoServidor(t *testing.T) {
 	srv := serverWithData(t, 4, blockPadrao)
-	const want = "_meta.alarms,_meta.counters,_meta.fields,_meta.kafka,_meta.tables,d"
+	const want = "_meta.alarms,_meta.counter_metrics,_meta.counters,_meta.fields,_meta.kafka,_meta.tables,d"
 	if got := idsOfMetaTables(t, srv, "d"); got != want {
 		t.Fatalf("catálogo = %s, quero %s", got, want)
 	}
@@ -62,8 +62,9 @@ func TestMetaTablesRespondePelaRotaDeConsultaDoServidor(t *testing.T) {
 // a outra de pé.
 //
 // A lista da irmã é mais curta que a do base, e é assim HOJE: pelo servidor ela
-// não recebe `_meta.counters` nem `_meta.kafka`, e pelo `nishidb query
-// --config` recebe a `_meta.counters`. A assimetria é da fiação, está
+// não recebe `_meta.counters`, `_meta.counter_metrics` nem `_meta.kafka`, e
+// pelo `nishidb query --config` recebe as duas dos contadores. A assimetria é
+// da fiação, está
 // registrada no débito 117, e é este teste que muda no dia em que ela for
 // resolvida.
 func TestMetaTablesRespondeNaTabelaIrmaAbertaPeloServidor(t *testing.T) {

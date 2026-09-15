@@ -10,3 +10,16 @@ import "testing"
 func TestTabelaDoContadorNaoAlocaPorLinha(t *testing.T) {
 	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
 }
+
+// TestCounterTableDoesNotAllocatePerRowWithMetrics: mesma contraparte, para o
+// gate com as métricas de janela presentes.
+func TestCounterTableDoesNotAllocatePerRowWithMetrics(t *testing.T) {
+	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+}
+
+// TestCounterTableAtRowCeilingDoesNotAllocatePerRow: mesma contraparte, para o
+// gate da linha no teto. A conferência das colunas no teto roda sob -race
+// (TestCounterTableAtRowCeilingPublishesEveryColumn); só a contagem pula.
+func TestCounterTableAtRowCeilingDoesNotAllocatePerRow(t *testing.T) {
+	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+}

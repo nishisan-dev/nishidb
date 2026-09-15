@@ -2,12 +2,15 @@ package alarm
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/predicate"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -33,19 +36,34 @@ type Definition struct {
 	// o texto de um grupo que a varredura não viu mais. Ela JÁ é o insumo desta
 	// compilação: recuperá-la depois do leitor por type assertion acoplaria o
 	// laço ao leitor concreto e falharia em silêncio com qualquer outro.
-	def    counter.Definition
-	alarms []compiledAlarm
+	def counter.Definition
+	// metrics são as métricas de janela declaradas no contador. Guardadas pela
+	// mesma razão de def: a tabela própria do laço tem de ter o MESMO schema
+	// contra o qual as condições foram compiladas, colunas das métricas
+	// incluídas.
+	metrics []schema.CounterMetricSpec
+	alarms  []compiledAlarm
 }
 
 // compiledAlarm é um alarme pronto para o laço.
 type compiledAlarm struct {
-	name         string
-	when         string
+	name string
+	when string
+	// qualifyWhen é a condição de qualificação normalizada; vazio quando o
+	// alarme não a declara, e aí todo grupo é elegível.
+	qualifyWhen  string
 	sustainedFor time.Duration
+	// metricsFingerprint é o texto canônico das métricas citadas pelas duas
+	// condições (ver metricsFingerprintOf). Entra na assinatura da regra
+	// gravada no estado durável.
+	metricsFingerprint string
 	// newEvaluator é FÁBRICA, e não um avaliador: o avaliador do predicado tem
 	// scratch próprio e é de um dono por vez (internal/predicate). Dois donos
 	// no mesmo scratch é data race.
 	newEvaluator func() counter.Evaluator
+	// newQualifier é a fábrica do avaliador do qualifyWhen, pela mesma razão;
+	// nil quando o alarme não o declara.
+	newQualifier func() counter.Evaluator
 	enrich       []enrichQuery
 }
 
@@ -118,13 +136,13 @@ func Compile(dataset string, specs []schema.CounterSpec, defs []counter.Definiti
 			// o alarme calado para sempre sem ninguém saber.
 			return nil, fmt.Errorf("%s.alarms: o contador %q não está aberto neste dataset", label, cs.Name)
 		}
-		sc, err := counters.TableSchema(def)
+		sc, err := counters.TableSchema(def, cs.Metrics)
 		if err != nil {
 			return nil, fmt.Errorf("%s.alarms: %w", label, err)
 		}
-		d := Definition{Dataset: dataset, Counter: cs.Name, def: def, alarms: make([]compiledAlarm, 0, len(cs.Alarms))}
+		d := Definition{Dataset: dataset, Counter: cs.Name, def: def, metrics: cs.Metrics, alarms: make([]compiledAlarm, 0, len(cs.Alarms))}
 		for j, as := range cs.Alarms {
-			a, err := compileAlarm(fmt.Sprintf("%s.alarms[%d]", label, j), as, def, sc)
+			a, err := compileAlarm(fmt.Sprintf("%s.alarms[%d]", label, j), as, def, cs.Metrics, sc)
 			if err != nil {
 				return nil, err
 			}
@@ -135,14 +153,57 @@ func Compile(dataset string, specs []schema.CounterSpec, defs []counter.Definiti
 	return out, nil
 }
 
-func compileAlarm(label string, as schema.AlarmSpec, def counter.Definition, sc *schema.Compiled) (compiledAlarm, error) {
-	a := compiledAlarm{name: as.Name, when: as.When, sustainedFor: as.SustainedFor}
+// checkAlarmStateText recusa um texto da assinatura da regra que o
+// alarms.state não comporta.
+//
+// A recusa é AQUI, e não só na escrita do estado: aceito na subida, o texto
+// compilaria e falharia na primeira gravação — que acontece na primeira
+// transição, de madrugada, e para o laço com `alarm.stopped`. O teto é o do
+// próprio arquivo (checkpoint.MaxAlarmStateText), para que as duas recusas nunca
+// divirjam.
+func checkAlarmStateText(path, text string) error {
+	if len(text) > checkpoint.MaxAlarmStateText {
+		return fmt.Errorf("%s: %d bytes, above the %d bytes the alarm state can hold",
+			path, len(text), checkpoint.MaxAlarmStateText)
+	}
+	return nil
+}
+
+// compileAlarm compila um alarme contra o schema da tabela do contador.
+//
+// O `qualifyWhen` passa pelo MESMO CompileCondition e contra o MESMO schema do
+// `when`: `auth_24h_max > 10` na qualificação significa exatamente o que
+// significaria num WHERE sobre `_counters.<nome>`, NULL comparando falso
+// incluído.
+func compileAlarm(label string, as schema.AlarmSpec, def counter.Definition, metrics []schema.CounterMetricSpec,
+	sc *schema.Compiled) (compiledAlarm, error) {
+	a := compiledAlarm{name: as.Name, when: as.When, qualifyWhen: as.QualifyWhen, sustainedFor: as.SustainedFor}
+	if err := checkAlarmStateText(label+".when", as.When); err != nil {
+		return a, err
+	}
+	if err := checkAlarmStateText(label+".qualifyWhen", as.QualifyWhen); err != nil {
+		return a, err
+	}
 	prog, slots, err := predicate.CompileCondition(label+".when", as.When, sc)
 	if err != nil {
 		return a, err
 	}
 	ids := slots.IDs
 	a.newEvaluator = func() counter.Evaluator { return predicate.NewAvaliadorOfPayload(prog, ids) }
+	cited := ids
+	if as.QualifyWhen != "" {
+		qualifyProg, qualifySlots, err := predicate.CompileCondition(label+".qualifyWhen", as.QualifyWhen, sc)
+		if err != nil {
+			return a, err
+		}
+		qualifyIDs := qualifySlots.IDs
+		a.newQualifier = func() counter.Evaluator { return predicate.NewAvaliadorOfPayload(qualifyProg, qualifyIDs) }
+		cited = slices.Concat(ids, qualifyIDs)
+	}
+	a.metricsFingerprint = metricsFingerprintOf(sc, metrics, cited)
+	if err := checkAlarmStateText(label+" metrics fingerprint", a.metricsFingerprint); err != nil {
+		return a, err
+	}
 	if len(as.Enrich) == 0 {
 		return a, nil
 	}
@@ -155,6 +216,56 @@ func compileAlarm(label string, as schema.AlarmSpec, def counter.Definition, sc 
 		a.enrich = append(a.enrich, q)
 	}
 	return a, nil
+}
+
+// metricsFingerprintOf monta o fingerprint das métricas de janela citadas por
+// um alarme: para cada métrica cuja coluna gerada aparece nos campos lidos pelas
+// condições (ids, os Slots.IDs do `when` e do `qualifyWhen`), o texto
+// `name:type:source:windowMs`, sem repetição, ordenado e unido por `;`. Nenhuma
+// métrica citada dá o texto vazio.
+//
+// # Por que ele existe
+//
+// É o que faz uma janela alterada no YAML invalidar o cronômetro salvo, como
+// `when` e `sustainedFor` já invalidam: `auth_24h_max > 10` sobre uma janela de
+// 24h e sobre uma de 1h têm o MESMO texto e são regras diferentes. Sem ele, um
+// prazo medido contra a janela antiga assombraria a condição nova depois do
+// reinício, e o alarme dispararia por uma sustentação que ninguém mediu.
+//
+// Só as métricas CITADAS entram: mudar a janela de uma métrica que o alarme não
+// lê não muda a regra dele, e descartar o cronômetro nesse caso seria perder
+// estado sem motivo. Os agregados declarados também ficam de fora — acrescentar
+// `min` a uma métrica não altera o valor de `auth_24h_max`.
+//
+// A ordem sai dos nomes, e não dos FieldIDs nem da declaração, para que o texto
+// dependa só do que as métricas SÃO.
+func metricsFingerprintOf(sc *schema.Compiled, metrics []schema.CounterMetricSpec, ids []types.FieldID) string {
+	if len(metrics) == 0 || len(ids) == 0 {
+		return ""
+	}
+	byColumn := make(map[string]int, len(metrics)*3)
+	for i, m := range metrics {
+		for _, col := range m.Columns() {
+			byColumn[col] = i
+		}
+	}
+	cited := make([]bool, len(metrics))
+	parts := make([]string, 0, len(metrics))
+	for _, id := range ids {
+		f, ok := sc.FieldByID(id)
+		if !ok {
+			continue
+		}
+		i, ok := byColumn[f.Name]
+		if !ok || cited[i] {
+			continue
+		}
+		cited[i] = true
+		m := metrics[i]
+		parts = append(parts, fmt.Sprintf("%s:%s:%s:%d", m.Name, m.Type, m.Source, m.Window.Milliseconds()))
+	}
+	slices.Sort(parts)
+	return strings.Join(parts, ";")
 }
 
 func compileEnrich(label string, es schema.EnrichSpec, def counter.Definition) (enrichQuery, error) {

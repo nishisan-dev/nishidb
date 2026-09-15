@@ -34,7 +34,7 @@ func registerMetricsOfAlarms(reg *metrics.Registry, s *Server) {
 
 func samplesOfAlarms(dataset string, r *alarm.Runner) []metrics.Sample {
 	stats := r.Stats()
-	out := make([]metrics.Sample, 0, len(stats)*6+3)
+	out := make([]metrics.Sample, 0, len(stats)*7+3)
 	for _, a := range stats {
 		rotulo := []metrics.Label{
 			{Name: metrics.LabelDataset, Value: dataset},
@@ -69,10 +69,18 @@ func samplesOfAlarms(dataset string, r *alarm.Runner) []metrics.Sample {
 			metrics.Sample{
 				Family: metrics.MetAlarmResolvedTotal,
 				Name:   metrics.MetAlarmResolvedTotal,
-				Help:   "resoluções desde a subida (condição que passou ou grupo aposentado)",
+				Help:   "resoluções desde a subida (condição que passou, grupo aposentado ou desqualificação)",
 				Type:   metrics.TypeCounter,
 				Labels: rotulo,
 				Value:  float64(a.Resolved),
+			},
+			metrics.Sample{
+				Family: metrics.MetAlarmDisqualifiedTotal,
+				Name:   metrics.MetAlarmDisqualifiedTotal,
+				Help:   "resoluções por desqualificação desde a subida; subconjunto de nishidb_alarm_resolved_total",
+				Type:   metrics.TypeCounter,
+				Labels: rotulo,
+				Value:  float64(a.Disqualified),
 			},
 			metrics.Sample{
 				Family: metrics.MetAlarmEnrichFailedTotal,

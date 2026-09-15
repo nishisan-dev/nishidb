@@ -36,7 +36,7 @@ func NewLogSink(log *logging.Logger) Sink {
 }
 
 func (s *logSink) Emit(e Event) {
-	args := make([]any, 0, 24+2*len(e.Columns))
+	args := make([]any, 0, 28+2*len(e.Columns))
 	args = append(args,
 		"counter", e.Counter,
 		"alarm", e.Alarm,
@@ -50,6 +50,11 @@ func (s *logSink) Emit(e Event) {
 	if e.Reason != "" {
 		args = append(args, "reason", e.Reason)
 	}
+	// Só quando declarada, pela razão da lacuna abaixo: presente e vazia, ela
+	// obrigaria quem consome a distinguir "não declarei" de "declarei vazio".
+	if e.QualifyCondition != "" {
+		args = append(args, "qualifyCondition", e.QualifyCondition)
+	}
 	// A marca de restauro e a lacuna saem SÓ quando houve restauro: um campo
 	// sempre presente, com zero, diria "o processo não ficou fora" para todo
 	// alarme observado de ponta a ponta — verdade indistinguível de "não sei".
@@ -62,6 +67,9 @@ func (s *logSink) Emit(e Event) {
 	for _, c := range e.Columns {
 		args = append(args, c.Name, c.Value)
 	}
+	if g, ok := metricsAttr(e.Metrics); ok {
+		args = append(args, g)
+	}
 	if g, ok := enrichmentAttr(e.Enrichment); ok {
 		args = append(args, g)
 	}
@@ -73,6 +81,28 @@ func (s *logSink) Emit(e Event) {
 		s.log.Info(eventResolved,
 			"o alarme deixou de valer", args...)
 	}
+}
+
+// metricsAttr monta o grupo `metrics` com as colunas das métricas de janela.
+//
+// Grupo, e não atributos soltos como as colunas do groupBy, porque os dois
+// conjuntos de nomes vêm do YAML e só um deles tem a colisão recusada na
+// subida: a recusa garante que `auth_5m_avg` não repete coluna do contador, mas
+// nada impede um groupBy chamado `reason` ou `total` de bater num campo do
+// próprio evento. Aninhadas, as métricas ficam fora desse espaço de nomes.
+//
+// Continua sendo slog.Group, e não slog.Any, pelo motivo do logSink: a supressão
+// de chaves sensíveis alcança atributos dentro de grupo, e não dentro de um valor
+// serializado.
+func metricsAttr(ms []Column) (slog.Attr, bool) {
+	if len(ms) == 0 {
+		return slog.Attr{}, false
+	}
+	attrs := make([]any, 0, len(ms))
+	for _, m := range ms {
+		attrs = append(attrs, slog.String(m.Name, m.Value))
+	}
+	return slog.Group("metrics", attrs...), true
 }
 
 // enrichmentAttr monta o atributo aninhado dos enriquecimentos, indexado pelo

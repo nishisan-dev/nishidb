@@ -147,6 +147,38 @@ class Metadados(unittest.TestCase):
                     self.assertEqual(row["FROM"], 'linha com "aspas" e \\barra')
                     self.assertIsNone(cur.fetchone())
 
+    def test_window_metric_reaches_the_catalog_and_projection_names(self):
+        # O contador do corpus declara UMA métrica de janela. O valor da coluna
+        # gerada pode ser NULL — o amostrador talvez ainda não tenha passado —,
+        # então só nomes, tipos e presença são afirmados, nunca o valor.
+        with self.cx.cursor() as cur:
+            cur.execute("SELECT namespace, name FROM _meta.tables")
+            tabelas = {(r["namespace"], r["name"]) for r in cur.fetchall()}
+        self.assertIn(("_meta", "counter_metrics"), tabelas)
+        self.assertIn(("_counters", "rows_by_text"), tabelas)
+
+        with self.cx.cursor() as cur:
+            cur.execute("SELECT id, counter, name, columns FROM _meta.counter_metrics")
+            linhas = cur.fetchall()
+        self.assertEqual(len(linhas), 1, "esperava exatamente a métrica do corpus")
+        self.assertEqual(linhas[0]["id"], "rows_by_text|rows_5m")
+        self.assertEqual(linhas[0]["counter"], "rows_by_text")
+        self.assertEqual(linhas[0]["name"], "rows_5m")
+        self.assertEqual(linhas[0]["columns"], "rows_5m_avg,rows_5m_max")
+
+        nomes = ["rows_5m_avg", "x", "rows_5m_avg_1"]
+        with self.cx.cursor() as cur:
+            cur.execute(
+                "SELECT rows_5m_avg, rows_5m_avg AS x, rows_5m_avg FROM _counters.rows_by_text"
+            )
+            self.assertEqual([d[0] for d in cur.description], nomes)
+            self.assertEqual([d[1] for d in cur.description], ["DOUBLE"] * 3)
+            row = cur.fetchone()
+            self.assertIsNotNone(row, "a tabela do contador não trouxe grupo nenhum")
+            for nome in nomes:
+                valor = row[nome]
+                self.assertTrue(valor is None or isinstance(valor, float), f"{nome} = {valor!r}")
+
     def test_a_chave_e_a_sequence_sao_nao_nulaveis(self):
         cur = self.cx.cursor()
         cur.execute("SELECT id, inteiro FROM todos_os_tipos LIMIT 1")

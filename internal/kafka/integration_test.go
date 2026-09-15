@@ -38,7 +38,7 @@ const imagemRedpanda = "redpandadata/redpanda:v24.2.18"
 // produzComHash publica escolhendo a partição pelo HASH DA KEY, que é a
 // recomendação do §26 (Kafka key igual à materialization key) e o que garante
 // que os eventos de uma entidade caiam sempre na mesma partição.
-func (b *bancada) produzComHash(recs ...*kgo.Record) {
+func (b *bench) produzComHash(recs ...*kgo.Record) {
 	b.t.Helper()
 	cl, err := kgo.NewClient(kgo.SeedBrokers(b.endereco))
 	if err != nil {
@@ -140,11 +140,11 @@ func criaTopico(t *testing.T, container string, porta, particoes int) {
 // recuperar offsets.
 func TestIntegracaoConsomeERetomaPelaPosicaoLocal(t *testing.T) {
 	endereco := sobeRedpanda(t, 3)
-	b := novaBancadaEm(t, endereco)
-	defer b.fecha()
+	b := newBenchIn(t, endereco)
+	defer b.close()
 
-	b.produz(evento("A", 1, "Start"), evento("B", 1, "Start"), evento("C", 1, "Start"))
-	d, err := b.consomeAte(60*time.Second, func(d kafka.Desfecho) bool { return d.Eventos >= 3 })
+	b.produz(event("A", 1, "Start"), event("B", 1, "Start"), event("C", 1, "Start"))
+	d, err := b.consomeUntil(60*time.Second, func(d kafka.Desfecho) bool { return d.Eventos >= 3 })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestIntegracaoConsomeERetomaPelaPosicaoLocal(t *testing.T) {
 		t.Fatalf("aplicados = %d, quer 3 (%+v)", d.Aplicados, d)
 	}
 
-	offsets, existe := b.leOffsets()
+	offsets, existe := b.readOffsets()
 	if !existe {
 		t.Fatal("kafka.offsets não foi criado")
 	}
@@ -167,7 +167,7 @@ func TestIntegracaoConsomeERetomaPelaPosicaoLocal(t *testing.T) {
 	// Reinício: nada novo no tópico, então um consumidor que não retomasse
 	// pela posição local reprocessaria os três eventos.
 	b.reinicia()
-	d2, err := b.consomeAte(20*time.Second, func(d kafka.Desfecho) bool { return d.Eventos > 0 })
+	d2, err := b.consomeUntil(20*time.Second, func(d kafka.Desfecho) bool { return d.Eventos > 0 })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,19 +185,19 @@ func TestIntegracaoConsomeERetomaPelaPosicaoLocal(t *testing.T) {
 // que é o mesmo estado em disco que o SIGKILL deixa.
 func TestIntegracaoRetomadaAposEncerramentoAbrupto(t *testing.T) {
 	endereco := sobeRedpanda(t, 1)
-	b := novaBancadaEm(t, endereco)
-	defer b.fecha()
+	b := newBenchIn(t, endereco)
+	defer b.close()
 
 	var recs []*kgo.Record
 	for i := 1; i <= 20; i++ {
-		recs = append(recs, evento("A", int64(i), "Start"))
+		recs = append(recs, event("A", int64(i), "Start"))
 	}
 	b.produz(recs...)
 
-	if _, err := b.consomeAte(60*time.Second, func(d kafka.Desfecho) bool { return d.Eventos >= 20 }); err != nil {
+	if _, err := b.consomeUntil(60*time.Second, func(d kafka.Desfecho) bool { return d.Eventos >= 20 }); err != nil {
 		t.Fatal(err)
 	}
-	estado := leEstado(t, b, "A")
+	estado := readState(t, b, "A")
 
 	// Regride a posição: é o estado que um SIGKILL entre o rename do manifest
 	// e o do kafka.offsets deixaria.
@@ -214,10 +214,10 @@ func TestIntegracaoRetomadaAposEncerramentoAbrupto(t *testing.T) {
 	}
 	b.reinicia()
 
-	if _, err := b.consomeAte(60*time.Second, func(d kafka.Desfecho) bool { return d.Eventos >= 20 }); err != nil {
+	if _, err := b.consomeUntil(60*time.Second, func(d kafka.Desfecho) bool { return d.Eventos >= 20 }); err != nil {
 		t.Fatal(err)
 	}
-	if depois := leEstado(t, b, "A"); depois != estado {
+	if depois := readState(t, b, "A"); depois != estado {
 		t.Errorf("o estado confirmado mudou após a retomada:\n antes: %s\ndepois: %s", estado, depois)
 	}
 }
@@ -226,18 +226,18 @@ func TestIntegracaoRetomadaAposEncerramentoAbrupto(t *testing.T) {
 // que é a recomendação do §26 (Kafka key igual à materialization key).
 func TestIntegracaoMultiplasParticoesComKeyReal(t *testing.T) {
 	endereco := sobeRedpanda(t, 4)
-	b := novaBancadaEm(t, endereco)
-	defer b.fecha()
+	b := newBenchIn(t, endereco)
+	defer b.close()
 
 	const entidades = 40
 	var recs []*kgo.Record
 	for i := 0; i < entidades; i++ {
 		id := fmt.Sprintf("e%03d", i)
-		recs = append(recs, evento(id, 1, "Start"), evento(id, 2, "Stop"))
+		recs = append(recs, event(id, 1, "Start"), event(id, 2, "Stop"))
 	}
 	b.produzComHash(recs...)
 
-	d, err := b.consomeAte(90*time.Second, func(d kafka.Desfecho) bool { return d.Eventos >= 2*entidades })
+	d, err := b.consomeUntil(90*time.Second, func(d kafka.Desfecho) bool { return d.Eventos >= 2*entidades })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestIntegracaoMultiplasParticoesComKeyReal(t *testing.T) {
 	// que a ordem por partição foi respeitada de ponta a ponta.
 	for i := 0; i < entidades; i++ {
 		id := fmt.Sprintf("e%03d", i)
-		if got := leEstado(t, b, id); !strings.Contains(got, "Stop") {
+		if got := readState(t, b, id); !strings.Contains(got, "Stop") {
 			t.Fatalf("entidade %s ficou em %s, quer o patch de _SEQ=2", id, got)
 		}
 	}
@@ -260,8 +260,8 @@ func TestIntegracaoMultiplasParticoesComKeyReal(t *testing.T) {
 // A guarda do D10 contra um group coordinator real.
 func TestIntegracaoAssignmentParcialRecusa(t *testing.T) {
 	endereco := sobeRedpanda(t, 4)
-	b := novaBancadaEm(t, endereco)
-	defer b.fecha()
+	b := newBenchIn(t, endereco)
+	defer b.close()
 
 	rival, err := kgo.NewClient(
 		kgo.SeedBrokers(endereco),
@@ -273,12 +273,12 @@ func TestIntegracaoAssignmentParcialRecusa(t *testing.T) {
 	}
 	defer rival.Close()
 
-	b.produz(evento("A", 1, "Start"))
+	b.produz(event("A", 1, "Start"))
 	ctx, cancela := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancela()
 	rival.PollRecords(ctx, 1)
 
-	_, err = b.consomeAte(60*time.Second, func(d kafka.Desfecho) bool { return false })
+	_, err = b.consomeUntil(60*time.Second, func(d kafka.Desfecho) bool { return false })
 	if !errors.Is(err, kafka.ErrAssignmentParcial) {
 		t.Errorf("erro = %v, quer ErrAssignmentParcial", err)
 	}

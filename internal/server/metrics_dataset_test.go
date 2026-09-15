@@ -53,12 +53,20 @@ type amostraExposta struct {
 // pelo Registry.
 func coletaSamples(t *testing.T, srv *server.Server) []amostraExposta {
 	t.Helper()
+	return parseExposition(t, fetch(t, srv, "/metrics"))
+}
+
+// parseExposition desmonta um texto no formato de exposição do Prometheus. É o
+// corpo de coletaSamples separado da raspagem, para que o teste que precisa
+// ler as séries ANTES do Run (sem HTTP) passe pelo MESMO parser.
+func parseExposition(t *testing.T, body string) []amostraExposta {
+	t.Helper()
 	var (
 		out   []amostraExposta
 		ajuda = make(map[string]string)
 		tipos = make(map[string]metrics.Type)
 	)
-	for _, row := range strings.Split(fetch(t, srv, "/metrics"), "\n") {
+	for _, row := range strings.Split(body, "\n") {
 		if row == "" {
 			continue
 		}
