@@ -33,8 +33,13 @@ type Definition struct {
 	// o texto de um grupo que a varredura não viu mais. Ela JÁ é o insumo desta
 	// compilação: recuperá-la depois do leitor por type assertion acoplaria o
 	// laço ao leitor concreto e falharia em silêncio com qualquer outro.
-	def    counter.Definition
-	alarms []compiledAlarm
+	def counter.Definition
+	// metrics são as métricas de janela declaradas no contador. Guardadas pela
+	// mesma razão de def: a tabela própria do laço tem de ter o MESMO schema
+	// contra o qual as condições foram compiladas, colunas das métricas
+	// incluídas.
+	metrics []schema.CounterMetricSpec
+	alarms  []compiledAlarm
 }
 
 // compiledAlarm é um alarme pronto para o laço.
@@ -118,11 +123,11 @@ func Compile(dataset string, specs []schema.CounterSpec, defs []counter.Definiti
 			// o alarme calado para sempre sem ninguém saber.
 			return nil, fmt.Errorf("%s.alarms: o contador %q não está aberto neste dataset", label, cs.Name)
 		}
-		sc, err := counters.TableSchema(def)
+		sc, err := counters.TableSchema(def, cs.Metrics)
 		if err != nil {
 			return nil, fmt.Errorf("%s.alarms: %w", label, err)
 		}
-		d := Definition{Dataset: dataset, Counter: cs.Name, def: def, alarms: make([]compiledAlarm, 0, len(cs.Alarms))}
+		d := Definition{Dataset: dataset, Counter: cs.Name, def: def, metrics: cs.Metrics, alarms: make([]compiledAlarm, 0, len(cs.Alarms))}
 		for j, as := range cs.Alarms {
 			a, err := compileAlarm(fmt.Sprintf("%s.alarms[%d]", label, j), as, def, sc)
 			if err != nil {

@@ -153,9 +153,10 @@ func (e *Engine) MetaTables(dataset string) (*schema.Compiled, Store, error) {
 // coincide entre servidor e CLI: os dois chamam counters.Register e
 // metakafka.Register ao lado desta função. Na IRMÃ não coincide: o CLI chama
 // counters.Register sem condição (internal/cli/query.go), e a `_meta.counters`
-// é registrada sempre, com contador ou sem (internal/counters/table.go), então
-// ela aparece na listagem da irmã pelo CLI e não aparece pela do servidor, que
-// na irmã só chama esta função. A assimetria é da FIAÇÃO e é anterior a esta
+// e a `_meta.counter_metrics` são registradas sempre, com contador ou sem e com
+// métrica ou sem (internal/counters/table.go), então as duas aparecem na
+// listagem da irmã pelo CLI e não aparecem na do servidor, que na irmã só
+// chama esta função. A assimetria é da FIAÇÃO e é anterior a esta
 // tabela — que está contando a verdade sobre cada processo; está registrada
 // como débito 117, com os dois lados travados por teste
 // (TestMetaTablesRespondeNaTabelaIrmaAbertaPeloServidor e

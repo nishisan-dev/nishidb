@@ -25,11 +25,11 @@ import (
 // é este.
 const TableMetaCounters = "counters"
 
-// Contado é o que a tabela precisa de cada contador: a definição (nome,
+// ListedCounter é o que a tabela precisa de cada contador: a definição (nome,
 // groupBy, condição, teto) e o retrato corrente. Interface, e não o
 // *counter.Counter, pelo mesmo motivo do Reader — *counter.Counter a
 // satisfaz.
-type Contado interface {
+type ListedCounter interface {
 	Def() counter.Definition
 	Stats() counter.Stats
 }
@@ -134,7 +134,7 @@ const GroupBySeparator = "|"
 // abertura do dataset —, então o rowID é a posição na lista mais um, e a key
 // (o nome) resolve por mapa. O que muda entre duas consultas são os números,
 // lidos no presente a cada linha, como o `_counters` lê os totais.
-func TableMeta(cs []Contado) (*schema.Compiled, query.Store, error) {
+func TableMeta(cs []ListedCounter) (*schema.Compiled, query.Store, error) {
 	spec, err := schema.Parse([]byte(metaTableSpec), schema.BuiltinDefaults)
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", meta.Namespace, TableMetaCounters, err)
@@ -183,7 +183,7 @@ type columnWithID struct {
 // metaRow é um contador como linha: os textos são calculados uma vez, na
 // montagem, para que a linha não aloque.
 type metaRow struct {
-	c         Contado
+	c         ListedCounter
 	name      []byte
 	groupBy   []byte
 	keyFormat []byte

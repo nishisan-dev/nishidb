@@ -30,11 +30,11 @@ func engineWithMeta(t *testing.T, cs ...*counter.Counter) *query.Engine {
 	if err := eng.Register("servicos", sc, fakestorage.New(fakestorage.Indexes{})); err != nil {
 		t.Fatal(err)
 	}
-	contados := make([]counters.Contado, 0, len(cs))
+	listed := make([]counters.ListedCounter, 0, len(cs))
 	for _, c := range cs {
-		contados = append(contados, c)
+		listed = append(listed, c)
 	}
-	msc, source, err := counters.TableMeta(contados)
+	msc, source, err := counters.TableMeta(listed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestMetaFieldsContinuaRespondendoAoLadoDaCounters(t *testing.T) {
 func TestTabelaMetaRecusaNomeRepetido(t *testing.T) {
 	a := openCounter(t, defByOLT("a"))
 	b := openCounter(t, defByOLT("a"))
-	if _, _, err := counters.TableMeta([]counters.Contado{a, b}); err == nil {
+	if _, _, err := counters.TableMeta([]counters.ListedCounter{a, b}); err == nil {
 		t.Fatal("nome repetido tem de ser recusado")
 	}
 }

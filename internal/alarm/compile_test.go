@@ -36,7 +36,7 @@ func defByPON(name string) counter.Definition {
 func rowOf(t *testing.T, def counter.Definition, olt string, slot, total int64) []byte {
 	t.Helper()
 	f := newFakeCounter(t, defByPON("autenticados_por_pon"), grupo{olt: olt, slot: slot, total: total, live: true})
-	_, store, err := counters.Table(def, f)
+	_, store, err := counters.Table(def, f, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

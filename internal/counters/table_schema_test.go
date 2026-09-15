@@ -24,7 +24,7 @@ func TestTableSchemaRefusesGroupingColumnNamedAfterFixedColumn(t *testing.T) {
 				Names:   []string{fixed},
 				Types:   []types.FieldType{types.TypeString},
 			}
-			_, err := counters.TableSchema(def)
+			_, err := counters.TableSchema(def, nil)
 			if err == nil {
 				t.Fatalf("groupBy %q aceito; a coluna colide com a fixa da tabela", fixed)
 			}

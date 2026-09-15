@@ -554,7 +554,11 @@ inglês correspondente.
 | série (o arquivo NDJSON com uma linha por grupo por intervalo) | series | internal/series |
 | rotação / rotacionar (girar o arquivo de série ao cruzar o teto de tamanho) | rotate / rotation | internal/series |
 | guardar (quantos arquivos rotacionados são mantidos) | keep | internal/series, internal/schema |
-| métrica de janela (avg, min ou max do total de cada grupo numa janela de tempo, declarada no bloco `metrics:` do contador) | window metric | internal/schema |
+| métrica de janela (avg, min ou max do total de cada grupo numa janela de tempo, declarada no bloco `metrics:` do contador) | window metric | internal/schema, internal/counters |
+| leitor da métrica (lê o valor publicado de uma métrica de janela) | MetricReader | internal/counters |
+| fonte das métricas (resolve o leitor da métrica pelo nome) | MetricSource | internal/counters |
+| contador listado (o que `_meta.counters` precisa de cada contador) | ListedCounter | internal/counters |
+| uso da métrica (grupos, bytes em heap e em disco, instante da amostra) | usage | internal/counters |
 | janela da métrica (o intervalo de tempo que a métrica de janela cobre; distinta da janela do rowindex) | metric window | internal/schema, internal/storage/metricwindow |
 | agregado da janela (avg, min ou max sobre a janela da métrica; distinto do agregado do contador inteiro) | window aggregate | internal/schema |
 | balde (cada uma das fatias de largura igual em que a janela da métrica é dividida, e onde as amostras de um grupo são dobradas) | bucket | internal/schema, internal/storage/metricwindow |

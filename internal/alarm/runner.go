@@ -161,8 +161,9 @@ func New(defs []Definition, readers map[string]counters.Reader, opts Options) (*
 		var err error
 		// Tabela virtual PRÓPRIA do alarme: ela tem buffer e scratch, e
 		// compartilhar a das consultas poria dois donos no mesmo estado
-		// interno. Montá-la custa uma compilação de schema na subida.
-		if _, rc.store, err = counters.Table(d.def, reader); err != nil {
+		// interno. Montá-la custa uma compilação de schema na subida. Sem
+		// MetricSource as colunas das métricas existem e saem NULL.
+		if _, rc.store, err = counters.Table(d.def, reader, d.metrics, nil); err != nil {
 			return nil, fmt.Errorf("alarm: tabela do contador %q: %w", d.Counter, err)
 		}
 		rc.names, rc.format = d.def.Names, d.def.Format

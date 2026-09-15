@@ -488,7 +488,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	// As tabelas `_counters.<nome>` entram no motor sob o dataset — e o
 	// namespace é declarado mesmo sem contador, para que a recusa nomeie o
 	// que existe.
-	if err := counters.Register(s.eng, spec.Name, st); err != nil {
+	if err := counters.Register(s.eng, spec.Name, st, spec.Counters, nil); err != nil {
 		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	// Os alarmes são compilados DEPOIS do counters.Register, que é quando as

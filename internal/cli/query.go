@@ -18,6 +18,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/lexer"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
+	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
 func runQuery(args []string, amb Context) int {
@@ -126,7 +127,13 @@ func runQuery(args []string, amb Context) int {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUsageError
 	}
-	if err := counters.Register(eng, *dataset, st); err != nil {
+	// A tabela irmã chega sem spec (openForQuery) e nunca abre contador, então
+	// não tem o que casar: a lista vazia é a resposta certa, não um nil pointer.
+	var counterSpecs []schema.CounterSpec
+	if spec != nil {
+		counterSpecs = spec.Counters
+	}
+	if err := counters.Register(eng, *dataset, st, counterSpecs, nil); err != nil {
 		notify(amb, "query: %v\n", err)
 		return ExitUsageError
 	}

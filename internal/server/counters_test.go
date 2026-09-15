@@ -200,7 +200,7 @@ func TestTabelaVirtualDesconhecidaSaiComoErroDoCliente(t *testing.T) {
 		sql   string
 		naMsg string
 	}{
-		{"tabela do _meta", "SELECT a FROM _meta.nada", "existem: alarms, counters, fields"},
+		{"tabela do _meta", "SELECT a FROM _meta.nada", "existem: alarms, counter_metrics, counters, fields"},
 		{"namespace", "SELECT a FROM _outro.coisa", "_counters"},
 	}
 	for _, c := range casos {

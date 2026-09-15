@@ -17,7 +17,7 @@ func TestTabelaMetaCountersNaoAlocaPorLinha(t *testing.T) {
 	b := openCounter(t, defByPON("b"))
 	populaPON(t, a)
 	populaPON(t, b)
-	_, source, err := counters.TableMeta([]counters.Contado{a, b})
+	_, source, err := counters.TableMeta([]counters.ListedCounter{a, b})
 	if err != nil {
 		t.Fatal(err)
 	}
