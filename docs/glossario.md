@@ -555,9 +555,15 @@ inglês correspondente.
 | rotação / rotacionar (girar o arquivo de série ao cruzar o teto de tamanho) | rotate / rotation | internal/series |
 | guardar (quantos arquivos rotacionados são mantidos) | keep | internal/series, internal/schema |
 | métrica de janela (avg, min ou max do total de cada grupo numa janela de tempo, declarada no bloco `metrics:` do contador) | window metric | internal/schema |
-| janela da métrica (o intervalo de tempo que a métrica de janela cobre; distinta da janela do rowindex) | metric window | internal/schema |
+| janela da métrica (o intervalo de tempo que a métrica de janela cobre; distinta da janela do rowindex) | metric window | internal/schema, internal/storage/metricwindow |
 | agregado da janela (avg, min ou max sobre a janela da métrica; distinto do agregado do contador inteiro) | window aggregate | internal/schema |
-| balde (cada uma das fatias de largura igual em que a janela da métrica é dividida) | bucket | internal/schema |
+| balde (cada uma das fatias de largura igual em que a janela da métrica é dividida, e onde as amostras de um grupo são dobradas) | bucket | internal/schema, internal/storage/metricwindow |
+| largura do balde (a janela da métrica dividida pela quantidade de baldes) | bucket width | internal/storage/metricwindow |
+| slot (a coluna do arquivo da janela da métrica que guarda um balde) | slot | internal/storage/metricwindow |
+| época do balde (o número do balde desde a época Unix: unixMs / largura) | epoch | internal/storage/metricwindow |
+| identidade (o hash da chave do grupo dono de um id e a época a partir da qual os baldes do id são dele) | identity | internal/storage/metricwindow |
+| capacidade (quantos ids de grupo o arquivo da janela da métrica endereça) | capacity | internal/storage/metricwindow |
+| marca de dono (os 16 bits do hash da chave gravados em cada balde) | owner tag | internal/storage/metricwindow |
 | coluna gerada (a coluna `<métrica>_<agregado>` que uma métrica de janela produz na tabela do contador) | generated column | internal/schema |
 | coluna fixa (`groupKey` e `total`, presentes em toda tabela de contador) | fixed column | internal/schema, internal/counters |
 | origem da coluna (o trecho do contador, colunas fixas, `groupBy` ou `metrics[i]`, que produz a coluna) | origin | internal/schema |
