@@ -24,9 +24,9 @@ import (
 // NÃO retém nada de row: tudo é copiado. É isso que permite ao executor
 // invalidar a Row no próximo Next.
 //
-// A ordem das chaves é a da PROJEÇÃO, literalmente — inclusive se ela repetir
-// uma coluna (`SELECT a, a` produz a chave duas vezes). Deduplicar é decisão
-// do binder, não do encoder.
+// A ordem e os nomes das chaves são os da projeção recebida. O binder já
+// resolveu aliases e sufixos; o encoder apenas emite esses nomes, sem
+// consultar schema nem normalizá-los novamente.
 func AppendRow(dst []byte, row Row) []byte {
 	dst = append(dst, '{')
 	for i, c := range row.Cols() {

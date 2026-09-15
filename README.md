@@ -11,6 +11,62 @@ Medido com **8 milhões de entidades**: 483 MiB de RSS de pico (limite: 1 GiB),
 caminho SQL completo. O heap Go da ingestão fica em **396 KiB com 8 milhões de
 rows**, contra 389 KiB com 1 milhão — 8× de dados, 1,9% de heap a mais.
 
+## Releases e driver JDBC
+
+As [GitHub Releases](https://github.com/nishisan-dev/nishidb/releases) oferecem
+`nishidb-vx.y.z-linux-amd64` e `nishidb-jdbc.jar` juntos. O driver exige Java 21
+ou superior e não precisa de dependências adicionais no classpath. Sua versão
+interna acompanha a release: em `v0.8.1`, o JAR e os metadados JDBC informam
+`0.8.1`.
+
+Para publicar, crie uma tag no commit desejado **que já contenha o novo workflow**
+e envie essa tag ao GitHub, por exemplo:
+
+```sh
+git tag -a v0.8.1 -m "NishiDB 0.8.1"
+git push origin v0.8.1
+```
+
+Use uma tag nova no formato exato `vx.y.z`, sem zeros à esquerda ou sufixos.
+A criação apenas local não dispara o workflow; atualizações e exclusões de tags
+são ignoradas. Envie cada tag individualmente: o GitHub não emite eventos de
+push quando mais de três tags são enviadas juntas. Tags criadas por outro
+workflow com `GITHUB_TOKEN` também não disparam esse fluxo automaticamente;
+para essa automação, use um token de GitHub App ou pessoal. Esses limites
+são descritos na [documentação de eventos do GitHub](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push).
+
+O workflow **Release** executa a suíte Go e os testes JDBC contra o servidor
+real, compila ambos os artefatos e os anexa a um rascunho com notas geradas
+automaticamente. A release só é publicada após confirmar os dois uploads.
+Publicação e limpeza compartilham uma fila entre todas as tags (até 100
+execuções pendentes, limite do GitHub).
+
+Após cada publicação automática bem-sucedida, permanecem as **5 releases mais
+recentes pela data de publicação**, incluindo pré-releases manuais. Rascunhos
+não entram na contagem. As demais releases e seus anexos são excluídos,
+**mas todas as tags permanecem**, permitindo consultar ou recompilar versões
+anteriores. Releases antigas já existentes entram nessa contagem; o JDBC não
+é anexado retroativamente a elas. Publicações manuais só entram na limpeza
+quando ocorrer a próxima publicação automática.
+
+Se houver falha, use **Re-run failed jobs** na execução do workflow: o processo
+retoma o rascunho ou atualiza os anexos da release existente sem alterar suas
+notas nem sua data original de publicação. Falhas de build/upload impedem a
+limpeza; uma limpeza parcialmente concluída pode ser retomada. Não é preciso
+excluir ou recriar a tag. A fila, os logs e eventuais erros ficam em **Actions →
+Release**.
+
+Para compilar ou testar o JDBC localmente com uma versão específica:
+
+```sh
+make test-jdbc JDBC_VERSION=0.8.1
+make build-jdbc JDBC_VERSION=0.8.1
+```
+
+Sem `JDBC_VERSION`, o Maven usa `0.1.0-SNAPSHOT`. O resultado continua em
+`clients/jdbc/target/nishidb-jdbc.jar`. A distribuição é pela GitHub Release;
+não há publicação em repositório Maven.
+
 ## Estado
 
 **M1, M2 e a Fase 6 do M3 completos; o M4 entregue, com uma ressalva que
@@ -1788,11 +1844,50 @@ Não há sintaxe de `--param` que produza NULL, e é deliberado: `col = ?` com `
 nulo não tem semântica sem lógica trivalente, e o que se quer dizer é
 `IS NULL` — escrito na query, não passado como valor.
 
-Repetir uma coluna na projeção (`SELECT id, id`) é recusado no bind: a linha
-sairia com a chave repetida e o consumidor de JSON colapsaria as duas em
-silêncio — duas colunas pedidas, uma entregue. Pedir o mesmo campo pelo nome e
-pelo alias (`SELECT id, service_id`) continua valendo, porque aí são duas
-chaves distintas na saída.
+Aliases por consulta aceitam `AS` ou a forma implícita, inclusive em colunas
+aninhadas e tabelas virtuais:
+
+```sql
+SELECT olt AS equipamento, total quantidade
+FROM _counters.autenticados_por_olt
+ORDER BY equipamento;
+```
+
+O alias é o nome publicado no NDJSON, nos metadados JDBC e no `description`
+do Python. O tipo e a nulabilidade continuam sendo os do campo de origem.
+`WHERE` usa os nomes do schema, incluindo aliases YAML; o alias da consulta
+não cria um novo nome para filtros nem para outros itens do `SELECT`.
+
+**Todas as colunas pedidas são preservadas.** Nomes de saída repetidos recebem
+`_1`, `_2` etc. Aliases declarados na consulta, com ou sem `AS`, têm
+prioridade sobre nomes sem alias; entre aliases iguais, o primeiro mantém o nome. A ordem da projeção não muda:
+
+| Projeção | Nomes de saída |
+|---|---|
+| `a, a` | `a, a_1` |
+| `b, a AS b` | `b_1, b` |
+| `a AS x, b AS x` | `x, x_1` |
+| `a AS x, b AS x, c AS x_1` | `x, x_2, x_1` |
+
+Todos os nomes pedidos ficam reservados antes da numeração, que usa o menor
+índice livre. Os nomes distinguem maiúsculas e minúsculas. Essa regra substitui
+a antiga recusa de duplicatas na projeção (issue #41).
+
+`ORDER BY` resolve primeiro os nomes finais da saída, incluindo sufixos, e
+depois os nomes do schema. Em `SELECT b, a AS b ORDER BY b`, ordena por `a`;
+`ORDER BY b_1` ordena pelo `b` original. Caminhos como `doc.campo` continuam
+resolvendo a coluna aninhada; para ordenar pelo alias literal contendo ponto,
+use `ORDER BY "doc.campo"`.
+
+Aliases vazios ou aplicados a `*`/`pai.*` são recusados. Palavras reservadas
+exigem aspas duplas, inclusive o vocabulário contextual (`AS`, `ORDER`, `BY`,
+`ASC`, `DESC`, `NULLS`, `FIRST`, `LAST`, `OFFSET`, `LIKE`, `GROUP`, `JOIN`,
+`HAVING`, `DISTINCT`, `UNION`). Isso não muda nomes de campos já aceitos.
+Aspas internas se escrevem duplicadas: `SELECT id AS "com""aspas" FROM tabela`.
+A saída HTTP continua reservando `nishidb` para as molduras do protocolo;
+renomeie um campo com esse nome, por exemplo `nishidb AS valor`.
+As provas funcionais, de memória e por mutação estão no
+[aceite de aliases de projeção](docs/aceite-aliases-projecao.md).
 
 `ORDER BY` aceita até 16 chaves, com `ASC` (padrão) ou `DESC`. **Campo ausente
 vai por ÚLTIMO nas duas direções**, e `NULLS FIRST` inverte só os ausentes.

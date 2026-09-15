@@ -387,3 +387,69 @@ func TestWorkflowDeCIFixaADistribuicaoDoJdk(t *testing.T) {
 		t.Error("o workflow não fixa `distribution` no setup-java: o JDK do CI fica a cargo do default da action")
 	}
 }
+
+// Release publication deletes old releases, so its trigger, serialization and
+// test/build ordering are part of the release contract.
+func TestReleaseWorkflowPublishesOnlyValidatedTagsAfterTests(t *testing.T) {
+	var wf struct {
+		On map[string]struct {
+			Tags []string `yaml:"tags"`
+		} `yaml:"on"`
+		Concurrency struct {
+			Group  string `yaml:"group"`
+			Queue  string `yaml:"queue"`
+			Cancel bool   `yaml:"cancel-in-progress"`
+		} `yaml:"concurrency"`
+		Jobs map[string]struct {
+			If    string `yaml:"if"`
+			Needs string `yaml:"needs"`
+			Steps []struct {
+				Uses string            `yaml:"uses"`
+				Run  string            `yaml:"run"`
+				With map[string]string `yaml:"with"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(readWorkflow(t, releaseWorkflowPath)), &wf); err != nil {
+		t.Fatal(err)
+	}
+	push, ok := wf.On["push"]
+	if !ok || len(wf.On) != 1 || len(push.Tags) != 1 || push.Tags[0] != "v*.*.*" {
+		t.Fatal("release must trigger only on version tag pushes")
+	}
+	if wf.Concurrency.Group == "" || strings.Contains(wf.Concurrency.Group, "${{") || wf.Concurrency.Queue != "max" || wf.Concurrency.Cancel {
+		t.Fatal("all release tags must share a non-canceling queue")
+	}
+	validation := wf.Jobs["validate"]
+	if !strings.Contains(validation.If, "github.event.created == true") || !strings.Contains(validation.If, "github.event.deleted == false") {
+		t.Fatal("release must ignore tag updates and deletions")
+	}
+	if !strings.Contains(jobScriptInFile(t, releaseWorkflowPath, "validate"), "scripts/release.py validate") {
+		t.Fatal("release tag must pass strict validation")
+	}
+	publication := wf.Jobs["anexa-binario"]
+	if publication.Needs != "validate" || publication.If != "needs.validate.outputs.version != ''" {
+		t.Fatal("publication must depend on a valid version")
+	}
+	script := jobScriptInFile(t, releaseWorkflowPath, "anexa-binario")
+	last := -1
+	for _, command := range []string{"go test ./...", "python3 scripts/release_test.py", "make test-jdbc", "make build\n", "make build-jdbc", "scripts/release.py publish"} {
+		index := strings.Index(script, command)
+		if index <= last {
+			t.Fatalf("missing or out of order release step: %s", command)
+		}
+		last = index
+	}
+	var checkout, java bool
+	for _, step := range publication.Steps {
+		if strings.HasPrefix(step.Uses, "actions/checkout@") {
+			checkout = step.With["fetch-depth"] == "0" && step.With["ref"] == "${{ github.sha }}"
+		}
+		if strings.HasPrefix(step.Uses, "actions/setup-java@") {
+			java = step.With["java-version"] == readPom(t).Properties.Release && step.With["distribution"] == "temurin"
+		}
+	}
+	if !checkout || !java {
+		t.Fatal("release must build the tagged commit with full history and the JDBC Java version")
+	}
+}

@@ -947,3 +947,8 @@ internal/schema	var	TestSpecRecusaSchemaNameInvalido.valor	value	renomeado no te
 internal/counters	const	maxColumnsOfAgrupamento	maxGroupingColumns	renomeado ao tocar a Table na extração do TableSchema, ciclo dos alarmes de contador (12/09/2026)
 internal/counters	func	nameOfTipo	typeName	renomeado ao tocar a Table na extração do TableSchema, ciclo dos alarmes de contador (12/09/2026)
 internal/server	func	readRequisicao	readRequest	renomeado na conexão por schema, issue #57 (13/09/2026)
+internal/query/binder	func	TestProjecaoComNomeRepetidoERecusada	TestProjectionDuplicateNamesReceiveSuffixes	renomeado ao implementar aliases de projeção, issue #41 (14/09/2026)
+internal/query/binder	func	TestRepeticaoEmProjecaoGrande	TestLargeProjectionDuplicatesReceiveSuffixes	renomeado ao implementar aliases de projeção, issue #41 (14/09/2026)
+internal/query/parser	func	TestColunaChamadaDistinctEntreAspasNaoDisparaAClausula	TestQuotedDistinctColumnAcceptsImplicitAlias	renomeado ao implementar aliases de projeção, issue #41 (14/09/2026)
+internal/query/parser	func	TestErrosDeSintaxe	TestSyntaxErrors	renomeado ao implementar aliases de projeção, issue #41 (14/09/2026)
+internal/server	func	TestColunaComNomeReservadoEhRecusada	TestReservedOutputColumnCanBeAliased	renomeado ao implementar aliases de projeção, issue #41 (14/09/2026)

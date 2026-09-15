@@ -21,16 +21,6 @@ import java.util.logging.Logger;
  */
 public final class NishiDriver implements Driver {
 
-    /**
-     * A versão do ARTEFATO, e um gate do lado Go cobra que ela continue sendo.
-     *
-     * <p>Duas fontes para o mesmo número divergem: o pom sobe de versão numa
-     * release e estas constantes ficam para trás, e a ferramenta passa a exibir
-     * uma versão de driver que não existe. O gate compara as duas extrações.
-     */
-    static final int VERSAO_MAJOR = 0;
-    static final int VERSAO_MINOR = 1;
-
     static {
         try {
             DriverManager.registerDriver(new NishiDriver());
@@ -70,12 +60,12 @@ public final class NishiDriver implements Driver {
 
     @Override
     public int getMajorVersion() {
-        return VERSAO_MAJOR;
+        return DriverVersion.MAJOR;
     }
 
     @Override
     public int getMinorVersion() {
-        return VERSAO_MINOR;
+        return DriverVersion.MINOR;
     }
 
     /**

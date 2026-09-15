@@ -1570,6 +1570,32 @@ SELECT id, status, ip
 FROM radius_sessions;
 ```
 
+
+Cada coluna explícita aceita um alias por consulta: `campo AS alias` ou
+`campo alias`. A regra vale para campos simples, caminhos aninhados e tabelas
+virtuais. O alias substitui o nome de saída no NDJSON e nos metadados; tipo e
+nulabilidade permanecem os do campo. `*` e `pai.*` não aceitam alias.
+
+Nomes de saída repetidos recebem sufixos `_1`, `_2`, começando no menor índice
+livre, sem descartar colunas ou mudar sua ordem. Todos os nomes originalmente
+pedidos ficam reservados antes da numeração. Aliases explícitos têm prioridade
+sobre nomes sem alias; entre aliases explícitos iguais, vence o primeiro.
+Exemplos: `b, a AS b` → `b_1, b`; `a AS x, b AS x, c AS x_1` → `x, x_2, x_1`.
+Essa decisão da issue #41 substitui a recusa anterior de projeções repetidas.
+
+`ORDER BY` resolve nomes finais de saída (inclusive sufixos) antes dos nomes
+do schema. Referências qualificadas continuam sendo caminhos aninhados;
+um alias literal contendo ponto exige aspas para ser referenciado.
+`WHERE` e campos de origem do `SELECT` usam somente o schema, incluindo
+aliases YAML. Aliases da consulta não encadeiam dentro da projeção.
+
+Identificadores distinguem maiúsculas e minúsculas. Aliases vazios são
+recusados; palavras reservadas, incluindo as palavras contextuais do SQL v1,
+exigem aspas duplas. A lista contextual é: AS, ORDER, BY, ASC, DESC, NULLS,
+FIRST, LAST, OFFSET, LIKE, GROUP, JOIN, HAVING, DISTINCT e UNION. O escape
+para aspas internas é `""`. A regra não torna esses nomes reservados nas
+posições de campos existentes.
+
 ---
 
 # 61. Predicates

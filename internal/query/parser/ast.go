@@ -71,6 +71,10 @@ type ColumnRef struct {
 	// não o nome da coluna — quem resolve um no outro é o binder.
 	Qualifier string
 	Name      string
+	// Alias é o rótulo pedido nesta consulta, vazio quando ausente.
+	// AliasPos aponta para o token do alias, inclusive a aspa de abertura.
+	Alias    string
+	AliasPos int
 	// Star marca `pai.*`: expande as colunas extraídas daquele pai. Elas
 	// ficam fora do SELECT *, então esta é a forma de pedi-las sem saber os
 	// nomes. Com Star, Name é vazio.

@@ -124,6 +124,29 @@ class Metadados(unittest.TestCase):
     def tearDownClass(cls):
         cls.cx.close()
 
+    def test_projection_aliases_and_suffixes(self):
+        for limit in ("", " LIMIT 0"):
+            with self.subTest(limit=limit), self.cx.cursor() as cur:
+                cur.execute(
+                    'SELECT id, inteiro AS id, texto AS "FROM", inteiro amount '
+                    "FROM todos_os_tipos WHERE id = 'borda-1' ORDER BY id" + limit
+                )
+                self.assertEqual([d[0] for d in cur.description], ["id_1", "id", "FROM", "amount"])
+                self.assertEqual(
+                    [d[1] for d in cur.description], ["VARCHAR", "BIGINT", "VARCHAR", "BIGINT"]
+                )
+                self.assertFalse(cur.description[0][6])
+                self.assertTrue(cur.description[1][6])
+                row = cur.fetchone()
+                if limit:
+                    self.assertIsNone(row)
+                else:
+                    self.assertEqual(row["id_1"], "borda-1")
+                    self.assertEqual(row["id"], (1 << 63) - 1)
+                    self.assertEqual(row["amount"], (1 << 63) - 1)
+                    self.assertEqual(row["FROM"], 'linha com "aspas" e \\barra')
+                    self.assertIsNone(cur.fetchone())
+
     def test_a_chave_e_a_sequence_sao_nao_nulaveis(self):
         cur = self.cx.cursor()
         cur.execute("SELECT id, inteiro FROM todos_os_tipos LIMIT 1")

@@ -1,42 +1,78 @@
 name: Release
 
-# Disparado pela publicação de uma release já existente. A criação da
-# release/tag em si é ato manual (`gh release create` antes da tag) — este
-# workflow só builda e anexa o binário, nunca cria a release.
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+# Publication and retention share one queue across all tags.
+concurrency:
+  group: nishidb-releases
+  queue: max
+  cancel-in-progress: false
 
 jobs:
-  anexa-binario:
+  validate:
+    if: github.event.created == true && github.event.deleted == false
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.5"
-          cache: true
-
-      # O alvo `build` do Makefile é a ÚNICA fonte do comando de build — nunca
-      # um `go build` próprio aqui. A Task A3 acrescenta ldflags de versão a
-      # este mesmo alvo, e este workflow herda a mudança sem precisar ser
-      # tocado de novo.
-      - name: builda com o alvo do Makefile
-        run: make build
-
-      - name: renomeia e anexa o binário à release
+          ref: ${{ github.sha }}
+      - name: Validate release tag
+        id: tag
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          if [ ! -f ./nishidb ]; then
-            echo "erro: 'make build' não deixou ./nishidb no diretório de trabalho — o alvo build ainda não emite o binário nomeado (ver Task A3)." >&2
-            exit 1
+          if python3 scripts/release.py validate "$RELEASE_TAG"; then
+            echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
           fi
 
-          versao="${{ github.event.release.tag_name }}"
-          artefato="nishidb-${versao}-linux-amd64"
-          cp ./nishidb "$artefato"
-          gh release upload "$versao" "$artefato" --clobber
+  anexa-binario:
+    needs: validate
+    if: needs.validate.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ github.ref_name }}
+      JDBC_VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+          cache-dependency-path: clients/jdbc/pom.xml
+      - name: Test Go and release automation
+        run: |
+          go test ./...
+          python3 scripts/release_test.py
+      - name: Test JDBC against the real server
+        run: make test-jdbc
+      - name: Build release artifacts
+        run: |
+          make build
+          make build-jdbc
+          mkdir -p dist
+          cp nishidb "dist/nishidb-${VERSION}-linux-amd64"
+          cp clients/jdbc/target/nishidb-jdbc.jar dist/nishidb-jdbc.jar
+      - name: Publish both assets and retain five releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 scripts/release.py publish "$VERSION" dist

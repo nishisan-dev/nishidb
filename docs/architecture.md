@@ -1089,11 +1089,11 @@ NDJSON: uma linha por row, terminada em LF. Colunas **sempre presentes**, com
 `null` explícito — os clients mapeiam POSIÇÃO para valor e decodificam cada
 linha num passe só.
 
-A posição, e não o nome, porque **chave repetida é legal**: `SELECT a, a`
-produz `{"a":1,"a":1}`, e um cliente que indexasse a linha por um mapa de nome
-perderia a segunda coluna em silêncio. É o `null` explícito que torna o
-casamento posicional possível — com o campo ausente, o número de chaves da row
-deixaria de ser o número de colunas do schema.
+O binder garante nomes de saída únicos: `SELECT a, a` publica `a, a_1`,
+preservando as duas colunas. Aliases explícitos e sufixos são resolvidos uma
+vez por consulta e chegam tanto à moldura quanto às linhas, sem mudar os tipos.
+Os clients continuam casando por posição; o `null` explícito garante que o
+número de valores da row seja sempre o número de colunas do schema.
 
 Dois cuidados que o framing exige: o `json` armazenado guarda a janela crua do
 evento, então um documento pretty-printed chega com quebra de linha dentro (é

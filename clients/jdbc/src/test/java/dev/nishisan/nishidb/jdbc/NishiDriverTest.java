@@ -92,8 +92,15 @@ class NishiDriverTest {
     @Test
     void aVersaoEhADoArtefato() {
         NishiDriver d = new NishiDriver();
-        assertEquals(0, d.getMajorVersion());
-        assertEquals(1, d.getMinorVersion());
+        String expected = System.getProperty("expectedDriverVersion");
+        assertNotNull(expected, "Maven must supply the expected project version");
+        String[] parts = expected.split("\\.");
+        assertEquals(Integer.parseInt(parts[0]), d.getMajorVersion());
+        assertEquals(Integer.parseInt(parts[1]), d.getMinorVersion());
+        NishiDatabaseMetaData metadata = new NishiDatabaseMetaData(null);
+        assertEquals(expected, metadata.getDriverVersion());
+        assertEquals(d.getMajorVersion(), metadata.getDriverMajorVersion());
+        assertEquals(d.getMinorVersion(), metadata.getDriverMinorVersion());
     }
 
     // ------------------------------------------------------- ConnectionConfig

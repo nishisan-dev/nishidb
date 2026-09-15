@@ -1,7 +1,6 @@
 package binder_test
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,25 +11,14 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
 )
 
-// `SELECT id, id` produz um objeto JSON com a chave repetida. É tecnicamente
-// válido, e é exatamente por isso que dói: o consumidor colapsa as duas em
-// silêncio, o usuário pede duas colunas e recebe uma, sem aviso nenhum. Recusar
-// no bind troca resultado errado silencioso por erro visível.
-func TestProjecaoComNomeRepetidoERecusada(t *testing.T) {
-	const prefix = "SELECT id, status, "
-	err := bindErr(t, prefix+"id FROM radius_sessions")
-
-	if !strings.Contains(err.Error(), `coluna "id" aparece mais de uma vez na projeção`) {
-		t.Errorf("mensagem = %q", err)
+// A repetição preserva as duas colunas e numera o segundo nome de saída.
+func TestProjectionDuplicateNamesReceiveSuffixes(t *testing.T) {
+	bq := bindOK(t, "SELECT id, status, id FROM radius_sessions")
+	if got := columnNames(bq.Columns); strings.Join(got, ",") != "id,status,id_1" {
+		t.Fatalf("nomes = %q", got)
 	}
-	// A posição é a da SEGUNDA ocorrência: é ela que o usuário apaga para
-	// corrigir a query. Apontar a primeira mandaria remover a coluna certa.
-	var be *binder.Error
-	if !errors.As(err, &be) {
-		t.Fatalf("erro é %T, want *binder.Error", err)
-	}
-	if be.Pos != len(prefix) {
-		t.Errorf("posição = %d, want %d (a segunda ocorrência)", be.Pos, len(prefix))
+	if bq.Columns[0].Slot != bq.Columns[2].Slot {
+		t.Fatal("campo repetido não compartilha slot")
 	}
 }
 
@@ -124,12 +112,9 @@ func compileWithExtraFields(t *testing.T, n int) *schema.Compiled {
 
 func extraName(i int) string { return fmt.Sprintf("c%03d", i) }
 
-// Projeção grande troca a varredura linear por mapa, e a troca tem duas
-// maneiras de vazar uma repetição: esquecer de semear o mapa com o que a
-// varredura já tinha visto (repetição de coluna ANTES do limiar) e esquecer de
-// alimentá-lo dali em diante (repetição DEPOIS do limiar). Cada subteste cobre
-// uma delas.
-func TestRepeticaoEmProjecaoGrande(t *testing.T) {
+// A normalização por mapa preserva nomes distintos e numera colisões tanto
+// com uma coluna anterior ao limiar quanto com uma coluna posterior.
+func TestLargeProjectionDuplicatesReceiveSuffixes(t *testing.T) {
 	const columnCount = 200
 	sc := compileWithExtraFields(t, columnCount)
 
@@ -154,24 +139,19 @@ func TestRepeticaoEmProjecaoGrande(t *testing.T) {
 				t.Fatal(err)
 			}
 			bq, err := binder.Bind(st, sc, nil)
-			if err == nil {
-				t.Fatalf("Bind não falhou: %d colunas", len(bq.Columns))
+			if err != nil {
+				t.Fatal(err)
 			}
-			if !errors.Is(err, binder.ErrBind) {
-				t.Errorf("erro = %v, want errors.Is ErrBind", err)
+			if len(bq.Columns) != columnCount+1 {
+				t.Fatalf("colunas = %d", len(bq.Columns))
 			}
-			want := fmt.Sprintf("coluna %q aparece mais de uma vez na projeção", tc.duplicateColumn)
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("mensagem = %q, want conter %q", err, want)
+			for i := range columnCount {
+				if bq.Columns[i].Name != names[i] {
+					t.Fatalf("nome %d mudou: %s", i, bq.Columns[i].Name)
+				}
 			}
-			// A posição continua sendo a da última ocorrência, que é a única
-			// coisa que o usuário consegue apagar sem reescrever a query.
-			var be *binder.Error
-			if !errors.As(err, &be) {
-				t.Fatalf("erro é %T, want *binder.Error", err)
-			}
-			if wantPos := strings.LastIndex(sql, tc.duplicateColumn); be.Pos != wantPos {
-				t.Errorf("posição = %d, want %d", be.Pos, wantPos)
+			if got := bq.Columns[columnCount].Name; got != tc.duplicateColumn+"_1" {
+				t.Fatalf("nome duplicado = %q", got)
 			}
 		})
 	}

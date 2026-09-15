@@ -13,7 +13,7 @@ import (
 // mensagem é o que o usuário lê para consertar a query) e a posição é o que o
 // driver JDBC usa para apontar o byte. Um teste que só afira o sentinela fica
 // verde com a guarda errada disparando.
-func TestErrosDeSintaxe(t *testing.T) {
+func TestSyntaxErrors(t *testing.T) {
 	cases := []struct {
 		name string
 		sql  string
@@ -27,7 +27,7 @@ func TestErrosDeSintaxe(t *testing.T) {
 		{"keyword como coluna", "SELECT limit FROM x", 7, "esperado nome de coluna ou '*'"},
 		{"virgula sem coluna", "SELECT a, FROM x", 10, "esperado nome de coluna"},
 		{"estrela com coluna", "SELECT *, a FROM x", 8, "'*' não pode ser combinado com colunas"},
-		{"coluna sem virgula", "SELECT a b FROM x", 9, "esperado ',' ou FROM"},
+		{"conteudo apos alias", "SELECT a b c FROM x", 11, "esperado ',' ou FROM"},
 		{"sem from", "SELECT a", 8, "esperado ',' ou FROM"},
 		{"from sem dataset", "SELECT a FROM", 13, "esperado nome do dataset"},
 		{"dataset numerico", "SELECT a FROM 3", 14, "esperado nome do dataset"},
