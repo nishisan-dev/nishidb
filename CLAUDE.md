@@ -250,7 +250,42 @@ NA FORMA DOMINANTE do repositório, não só na que você escreveu no teste.
 - Diagramas PlantUML em `docs/diagrams/`, incorporados via `uml.nishisan.dev`
   com URL raw fixando `main` (fixar branch de trabalho quebraria no merge);
   validar com `plantuml -checkonly`.
-- Ao fazer grep no repositório, excluir `.claude/worktrees/` (cópias da árvore).
+
+## Worktrees e agentes
+
+Toda regra aqui foi aprendida quebrando. Para a sessão do agente, o worktree não
+é só um recurso do git: é uma FRONTEIRA DE ISOLAMENTO. A sessão fica presa a um
+worktree, e todo subagente dela fica preso ao mesmo worktree.
+
+- **Worktree extra para subagente não funciona.** Um worktree criado com
+  `git worktree add` para um subagente é inútil: escrever lá e rodar git lá são
+  recusados. `EnterWorktree(path)` chamado pelo subagente responde sucesso e não
+  libera nada.
+  - Paralelismo DENTRO da sessão é feito por pacotes DISJUNTOS no mesmo worktree,
+    sem commit.
+  - O arquivo que todos tocariam (`docs/glossario.md`) fica proibido aos
+    subagentes; os termos vêm listados no relatório.
+  - Os aceites rodam primeiro por pacote, e cada falha fora do pacote é atribuída.
+  - O orquestrador commita cada bloco com `git add` explícito.
+  - Paralelismo em worktrees DISTINTOS é outra sessão, não subagente.
+- **`isolation: "worktree"` parte de `origin/main`**, não do branch local. Só serve
+  para trabalho que não depende de commit ainda não publicado (ex.: pacote novo).
+  Para integrar: `git diff <base> <topo> --output=<patch>` e depois
+  `git apply --3way <patch>`.
+- **Entre no worktree ANTES de criar branch ou escrever arquivo.** Outras sessões
+  trabalham na árvore principal ao mesmo tempo: um `git checkout -b` lá troca o
+  branch debaixo delas, e um `git add` largo de outra sessão já engoliu arquivo
+  não rastreado. O worktree nasce no branch `worktree-<nome>`: renomeie para a
+  convenção com `git branch -m feature/<descricao>`.
+- **A guarda recusa `git -C`, até para leitura, Bash composto com git e `$(git ...)`
+  embutido.** Use um comando git por chamada; laço e script vão para um arquivo no
+  scratchpad, executado como `bash <arquivo>`. Os objetos são compartilhados:
+  `git show <sha>` de dentro do próprio worktree lê commit feito noutro.
+- **A pilha de `stash` é compartilhada** entre worktrees e sessões. Nunca use
+  `git stash` cru; prefira commit WIP.
+- **O cache do golangci-lint guarda arquivos de worktree removido** e infla a
+  contagem acima da baseline. Cura: `golangci-lint cache clean`.
+- Ao fazer grep no repositório, exclua `.claude/worktrees/` (cópias da árvore).
 
 ## Release
 
