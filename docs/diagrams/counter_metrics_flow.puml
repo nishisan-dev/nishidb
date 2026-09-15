@@ -1,0 +1,124 @@
+@startuml counter_metrics_flow
+title Métricas de janela do contador: abertura, passada, fechamento do balde, leitura e parada
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+
+partition "Subida (openDataset, ANTES do counters.Register e da compilação dos alarmes)" {
+  start
+  if (algum contador declara metrics:?) then (não)
+    :RemoveOrphans apaga os .win que a
+    última métrica deixou ao sair do YAML
+    (WARN counter_metric.orphans);
+    :sem amostrador: nenhuma coluna de métrica;
+    stop
+  endif
+  :Open remove os órfãos
+  (métrica ou contador fora do YAML);
+  :abre um counter_metrics/{contador}/{métrica}.win
+  por métrica declarada;
+  if (cabeçalho ilegível ou largura de balde divergente?) then (sim)
+    :recria o arquivo
+    (WARN counter_metric.reset:
+    a janela da métrica se perde);
+  endif
+  :Restauração: lê a coluna de identidade
+  e casa cada grupo VIVO pelo hash da chave;
+  note right
+    O id do grupo não vai a disco.
+    Hash que nenhum vivo reclama: a posição
+    volta à lista livre e a identidade é zerada.
+    Hash em duas posições, ou métricas que
+    divergem na mesma posição: posições liberadas.
+  end note
+  :publica o agregado relativo ao agora
+  (baldes fechados na janela e o balde
+  aberto da mesma época), ANTES da 1ª passada;
+  :Run: Start do laço ANTES do laço dos alarmes;
+}
+
+partition "Passada (a cada clamp(menor janela / 60, 1 s, 10 s))" {
+  :para cada id de 1 a Limit(): Group(id)
+  sob o lock FOLHA do dicionário (nada do writer);
+  if (grupo vivo?) then (não)
+    :se tinha posição: publica sem valor e sem dono,
+    zera a identidade e devolve a posição
+    à lista livre;
+  else (sim)
+    if (tem posição?) then (não)
+      :acquire: topo da lista livre ou posição nova,
+      com a capacidade garantida ANTES;
+      note right
+        Falha de infra (crescimento, teto):
+        ERROR counter_metric.stopped, o laço para,
+        o publicado congela e
+        nishidb_counter_metric_sampling vai a 0.
+      end note
+    endif
+    if (hash da chave igual ao dono da entrada?) then (não)
+      :adopt: identidade nova no disco,
+      validFromEpoch = época corrente,
+      balde aberto anterior DESCARTADO;
+    endif
+    if (a época do balde mudou?) then (sim)
+      :fecha o balde: grava a coluna do slot
+      (época % 60) com a marca de dono;
+      note right
+        É a ÚNICA escrita de balde no mmap:
+        passadas dentro da mesma época não
+        sujam página de balde nenhuma (a troca
+        de dono e a aposentadoria gravam só
+        a coluna de identidade).
+      end note
+      :recalcula o cache dos fechados
+      (60 leituras: marca de dono, validFromEpoch
+      e época dentro da janela);
+    endif
+    :dobra a amostra no balde aberto, em heap;
+    :publica sob seqlock
+    (seq ímpar, dono, amostras, avg, min, max, seq par);
+  endif
+}
+
+partition "Consulta local (nishidb query --config)" {
+  :abre os .win SÓ PARA LEITURA e publica uma vez,
+  pelo MESMO código da restauração;
+  note right
+    Nunca amostra, escreve, cria diretório
+    ou limpa órfão. Arquivo ausente: NULL sem log.
+    Arquivo ilegível ou divergente: NULL e
+    WARN counter_metric.unreadable no stderr.
+  end note
+}
+
+partition "Leitura (SELECT em _counters e qualifyWhen, sem lock e sem alocação)" {
+  :posição = mapa id -> posição do contador;
+  repeat
+    :lê seq, dono, amostras, avg, min e max;
+  repeat while (seq ímpar ou mudou durante a leitura?) is (relê) not (estável)
+  if (dono publicado é o id pedido?) then (não)
+    :sem valor
+    (posição reusada por outro grupo);
+  elseif (amostras > 0?) then (não)
+    :coluna ausente da linha = NULL
+    (NULL compara falso);
+  else (sim)
+    :colunas {métrica}_avg, _min e _max
+    com o agregado do que existe na janela;
+  endif
+}
+
+partition "Parada (encerra: forAlarms, forEmitters, forCounterMetrics, closeDatasets)" {
+  :cancela e AGUARDA o laço;
+  :grava os baldes abertos que mudaram
+  e faz msync de cada arquivo;
+  :fecha os arquivos;
+  note right
+    Crash sem Stop: sobra o que já tinha fechado.
+    O arquivo é telemetria, fora da ordem de
+    durabilidade do checkpoint.
+  end note
+  stop
+}
+
+@enduml

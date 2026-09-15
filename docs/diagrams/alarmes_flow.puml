@@ -1,31 +1,33 @@
 @startuml alarmes_flow
-title Alarme por condição sustentada: a passada, a decisão e o que sai
+title Alarme por condição sustentada: a passada, a qualificação, a decisão e o que sai
 
 skinparam shadowing false
 skinparam defaultFontName Helvetica
 
 partition "Subida (openDataset)" {
   start
-  :Compila a condição de cada alarme
-  contra o schema da tabela do contador
+  :Compila o `when` e o `qualifyWhen` de cada alarme
+  contra o schema da tabela do contador, com as
+  colunas das métricas de janela
   (internal/predicate, o MESMO do WHERE);
   note right
-    Nome de coluna errado, SQL de
-    enriquecimento malformado ou
-    contagem de `?` divergente
-    DERRUBAM a subida aqui.
+    Nome de coluna errado, texto acima do
+    que o alarms.state comporta, SQL de
+    enriquecimento malformado ou contagem
+    de `?` divergente DERRUBAM a subida aqui.
   end note
-  :Lê checkpoint/alarms.state;
+  :Lê checkpoint/alarms.state (versão 2);
   if (arquivo?) then (ausente)
     :primeira subida: nada a restaurar;
-  elseif (ilegível) then
+  elseif (ilegível, ou versão 1 da v0.8.x) then
     :WARN alarm.state_unreadable;
     :cada alarme recomeça a contar
     (a abertura NÃO é recusada);
   else (válido)
-    if (when e sustainedFor batem com o YAML?) then (não)
+    if (when, qualifyWhen, sustainedFor e impressão
+das métricas citadas batem com o YAML?) then (não)
       :descarta a entrada
-      (prazo antigo sobre condição nova
+      (prazo antigo sobre regra nova
       anunciaria sustentação que
       ninguém mediu);
     else (sim)
@@ -43,12 +45,29 @@ partition "Passada (cadência = menor sustainedFor / 4)" {
     nada do Store: a varredura não
     disputa nada com a ingestão.
   end note
-  :Avalia a condição sobre a linha
+  :Avalia o `when` sobre a linha
   que a tabela virtual monta;
   if (grupo já tem estado?) then (não)
     if (condição vale?) then (não)
       :nada a lembrar
       (caso dominante, zero alocação);
+      stop
+    endif
+  endif
+  if (condição vale?) then (sim)
+    :Avalia o `qualifyWhen`
+    (sem ele declarado, qualificado);
+    note right
+      Só com a condição valendo: com ela
+      falsa o desfecho já está decidido.
+      Coluna de métrica sem amostra é
+      NULL, e NULL não qualifica.
+    end note
+  endif
+  if (grupo já tem estado?) then (não)
+    if (qualificado?) then (não)
+      :nada a lembrar
+      (a OLT que nunca teve ninguém);
       stop
     endif
     :cria o cronômetro;
@@ -61,6 +80,20 @@ partition "Passada (cadência = menor sustainedFor / 4)" {
       (rajada curta: resolução sem
       disparo seria um "voltou" que
       ninguém viu abrir);
+      stop
+    endif
+  elseif (qualificado?) then (não)
+    if (estava disparado?) then (sim)
+      :RESOLVED / disqualified;
+      note right
+        A OLT morta há mais de 24h: a condição
+        ainda vale, mas auth_24h_max caiu abaixo
+        do limiar. Só volta a disparar depois de
+        requalificar E sustentar o prazo inteiro.
+      end note
+    else (não)
+      :volta ao início SEM evento
+      (nunca houve disparo a resolver);
       stop
     endif
   elseif (prazo cumprido?) then (não)
@@ -89,8 +122,9 @@ partition "Fase dois: quem a varredura não viu" {
   if (estava disparado?) then (sim)
     :RESOLVED / group_retired;
     note right
-      Motivo distinto de propósito:
-      equipamento removido do inventário
+      Precedência dos motivos na mesma passada:
+      group_retired > condition_cleared > disqualified.
+      Equipamento removido do inventário
       não é equipamento recuperado.
     end note
   else (não)
@@ -100,9 +134,13 @@ partition "Fase dois: quem a varredura não viu" {
 
 partition "Saída" {
   :Evento no log estruturado
-  (alarm.firing / alarm.resolved);
+  (alarm.firing / alarm.resolved, com
+  qualifyCondition quando declarada e as
+  colunas de métrica no grupo `metrics`,
+  lidas da MESMA linha que decidiu);
   if (houve transição?) then (sim)
-    :republica o retrato de `_meta.alarms`;
+    :republica o retrato de `_meta.alarms`
+    (com qualifyCondition);
     :grava checkpoint/alarms.state
     (temp -> fsync -> rename -> dirsync);
   endif

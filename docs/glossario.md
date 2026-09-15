@@ -565,8 +565,8 @@ inglês correspondente.
 | largura do balde (a janela da métrica dividida pela quantidade de baldes) | bucket width | internal/storage/metricwindow |
 | slot (a coluna do arquivo da janela da métrica que guarda um balde) | slot | internal/storage/metricwindow |
 | época do balde (o número do balde desde a época Unix: unixMs / largura) | epoch | internal/storage/metricwindow |
-| identidade (o hash da chave do grupo dono de um id e a época a partir da qual os baldes do id são dele) | identity | internal/storage/metricwindow |
-| capacidade (quantos ids de grupo o arquivo da janela da métrica endereça) | capacity | internal/storage/metricwindow |
+| identidade (o hash da chave do grupo dono de uma posição da métrica e a época a partir da qual os baldes da posição são dele) | identity | internal/storage/metricwindow |
+| capacidade (quantas posições da métrica o arquivo da janela endereça; não é o número de ids de grupo) | capacity | internal/storage/metricwindow |
 | marca de dono (os 16 bits do hash da chave gravados em cada balde) | owner tag | internal/storage/metricwindow |
 | amostrador (quem lê o total de cada grupo a cada intervalo e dobra a amostra no balde aberto de cada métrica de janela) | sampler | internal/countermetrics |
 | posição da métrica (o índice denso da entrada de um grupo VIVO no arquivo da janela e no heap do amostrador, reaproveitado quando o grupo se aposenta; distinta do id do grupo, do slot de balde e da posição de consumo do Kafka) | position | internal/countermetrics, internal/storage/metricwindow |

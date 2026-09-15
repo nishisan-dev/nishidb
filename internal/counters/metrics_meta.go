@@ -38,10 +38,12 @@ const metricListSeparator = ","
 // por contador, e dois contadores podem declarar `auth_5m` cada um.
 //
 // `groups`, `heapBytes`, `diskBytes` e `sampledAt` são o uso lido do
-// amostrador, e são NULL sem ele — o CLI local e um processo sem laço de
-// amostragem não medem nada, e zero seria uma medida inventada. `sampledAt` é
-// NULL também antes da primeira amostra: "nunca amostrou" e "amostrou agora"
-// são afirmações diferentes.
+// amostrador, e são NULL sem ele (MetricSource nil) — zero seria uma medida
+// inventada. `sampledAt` é NULL também antes da primeira passada: "nunca
+// amostrou" e "amostrou agora" são afirmações diferentes. A consulta local
+// (`nishidb query --config`) passa o amostrador aberto só para leitura: os três
+// primeiros saem com o que a restauração achou no disco, e `sampledAt` sai
+// sempre NULL, porque aquele processo nunca amostra.
 const metricsMetaTableSpec = `version: 1
 name: ` + TableMetaCounterMetrics + `
 schemaName: ` + schema.SyntheticSchemaName + `

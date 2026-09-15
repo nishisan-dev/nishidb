@@ -215,6 +215,14 @@ estão no arquivo:
 tail -F /var/log/nishidb/service.log | grep '"component":"alarm"'
 ```
 
+Os eventos do amostrador das métricas de janela saem com o componente do
+servidor, e se filtram pelo prefixo do evento (`counter_metric.stopped`,
+`counter_metric.reset`, `counter_metric.orphans`…):
+
+```bash
+tail -F /var/log/nishidb/service.log | grep '"event":"counter_metric\.'
+```
+
 Os caminhos são os do piloto. Torná-los configuráveis pede `EnvironmentFile`, o
 que muda o contrato de operação — não está feito.
 
@@ -1551,10 +1559,58 @@ counters:
         aggregates: [max, min]
 ```
 
-Cada agregado dá nome a uma coluna `<name>_<aggregate>`, na ordem declarada:
-`auth_5m_avg`, `auth_24h_max`, `auth_24h_min`. **Nesta versão o bloco só é
-validado na subida:** a amostragem ainda não existe, as colunas não aparecem em
-`_counters.<name>` e nenhuma condição consegue citá-las.
+Cada agregado vira uma coluna `<name>_<aggregate>` em `_counters.<nome>`,
+depois de `total` e na ordem declarada: `auth_5m_avg`, `auth_24h_max`,
+`auth_24h_min`. `avg` é `double`; `min` e `max` são `int64`, porque são valores
+que o `total` de fato teve. É o mesmo nome no SELECT e na condição de um
+alarme:
+
+```bash
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT groupKey, auth_5m_avg, auth_24h_max FROM _counters.autenticados_por_olt ORDER BY auth_24h_max DESC LIMIT 10"
+```
+
+Uma coluna repetida na projeção sai com sufixo, pelas regras de nome da
+projeção descritas em "SQL suportado": `SELECT groupKey, auth_5m_avg,
+auth_5m_avg AS x, auth_5m_avg FROM _counters.autenticados_por_olt` devolve as
+colunas `groupKey`, `auth_5m_avg`, `x` e `auth_5m_avg_1`.
+
+O servidor amostra o `total` de cada grupo vivo a cada `menor janela ÷ 60`,
+entre 1 s e 10 s (5 s com a janela de `5m`), e cada janela é dividida em 60
+baldes, então ela desliza no passo de um balde. Uma janela ainda incompleta — a
+OLT que apareceu há dois minutos — responde com o agregado das amostras que
+existem. A coluna só é NULL (ausente da linha) sem nenhuma amostra na janela, e
+NULL compara falso em qualquer condição.
+
+Os baldes ficam em `indexes/counter_metrics/<contador>/<métrica>.win`, um
+arquivo mapeado em memória por métrica. No formato do piloto — 2.830 grupos e
+duas métricas —, a bancada do aceite mediu cada arquivo com 7,6 MiB e o heap
+vivo do amostrador em cerca de 152 B por grupo por métrica, 841 KiB no total
+([`docs/aceite-metricas-de-janela.md`](docs/aceite-metricas-de-janela.md)). A
+coluna `heapBytes` de `_meta.counter_metrics` é uma contabilidade das entradas
+da métrica, e não uma medida: fica um pouco abaixo do heap real.
+O reinício **não zera a janela**: a subida publica o agregado a partir do disco
+antes da primeira amostra, e o encerramento gracioso grava o balde em curso. Num
+crash perde-se o balde em curso; parado por mais que a janela, o grupo volta
+sem valor.
+
+Mudar a `window` de uma métrica recria o arquivo dela e a janela recomeça, com
+`counter_metric.reset` no log; mudar só `aggregates` não recria. O arquivo de
+uma métrica que sai do YAML é apagado na subida seguinte
+(`counter_metric.orphans`). Se a amostragem parar por falha de disco, o log
+registra `counter_metric.stopped`, os valores congelam e
+`nishidb_counter_metric_sampling` vai a 0 (as séries estão em
+[`docs/metricas.md`](docs/metricas.md)).
+
+`nishidb query --config` lê o que o servidor gravou, sem amostrar nem escrever:
+o agregado é calculado sobre o agora com os baldes em disco. Dataset que o
+servidor nunca amostrou responde NULL, sem aviso; arquivo corrompido também
+responde NULL, com `counter_metric.unreadable` no stderr.
+
+As métricas declaradas e o que cada uma custa saem por SQL:
+
+```bash
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT id, windowMs, bucketMs, columns, groups, heapBytes, diskBytes, sampledAt FROM _meta.counter_metrics"
+```
 
 A subida recusa, nomeando o caminho da chave:
 
@@ -1605,7 +1661,8 @@ counters:
 ```
 
 O `when` fala a **mesma linguagem do `WHERE`** — é o mesmo avaliador — sobre as
-colunas da tabela do contador: `groupKey`, as do `groupBy` e `total`. Um nome de
+colunas da tabela do contador: `groupKey`, as do `groupBy`, `total` e as geradas
+pelas métricas de janela do contador (`auth_5m_avg`, ver acima). Um nome de
 coluna errado **derruba a subida**, com a coluna nomeada.
 
 `sustainedFor` é o que separa alarme de rajada: mínimo de 10 s, e `never` é
@@ -1641,7 +1698,8 @@ a contar o prazo, uma vez.
 
 O `enrich` acompanha o evento com o resultado de consultas parametrizadas pelo
 grupo que alarmou — `bind` liga cada `?` a uma coluna do contador (`total` e
-`groupKey` incluídos). O valor vai como **parâmetro**, nunca concatenado: um nome
+`groupKey` incluídos; as colunas das métricas de janela **não** são ligáveis, e a
+subida as recusa). O valor vai como **parâmetro**, nunca concatenado: um nome
 de OLT com apóstrofo não reescreve a consulta. `LIMIT` é obrigatório, no máximo
 100. Cada consulta precisa de `name`, que é como o bloco é identificado no
 evento.
@@ -1670,8 +1728,9 @@ O cronômetro **sobrevive ao reinício**: o "desde quando" é gravado em
 `checkpoint/alarms.state`, e um alarme restaurado dispara com `"restored":true` e
 `"downtimeMs"`. Num encerramento gracioso esse número é o tempo de parada; num
 crash é "desde quando não há registro", que é maior — a lacuna real é
-desconhecida, e um número grande é a resposta honesta. Mudar o `when` ou o
-`sustainedFor` no YAML invalida o cronômetro salvo daquele alarme.
+desconhecida, e um número grande é a resposta honesta. Mudar o `when`, o
+`qualifyWhen`, o `sustainedFor` ou a janela de uma métrica citada no YAML
+invalida o cronômetro salvo daquele alarme.
 
 Para inspecionar o que está em curso, sem ler log:
 
@@ -1680,6 +1739,8 @@ nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT 
 ```
 
 `state` é `firing` (já anunciado) ou `pending` (ainda contando o prazo).
+`qualifyCondition` é o `qualifyWhen` do alarme, e NULL quando ele não foi
+declarado.
 
 ### Emissão periódica: a série de cada grupo
 
@@ -1814,6 +1875,7 @@ SELECT id, name, schema, kind, columns FROM _meta.tables ORDER BY id
 SELECT name, type, auto, index, indexed, parent, occurrences, typeMismatches, coercions FROM _meta.fields
 SELECT name FROM _meta.fields WHERE parent = 'persistent'
 SELECT name, rows, total, groupBy, condition, groups, refused FROM _meta.counters
+SELECT id, windowMs, columns, groups, sampledAt FROM _meta.counter_metrics
 SELECT partition, appliedOffset, highWatermark, lag, state FROM _meta.kafka ORDER BY partition
 ```
 
@@ -1854,6 +1916,15 @@ cliente compilado antes deles lê o documento como lia.
 `_meta.counters` lista os contadores mantidos na escrita do dataset, com a
 definição e os números vivos; `_counters.<nome>`, uma tabela por contador
 declarado no YAML, lê os totais (ver "Contadores mantidos na escrita" acima).
+
+`_meta.counter_metrics` lista as métricas de janela dos contadores, uma linha
+por métrica: `id` (`<contador>|<métrica>`, a key), `counter`, `name`, `type`,
+`source`, `windowMs`, `bucketMs`, `aggregates` e `columns` — as colunas geradas,
+na ordem declarada e separadas por vírgula, que são os nomes que o SELECT e o
+alarme citam —, mais o uso: `groups`, `heapBytes`, `diskBytes` e `sampledAt`, o
+instante da última passada de amostragem. `sampledAt` é NULL antes da primeira
+passada, e sempre no `nishidb query --config`, que não amostra. Existe em todo
+dataset, vazia sem `metrics:` (ver "Métricas de janela do contador" acima).
 
 `_meta.alarms` lista os alarmes em observação, um por par (alarme, grupo): qual
 grupo, desde quando, e se o prazo já se cumpriu (ver "Alarme por condição

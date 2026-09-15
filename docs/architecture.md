@@ -961,7 +961,8 @@ WHERE parent = 'persistent' AND typeMismatches > 0
 
 O mesmo namespace lista os contadores mantidos na escrita em
 `_meta.counters` (ver "Contadores mantidos na escrita"), e os totais de cada
-um saem em `_counters.<nome>`.
+um saem em `_counters.<nome>`; as métricas de janela desses contadores saem em
+`_meta.counter_metrics` (ver "Métricas de janela do contador").
 
 ![_meta.kafka: uma consulta, um instante — o retrato colhido na abertura, a marca d'água buscada só quando vencida, e as linhas lidas do retrato](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/meta_kafka.puml)
 
@@ -2588,6 +2589,242 @@ foi medido (débito 108). `_counters` fica fora do isolamento de snapshot
 (débito 109), e `WHERE olt = …` num contador composto varre os grupos em vez
 de usar índice (débito 110).
 
+## Métricas de janela do contador
+
+![Métricas de janela do contador: abertura, passada, fechamento do balde, leitura e parada](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/counter_metrics_flow.puml)
+
+**O que é.** O `total` de um grupo é o valor de agora, e não diz se a OLT com
+zero autenticados nunca teve ninguém ou tinha gente e esvaziou. Uma métrica de
+janela, declarada dentro do contador, publica a média, o mínimo e/ou o máximo
+do `total` de cada grupo numa janela de tempo, e cada agregado vira uma coluna
+`<métrica>_<agregado>` em `_counters.<nome>`, depois de `total` — o MESMO nome
+que o SELECT e a condição de um alarme citam, sem gramática nova. O plano do
+ciclo está em
+[`planning/metricas-de-janela-e-alarme-qualificavel.md`](../planning/metricas-de-janela-e-alarme-qualificavel.md),
+e o aceite em [`aceite-metricas-de-janela.md`](aceite-metricas-de-janela.md).
+
+```yaml
+counters:
+  - name: autenticados_por_olt
+    groupBy: [olt]
+    where: authenticated = true
+    metrics:
+      - name: auth_5m
+        type: window          # único tipo
+        source: total         # única fonte
+        window: 5m            # múltipla de 1m, de 1m a 30d
+        aggregates: [avg]     # coluna auth_5m_avg (double)
+      - name: auth_24h
+        type: window
+        source: total
+        window: 24h
+        aggregates: [max]     # coluna auth_24h_max (int64)
+```
+
+**A janela não mora no storage, porque tem relógio.** Tudo o que o
+`applyRecord` alimenta tem de ser reconstruível a partir do payload dos
+records, e "a média dos últimos cinco minutos" não é: depende de QUANDO cada
+valor foi observado, não de que evento chegou. O amostrador
+(`internal/countermetrics`) mora fora de `internal/counters` e de
+`internal/storage` pelo argumento de `internal/alarm` e `internal/series`, e lê
+os contadores só pelo lock FOLHA do dicionário (`Limit`/`Group`), nunca pelo
+writer. O formato em disco é de outro pacote, `internal/storage/metricwindow`,
+que não lê relógio: quem chama passa a época do balde.
+
+**Sessenta baldes, e a janela múltipla de 1m.** Toda janela é dividida em 60
+baldes de largura igual (`schema.MetricWindowBuckets`, o único lugar desse
+número). A época de um balde é `unixMs ÷ largura`, e o slot em disco é
+`época % 60` — reaproveitado exatamente quando o balde antigo já saiu da
+janela. A largura é janela ÷ 60, e só uma janela múltipla de 1m a faz sair em
+segundos inteiros: `90s` daria balde de 1,5 s, e arredondar mudaria em
+silêncio o intervalo declarado, então a subida recusa. Os limites são 1m
+(balde de 1 s) e 30d (balde de 12 h); acima disso a pergunta passa a ser de
+série histórica, que é o papel do `emit:`.
+
+**A amostragem é `clamp(menor janela ÷ 60, 1 s, 10 s)`.** A cadência acompanha
+o menor balde declarado no dataset (5 s com uma janela de `5m`). O piso de 1 s
+é o menor balde declarável, e é também o que faz a contagem de amostras de um
+balde caber nos 16 bits do formato: o maior balde, 12 h, amostrado a cada
+segundo dá 43.200 amostras, abaixo de 65.535. Um teste refaz essa conta a
+partir das constantes (`TestOpenBucketCountFitsInSixteenBitsAtTheSamplingFloor`),
+e a contagem satura em vez de dar a volta
+(`TestOpenBucketCountSaturatesAtTheSixteenBitCeiling`), com a soma parando
+junto para o avg continuar sendo a média exata das amostras contadas. O teto de
+10 s existe porque numa janela de 24 h o balde tem 24 min, e amostrar uma vez
+por balde deixaria o min e o max cegos a qualquer pico mais curto que isso.
+
+**Colunar, e o balde só vai ao disco quando fecha.** Cada métrica tem um
+arquivo `indexes/counter_metrics/<contador>/<métrica>.win` (magic `NDBT`, com
+golden de bytes em `TestGoldenBytesOfHeaderAndEntry`): cabeçalho de 4 KiB, uma
+coluna de identidade (`keyHash u64 | validFromEpoch u64` por posição) e
+sessenta colunas de balde (`época u32 | marca de dono u16 | contagem u16`,
+`sum`, `min`, `max` — 32 B por posição). Com o layout por grupo, cada
+fechamento de balde sujaria todas as páginas do arquivo, e o writeback do
+kernel o regravaria inteiro para mudar 1/60 dele; colunar, fechar o balde k
+suja só a coluna k, e a capacidade em potência de 2 com piso 1.024 alinha toda
+coluna a uma fronteira de página. O balde aberto vive em heap e só vai ao mmap
+quando a época vira (`TestPassesWithinTheSameEpochDoNotWriteBuckets`). O
+diretório fica fora do de cada contador: a reconstrução de um contador não
+precisa conhecer estes arquivos. Crescer reescreve o arquivo com o dobro da
+capacidade por tmp e rename; só o amostrador toca o mmap, então não há leitor
+concorrente a proteger ali.
+
+**Heap pequeno, peso em mmap.** Em heap fica, por posição e por métrica, uma
+entrada de tamanho fixo: o balde aberto, o cache dos baldes fechados (soma,
+contagem, min e max, recalculado só quando a época muda) e o publicado. O cache
+é o que torna a publicação O(1) por passada: ler os 60 slots de um grupo só
+acontece quando a época vira.
+
+**Posição de grupo vivo, e não id.** Arquivo e entradas em heap são endereçados
+pela POSIÇÃO que o amostrador atribui a um grupo vivo, e ela volta para uma
+lista livre quando o grupo se aposenta. Endereçar pelo id seria mais simples e
+estaria errado: o dicionário do contador nunca reaproveita o id de um grupo
+aposentado — a mesma chave que volta ganha id novo —, e o estado cresceria com
+todo id que o contador já emitiu, e não com o inventário. Com a posição, o custo
+fica limitado pelo MÁXIMO DE GRUPOS VIVOS SIMULTÂNEOS, mais um mapa id →
+posição de 4 B por id por contador, compartilhado pelas métricas dele. Com
+rotatividade de 100.100 ids e 10 grupos vivos, o teste lê do amostrador a
+capacidade do arquivo no piso (1.024) e um único bloco de entradas alocado;
+pela contabilidade do `Sampler.Stats`, isso são 139.264 B de entradas e
+409.600 B de mapa, 4 B por id
+(`TestRotationKeepsFileAndHeapAtThePeakOfLiveGroups`). A troca de dono de uma
+posição reusada tem ordem fixa — identidade nova no disco antes de qualquer
+balde do dono novo, balde aberto do antigo descartado, `validFromEpoch` na
+época corrente —, e o dono novo começa sem as amostras do antigo
+(`TestReusedPositionStartsWithoutTheRetiredOwnerSamples`).
+
+**O leitor nunca vê linha rasgada, nem o valor de outro grupo.** O publicado de
+cada entrada (amostras, avg, min, max e o id DONO) sai sob seqlock: o escritor
+marca a sequência ímpar, grava e marca par; o leitor relê se a viu ímpar ou se
+ela mudou no meio. SQL e alarme leem sem lock e sem alocação
+(`TestSampleOnceAndAggregateDoNotAllocate`), e nunca recebem o avg de uma
+passada com o max de outra (`TestConcurrentReadersNeverSeeATornAggregate`). A
+conferência do dono fica DENTRO do seqlock porque a posição que o leitor
+carregou do mapa pode ter sido reatribuída a outro grupo antes da leitura: o
+valor só vale se o dono publicado for o id pedido
+(`TestAggregateNeverReturnsTheValueOfTheGroupThatReusedThePosition`,
+`TestReadersNeverSeeAnotherGroupsValueWhilePositionsAreReused`). Os blocos de
+entradas nunca se movem; crescer troca só o diretório de blocos, por
+`atomic.Pointer`.
+
+**Janela parcial é o agregado do que existe.** Uma OLT que apareceu há dois
+minutos tem `auth_5m_avg` com as amostras desses dois minutos, e não NULL. NULL
+— a coluna ausente da linha — é só "nenhuma amostra na janela"
+(`TestSingleSamplePublishesItsOwnAggregate`). E NULL compara falso: um
+`qualifyWhen` sobre uma métrica sem amostra não qualifica.
+
+**A identidade é o hash da chave.** Cada posição guarda o FNV-1a de 64 bits da
+chave composta do grupo e a época a partir da qual os baldes são dele, e cada
+balde leva 16 bits desse hash como marca de dono. Contador reconstruído que dá
+a um id outra chave, grupo aposentado e grupo novo numa posição reusada caem no
+mesmo caminho: hash diferente, troca de dono, baldes anteriores ignorados
+(`TestRebuiltCounterReusingAnIdDoesNotLeakTheOldBuckets`,
+`TestRetiredGroupHasNoValueAndReturningKeyStartsFromZero`). Marca e
+`validFromEpoch` são defesas independentes para o crash que separa a página de
+identidade da página de baldes; o godoc de `metricwindow` escreve o resto que
+elas não fecham — duas chaves com a mesma marca de 16 bits, na queda que separa
+exatamente essas duas páginas.
+
+**Entre aberturas a chave herda a janela, sob duas condições.** O id não vai a
+disco: a restauração casa cada grupo VIVO com a posição pelo hash da chave. Por
+isso a mesma chave recriada com id novo herda a janela antiga quando o
+amostrador NÃO observou a aposentadoria antes da última gravação E a chave
+recriada já está viva na abertura seguinte — processo parado; laço parado por
+erro de infra enquanto a ingestão seguia; aposentadoria e recriação dentro do
+último intervalo antes do Stop. Não há herança quando uma passada viu a
+aposentadoria (ela libera a posição) nem quando a chave só volta DEPOIS da
+abertura: a restauração não acha dono vivo, libera a posição e zera a
+identidade. É o princípio do alarme, que também casa pela chave canônica.
+
+**Restauração, Stop e crash.** A abertura publica o agregado a partir das
+colunas, relativo ao agora, ANTES da primeira passada — sem isso um
+`qualifyWhen` sobre `auth_24h_max` ficaria cego por 24 h a cada deploy
+(`TestRestartWithinTheWindowRestoresBeforeAnySample`); parado por mais que a
+janela, o grupo volta sem valor (`TestRestartBeyondTheWindowPublishesNoValue`).
+O `Stop` grava os baldes abertos que mudaram e faz msync, e o reinício dentro
+da mesma época recarrega o balde aberto e continua a contagem
+(`TestRestartWithinTheSameEpochReloadsTheOpenBucket`); sem essa gravação, numa
+janela de 24 h cada deploy perderia até 24 min de amostras. Num crash sobra o
+que já tinha fechado. O arquivo fica fora da ordem de durabilidade do
+checkpoint (§48), pelo argumento do `alarms.state`: é telemetria que sobrevive
+a reinício, nada do dataset é derivado dele, e perdê-lo custa histórico de
+alarme, nunca uma linha. Cabeçalho ilegível ou com largura de balde divergente
+— mudar a `window` no YAML — recria o arquivo, com WARN `counter_metric.reset`
+e `nishidb_counter_metric_resets_total`; mudar só `aggregates` não recria,
+porque o balde guarda todos os campos. Falha de infra na passada (crescimento
+do arquivo, teto de capacidade) para o laço de vez, com ERROR
+`counter_metric.stopped`: o publicado congela, `nishidb_counter_metric_sampling`
+vai a 0 e o `sampledAt` de `_meta.counter_metrics` mostra desde quando.
+
+**Órfãos, subida e parada.** Com métrica declarada, o `Open` remove os arquivos
+de métrica ou de contador que saíram do YAML, com WARN `counter_metric.orphans`
+nomeando o que saiu (`removed`) e o que ficou (`kept`). Só apaga o que é do
+pacote: arquivo REGULAR `<métrica>.win` ou `<métrica>.win.tmp` (a sobra de um
+crescimento interrompido) num diretório de contador, e o próprio diretório do
+contador órfão quando ele fica vazio. Link simbólico nunca é seguido nem
+apagado, e diretório de contador órfão com conteúdo alheio fica onde está,
+nomeado em `kept` — apagar o que não foi criado aqui para limpar um diretório
+trocaria telemetria órfã por dado de outra pessoa. Sem métrica declarada o servidor
+não abre amostrador, e quem limpa é `RemoveOrphans`, na subida — sem ele os
+arquivos da ÚLTIMA métrica removida ficariam no disco para sempre, porque o
+`Open` nunca mais roda (`TestRemovingTheLastWindowMetricRemovesItsFilesOnTheNextStart`).
+O amostrador abre antes do `counters.Register` e da compilação dos alarmes:
+aberto depois, a fonte seria nil na montagem das tabelas e as colunas sairiam
+NULL para sempre, sem erro. O laço sobe ANTES do dos alarmes, para que a
+primeira varredura dispute com a primeira amostra em vez de começar sempre
+sobre o que a restauração publicou. Na parada, `encerra()` chama `forAlarms` →
+`forEmitters` → `forCounterMetrics` → `closeDatasets`: o amostrador lê os
+contadores sem a guarda de vida, então tem de parar antes de o Store fechar, e
+para depois dos alarmes para que a varredura em voo termine sobre valores ainda
+amostrados. O gate que lê a AST do `encerra()`
+(`TestLacosDoServidorParamAntesDoQuiesceDosDatasets`) trava a ordem.
+
+**A consulta local só lê.** `nishidb query --config` abre os arquivos com
+`mmap.OpenReadOnly` e publica uma vez, pelo MESMO código da restauração: não
+amostra, não escreve, não cria diretório e não limpa órfão
+(`TestLocalQueryReadsRestoredWindowMetricsWithoutWritingTheFiles`,
+`TestLocalQueryNeverRemovesWindowFilesOfARemovedMetric`) — uma amostra tirada
+por um SELECT pontual entraria na janela como se fosse cadência. Arquivo
+AUSENTE, de um dataset que o servidor ainda não amostrou, deixa as colunas NULL
+sem log nenhum, no precedente do estado de alarme ausente
+(`TestLocalQueryWithoutWindowMetricFilesAnswersNull`); arquivo que existe e é
+ilegível, ou tem cabeçalho divergente, deixa as colunas NULL com WARN
+`counter_metric.unreadable` no STDERR, e o stdout continua só NDJSON
+(`TestLocalQueryWarnsOnStderrWhenAWindowFileIsUnreadable`).
+
+**`_meta.counter_metrics`.** Uma linha por métrica, registrada em todo dataset
+e vazia sem `metrics:`: `id` (`<contador>|<métrica>`), `counter`, `name`,
+`type`, `source`, `windowMs`, `bucketMs`, `aggregates` e `columns` — as colunas
+geradas, que é o que a condição cita —, mais o uso lido do amostrador:
+`groups`, `heapBytes`, `diskBytes` e `sampledAt`, este NULL antes da primeira
+passada e sempre na consulta local, que não amostra. As séries
+`nishidb_counter_metric_*` estão em [`metricas.md`](metricas.md).
+
+**O que custa** (bancada `BenchmarkSampleOncePilotShape` de 15/09/2026, com o
+comando e a saída crua em [`aceite-metricas-de-janela.md`](aceite-metricas-de-janela.md)).
+No formato do piloto — 2.830 grupos vivos, `auth_5m` e `auth_24h` —, MEDIDO,
+com zero alocação nos três regimes: a passada em que nenhum balde fecha custa
+**0,27 ms**; na cadência real de 5 s, em que TODA passada fecha o balde da
+métrica de 5m e relê os 60 slots de cada grupo, **11,8 ms**; com as duas
+métricas fechando balde na mesma passada, **23,4 ms**. O heap vivo que o
+amostrador retém, medido por `runtime.MemStats.HeapAlloc` com `runtime.GC()`
+antes e depois de abrir e aquecer, é **861.304 a 861.816 B** para as duas
+métricas e o mapa de posições — **152,2 B por grupo × métrica** —, e cada
+`.win` tem **7.933.952 B** no `stat` (7,57 MiB; capacidade 4.096). A
+contabilidade do `Sampler.Stats`, que alimenta a coluna `heapBytes` e a série
+`nishidb_counter_metric_heap_bytes`, dá 851.968 B para o mesmo conjunto (três
+blocos de entradas por métrica mais o mapa de 16.384 B, 150,5 B por grupo ×
+métrica) e fica cerca de 9 KiB abaixo do medido, porque não conta o diretório de
+blocos, as structs fixas e as fatias de trabalho. O leitor da bancada é o
+contador em memória dos testes — um mutex do contador inteiro, tomado a cada
+`Group` — e não o dicionário do storage.
+
+**O que NÃO existe.** A única fonte é `total` (débito 126). As colunas das
+métricas não saem na linha do `emit:` (débito 124) e não são ligáveis no `bind`
+do enriquecimento, que as recusa na subida (débito 125). E a razão entre dois
+contadores — autenticados ÷ serviços da mesma OLT — é a issue #61: `source` é
+um enum justamente para que uma fonte nova entre sem mudar a forma do bloco.
+
 ## Alarmes e emissão periódica de contador
 
 Os contadores respondem quando perguntados. Estes dois subsistemas **empurram**:
@@ -2612,14 +2849,64 @@ counters:
       every: 30s                     # file, maxBytes e keep têm default
 ```
 
-![Alarme por condição sustentada: a passada, a decisão e o que sai](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/alarmes_flow.puml)
+![Alarme por condição sustentada: a passada, a qualificação, a decisão e o que sai](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/alarmes_flow.puml)
 
 **A condição não tem gramática nova.** A tabela `_counters.<nome>` já monta cada
 grupo como um payload de record de verdade, e o `when` passa pelo avaliador
 compartilhado de `internal/predicate` — o mesmo do `WHERE` de uma consulta e do
 `when:` de uma regra de TTL. `total < 100` num alarme significa exatamente o que
 significaria num `SELECT`, e não há uma segunda implementação de coerção para
-divergir da primeira.
+divergir da primeira. As colunas geradas pelas métricas de janela do contador
+(seção anterior) entram pelo mesmo caminho: `auth_5m_avg < 1` compila contra o
+mesmo schema da tabela, e o laço lê os valores pela MESMA fonte que a tabela de
+consulta recebeu — o que o `when` enxerga é o que o SELECT devolve.
+
+**Elegibilidade é um terceiro fato, e não parte da condição.** O `qualifyWhen`
+é opcional, fala a mesma linguagem do `when`, compila contra o MESMO schema e
+responde se o grupo é assunto do alarme:
+
+```yaml
+    alarms:
+      - name: primary_quase_vazia
+        qualifyWhen: "auth_24h_max > 10"   # a OLT teve gente nas últimas 24 h
+        when: "auth_5m_avg < 1"            # e está vazia nos últimos 5 min
+        sustainedFor: 5m
+```
+
+Juntar as duas numa condição só (`auth_5m_avg < 1 AND auth_24h_max > 10`)
+dispararia igual e resolveria errado. A OLT morta há mais de um dia continua com
+zero autenticados — a condição vale —, mas o máximo de 24 h caiu abaixo do
+limiar e ela deixou de ser o assunto do alarme; com uma condição só, isso sairia
+como `condition_cleared`, que diz "voltou". Com as duas, a semântica aprovada:
+
+- o prazo só conta com o `when` valendo E o grupo qualificado;
+- pendente que perde a qualificação volta ao início SEM evento — nunca houve
+  disparo a resolver (`TestPendingGroupThatLosesQualificationReturnsToAbsentWithoutEvent`);
+- disparado que perde a qualificação resolve com `reason: disqualified`, e só
+  volta a disparar depois de requalificar E sustentar o prazo inteiro outra vez
+  (`TestFiringGroupThatLosesQualificationResolvesAsDisqualified`,
+  `TestDisqualifiedAlarmFiresAgainOnlyAfterRequalifyingAndSustaining`);
+- na mesma passada, `group_retired` > `condition_cleared` > `disqualified`:
+  grupo que sumiu não tem condição a avaliar, e dizer "desqualificado" de uma
+  OLT que voltou esconderia a recuperação atrás de uma mudança de elegibilidade
+  (`TestSameSweepPrecedenceIsRetiredThenClearedThenDisqualified`).
+
+O ponta a ponta do servidor, com relógio injetado, sustenta, dispara e resolve
+por desqualificação depois de 24 h simuladas
+(`TestWindowMetricsFeedTheTableTheAlarmAndSurviveARestart`).
+
+**A qualificação não custa ao grupo saudável.** O `qualifyWhen` só é avaliado
+com o `when` valendo: com a condição falsa o desfecho já está decidido, e
+avaliá-lo para todo grupo do inventário seria pagar uma segunda avaliação por
+grupo para não mudar decisão nenhuma
+(`TestQualifyWhenIsOnlyEvaluatedWhenTheConditionHolds`). Condição valendo sobre
+grupo inelegível — a OLT que nunca teve ninguém, o caso dominante do alarme
+qualificado — também não cria cronômetro, e o gate de zero alocação por grupo
+vale com `qualifyWhen` declarado (`TestSweepWithQualifyWhenDoesNotAllocatePerGroup`).
+O evento leva `qualifyCondition`, só quando declarada, e os valores das colunas
+de métrica do grupo num grupo `metrics` do log, lidos do MESMO payload que
+decidiu — e não de uma releitura, porque entre as duas o amostrador pode
+publicar outro valor, e o evento mostraria um número que não foi o que decidiu.
 
 **A varredura não disputa nada com a ingestão.** Ler os grupos de um contador
 toma o lock FOLHA do dicionário e lê atômicos; nada do `Store`. A exigência de
@@ -2634,10 +2921,15 @@ sustentação só é reconhecida entre DUAS observações, e com passada igual a
 prazo um alarme de dois minutos levaria até quatro para sair.
 
 **Dispara uma vez, e avisa de novo quando passa.** O evento de resolução traz o
-motivo, e os dois motivos são distintos de propósito: `condition_cleared` é "o
-problema passou", `group_retired` é "o grupo saiu do contador". Equipamento
-removido do inventário não é equipamento recuperado, e quem gera evento a partir
-disso trata os dois de formas diferentes. Resolução sem disparo anterior nunca
+motivo, e os três motivos são distintos de propósito, porque pedem leituras
+diferentes a quem consome o evento: `condition_cleared` é "o problema passou" —
+a condição deixou de valer para um grupo ainda presente; `group_retired` é "o
+grupo saiu do contador" — equipamento removido do inventário não é equipamento
+recuperado; e `disqualified` é "o grupo deixou de ser elegível" — o `qualifyWhen`
+ficou falso com a condição AINDA valendo, então o problema NÃO passou: o grupo
+só deixou de ser assunto do alarme (a OLT morta há mais de um dia, descrita
+abaixo). Na mesma passada vale a precedência `group_retired` >
+`condition_cleared` > `disqualified`. Resolução sem disparo anterior nunca
 sai — é o que faz toda rajada curta não emitir nada, em vez de anunciar um
 "voltou" que ninguém viu abrir.
 
@@ -2667,6 +2959,25 @@ faria uma troca de molde descartar em silêncio todos os cronômetros. Ausência
 distinta de corrupção, e nenhuma das duas impede a abertura (§51): o que se
 perde são os cronômetros, e cada alarme recomeça a contar.
 
+**A assinatura da regra inclui as métricas citadas, e o estado está na versão
+2.** O cronômetro salvo só vale se a regra for a mesma: `when`, `qualifyWhen`,
+`sustainedFor` e a impressão das métricas de janela que as duas condições citam
+— `nome:type:source:windowMs` de cada uma, ordenado. `auth_24h_max > 10` sobre
+uma janela de 24 h e sobre uma de 1 h têm o mesmo texto e são regras
+diferentes, e sem a impressão o prazo medido contra a janela antiga assombraria
+a condição nova depois do reinício. Só as métricas CITADAS entram: mudar a
+janela de uma que o alarme não lê não descarta cronômetro nenhum
+(`TestRestoreDropsTheTimerWhenTheQualificationSignatureChanges`). O
+`checkpoint/alarms.state` passou à versão 2 SEM leitor da 1, de propósito: ler
+uma entrada da versão 1 exigiria inventar os dois campos novos, e vazio
+afirmaria "sem qualificação" — preservando o cronômetro de um alarme cujo YAML
+acabou de ganhar `qualifyWhen` (`TestAlarmStateV1FileIsRefusedAsUnknownVersion`).
+O custo foi aceito e vai na nota da release: a primeira subida depois da v0.8.x
+registra `alarm.state_unreadable`, e os alarmes em curso recomeçam a contar o
+prazo, uma vez. Texto de condição acima do que o estado comporta é recusado na
+subida, e não na primeira gravação, que acontece na primeira transição
+(`TestAlarmTextAboveTheStateCeilingIsRefusedAtStartup`).
+
 Um alarme restaurado dispara marcado, com a **lacuna** no evento. Sem ela, um
 disparo sobre um período que ninguém acompanhou seria indistinguível de um
 observado de ponta a ponta.
@@ -2695,11 +3006,15 @@ leem os contadores sem a guarda de vida, então o `encerra()` os cancela e
 AGUARDA antes do quiesce. A prova disso é um gate que lê a AST, e a escolha tem
 medida por trás: subir com alarme e encerrar sob `-race` NÃO prova a ordem — a
 passada sobre dezenas de grupos termina em microssegundos, o laço já está
-dormindo no timer, e com a ordem invertida cinco rodadas passaram verdes.
+dormindo no timer, e com a ordem invertida cinco rodadas passaram verdes. O
+amostrador das métricas de janela obedece à mesma regra, e para depois dos dois
+laços e antes do `closeDatasets` (ver a seção anterior).
 
-**Observabilidade.** Nove séries para o alarme e seis para a emissão (ver
+**Observabilidade.** Dez séries para o alarme e seis para a emissão (ver
 [`metricas.md`](metricas.md)), todas nascendo com zero. Falha e pulo de
-enriquecimento são séries separadas porque pedem ações opostas. E a tabela
+enriquecimento são séries separadas porque pedem ações opostas, e
+`nishidb_alarm_disqualified_total` é SUBCONJUNTO de
+`nishidb_alarm_resolved_total`, nunca somada a ela. E a tabela
 virtual `_meta.alarms` dá o detalhe que os agregados não dão:
 
 ```sql
@@ -2708,14 +3023,20 @@ SELECT groupKey, state, since, condition FROM _meta.alarms WHERE state = 'firing
 
 `state = 'pending'` é o alarme que ainda conta o prazo — "vai alarmar em
 quarenta segundos" é informação que só existe antes do disparo.
+`qualifyCondition` repete o `qualifyWhen` em toda linha do alarme e é NULL
+quando ele não foi declarado: `WHERE qualifyCondition IS NULL` separa os dois
+tipos de alarme (`TestQualifyConditionColumnIsNullWhenNotDeclared`).
 
 **O que NÃO existe aqui.** O canal é o log estruturado; tópico e webhook entram
 como outro `Sink` sobre o MESMO evento, e o ponto de extensão está pronto. A
-condição fala de UM contador: a razão entre dois (autenticados ÷ serviços da
-mesma OLT) não é expressável, e o desenho aninhado dentro do contador não
-acomoda um alarme que cite dois — quando a razão entrar, precisará de lugar
-próprio. `/v1/stats` não publica estes números; o coletor do `/metrics` é a
-fonte única, e expô-los no documento do dataset sairá de lá.
+condição fala de UM contador: ela cita as colunas dele, inclusive as geradas
+pelas métricas de janela do próprio contador, mas a razão entre dois
+(autenticados ÷ serviços da mesma OLT) não é expressável — é a issue #61. O
+`bind` do enriquecimento liga só `groupKey`, `total` e as colunas do `groupBy`,
+e recusa na subida as colunas das métricas (débito 125); a linha do `emit:`
+também não as leva (débito 124). `/v1/stats` não publica estes números; o
+coletor do `/metrics` é a fonte única, e expô-los no documento do dataset sairá
+de lá.
 
 ## O que ainda não existe
 
