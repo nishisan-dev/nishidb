@@ -290,7 +290,7 @@ inglês correspondente.
 | cerca (de bloco de código) | fence | internal/gates/verification_test.go |
 | seção | section | internal/gates/verification_test.go |
 | cabeçalho (markdown) | heading | internal/gates/verification_test.go |
-| amostra (de métrica; e as primeiras divergências que o relatório da auditoria nomeia) | sample | internal/metrics, internal/gates/verification_test.go, internal/storage/counter |
+| amostra (de métrica; e as primeiras divergências que o relatório da auditoria nomeia; e a leitura do total de um grupo que o amostrador dobra no balde) | sample | internal/metrics, internal/gates/verification_test.go, internal/storage/counter, internal/countermetrics |
 | família (de métrica) | family | internal/metrics, internal/gates/verification_test.go |
 | série (de métrica) | series | internal/metrics, internal/gates/metrics_test.go |
 | marcador (de item de lista) | bullet | internal/gates/verification_test.go |
@@ -568,6 +568,20 @@ inglês correspondente.
 | identidade (o hash da chave do grupo dono de um id e a época a partir da qual os baldes do id são dele) | identity | internal/storage/metricwindow |
 | capacidade (quantos ids de grupo o arquivo da janela da métrica endereça) | capacity | internal/storage/metricwindow |
 | marca de dono (os 16 bits do hash da chave gravados em cada balde) | owner tag | internal/storage/metricwindow |
+| amostrador (quem lê o total de cada grupo a cada intervalo e dobra a amostra no balde aberto de cada métrica de janela) | sampler | internal/countermetrics |
+| posição da métrica (o índice denso da entrada de um grupo VIVO no arquivo da janela e no heap do amostrador, reaproveitado quando o grupo se aposenta; distinta do id do grupo, do slot de balde e da posição de consumo do Kafka) | position | internal/countermetrics, internal/storage/metricwindow |
+| mapa de posições (o mapa id do grupo → posição da métrica, um por contador, compartilhado pelas métricas) | position map | internal/countermetrics |
+| dono da entrada (o id do grupo que ocupa a posição da métrica, conferido pelo leitor dentro do seqlock) | owner | internal/countermetrics |
+| agregado publicado (avg, min e max de um grupo, publicados para leitura concorrente sem lock) | published aggregate | internal/countermetrics |
+| seqlock (a publicação em que o escritor marca o número de sequência ímpar enquanto grava e o leitor relê se o número mudou) | seqlock | internal/countermetrics |
+| releitura (a volta do leitor do seqlock quando a sequência mudou ou estava ímpar) | retry | internal/countermetrics |
+| balde aberto (o balde da época corrente, ainda em heap, gravado no arquivo só quando a época vira ou no Stop) | open bucket | internal/countermetrics |
+| baldes fechados (o cache em heap da soma, contagem, mínimo e máximo dos baldes gravados que ainda estão na janela) | closed buckets | internal/countermetrics |
+| adotar (o amostrador assumir uma posição para um dono novo: identidade nova antes de qualquer balde, balde aberto anterior descartado) | adopt | internal/countermetrics |
+| órfão da métrica (o arquivo `.win` de uma métrica que saiu do YAML, removido na abertura) | orphan | internal/countermetrics |
+| restauração da janela (a publicação dos agregados a partir dos baldes gravados, na abertura, antes da primeira amostra) | restore | internal/countermetrics |
+| saturação da contagem (a contagem do balde que para em 65.535, com a soma parando junto para o avg continuar exato) | count saturation | internal/countermetrics |
+| bloco de entradas da métrica (o pedaço de tamanho fixo do estado em heap do amostrador, que nunca se move; distinto do bloco varrido numa passada sobre a região) | chunk | internal/countermetrics |
 | coluna gerada (a coluna `<métrica>_<agregado>` que uma métrica de janela produz na tabela do contador) | generated column | internal/schema |
 | coluna fixa (`groupKey` e `total`, presentes em toda tabela de contador) | fixed column | internal/schema, internal/counters |
 | origem da coluna (o trecho do contador, colunas fixas, `groupBy` ou `metrics[i]`, que produz a coluna) | origin | internal/schema |

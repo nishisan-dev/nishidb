@@ -1,7 +1,7 @@
 // Package metricwindow é o dono do formato em disco da janela da métrica
 // (avg/min/max do total de cada grupo de um contador numa janela deslizante,
 // como 5m ou 24h — não confundir com a janela do rowindex): um arquivo por
-// janela, com uma coluna de identidade por id de grupo e uma coluna por slot de
+// janela, com uma coluna de identidade por índice de entrada e uma coluna por slot de
 // balde.
 //
 // O pacote é SÓ o formato. Não tem relógio, nem goroutine, nem conhecimento de
@@ -34,10 +34,10 @@
 //	                                 bucketWidthMs i64 | source u32 | capacity u32 |
 //	                                 crc32c u32 (Castagnoli, sobre os 32 bytes
 //	                                 anteriores); resto da página zerado
-//	[4096, 4096 + capacity*16)       coluna de identidade, por id de grupo:
+//	[4096, 4096 + capacity*16)       coluna de identidade, por índice de entrada:
 //	                                 keyHash u64 | validFromEpoch u64
 //	slot s, a partir de
-//	4096 + capacity*16 + s*capacity*32  coluna do balde s, por id de grupo:
+//	4096 + capacity*16 + s*capacity*32  coluna do balde s, por índice de entrada:
 //	                                 palavra 0 | sum i64 | min i64 | max i64
 //
 //	palavra 0 de um balde:           epoch u32 (bits 63..32) |
@@ -47,9 +47,18 @@
 // O arquivo tem de ter EXATAMENTE o tamanho que o cabeçalho declara; maior ou
 // menor é cabeçalho ilegível.
 //
-// O id 0 nunca é usado pelo contador (ids de grupo começam em 1), mas ocupa
-// lugar nas colunas para que o endereço de um id seja id*16 e id*32, sem
-// subtração. O formato não o proíbe: a convenção é do chamador.
+// # Índice da entrada
+//
+// Todo parâmetro chamado id nesta API — e todo "id" deste godoc — é o ÍNDICE
+// DA ENTRADA: a posição que o chamador atribuiu, e não necessariamente o id do
+// grupo no contador. O amostrador atribui posições densas a grupos vivos e as
+// reaproveita quando um grupo se aposenta, e é esse reaproveitamento que as
+// defesas de troca de dono abaixo (identidade, marca de dono, validFromEpoch)
+// protegem.
+//
+// O índice 0 nunca é usado pelo amostrador (as posições começam em 1), mas
+// ocupa lugar nas colunas para que o endereço de uma entrada seja id*16 e
+// id*32, sem subtração. O formato não o proíbe: a convenção é do chamador.
 //
 // A magic é "NDBT", e não "NDBW": "NDBW" já é a magic do WIP do índice por
 // segmento (segindex.WIPMagic), e duas famílias de arquivo com a mesma magic
@@ -180,9 +189,9 @@ var openRegion = mmap.Open
 // de alocação mede as operações com o seam no lugar.
 var writeTrace func(off int64, v uint64)
 
-// ErrCapacityExceeded marca um id de grupo no teto (maxCapacity) ou acima
+// ErrCapacityExceeded marca um índice de entrada no teto (maxCapacity) ou acima
 // dele. Não é corrupção nem falha de infra: o chamador decide o que fazer com
-// o grupo que não cabe, e conta.
+// a entrada que não cabe, e conta.
 var ErrCapacityExceeded = errors.New("metricwindow: group id exceeds the maximum capacity")
 
 // ErrCorruptHeader marca um cabeçalho ilegível: magic, versão, crc, campo fora
@@ -211,12 +220,12 @@ type Header struct {
 	Source uint32
 }
 
-// Identity diz a quem pertencem os baldes de um id de grupo.
+// Identity diz a quem pertencem os baldes de uma entrada.
 type Identity struct {
-	// KeyHash é o hash da chave do grupo dono do id.
+	// KeyHash é o hash da chave do grupo dono da entrada.
 	KeyHash uint64
 	// ValidFromEpoch é a primeira época de balde que pertence a esse dono;
-	// baldes de época anterior são de um dono antigo do mesmo id.
+	// baldes de época anterior são de um dono antigo da mesma entrada.
 	ValidFromEpoch uint64
 }
 
@@ -269,8 +278,10 @@ type File struct {
 //
 // minCapacity é arredondada para potência de 2 com piso 1024; um arquivo
 // existente com capacidade menor cresce até ela, e um com capacidade maior a
-// mantém (nunca encolhe). maxCapacity é o teto dos ids aceitos por
-// EnsureCapacity (maxGroups+1 no chamador).
+// mantém (nunca encolhe). maxCapacity é o teto dos índices de entrada aceitos
+// por EnsureCapacity; no amostrador é o limite do formato, e o tamanho real
+// vem das posições que ele atribui, limitadas pelo máximo de grupos vivos
+// simultâneos.
 //
 // A criação e o reset passam pelo mesmo caminho do crescimento — arquivo tmp,
 // msync, rename, reabertura, fsync do diretório —, então o arquivo em path,
@@ -363,7 +374,7 @@ func OpenReadOnly(path string) (*File, error) {
 // Header devolve os parâmetros do arquivo.
 func (f *File) Header() Header { return f.header }
 
-// Capacity devolve quantos ids o arquivo endereça hoje: ids válidos são
+// Capacity devolve quantas entradas o arquivo endereça hoje: índices válidos são
 // [0, Capacity()). Zero no File fechado.
 func (f *File) Capacity() uint32 { return f.capacity }
 

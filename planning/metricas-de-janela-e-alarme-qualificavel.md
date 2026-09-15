@@ -92,7 +92,9 @@ counters:
   `Open`, `Grow`, `AtomicLoad64`/`AtomicStore64`, `Msync`, `ReleaseBlocks`):
   - cabeçalho: magic `NDBT` (`NDBW` já é o WIP do índice por segmento), versão 1,
     `bucketCount` = 60, `bucketWidthMs`, `source`, `capacity`, crc32c do cabeçalho;
-  - coluna de identidade por id de grupo: `keyHash u64` e `validFromEpoch u64`;
+  - coluna de identidade por ENTRADA: `keyHash u64` e `validFromEpoch u64`. A
+    entrada é uma POSIÇÃO que o amostrador atribui a um grupo vivo e reaproveita
+    quando o grupo se aposenta, e não o id do grupo;
   - 60 colunas de balde, `slot × capacity`. Cada entrada tem 32 B:
     `epoch u32 | owner u16 | count u16`, `sum`, `min`, `max`. O `owner` é a
     marca de dono (`OwnerTag(keyHash)`, 16 bits). Um balde gravado por um dono
@@ -108,8 +110,10 @@ counters:
   entrada torna uma escrita parcial num crash inofensiva: entrada de epoch velho
   fica fora da janela.
 - **Crescimento:** reescrita para capacidade 2× (tmp → rename). Só o amostrador
-  toca o arquivo, então não há leitor concorrente no mmap. O teto é
-  `maxGroups + 1`.
+  toca o arquivo, então não há leitor concorrente no mmap. A capacidade cresce
+  só até o máximo de grupos vivos simultâneos, porque a entrada é a posição que o
+  amostrador reaproveita. Indexar pelo id faria o custo crescer com a vida do
+  contador: id aposentado nunca é reaproveitado.
 - **Fora do §48:** não entra na ordem de checkpoint. O godoc justifica como o
   `alarms.state`: não descreve dado materializado nem posição de consumo.
 - **Golden de bytes** do cabeçalho e de uma entrada.
@@ -126,8 +130,12 @@ argumento de `internal/alarm` e `internal/series`.
   `counter_metric.reset`; mudar `aggregates` não recria, porque o balde guarda
   todos os campos.
 
-**Estado em heap**, por grupo e por métrica, ~112 B (piloto: ~630 KB; pior caso
-com `maxGroups` default: ~15 MB):
+**Estado em heap**, por posição de grupo vivo e por métrica, com a posição
+reaproveitada quando o grupo se aposenta. O custo é limitado pelo máximo de vivos
+simultâneos, mais um mapa id → posição de 4 B por id por contador, compartilhado
+pelas métricas. O leitor confere o id dono da entrada dentro do seqlock, e assim
+nunca lê o valor de outro grupo numa posição reusada. Números medidos no aceite.
+Cada entrada guarda:
 - balde aberto;
 - cache dos baldes fechados (`sum`/`count`/`min`/`max`), recalculado só no
   fechamento de balde;
