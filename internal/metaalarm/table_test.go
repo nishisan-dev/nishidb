@@ -176,9 +176,43 @@ func TestSelectEstrelaTrazTodasAsColunas(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("%d linhas", len(got))
 	}
-	for _, col := range []string{"id", "counter", "alarm", "groupKey", "state", "since", "condition", "sustainedForMs"} {
+	for _, col := range []string{"id", "counter", "alarm", "groupKey", "state", "since", "condition", "qualifyCondition", "sustainedForMs"} {
 		if _, ok := got[0][col]; !ok {
 			t.Errorf("a coluna %q não veio no SELECT *: %+v", col, got[0])
 		}
+	}
+}
+
+// TestQualifyConditionColumnIsNullWhenNotDeclared: a coluna traz o
+// `qualifyWhen` do alarme que o declara, e NULL — não a string vazia — do que
+// não declara. É o que deixa `IS NULL` separar os dois tipos de alarme.
+func TestQualifyConditionColumnIsNullWhenNotDeclared(t *testing.T) {
+	groups := func() []alarm.ActiveGroup {
+		return []alarm.ActiveGroup{
+			{
+				Counter: "autenticados_por_olt", Alarm: "olt_down", GroupKey: "BR_SPOAM_OLT_09",
+				Since: t0, Condition: "total < 100", SustainedFor: 2 * time.Minute,
+			},
+			{
+				Counter: "autenticados_por_olt", Alarm: "primary_nearly_empty", GroupKey: "BR_SPOAM_OLT_14",
+				Firing: true, Since: t0, Condition: "auth_5m_avg < 1", QualifyCondition: "auth_24h_max > 10",
+				SustainedFor: 5 * time.Minute,
+			},
+		}
+	}
+	eng := motor(t, groups)
+	got := consulta(t, eng, "SELECT alarm, qualifyCondition FROM _meta.alarms")
+	if len(got) != 2 {
+		t.Fatalf("%d linhas, quero 2", len(got))
+	}
+	if got[0]["qualifyCondition"] != "<null>" {
+		t.Errorf("qualifyCondition do alarme sem qualifyWhen = %q, quero NULL", got[0]["qualifyCondition"])
+	}
+	if got[1]["qualifyCondition"] != "auth_24h_max > 10" {
+		t.Errorf("qualifyCondition do alarme qualificado = %q", got[1]["qualifyCondition"])
+	}
+	nulls := consulta(t, eng, "SELECT alarm FROM _meta.alarms WHERE qualifyCondition IS NULL")
+	if len(nulls) != 1 || nulls[0]["alarm"] != "olt_down" {
+		t.Errorf("IS NULL trouxe %+v, quero só olt_down", nulls)
 	}
 }

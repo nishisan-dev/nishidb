@@ -38,7 +38,7 @@ const (
 	StateFiring = "firing"
 )
 
-// especOfTable é a spec da tabela, no MESMO YAML de um dataset de verdade,
+// tableSpec é a spec da tabela, no MESMO YAML de um dataset de verdade,
 // como o `_meta.counters` e o `_meta.kafka`. Reusar o compilador é o que
 // garante que ela obedeça às mesmas regras — tipos, chave, ordem determinística
 // de FieldID — que qualquer outro dataset, e o que dá WHERE, ORDER BY, LIMIT e
@@ -50,17 +50,22 @@ const (
 // dentro do groupKey — o que mantém a decomposição sem ambiguidade e a key
 // única.
 //
-// `condition` e `sustainedForMs` repetem em toda linha do mesmo alarme, e isso
-// é deliberado: quem consulta a tabela não tem o YAML à mão, e "total baixo"
-// sem o limiar não é acionável.
-const especOfTable = `version: 1
+// `condition`, `qualifyCondition` e `sustainedForMs` repetem em toda linha do
+// mesmo alarme, e isso é deliberado: quem consulta a tabela não tem o YAML à
+// mão, e "total baixo" sem o limiar não é acionável.
+//
+// `qualifyCondition` é NULL quando o alarme não declara `qualifyWhen`: NULL é
+// ausência, e uma string vazia afirmaria uma condição de qualificação vazia que
+// ninguém escreveu. É o que deixa `WHERE qualifyCondition IS NULL` separar os
+// dois tipos de alarme.
+const tableSpec = `version: 1
 name: ` + TableMetaAlarms + `
 schemaName: ` + schema.SyntheticSchemaName + `
 materialization:
   key:
     field: id
 schema:
-  include: [id, counter, alarm, groupKey, state, since, condition, sustainedForMs]
+  include: [id, counter, alarm, groupKey, state, since, condition, qualifyCondition, sustainedForMs]
   fields:
     id:
       type: string
@@ -76,11 +81,13 @@ schema:
       type: timestamp
     condition:
       type: string
+    qualifyCondition:
+      type: string
     sustainedForMs:
       type: int64
 `
 
-// column é a posição de cada coluna, e nomesDasColumns as nomeia na mesma
+// column é a posição de cada coluna, e columnNames as nomeia na mesma
 // ordem. Uma lista só, para que acrescentar coluna seja uma linha em cada.
 type column int
 
@@ -92,11 +99,12 @@ const (
 	cState
 	cSince
 	cCondition
+	cQualifyCondition
 	cSustainedForMs
 )
 
-var nomesDasColumns = []string{
-	"id", "counter", "alarm", "groupKey", "state", "since", "condition", "sustainedForMs",
+var columnNames = []string{
+	"id", "counter", "alarm", "groupKey", "state", "since", "condition", "qualifyCondition", "sustainedForMs",
 }
 
 // Source é o que a tabela precisa do dataset, RESOLVIDO NA HORA.
@@ -113,7 +121,7 @@ type Source struct {
 
 // Table monta o schema sintético e o Store virtual de `_meta.alarms`.
 func Table(f Source) (*schema.Compiled, query.Store, error) {
-	spec, err := schema.Parse([]byte(especOfTable), schema.BuiltinDefaults)
+	spec, err := schema.Parse([]byte(tableSpec), schema.BuiltinDefaults)
 	if err != nil {
 		return nil, nil, fmt.Errorf("metaalarm: spec da tabela %s.%s inválida: %w", meta.Namespace, TableMetaAlarms, err)
 	}
@@ -122,8 +130,8 @@ func Table(f Source) (*schema.Compiled, query.Store, error) {
 		return nil, nil, fmt.Errorf("metaalarm: compilando a tabela %s.%s: %w", meta.Namespace, TableMetaAlarms, err)
 	}
 	fo := &source{f: f, abertos: map[uint64][]alarm.ActiveGroup{}}
-	fo.columns = make([]columnWithID, 0, len(nomesDasColumns))
-	for k, name := range nomesDasColumns {
+	fo.columns = make([]columnWithID, 0, len(columnNames))
+	for k, name := range columnNames {
 		field, ok := sc.FieldByName([]byte(name))
 		if !ok {
 			return nil, nil, fmt.Errorf("metaalarm: coluna %q sem FieldID no schema sintético", name)
@@ -258,24 +266,30 @@ func idOf(g alarm.ActiveGroup) []byte {
 // porque o dicionário em memória atribui os ids na ordem em que os lê.
 func (f *source) record(row types.RowID, g alarm.ActiveGroup, buf []byte) (types.Record, []byte, error) {
 	id := idOf(g)
-	estado := StatePending
+	state := StatePending
 	if g.Firing {
-		estado = StateFiring
+		state = StateFiring
 	}
-	valores := [...]types.Value{
-		cID:             {Type: types.TypeString, Bytes: id},
-		cCounter:        {Type: types.TypeString, Bytes: []byte(g.Counter)},
-		cAlarm:          {Type: types.TypeString, Bytes: []byte(g.Alarm)},
-		cGroupKey:       {Type: types.TypeString, Bytes: []byte(g.GroupKey)},
-		cState:          {Type: types.TypeString, Bytes: []byte(estado)},
-		cSince:          {Type: types.TypeTimestamp, I64: g.Since.UnixMilli()},
-		cCondition:      {Type: types.TypeString, Bytes: []byte(g.Condition)},
-		cSustainedForMs: {Type: types.TypeInt64, I64: g.SustainedFor.Milliseconds()},
+	values := [...]types.Value{
+		cID:               {Type: types.TypeString, Bytes: id},
+		cCounter:          {Type: types.TypeString, Bytes: []byte(g.Counter)},
+		cAlarm:            {Type: types.TypeString, Bytes: []byte(g.Alarm)},
+		cGroupKey:         {Type: types.TypeString, Bytes: []byte(g.GroupKey)},
+		cState:            {Type: types.TypeString, Bytes: []byte(state)},
+		cSince:            {Type: types.TypeTimestamp, I64: g.Since.UnixMilli()},
+		cCondition:        {Type: types.TypeString, Bytes: []byte(g.Condition)},
+		cQualifyCondition: {Type: types.TypeString, Bytes: []byte(g.QualifyCondition)},
+		cSustainedForMs:   {Type: types.TypeInt64, I64: g.SustainedFor.Milliseconds()},
 	}
 	buf = buf[:0]
 	var err error
 	for _, c := range f.columns {
-		if buf, err = encoding.AppendField(buf, c.id, valores[c.k]); err != nil {
+		// Sem qualifyWhen declarado a coluna fica fora do payload: NULL é
+		// ausência (ver tableSpec).
+		if c.k == cQualifyCondition && g.QualifyCondition == "" {
+			continue
+		}
+		if buf, err = encoding.AppendField(buf, c.id, values[c.k]); err != nil {
 			return types.Record{}, buf, fmt.Errorf("metaalarm: montando a linha %q: %w", id, err)
 		}
 	}

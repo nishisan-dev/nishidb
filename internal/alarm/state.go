@@ -22,6 +22,17 @@ type observation struct {
 	// conditionHolds diz se o `when` do alarme vale para a linha do grupo.
 	// Indefinido quando present é false.
 	conditionHolds bool
+	// qualified diz se o grupo é elegível ao alarme: o `qualifyWhen` vale, ou
+	// o alarme não o declara. Indefinido quando conditionHolds é false — a
+	// passada nem o avalia, porque condição falsa já decide o desfecho.
+	//
+	// É um terceiro fato, e não parte de conditionHolds, pela mesma razão que
+	// separa present de conditionHolds: "o problema passou" e "o grupo deixou de
+	// ser elegível" resolvem o alarme por motivos diferentes. A OLT morta há
+	// mais de um dia continua com zero autenticados — a condição vale —, mas o
+	// máximo de 24h caiu abaixo do limiar e ela deixou de ser o assunto do
+	// alarme. Anunciar isso como `condition_cleared` diria que ela voltou.
+	qualified bool
 }
 
 // decision é o que uma passada decide para um par (alarme, grupo).
@@ -53,6 +64,9 @@ const (
 	verdictCleared
 	// verdictRetired: estava disparado e o grupo saiu do contador.
 	verdictRetired
+	// verdictDisqualified: estava disparado, a condição ainda vale e o grupo
+	// deixou de ser elegível (o `qualifyWhen` passou a ser falso).
+	verdictDisqualified
 )
 
 // phase é a fase de um alarme sobre um grupo.
@@ -115,15 +129,30 @@ func (t *tracker) observedSince() time.Time { return t.since }
 // evaluate avança a máquina com uma observação e devolve o que emitir.
 //
 // A ordem das guardas é a ordem das perguntas: o grupo ainda existe? a condição
-// vale? já se sustentou? Ausência e condição falsa são tratadas ANTES da fase
-// porque as duas zeram o cronômetro — e zerá-lo é o que faz a próxima queda
-// precisar se sustentar outra vez, em vez de herdar o prazo já cumprido.
+// vale? o grupo é elegível? já se sustentou? Ausência, condição falsa e
+// desqualificação são tratadas ANTES da fase porque as três zeram o cronômetro
+// — e zerá-lo é o que faz a próxima queda precisar se sustentar outra vez, em
+// vez de herdar o prazo já cumprido.
+//
+// A mesma ordem é a PRECEDÊNCIA dos motivos quando mais de um vale na mesma
+// passada: `group_retired` > `condition_cleared` > `disqualified`. Grupo que
+// sumiu não tem condição a avaliar; e condição que passou é o fato mais forte
+// sobre um grupo ainda presente — dizer "desqualificado" de uma OLT que voltou
+// esconderia a recuperação atrás de uma mudança de elegibilidade.
+//
+// Grupo desqualificado não entra em observação e, se estava contando o prazo,
+// volta a phaseAbsent sem evento: nunca houve disparo a resolver. Disparado,
+// resolve com verdictDisqualified — e só volta a disparar depois de
+// requalificar E sustentar o prazo inteiro outra vez.
 func (t *tracker) evaluate(o observation, sustainedFor time.Duration, now time.Time) decision {
 	if !o.present {
 		return t.clear(verdictRetired)
 	}
 	if !o.conditionHolds {
 		return t.clear(verdictCleared)
+	}
+	if !o.qualified {
+		return t.clear(verdictDisqualified)
 	}
 	switch t.phase {
 	case phaseAbsent:

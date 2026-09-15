@@ -158,6 +158,55 @@ func TestEnriquecimentoSaiAninhadoPorNome(t *testing.T) {
 	}
 }
 
+// TestDisqualifiedResolutionIsLoggedWithItsReason: o motivo novo sai pelo mesmo
+// campo dos outros dois.
+func TestDisqualifiedResolutionIsLoggedWithItsReason(t *testing.T) {
+	e := eventoDeExemplo()
+	e.State, e.Reason = StateResolved, ReasonDisqualified
+	got := emitir(t, e)
+	if got["event"] != "alarm.resolved" || got["reason"] != "disqualified" {
+		t.Errorf("event=%v reason=%v, quero alarm.resolved/disqualified", got["event"], got["reason"])
+	}
+}
+
+// TestQualifyConditionIsLoggedOnlyWhenDeclared: presente e vazio, o campo
+// obrigaria quem consome a distinguir "não declarei" de "declarei vazio".
+func TestQualifyConditionIsLoggedOnlyWhenDeclared(t *testing.T) {
+	if got := emitir(t, eventoDeExemplo()); got["qualifyCondition"] != nil {
+		t.Errorf("qualifyCondition = %v num alarme sem qualifyWhen", got["qualifyCondition"])
+	}
+	e := eventoDeExemplo()
+	e.QualifyCondition = "auth_24h_max > 10"
+	if got := emitir(t, e); got["qualifyCondition"] != "auth_24h_max > 10" {
+		t.Errorf("qualifyCondition = %v", got["qualifyCondition"])
+	}
+}
+
+// TestMetricsAreLoggedAsAGroup: as colunas das métricas saem aninhadas em
+// `metrics`, fora do espaço de nomes das colunas do groupBy e dos campos do
+// evento — onde um nome vindo do YAML poderia bater num campo como `total`.
+func TestMetricsAreLoggedAsAGroup(t *testing.T) {
+	if got := emitir(t, eventoDeExemplo()); got["metrics"] != nil {
+		t.Errorf("metrics = %#v num evento sem métrica", got["metrics"])
+	}
+	e := eventoDeExemplo()
+	e.Metrics = []Column{{Name: "auth_5m_avg", Value: "0.5"}, {Name: "auth_24h_max", Value: "50"}}
+	got := emitir(t, e)
+	group, ok := got["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("metrics = %#v, quero um objeto", got["metrics"])
+	}
+	if group["auth_5m_avg"] != "0.5" || group["auth_24h_max"] != "50" {
+		t.Errorf("metrics = %#v", group)
+	}
+	if got["auth_5m_avg"] != nil {
+		t.Error("a coluna da métrica vazou para o nível dos campos soltos")
+	}
+	if got["olt"] != "OLT_A" || got["total"] != float64(42) {
+		t.Errorf("as métricas deslocaram os campos do evento: olt=%v total=%v", got["olt"], got["total"])
+	}
+}
+
 // TestEventoSemEnriquecimentoNaoTrazOCampo: um campo vazio sempre presente
 // obrigaria quem consome a distinguir "não declarei enriquecimento" de "declarei
 // e não veio nada" pelo conteúdo.

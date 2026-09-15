@@ -23,6 +23,11 @@ type Stats struct {
 	// Fired e Resolved são acumulados desde a subida.
 	Fired    uint64
 	Resolved uint64
+	// Disqualified são as resoluções por desqualificação desde a subida. É
+	// SUBCONJUNTO de Resolved, e não um terceiro desfecho somado ao lado: toda
+	// desqualificação é uma resolução. Existe à parte porque, entre as
+	// resoluções, é a única que não diz que o problema passou.
+	Disqualified uint64
 	// EnrichFailed e EnrichSkipped são contados SEPARADOS porque pedem ações
 	// diferentes: falha manda investigar a consulta, pulo diz que houve
 	// avalanche e o teto da passada agiu. Um contador só faria os dois
@@ -36,6 +41,7 @@ type Stats struct {
 type alarmCounters struct {
 	fired         atomic.Uint64
 	resolved      atomic.Uint64
+	disqualified  atomic.Uint64
 	enrichFailed  atomic.Uint64
 	enrichSkipped atomic.Uint64
 	firing        atomic.Int64
@@ -60,6 +66,7 @@ func (r *Runner) Stats() []Stats {
 				Firing:        ra.stats.firing.Load(),
 				Fired:         ra.stats.fired.Load(),
 				Resolved:      ra.stats.resolved.Load(),
+				Disqualified:  ra.stats.disqualified.Load(),
 				EnrichFailed:  ra.stats.enrichFailed.Load(),
 				EnrichSkipped: ra.stats.enrichSkipped.Load(),
 			})

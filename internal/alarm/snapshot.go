@@ -27,6 +27,8 @@ type ActiveGroup struct {
 	// tem o YAML à mão.
 	Condition    string
 	SustainedFor time.Duration
+	// QualifyCondition é o `qualifyWhen` declarado; vazio quando não há.
+	QualifyCondition string
 }
 
 // ActiveGroups devolve o retrato publicado pela última passada.
@@ -78,13 +80,14 @@ func (r *Runner) publishSnapshot() {
 					text = nil
 				}
 				out = append(out, ActiveGroup{
-					Counter:      rc.def.Counter,
-					Alarm:        ra.compiled.name,
-					GroupKey:     string(text),
-					Firing:       tr.phase == phaseFiring,
-					Since:        tr.observedSince(),
-					Condition:    ra.compiled.when,
-					SustainedFor: ra.compiled.sustainedFor,
+					Counter:          rc.def.Counter,
+					Alarm:            ra.compiled.name,
+					GroupKey:         string(text),
+					Firing:           tr.phase == phaseFiring,
+					Since:            tr.observedSince(),
+					Condition:        ra.compiled.when,
+					SustainedFor:     ra.compiled.sustainedFor,
+					QualifyCondition: ra.compiled.qualifyWhen,
 				})
 			}
 		}

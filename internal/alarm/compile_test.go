@@ -198,6 +198,16 @@ func TestCompilaRecusas(t *testing.T) {
 			"1 parâmetro",
 		},
 		{
+			"qualifyWhen sobre coluna que a tabela não tem",
+			specWith(schema.AlarmSpec{Name: "olt_down", When: "total < 100", QualifyWhen: "inexistente > 1", SustainedFor: 2 * time.Minute}),
+			"qualifyWhen",
+		},
+		{
+			"qualifyWhen com sintaxe inválida",
+			specWith(schema.AlarmSpec{Name: "olt_down", When: "total < 100", QualifyWhen: "total >", SustainedFor: 2 * time.Minute}),
+			"qualifyWhen",
+		},
+		{
 			"alarme num contador que não existe",
 			[]schema.CounterSpec{{Name: "outro_contador", GroupBy: []string{"olt"}, Alarms: []schema.AlarmSpec{alarmeDe("total < 100")}}},
 			"outro_contador",
@@ -213,6 +223,36 @@ func TestCompilaRecusas(t *testing.T) {
 				t.Fatalf("erro %q não menciona %q", err, c.want)
 			}
 		})
+	}
+}
+
+// TestMetricsFingerprintListsOnlyCitedMetricsByName: o fingerprint traz cada
+// métrica citada por `when` ou `qualifyWhen` uma vez só, ordenada pelo nome, e
+// deixa de fora a que nenhuma das duas condições lê.
+func TestMetricsFingerprintListsOnlyCitedMetricsByName(t *testing.T) {
+	def := defByPON("autenticados_por_pon")
+	both := schema.AlarmSpec{
+		Name: "both", When: "auth_5m_avg < 1", QualifyWhen: "auth_24h_max > 10 AND auth_24h_max < 100000",
+		SustainedFor: time.Minute,
+	}
+	plain := schema.AlarmSpec{Name: "plain", When: "total < 100", SustainedFor: time.Minute}
+	onlyQualify := schema.AlarmSpec{Name: "only_qualify", When: "total < 100", QualifyWhen: "auth_1h_min > 0", SustainedFor: time.Minute}
+	defs, err := Compile("telecom", specWithMetrics(defaultWindowMetrics(), both, plain, onlyQualify), []counter.Definition{def})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"both":         "auth_24h:window:total:86400000;auth_5m:window:total:300000",
+		"plain":        "",
+		"only_qualify": "auth_1h:window:total:3600000",
+	}
+	for _, a := range defs[0].alarms {
+		if a.metricsFingerprint != want[a.name] {
+			t.Errorf("%s: fingerprint = %q, quero %q", a.name, a.metricsFingerprint, want[a.name])
+		}
+	}
+	if defs[0].alarms[1].newQualifier != nil {
+		t.Error("alarme sem qualifyWhen ganhou avaliador de qualificação")
 	}
 }
 

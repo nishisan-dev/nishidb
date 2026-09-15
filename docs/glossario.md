@@ -571,7 +571,11 @@ inglês correspondente.
 | coluna gerada (a coluna `<métrica>_<agregado>` que uma métrica de janela produz na tabela do contador) | generated column | internal/schema |
 | coluna fixa (`groupKey` e `total`, presentes em toda tabela de contador) | fixed column | internal/schema, internal/counters |
 | origem da coluna (o trecho do contador, colunas fixas, `groupBy` ou `metrics[i]`, que produz a coluna) | origin | internal/schema |
-| qualificação do alarme / qualificar (a condição `qualifyWhen` que habilita o alarme para o grupo; distinta do qualificador de coluna) | qualify / qualifyWhen | internal/schema |
+| qualificação do alarme / qualificar (a condição `qualifyWhen` que habilita o alarme para o grupo; distinta do qualificador de coluna) | qualify / qualifyWhen | internal/schema, internal/alarm, internal/metaalarm, internal/storage/checkpoint |
+| qualificado (o grupo elegível ao alarme porque o `qualifyWhen` vale, ou não foi declarado) | qualified | internal/alarm |
+| desqualificado (o alarme disparado que resolve porque o `qualifyWhen` deixou de valer; motivo distinto de `condition_cleared` e `group_retired`) | disqualified / ReasonDisqualified | internal/alarm |
+| condição de qualificação (o texto do `qualifyWhen` levado ao evento e ao `_meta.alarms`) | QualifyCondition | internal/alarm, internal/metaalarm |
+| impressão das métricas (o texto canônico das métricas de janela citadas pela condição, gravado no estado para invalidar o cronômetro quando a janela muda) | metrics fingerprint / MetricsFingerprint | internal/alarm, internal/storage/checkpoint |
 
 ## 4. Como usar
 

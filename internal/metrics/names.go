@@ -648,6 +648,11 @@ const (
 	// MetAlarmFiredTotal e MetAlarmResolvedTotal são os acumulados do ciclo.
 	MetAlarmFiredTotal    = "nishidb_alarm_fired_total"
 	MetAlarmResolvedTotal = "nishidb_alarm_resolved_total"
+	// MetAlarmDisqualifiedTotal são as resoluções por desqualificação — o
+	// `qualifyWhen` ficou falso com a condição ainda valendo. É SUBCONJUNTO de
+	// MetAlarmResolvedTotal, nunca somado a ele: a diferença entre as duas são
+	// as resoluções que dizem que o problema passou ou que o grupo saiu.
+	MetAlarmDisqualifiedTotal = "nishidb_alarm_disqualified_total"
 	// MetAlarmEnrichFailedTotal e MetAlarmEnrichSkippedTotal são séries
 	// SEPARADAS de propósito: as duas deixam o bloco de enriquecimento vazio,
 	// mas pedem ações diferentes — falha manda investigar a consulta, pulo diz

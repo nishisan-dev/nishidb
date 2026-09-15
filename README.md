@@ -1613,11 +1613,31 @@ recusado (um alarme que nunca dispara não é um alarme). A varredura roda a cad
 `sustainedFor ÷ 4`.
 
 `qualifyWhen` é opcional: uma segunda condição, na mesma linguagem do `when`,
-que **habilita** o alarme para o grupo. O caso típico é citar uma métrica de
+que diz se o grupo é **elegível** ao alarme. O caso típico é citar uma métrica de
 janela (`qualifyWhen: "auth_24h_max > 10"`), para alarmar só a OLT que teve
-gente. Presente, não pode estar em branco. **Nesta versão a chave só é validada
-na subida: ela ainda não é avaliada, e um alarme com `qualifyWhen` se comporta
-como um alarme sem ela.**
+gente; as colunas das métricas vêm do amostrador de métricas de janela.
+Presente, não pode estar em branco; ausente, todo grupo é elegível.
+
+- O prazo só começa a contar com o `when` valendo **e** o grupo qualificado.
+- Um grupo que ainda contava o prazo e deixa de ser qualificado volta ao início
+  **sem evento**: nunca houve disparo a resolver.
+- Um alarme **disparado** cujo grupo deixa de ser qualificado resolve com
+  `"reason":"disqualified"`, e só volta a disparar depois de se requalificar e
+  sustentar o prazo inteiro outra vez. É a OLT morta há mais de um dia: continua
+  vazia, mas `auth_24h_max` caiu abaixo do limiar e ela deixou de ser o assunto
+  do alarme.
+- Na mesma passada, a precedência dos motivos é `group_retired` >
+  `condition_cleared` > `disqualified`: uma OLT que voltou e ficou inelegível ao
+  mesmo tempo sai como `condition_cleared`.
+- Coluna sem amostra na janela é NULL, e NULL compara falso: `auth_24h_max > 10`
+  sem amostra **não qualifica**.
+
+Mudar o `qualifyWhen`, ou a janela de uma métrica que o `when` ou o
+`qualifyWhen` cita, invalida o cronômetro salvo daquele alarme, como mudar o
+`when` ou o `sustainedFor`. Por isso o `checkpoint/alarms.state` está na versão
+2, **sem leitor da anterior**: na primeira subida depois da v0.8.x o arquivo
+antigo sai no log como `alarm.state_unreadable`, e os alarmes em curso recomeçam
+a contar o prazo, uma vez.
 
 O `enrich` acompanha o evento com o resultado de consultas parametrizadas pelo
 grupo que alarmou — `bind` liga cada `?` a uma coluna do contador (`total` e

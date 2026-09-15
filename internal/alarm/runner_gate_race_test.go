@@ -10,3 +10,7 @@ import "testing"
 func TestPassadaNaoAlocaPorGrupoSaudavel(t *testing.T) {
 	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
 }
+
+func TestSweepWithQualifyWhenDoesNotAllocatePerGroup(t *testing.T) {
+	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+}

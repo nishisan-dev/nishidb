@@ -216,7 +216,7 @@ Dez por contador declarado no bloco `counters:`, com o rótulo `counter`.
 
 ### Alarmes de contador
 
-Só nos datasets que declaram `alarms:` dentro de algum contador. As seis
+Só nos datasets que declaram `alarms:` dentro de algum contador. As sete
 primeiras saem por alarme declarado, com os rótulos `counter` e `alarm`; as três
 últimas são do dataset, porque a passada de varredura é do dataset inteiro.
 
@@ -229,7 +229,8 @@ responde a segunda pergunta.
 | `nishidb_alarm_groups_tracked` | gauge | `alarm`, `counter`, `dataset` | grupos em observação: a condição vale para eles, tenham ou não cumprido o prazo. Acompanha o problema, não o tamanho do inventário — se crescer com o número de grupos do contador, algo guarda estado que não deveria |
 | `nishidb_alarm_groups_firing` | gauge | `alarm`, `counter`, `dataset` | grupos com o alarme disparado agora |
 | `nishidb_alarm_fired_total` ⚠️ | counter | `alarm`, `counter`, `dataset` | disparos desde a subida |
-| `nishidb_alarm_resolved_total` | counter | `alarm`, `counter`, `dataset` | resoluções desde a subida, somando condição que passou e grupo aposentado; o motivo de cada uma está no evento de log, não na série |
+| `nishidb_alarm_resolved_total` | counter | `alarm`, `counter`, `dataset` | resoluções desde a subida, somando condição que passou, grupo aposentado e desqualificação; o motivo de cada uma está no evento de log |
+| `nishidb_alarm_disqualified_total` | counter | `alarm`, `counter`, `dataset` | resoluções por desqualificação desde a subida: o `qualifyWhen` ficou falso com a condição ainda valendo. É SUBCONJUNTO de `nishidb_alarm_resolved_total`, nunca somado a ele — a diferença entre as duas são as resoluções que dizem que o problema passou ou que o grupo saiu |
 | `nishidb_alarm_enrich_failed_total` ⚠️ | counter | `alarm`, `counter`, `dataset` | consultas de enriquecimento que falharam; o alarme saiu sem o bloco. Diferente de zero manda investigar a consulta declarada |
 | `nishidb_alarm_enrich_skipped_total` ⚠️ | counter | `alarm`, `counter`, `dataset` | consultas puladas pelo teto da passada; o alarme saiu sem o bloco. Diferente de zero significa avalanche de disparos, não consulta ruim — é por isso que não compartilha série com a de falha |
 | `nishidb_alarm_watching` | gauge | `dataset` | 1 enquanto o laço de varredura está de pé. Zero com alarme declarado significa que o laço parou na primeira falha |
