@@ -6,13 +6,14 @@
 
   <groupId>dev.nishisan</groupId>
   <artifactId>nishidb-jdbc</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>${revision}</version>
   <packaging>jar</packaging>
 
   <name>NishiDB JDBC Driver</name>
   <description>Thin remote JDBC driver for NishiDB (spec 70-73)</description>
 
   <properties>
+    <revision>0.1.0-SNAPSHOT</revision>
     <!--
       release, e nunca source/target: source/target compila contra a
       biblioteca do JDK que estiver instalado, então um build feito num JDK 25
@@ -52,6 +53,17 @@
     -->
     <finalName>nishidb-jdbc</finalName>
 
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>false</filtering>
+      </resource>
+      <resource>
+        <directory>src/main/filtered-resources</directory>
+        <filtering>true</filtering>
+      </resource>
+    </resources>
+
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -72,6 +84,9 @@
             esse teste um que passa por ter memória sobrando.
           -->
           <argLine>-Xmx64m</argLine>
+          <systemPropertyVariables>
+            <expectedDriverVersion>${project.version}</expectedDriverVersion>
+          </systemPropertyVariables>
           <includes>
             <!--
               Sufixo, nunca prefixo. TestFoo casaria o regexp \bTest[A-Z] de
@@ -92,6 +107,7 @@
         <configuration>
           <archive>
             <manifestEntries>
+              <Implementation-Version>${project.version}</Implementation-Version>
               <!--
                 Automatic-Module-Name e NÃO module-info.java: o DBeaver e o
                 IntelliJ carregam driver por URLClassLoader no classpath, onde

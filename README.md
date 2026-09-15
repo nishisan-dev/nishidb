@@ -11,6 +11,62 @@ Medido com **8 milhões de entidades**: 483 MiB de RSS de pico (limite: 1 GiB),
 caminho SQL completo. O heap Go da ingestão fica em **396 KiB com 8 milhões de
 rows**, contra 389 KiB com 1 milhão — 8× de dados, 1,9% de heap a mais.
 
+## Releases e driver JDBC
+
+As [GitHub Releases](https://github.com/nishisan-dev/nishidb/releases) oferecem
+`nishidb-vx.y.z-linux-amd64` e `nishidb-jdbc.jar` juntos. O driver exige Java 21
+ou superior e não precisa de dependências adicionais no classpath. Sua versão
+interna acompanha a release: em `v0.8.1`, o JAR e os metadados JDBC informam
+`0.8.1`.
+
+Para publicar, crie uma tag no commit desejado **que já contenha o novo workflow**
+e envie essa tag ao GitHub, por exemplo:
+
+```sh
+git tag -a v0.8.1 -m "NishiDB 0.8.1"
+git push origin v0.8.1
+```
+
+Use uma tag nova no formato exato `vx.y.z`, sem zeros à esquerda ou sufixos.
+A criação apenas local não dispara o workflow; atualizações e exclusões de tags
+são ignoradas. Envie cada tag individualmente: o GitHub não emite eventos de
+push quando mais de três tags são enviadas juntas. Tags criadas por outro
+workflow com `GITHUB_TOKEN` também não disparam esse fluxo automaticamente;
+para essa automação, use um token de GitHub App ou pessoal. Esses limites
+são descritos na [documentação de eventos do GitHub](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push).
+
+O workflow **Release** executa a suíte Go e os testes JDBC contra o servidor
+real, compila ambos os artefatos e os anexa a um rascunho com notas geradas
+automaticamente. A release só é publicada após confirmar os dois uploads.
+Publicação e limpeza compartilham uma fila entre todas as tags (até 100
+execuções pendentes, limite do GitHub).
+
+Após cada publicação automática bem-sucedida, permanecem as **5 releases mais
+recentes pela data de publicação**, incluindo pré-releases manuais. Rascunhos
+não entram na contagem. As demais releases e seus anexos são excluídos,
+**mas todas as tags permanecem**, permitindo consultar ou recompilar versões
+anteriores. Releases antigas já existentes entram nessa contagem; o JDBC não
+é anexado retroativamente a elas. Publicações manuais só entram na limpeza
+quando ocorrer a próxima publicação automática.
+
+Se houver falha, use **Re-run failed jobs** na execução do workflow: o processo
+retoma o rascunho ou atualiza os anexos da release existente sem alterar suas
+notas nem sua data original de publicação. Falhas de build/upload impedem a
+limpeza; uma limpeza parcialmente concluída pode ser retomada. Não é preciso
+excluir ou recriar a tag. A fila, os logs e eventuais erros ficam em **Actions →
+Release**.
+
+Para compilar ou testar o JDBC localmente com uma versão específica:
+
+```sh
+make test-jdbc JDBC_VERSION=0.8.1
+make build-jdbc JDBC_VERSION=0.8.1
+```
+
+Sem `JDBC_VERSION`, o Maven usa `0.1.0-SNAPSHOT`. O resultado continua em
+`clients/jdbc/target/nishidb-jdbc.jar`. A distribuição é pela GitHub Release;
+não há publicação em repositório Maven.
+
 ## Estado
 
 **M1, M2 e a Fase 6 do M3 completos; o M4 entregue, com uma ressalva que

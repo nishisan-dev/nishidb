@@ -8,7 +8,8 @@
 # buildinfo carimbados na hora do build. É a MESMA linha que o `release.yml`
 # (Task A2) herda ao chamar `make build`; não crie um segundo comando de
 # build fora daqui, ou os dois divergem em silêncio.
-LDFLAGS := -X github.com/nishisan-dev/nishidb/internal/buildinfo.Version=$(shell git describe --tags --always --dirty) \
+VERSION ?= $(shell git describe --tags --always --dirty)
+LDFLAGS := -X github.com/nishisan-dev/nishidb/internal/buildinfo.Version=$(VERSION) \
            -X github.com/nishisan-dev/nishidb/internal/buildinfo.Commit=$(shell git rev-parse --short HEAD) \
            -X github.com/nishisan-dev/nishidb/internal/buildinfo.Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -43,6 +44,9 @@ test-integration:
 # `make test` NÃO chama nada daqui, de propósito: a suíte Go não pode passar a
 # exigir uma JVM instalada para rodar. Quem mexe no driver chama estes alvos.
 JDBC_DIR := clients/jdbc
+# Empty means Maven's local revision default; releases supply x.y.z.
+export JDBC_VERSION
+JDBC_REVISION = $(if $(JDBC_VERSION),"-Drevision=$(JDBC_VERSION)")
 
 # O ramo `else` falha ALTO e nomeia o que falta, como o alvo `lint`: um gate que
 # passa quando a ferramenta está AUSENTE não é gate, é carimbo (débito 53). O
@@ -57,13 +61,13 @@ endef
 
 build-jdbc:
 	$(exige-java)
-	cd $(JDBC_DIR) && ./mvnw -B -DskipTests package
+	cd $(JDBC_DIR) && ./mvnw -B $(JDBC_REVISION) -DskipTests package
 
 # Só os unitários: não sobem servidor, não pedem porta, rodam em qualquer
 # máquina com JDK. Os de integração contra o binário real ficam no test-jdbc.
 test-jdbc-unit:
 	$(exige-java)
-	cd $(JDBC_DIR) && ./mvnw -B test
+	cd $(JDBC_DIR) && ./mvnw -B $(JDBC_REVISION) test
 
 # Integração de VERDADE: sobe o binário com TLS e credencial, ingere um corpus
 # com um campo de cada tipo e roda o driver contra ele. É o alvo que o CI chama,
@@ -94,6 +98,7 @@ test-jdbc:
 test-python:
 	@if command -v python3 > /dev/null; then \
 		python3 scripts/nishidb-stats_test.py && \
+		python3 scripts/release_test.py && \
 		PYTHONPATH=$(PY_DIR)/src python3 -m unittest discover -s $(PY_DIR)/tests -p '*_test.py'; \
 	else \
 		echo "erro: python3 não está no PATH — os testes Python NÃO rodaram." >&2; \

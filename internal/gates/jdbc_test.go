@@ -25,7 +25,8 @@ type driverPom struct {
 	ArtifactID string `xml:"artifactId"`
 	Version    string `xml:"version"`
 	Properties struct {
-		Release string `xml:"maven.compiler.release"`
+		Release  string `xml:"maven.compiler.release"`
+		Revision string `xml:"revision"`
 	} `xml:"properties"`
 	Dependencies struct {
 		Dependency []struct {
@@ -335,29 +336,16 @@ func protocolJDBCNames(t *testing.T) map[string]string {
 	return out
 }
 
-// A versão que o driver ANUNCIA é a do artefato.
-//
-// getDriverMajorVersion é o que a ferramenta escreve na tela de "sobre a
-// conexão" e o que vai num chamado de suporte. Duas fontes para o mesmo número
-// divergem sozinhas: o pom sobe de versão numa release e as constantes ficam
-// para trás, e a partir daí a ferramenta exibe uma versão de driver que nunca
-// existiu — sem nada acusar, porque as duas continuam compilando.
+// A versão de runtime vem do recurso filtrado pelo Maven, sem constantes
+// paralelas. A suíte Java compara os getters com project.version no build.
 func TestAVersaoAnunciadaPeloDriverEhADoArtefato(t *testing.T) {
 	p := readPom(t)
-	parts := strings.Split(strings.TrimSuffix(p.Version, "-SNAPSHOT"), ".")
-	if len(parts) < 2 {
-		t.Fatalf("versão %q do pom não tem major.minor", p.Version)
+	if p.Version != "${revision}" || p.Properties.Revision != "0.1.0-SNAPSHOT" {
+		t.Fatalf("expected CI-friendly revision with local snapshot default, got %q / %q", p.Version, p.Properties.Revision)
 	}
-
-	java := readFile(t, "clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/NishiDriver.java")
-	for _, required := range []string{
-		"VERSAO_MAJOR = " + parts[0] + ";",
-		"VERSAO_MINOR = " + parts[1] + ";",
-	} {
-		if !strings.Contains(java, required) {
-			t.Errorf("NishiDriver.java não declara %q: a versão anunciada divergiu da do pom (%s)",
-				required, p.Version)
-		}
+	resource := readFile(t, "clients/jdbc/src/main/filtered-resources/dev/nishisan/nishidb/jdbc/version.properties")
+	if strings.TrimSpace(resource) != "version=${project.version}" {
+		t.Fatal("JDBC version resource must use Maven project.version")
 	}
 }
 

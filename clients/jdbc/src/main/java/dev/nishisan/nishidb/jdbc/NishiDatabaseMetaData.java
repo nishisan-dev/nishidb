@@ -126,17 +126,17 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public String getDriverVersion() {
-        return NishiDriver.VERSAO_MAJOR + "." + NishiDriver.VERSAO_MINOR;
+        return DriverVersion.VERSION;
     }
 
     @Override
     public int getDriverMajorVersion() {
-        return NishiDriver.VERSAO_MAJOR;
+        return DriverVersion.MAJOR;
     }
 
     @Override
     public int getDriverMinorVersion() {
-        return NishiDriver.VERSAO_MINOR;
+        return DriverVersion.MINOR;
     }
 
     @Override
