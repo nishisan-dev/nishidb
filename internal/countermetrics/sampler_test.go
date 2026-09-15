@@ -663,8 +663,13 @@ func TestMetricAnswersEveryDeclaredMetricInBothModes(t *testing.T) {
 				t.Errorf("Usage de %s.%s sem arquivo = (%d, %d, %d, %d), esperado zeros", d[0], d[1], groups, heap, disk, sampledAt)
 			}
 		}
-		if n := len(logs.events(t, "counter_metric.unreadable")); n != len(declared) {
-			t.Errorf("%d WARN counter_metric.unreadable, esperado %d", n, len(declared))
+		// Arquivo ausente é o estado normal de quem ainda não amostrou: nenhum
+		// log, e não só nenhum WARN de arquivo ilegível.
+		logs.mu.Lock()
+		logged := logs.buf.String()
+		logs.mu.Unlock()
+		if logged != "" {
+			t.Errorf("modo leitura sem arquivo registrou log:\n%s", logged)
 		}
 	})
 
@@ -677,6 +682,34 @@ func TestMetricAnswersEveryDeclaredMetricInBothModes(t *testing.T) {
 			if samples, _, _, _ := m.Aggregate(1); samples != 1 {
 				t.Errorf("%s.%s: %d amostra(s) depois de uma passada, esperado 1", d[0], d[1], samples)
 			}
+		}
+	})
+
+	t.Run("read-only with a corrupted header", func(t *testing.T) {
+		// Os arquivos vêm do subteste de escrita, cujo amostrador já fechou.
+		for _, d := range declared {
+			path := filepath.Join(dir, d[0], d[1]+fileExtension)
+			f, err := os.OpenFile(path, os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatalf("o subteste de escrita não deixou %s: %v", path, err)
+			}
+			if _, err := f.WriteAt(make([]byte, 8), 0); err != nil {
+				_ = f.Close()
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		logs := &lockedBuffer{}
+		s := openWith(t, options(true, logs))
+		checkNames(t, s)
+		for _, d := range declared {
+			m, _ := s.Metric(d[0], d[1])
+			wantNoValue(t, m, 1)
+		}
+		if n := len(logs.events(t, "counter_metric.unreadable")); n != len(declared) {
+			t.Errorf("%d WARN counter_metric.unreadable com o cabeçalho corrompido, esperado %d", n, len(declared))
 		}
 	})
 }

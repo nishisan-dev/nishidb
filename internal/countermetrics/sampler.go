@@ -34,6 +34,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -149,7 +150,10 @@ type Options struct {
 	Now func() time.Time
 	// ReadOnly abre os arquivos só para leitura (CLI local): publica o que
 	// está em disco pelo mesmo código da restauração, nunca escreve e nunca
-	// amostra. Arquivo ausente ou ilegível vira métrica sem valores, com WARN.
+	// amostra. Arquivo ausente vira métrica sem valores e SEM log: é o estado
+	// normal de um dataset cujo servidor ainda não amostrou. Arquivo que existe
+	// e é ilegível, ou tem cabeçalho divergente, vira métrica sem valores com
+	// WARN counter_metric.unreadable.
 	ReadOnly bool
 }
 
@@ -312,8 +316,9 @@ func metricHeader(m schema.CounterMetricSpec) (metricwindow.Header, error) {
 }
 
 // openMetric abre o arquivo de uma métrica. Em modo escrita, reset do
-// cabeçalho vira WARN e ResetsTotal; em modo leitura, arquivo ausente,
-// ilegível ou de outra forma vira métrica sem arquivo (sem valores), com WARN.
+// cabeçalho vira WARN e ResetsTotal; em modo leitura, arquivo ausente vira
+// métrica sem arquivo (sem valores) e sem log, e arquivo ilegível ou de outra
+// forma vira métrica sem arquivo com WARN.
 //
 // A capacidade pedida é o piso do formato: o arquivo cresce sob demanda, com
 // as posições que a passada atribui, e um arquivo existente mantém a sua.
@@ -333,6 +338,14 @@ func (s *Sampler) openMetric(c *counterState, spec schema.CounterMetricSpec) (*M
 	}
 	if s.readOnly {
 		f, err := metricwindow.OpenReadOnly(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			// Arquivo ausente não é anomalia e não se registra, no precedente do
+			// estado dos alarmes (internal/alarm/runner.go): é o dataset cujo
+			// servidor ainda não amostrou — quem só ingere e consulta, ou quem
+			// acabou de declarar a métrica. Avisar aqui a cada consulta ensinaria
+			// o operador a ignorar o WARN que importa, o de arquivo corrompido.
+			return m, nil
+		}
 		if err == nil && f.Header() != header {
 			err = fmt.Errorf("header %+v differs from the declared %+v", f.Header(), header)
 			_ = f.Close()
@@ -570,9 +583,9 @@ func (s *Sampler) RestoredGroups() int64 { return s.restoredGroups }
 // parar por erro (responde o publicado congelado); false só para nome não
 // declarado.
 //
-// A interface que o consumidor declara (counters.MetricSource) não é importada
-// daqui, para não amarrar este pacote a internal/counters: o servidor passa um
-// adaptador de uma linha. Não aloca.
+// Devolve o tipo concreto; quem consome pela interface do consumidor
+// (counters.MetricSource) recebe o adaptador de Sampler.MetricSource. Não
+// aloca.
 func (s *Sampler) Metric(counter, metric string) (*Metric, bool) {
 	for _, m := range s.metrics {
 		if m.counter == counter && m.name == metric {

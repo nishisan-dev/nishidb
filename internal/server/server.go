@@ -29,6 +29,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/alarm"
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/config"
+	"github.com/nishisan-dev/nishidb/internal/countermetrics"
 	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/kafka"
 	"github.com/nishisan-dev/nishidb/internal/logging"
@@ -74,6 +75,12 @@ type dataset struct {
 	// contador com bloco `emit`. Moram aqui pelo mesmo motivo dos alarmes: o
 	// laço vive fora do Store, e é o servidor que o para antes do quiesce.
 	emitters []*series.Emitter
+
+	// metrics é o amostrador das métricas de janela dos contadores, ou nil
+	// quando nenhum contador declara `metrics:`. Mora aqui pelo mesmo motivo
+	// dos alarmes e das emissões: o laço tem relógio, vive fora do Store, e é o
+	// servidor que o para antes do quiesce.
+	metrics *countermetrics.Sampler
 
 	// cons é nil quando o dataset não declara Kafka ou está com
 	// `enabled: false` — o botão de pausa declarativo.
@@ -217,6 +224,11 @@ type Server struct {
 	// ctxOfMutacao cai para o contrato antigo (só o cliente decide) nesse
 	// caso, o que preserva o comportamento anterior a esta composição.
 	vidaCtx context.Context
+
+	// now é o relógio dos laços que medem tempo por conta própria — alarmes e
+	// amostrador das métricas de janela. Nil em produção, que eles tratam como
+	// time.Now (ver Options.Now).
+	now func() time.Time
 }
 
 // Options configura a subida.
@@ -227,6 +239,12 @@ type Options struct {
 	// administrativo", e expor profiles na mesma porta das métricas os
 	// tornaria alcançáveis por quem só deveria raspar /metrics.
 	PprofAddr string
+	// Now é o relógio dos alarmes e do amostrador das métricas de janela.
+	// Exclusivo de teste, no molde do alarm.Options.Now e do
+	// countermetrics.Options.Now: a prova de ponta a ponta de uma janela de 24 h
+	// e de um prazo de sustentação precisa avançar o tempo sem dormir. Não tem
+	// chave de configuração de propósito, e nil é time.Now.
+	Now func() time.Time
 }
 
 // Novo abre todos os datasets do datasets.directory e registra o que for
@@ -338,6 +356,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		budget:      budget.NewGlobal(cfg.MemoryTarget()),
 		users:       userTable,
 		tlsCert:     cert,
+		now:         o.Now,
 	}
 	s.met = registerMetricsOfQuery(reg, s.eng, s.inVoo, s.budget)
 	s.authFalhas = registerMetricsOfAuth(reg)
@@ -368,6 +387,10 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 				log.Warn("loopback.close", "falha ao fechar o listener loopback na subida abortada", "erro", err.Error())
 			}
 		}
+		// Os amostradores dos datasets já abertos fecham ANTES dos Stores, pela
+		// mesma ordem do encerra(): seguram mmap próprio e leem os contadores
+		// pelo campo do Store.
+		s.forCounterMetrics()
 		if err := s.closeDatasets(); err != nil {
 			log.Warn("datasets.close", "falha ao fechar datasets na subida abortada", "erro", err.Error())
 		}
@@ -401,6 +424,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 	// exporia um scrape com metade dos datasets durante a subida.
 	registerMetricsOfDataset(reg, s)
 	registerMetricsOfAlarms(reg, s)
+	registerMetricsOfCounterMetrics(reg, s)
 	ok = true
 	return s, nil
 }
@@ -485,11 +509,26 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	if err := s.eng.Register(spec.Name, compilado, st); err != nil {
 		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
+	// O amostrador das métricas de janela abre ANTES do counters.Register e da
+	// compilação dos alarmes: a tabela `_counters.<nome>` e a tabela própria do
+	// laço de alarmes resolvem o leitor de cada métrica UMA vez, na montagem.
+	// Aberto depois, a fonte seria nil naquele instante e as colunas das
+	// métricas sairiam NULL para sempre — e NULL compara falso, então um
+	// `qualifyWhen` sobre métrica nunca qualificaria, sem erro nenhum.
+	sampler, err := openCounterMetrics(spec, st, s.now, log)
+	if err != nil {
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
+	// Daqui em diante, toda falha fecha o amostrador ANTES do Store: ele segura
+	// mmap próprio e lê os contadores pelo campo do Store, sem a guarda de vida.
+	failing := func(err error) error {
+		return closingStore(st, closingSampler(sampler, err))
+	}
 	// As tabelas `_counters.<nome>` entram no motor sob o dataset — e o
 	// namespace é declarado mesmo sem contador, para que a recusa nomeie o
 	// que existe.
-	if err := counters.Register(s.eng, spec.Name, st, spec.Counters, nil); err != nil {
-		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	if err := counters.Register(s.eng, spec.Name, st, spec.Counters, sampler.MetricSource()); err != nil {
+		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	// Os alarmes são compilados DEPOIS do counters.Register, que é quando as
 	// tabelas dos contadores existem no motor, e ANTES de qualquer laço subir:
@@ -498,17 +537,18 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	// o alarme disparia.
 	alarmes, err := alarm.Compile(spec.Name, spec.Counters, defsOfCounters(st))
 	if err != nil {
-		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	d := &dataset{
-		nome: spec.Name,
-		spec: spec,
-		sch:  compilado,
-		st:   st,
-		mat:  mat,
+		nome:    spec.Name,
+		spec:    spec,
+		sch:     compilado,
+		st:      st,
+		mat:     mat,
+		metrics: sampler,
 	}
 	if err := openEmitters(d, spec, st, dir, log); err != nil {
-		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	if len(alarmes) > 0 {
 		runner, err := alarm.New(alarmes, readersOfCounters(st), alarm.Options{
@@ -520,9 +560,13 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 			// fazer nada que um SELECT do cliente não pudesse.
 			Engine:    s.eng,
 			StatePath: st.AlarmStatePath(),
+			Now:       s.now,
+			// A MESMA fonte que a tabela `_counters.<nome>` recebeu: o valor que
+			// o `qualifyWhen` enxerga é o que o SELECT devolve.
+			Metrics: sampler.MetricSource(),
 		})
 		if err != nil {
-			return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+			return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 		}
 		d.alarms = runner
 	}
@@ -541,7 +585,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		State:      func() (string, string) { return stateOfIngestion(d) },
 		Vigia:      d.vigiaCorrente,
 	}); err != nil {
-		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	// `_meta.alarms` entra pelo mesmo caminho, e SEMPRE — inclusive num
 	// dataset sem alarme declarado, onde ela responde a lista vazia: "este
@@ -552,10 +596,10 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	if err := metaalarm.Register(s.eng, spec.Name, metaalarm.Source{
 		Groups: d.activeAlarmGroups,
 	}); err != nil {
-		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	if err := s.registerMetaUsers(spec.Name); err != nil {
-		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	// `_meta.tables` entra por último só por leitura: ela lista as tabelas
 	// acima, e as linhas são montadas a cada consulta, a partir do catálogo do
@@ -566,7 +610,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	// irmã não tem própria; esta descreve o que se pode consultar, e a irmã é
 	// um dataset consultável por direito.
 	if err := s.eng.RegisterMetaTables(spec.Name); err != nil {
-		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 
 	// A irmã abre por ÚLTIMO, depois de o base estar inteiro: ela recebe o
@@ -574,7 +618,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	// ele já exista.
 	irma, err := s.openHistory(d, log)
 	if err != nil {
-		return nil, closingStore(st, err)
+		return nil, failing(err)
 	}
 	d.irma = irma
 	return d, nil
@@ -588,6 +632,46 @@ func closingStore(st *storage.Store, causa error) error {
 		return errors.Join(causa, err)
 	}
 	return causa
+}
+
+// closingSampler devolve a causa, fechando antes o amostrador (nil é aceito).
+// Mesma disciplina do closingStore: o erro do Close é agregado e nunca
+// substitui o motivo de a abertura ter falhado.
+func closingSampler(sampler *countermetrics.Sampler, cause error) error {
+	if sampler == nil {
+		return cause
+	}
+	if err := sampler.Close(); err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
+}
+
+// openCounterMetrics abre o amostrador das métricas de janela do dataset, ou
+// devolve nil quando nenhum contador declara `metrics:` — não se paga arquivo
+// nem goroutine para não amostrar nada, e o nil já é a fonte válida que deixa
+// as colunas das métricas NULL (ver counters.MetricSource). Não sobe o laço:
+// isso é do Run, pelo turnonCounterMetrics.
+func openCounterMetrics(spec *schema.DatasetSpec, st *storage.Store, now func() time.Time, log *logging.Logger) (*countermetrics.Sampler, error) {
+	inputs, err := countermetrics.CountersWithMetrics(spec.Counters, st.Counters())
+	if err != nil {
+		return nil, err
+	}
+	if len(inputs) == 0 {
+		// Sem métrica declarada o amostrador não abre — e com ele não roda a
+		// limpeza de órfãos do Open. É aqui que somem os arquivos que a última
+		// métrica deixou ao sair do YAML; sem isto eles ficariam no disco para
+		// sempre. Dataset que nunca declarou métrica não tem o diretório, e ele
+		// não é criado.
+		return nil, countermetrics.RemoveOrphans(spec.Name, st.CounterMetricsDir(), nil, log)
+	}
+	return countermetrics.Open(countermetrics.Options{
+		Dataset:  spec.Name,
+		Dir:      st.CounterMetricsDir(),
+		Counters: inputs,
+		Log:      log,
+		Now:      now,
+	})
 }
 
 // Run sobe o HTTP e os consumers, nessa ordem (§51), e bloqueia até o
@@ -613,6 +697,7 @@ func (s *Server) Run(ctx context.Context, pprofAddr string) error {
 	s.turnonCompaction(ctx)
 	s.turnonExpiration(ctx)
 	s.turnonRetirementOfGroups(ctx)
+	s.turnonCounterMetrics(ctx)
 	s.turnonAlarms(ctx)
 	s.turnonEmit(ctx)
 	s.turnonRetention(ctx)
@@ -847,6 +932,34 @@ func (s *Server) turnonRetirementOfGroups(ctx context.Context) {
 		"datasets", withRetention, "cadencia", storage.CadenciaOfRetirement.String())
 }
 
+// turnonCounterMetrics sobe o laço do amostrador nos datasets com contador que
+// declara `metrics:` — só neles, pela mesma economia dos laços irmãos.
+//
+// ANTES dos alarmes: a primeira varredura de alarmes é imediata e lê as
+// colunas das métricas, e com o amostrador já de pé ela disputa com a primeira
+// amostra, em vez de começar sempre sobre o que a restauração publicou. O log
+// nomeia quais subiram, porque "a janela não mudou" é indistinguível de
+// "ninguém está amostrando" quando ninguém conta qual dos dois é.
+func (s *Server) turnonCounterMetrics(ctx context.Context) {
+	var sampling []string
+	for _, d := range s.datasets {
+		if d.metrics == nil {
+			continue
+		}
+		d.metrics.Start(ctx)
+		if d.metrics.Active() {
+			sampling = append(sampling, d.nome)
+		}
+	}
+	if len(sampling) == 0 {
+		return
+	}
+	sort.Strings(sampling)
+	s.log.Info("counter_metric.sampling",
+		"window metric sampling is running",
+		"datasets", sampling)
+}
+
 // turnonAlarms sobe o laço de varredura nos datasets que declaram alarme — só
 // neles, pela mesma economia dos laços irmãos. O log nomeia quais subiram,
 // porque "nenhum alarme disparou" é indistinguível de "ninguém está
@@ -1042,8 +1155,17 @@ func (s *Server) encerra() error {
 	// guarda de vida — diferente da auditoria, ele não passa por
 	// entra()/sai(). E como ele vive AQUI, e não no Store, o Close de lá não o
 	// aguarda. Invertida a ordem, uma varredura em voo leria um Store fechado.
+	//
+	// O amostrador das métricas de janela obedece à mesma regra e pelo mesmo
+	// motivo, e para DEPOIS dos alarmes: a varredura em voo que o forAlarms
+	// aguarda lê as colunas das métricas, e com o amostrador ainda de pé ela
+	// termina sobre valores que continuam sendo amostrados, e não sobre uma
+	// janela congelada no meio da passada. (O publicado continua legível depois
+	// do Close — a ordem entre os dois laços é de frescor, e não de memória; a
+	// que não pode inverter é a de ambos antes do closeDatasets.)
 	s.forAlarms()
 	s.forEmitters()
+	s.forCounterMetrics()
 	errs = append(errs, s.closeDatasets())
 	// A tabela de usuários fecha por último: até aqui o http.Server ainda
 	// podia estar drenando requests autenticados contra ela.
@@ -1099,6 +1221,39 @@ func (s *Server) forEmitters() {
 			}
 		}
 	}
+}
+
+// forCounterMetrics cancela e AGUARDA o laço do amostrador das métricas de
+// janela de cada dataset, grava os baldes abertos e fecha os arquivos.
+// Idempotente — o Close do amostrador é — e seguro sem nenhum laço de pé, o que
+// deixa a subida abortada chamá-lo sem perguntar o que chegou a abrir.
+//
+// Mesma razão dos alarmes e das emissões: o amostrador lê os contadores pelo
+// campo do Store, sem a guarda de vida, e vive fora dele.
+func (s *Server) forCounterMetrics() {
+	for _, d := range s.datasets {
+		if d.metrics == nil {
+			continue
+		}
+		if err := d.metrics.Close(); err != nil {
+			s.log.Warn("counter_metric.close_failed",
+				"the window metric files did not close cleanly; the window history may be incomplete on the next start",
+				"dataset", d.nome, "error", err.Error())
+		}
+	}
+}
+
+// CounterMetricsActive diz se o laço do amostrador das métricas de janela do
+// dataset está de pé. Existe para a observabilidade e para os testes: "a
+// janela não mudou" é indistinguível de "ninguém está amostrando" sem esta
+// resposta.
+func (s *Server) CounterMetricsActive(dataset string) bool {
+	for _, d := range s.datasets {
+		if d.nome == dataset {
+			return d.metrics != nil && d.metrics.Active()
+		}
+	}
+	return false
 }
 
 // EmitActive diz se ALGUM laço de emissão do dataset está de pé. Existe para a

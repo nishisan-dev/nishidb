@@ -590,6 +590,8 @@ inglês correspondente.
 | desqualificado (o alarme disparado que resolve porque o `qualifyWhen` deixou de valer; motivo distinto de `condition_cleared` e `group_retired`) | disqualified / ReasonDisqualified | internal/alarm |
 | condição de qualificação (o texto do `qualifyWhen` levado ao evento e ao `_meta.alarms`) | QualifyCondition | internal/alarm, internal/metaalarm |
 | impressão das métricas (o texto canônico das métricas de janela citadas pela condição, gravado no estado para invalidar o cronômetro quando a janela muda) | metrics fingerprint / MetricsFingerprint | internal/alarm, internal/storage/checkpoint |
+| diretório das métricas de janela (o `counter_metrics/` dentro de `indexes/`, irmão do diretório dos contadores, com um `<contador>/<métrica>.win` por métrica) | counter metrics directory / CounterMetricsDir | internal/storage, internal/server, internal/cli |
+| amostragem (o laço do amostrador de pé, e a série que diz se ele está) | sampling | internal/server, internal/metrics |
 
 ## 4. Como usar
 

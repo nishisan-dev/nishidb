@@ -69,6 +69,21 @@ schema:
       type: time
       format: "HH:mm:ss.SSS"
 
+# Um contador mínimo com UMA métrica de janela, para que os testes de
+# integração dos clients vejam `_counters.rows_by_text` e
+# `_meta.counter_metrics` no servidor real. O `texto` é a única coluna string
+# que não é a key; as linhas de volume repetem poucos valores nele, então o
+# contador tem poucos grupos.
+counters:
+  - name: rows_by_text
+    groupBy: [texto]
+    metrics:
+      - name: rows_5m
+        type: window
+        source: total
+        window: 5m
+        aggregates: [avg, max]
+
 query:
   maxRows: 1000
   timeout: 30s

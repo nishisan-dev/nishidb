@@ -12,9 +12,10 @@ import (
 //
 // # Por que é um gate, e não um teste de corrida
 //
-// Os dois laços que vivem no SERVIDOR — a varredura de alarmes e a emissão
-// periódica — leem os contadores pelo campo do Store, que é leitura direta sem
-// a guarda de vida: diferente da auditoria, eles não passam por entra()/sai().
+// Os três laços que vivem no SERVIDOR — a varredura de alarmes, a emissão
+// periódica e o amostrador das métricas de janela — leem os contadores pelo
+// campo do Store, que é leitura direta sem a guarda de vida: diferente da
+// auditoria, eles não passam por entra()/sai().
 // E como vivem fora do Store, o Close de lá não os aguarda. É o encerra() que
 // tem de cancelá-los e AGUARDÁ-LOS antes do quiesce.
 //
@@ -41,7 +42,7 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 	// Os laços que têm de parar antes, e o que os para. Um laço novo que more
 	// no servidor entra nesta lista — e o gate falha enquanto ele não estiver
 	// no encerra(), que é o ponto.
-	paradas := []string{"forAlarms", "forEmitters"}
+	paradas := []string{"forAlarms", "forEmitters", "forCounterMetrics"}
 	const quiesce = "closeDatasets"
 
 	pos := map[string]int{}

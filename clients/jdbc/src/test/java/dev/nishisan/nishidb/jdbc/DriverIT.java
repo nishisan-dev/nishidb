@@ -140,6 +140,57 @@ class DriverIT {
         }
     }
 
+    /**
+     * O contador do corpus declara UMA métrica de janela: a tabela
+     * {@code _meta.counter_metrics} aparece na árvore e responde SELECT com a
+     * linha dele, e a coluna gerada repetida na projeção sai com os nomes que
+     * o servidor dá, acessíveis por nome. O VALOR não é afirmado: o amostrador
+     * pode ainda não ter passado, e a coluna sai NULL até lá.
+     */
+    @Test
+    void windowMetricReachesTheCatalogAndTheProjectionNames() throws SQLException {
+        try (Connection c = conecta()) {
+            boolean listed = false;
+            try (ResultSet rs = c.getMetaData().getTables(null, null, null, null)) {
+                while (rs.next()) {
+                    listed |= "_meta".equals(rs.getString("TABLE_SCHEM"))
+                            && "counter_metrics".equals(rs.getString("TABLE_NAME"));
+                }
+            }
+            assertTrue(listed, "getTables não listou _meta.counter_metrics");
+
+            try (Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery(
+                            "SELECT id, counter, name, columns FROM _meta.counter_metrics")) {
+                assertTrue(rs.next(), "_meta.counter_metrics não trouxe a métrica do corpus");
+                assertEquals("rows_by_text|rows_5m", rs.getString("id"));
+                assertEquals("rows_by_text", rs.getString("counter"));
+                assertEquals("rows_5m", rs.getString("name"));
+                assertEquals("rows_5m_avg,rows_5m_max", rs.getString("columns"));
+                assertFalse(rs.next(), "_meta.counter_metrics trouxe mais de uma métrica");
+            }
+
+            try (Statement st = c.createStatement();
+                    ResultSet rs = st.executeQuery("SELECT rows_5m_avg, rows_5m_avg AS x, rows_5m_avg "
+                            + "FROM _counters.rows_by_text")) {
+                ResultSetMetaData md = rs.getMetaData();
+                String[] names = {"rows_5m_avg", "x", "rows_5m_avg_1"};
+                assertEquals(names.length, md.getColumnCount());
+                for (int i = 0; i < names.length; i++) {
+                    assertEquals(names[i], md.getColumnLabel(i + 1));
+                    assertEquals(names[i], md.getColumnName(i + 1));
+                    assertEquals(Types.DOUBLE, md.getColumnType(i + 1));
+                    assertEquals(i + 1, rs.findColumn(names[i]));
+                }
+                assertTrue(rs.next(), "a tabela do contador não trouxe grupo nenhum");
+                for (String name : names) {
+                    Object value = rs.getObject(name);
+                    assertTrue(value == null || value instanceof Double, name + " = " + value);
+                }
+            }
+        }
+    }
+
     private static void assertArrayEqualsHello(byte[] b) {
         assertEquals("Hello", new String(b, java.nio.charset.StandardCharsets.UTF_8));
     }

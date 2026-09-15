@@ -629,6 +629,51 @@ const (
 	// o número de itens dos blocos `alarms:`. Mesma doutrina do LabelCounter,
 	// que ele acompanha em toda série de alarme.
 	LabelAlarm = "alarm"
+
+	// LabelMetric é o nome da métrica de janela declarada no contador, e o
+	// valor vem do YAML do dataset — conjunto fechado, declarado na subida —,
+	// nunca de entrada do cliente. Cardinalidade: o número de itens dos blocos
+	// `metrics:`, limitado a schema.MaxCounterMetrics por contador. Mesma
+	// doutrina do LabelAlarm, e acompanha o LabelCounter em toda série por
+	// métrica.
+	LabelMetric = "metric"
+)
+
+// Séries das MÉTRICAS DE JANELA dos contadores. Só nos datasets com algum
+// contador que declara `metrics:`, e todas publicadas desde a subida: "a janela
+// não mudou" tem de ser distinguível de "ninguém está amostrando", e é
+// MetCounterMetricSampling que responde a segunda pergunta.
+//
+// As quatro primeiras são por (dataset, counter, metric); a do mapa de
+// posições, por (dataset, counter); as três últimas, por dataset — a passada é
+// do dataset inteiro.
+const (
+	// MetCounterMetricGroups são as posições ocupadas por grupos vivos do
+	// contador — o mesmo número em todas as métricas dele.
+	MetCounterMetricGroups = "nishidb_counter_metric_groups"
+	// MetCounterMetricHeapBytes é a estimativa das entradas da métrica em heap.
+	// Acompanha o máximo de grupos vivos simultâneos, e não a vida do contador.
+	MetCounterMetricHeapBytes = "nishidb_counter_metric_heap_bytes"
+	// MetCounterMetricDiskBytes é o tamanho do arquivo mapeado da métrica.
+	MetCounterMetricDiskBytes = "nishidb_counter_metric_disk_bytes"
+	// MetCounterMetricResetsTotal são as recriações do arquivo por cabeçalho
+	// divergente ou ilegível: cada uma perdeu a janela daquela métrica.
+	MetCounterMetricResetsTotal = "nishidb_counter_metric_resets_total"
+	// MetCounterMetricPositionMapBytes é o mapa id → posição do CONTADOR. Sai
+	// uma vez por contador, e não por métrica: o mapa é compartilhado pelas
+	// métricas dele, e uma série por métrica somada no painel o contaria mais de
+	// uma vez.
+	MetCounterMetricPositionMapBytes = "nishidb_counter_metric_position_map_bytes"
+	// MetCounterMetricSampleSeconds é a duração da última passada completa. É
+	// medidor, como MetAlarmSweepSeconds: descreve a última, e não acumula.
+	MetCounterMetricSampleSeconds = "nishidb_counter_metric_sample_seconds"
+	// MetCounterMetricRestoredGroups são as entradas que saíram da abertura com
+	// amostra na janela, somadas sobre as métricas.
+	MetCounterMetricRestoredGroups = "nishidb_counter_metric_restored_groups"
+	// MetCounterMetricSampling é 1 enquanto o laço de amostragem está de pé.
+	// Zero com métrica declarada é a janela CONGELADA: o laço parou na primeira
+	// falha, ou ainda não subiu.
+	MetCounterMetricSampling = "nishidb_counter_metric_sampling"
 )
 
 // Séries dos ALARMES de contador. Todas nascem com zero na subida: "nenhum

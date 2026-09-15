@@ -2265,7 +2265,7 @@ contador com o mesmo nome de spec, que é bug de observabilidade. Os nomes do
 nome digitado à mão em dois lugares diverge no dia em que um deles é
 corrigido.
 
-**O inventário das 91 séries está em [`metricas.md`](metricas.md)** — por
+**O inventário das 115 séries está em [`metricas.md`](metricas.md)** — por
 subsistema, com tipo, labels e o `# HELP` real de cada uma, mais as três
 classes de ausência: a série que depende de uma feature não declarada, a que
 só nasce no primeiro evento e a que não é emitida por ninguém. Duas cobranças

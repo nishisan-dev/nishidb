@@ -5,10 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
+	"github.com/nishisan-dev/nishidb/internal/countermetrics"
 	"github.com/nishisan-dev/nishidb/internal/counters"
+	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metaalarm"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
@@ -19,7 +22,41 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/lexer"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/storage"
 )
+
+// openReadOnlyCounterMetrics abre, só para leitura, o amostrador das métricas
+// de janela do dataset e devolve a fonte das métricas e o fechamento. A
+// montagem das entradas é a MESMA do servidor (CountersWithMetrics). Sem
+// contador com métrica não abre nada: a fonte é nil e o fechamento não faz
+// nada — e NÃO remove órfão nenhum, ao contrário do servidor: a consulta local
+// só lê, e apagar a janela de uma métrica que o operador tirou do YAML por um
+// instante é decisão da subida do servidor, não de um SELECT.
+//
+// log recebe os avisos do amostrador — o counter_metric.unreadable de arquivo
+// que existe e é ilegível ou tem cabeçalho divergente. Sem ele o operador
+// veria as colunas NULL de um arquivo corrompido sem motivo nenhum. Arquivo
+// AUSENTE (o servidor ainda não amostrou) não gera aviso: é o estado normal de
+// quem só ingere e consulta.
+func openReadOnlyCounterMetrics(dataset string, specs []schema.CounterSpec, st *storage.Store, log *logging.Logger) (counters.MetricSource, func(), error) {
+	inputs, err := countermetrics.CountersWithMetrics(specs, st.Counters())
+	if err != nil || len(inputs) == 0 {
+		return nil, func() {}, err
+	}
+	sampler, err := countermetrics.Open(countermetrics.Options{
+		Dataset:  dataset,
+		Dir:      st.CounterMetricsDir(),
+		Counters: inputs,
+		Log:      log,
+		ReadOnly: true,
+	})
+	if err != nil {
+		return nil, func() {}, err
+	}
+	// O erro do Close não tem a quem ser reportado: a consulta já saiu, e em
+	// modo leitura não há balde a gravar — o que resta é soltar os mmaps.
+	return sampler.MetricSource(), func() { _ = sampler.Close() }, nil
+}
 
 func runQuery(args []string, amb Context) int {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
@@ -133,7 +170,30 @@ func runQuery(args []string, amb Context) int {
 	if spec != nil {
 		counterSpecs = spec.Counters
 	}
-	if err := counters.Register(eng, *dataset, st, counterSpecs, nil); err != nil {
+	// As colunas das métricas de janela respondem aqui com o que o amostrador
+	// do servidor GRAVOU: o amostrador abre SÓ PARA LEITURA e publica uma vez,
+	// pelo mesmo código da restauração do servidor, sem amostrar e sem escrever.
+	// Este processo não observa o tempo passar — uma amostra tirada por uma
+	// consulta pontual entraria na janela como se fosse cadência. Arquivo
+	// ausente (o servidor nunca amostrou) ou ilegível deixa as colunas NULL, e
+	// não é erro.
+	//
+	// Sem métrica declarada — e na irmã, que não tem spec nem contador — não
+	// abre nada, e a fonte nil é a resposta certa.
+	//
+	// O aviso de arquivo ilegível vai para o STDERR, no formato de texto dos
+	// outros avisos da CLI: o stdout é o NDJSON da consulta, e uma linha de log
+	// no meio dele quebraria quem o consome.
+	metricsLog := logging.New(amb.Stderr, logging.FormatText, slog.LevelInfo).Component("query")
+	metricSource, closeMetrics, err := openReadOnlyCounterMetrics(*dataset, counterSpecs, st, metricsLog)
+	if err != nil {
+		notify(amb, "query: %v\n", err)
+		return errorCode(err)
+	}
+	// Registrado DEPOIS do close do Store, e por isso roda ANTES dele: o
+	// amostrador lê os contadores pelo campo do Store.
+	defer closeMetrics()
+	if err := counters.Register(eng, *dataset, st, counterSpecs, metricSource); err != nil {
 		notify(amb, "query: %v\n", err)
 		return ExitUsageError
 	}
