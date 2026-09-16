@@ -3000,6 +3000,30 @@ para o passado — o teto de disco é `maxBytes × (keep+1)`, calculável por
 multiplicação. Não há fsync: é telemetria, e um crash perder a cauda é o desfecho
 certo, o mesmo argumento do spill do ORDER BY.
 
+**A linha leva as colunas das métricas de janela** do contador, entre o `total`
+e o `at`, na ordem declarada, com os mesmos nomes
+(`schema.MetricColumnName`) e os mesmos valores que `_counters.<nome>` serve
+para aquele grupo — o emissor resolve a mesma `counters.MetricSource` que a
+tabela e o alarme consomem. A chave sai SEMPRE, e o que falta vira `null`:
+nunca zero, que é valor legítimo de contador, e nunca chave ausente. É o que
+`executor.AppendRow` faz com coluna nula, e é o que dá a quem consome a série um
+esquema de linha fixo. Sem fonte de métrica as colunas continuam saindo, todas
+`null` — o formato da linha é função do YAML, e não de o amostrador estar de pé,
+pelo mesmo argumento que faz o schema da tabela não depender da fonte.
+
+Os dois laços têm cadências próprias: a emissão usa o `every` declarado e o
+amostrador usa `clamp(menor janela ÷ 60, 1s, 10s)`. O `at` é o instante da
+EMISSÃO, e o agregado ao lado dele é o publicado pela última amostra — de até um
+intervalo antes. A linha não carrega um segundo instante: com o `every` mínimo
+de 10 s e a amostragem no máximo a cada 10 s, o desencontro é de no máximo um
+intervalo, e um campo por linha para exprimi-lo custaria mais do que informa.
+
+Linha maior gira o arquivo mais rápido: com `metrics:` e `emit:` no mesmo
+contador, o mesmo `maxBytes × (keep+1)` guarda MENOS histórico. É o preço
+declarado da decisão de não pôr as colunas atrás de uma chave nova do `emit:` —
+quem não declara `metrics:` tem a linha inalterada campo a campo, então só quem
+pediu a janela paga por ela.
+
 **Ordem de parada.** Os dois laços vivem no SERVIDOR, não no `Store`, porque o
 enriquecimento precisa do motor de consulta — que o `Store` não conhece. Eles
 leem os contadores sem a guarda de vida, então o `encerra()` os cancela e
