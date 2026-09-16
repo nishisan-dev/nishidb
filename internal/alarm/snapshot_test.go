@@ -10,7 +10,8 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
 
-// TestRetratoListaOsGruposEmObservacao: é o que a tabela `_meta.alarms` serve.
+// TestRetratoListaOsGruposEmObservacao: é o que a view `<schema>.alarms`
+// (atalho de `_counters.alarms`) serve.
 // Um alarme pendente e um disparado são estados distintos, e quem inspeciona
 // precisa dos dois — "vai alarmar em 40 segundos" é informação.
 func TestRetratoListaOsGruposEmObservacao(t *testing.T) {
