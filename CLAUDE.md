@@ -246,6 +246,21 @@ aloca, então ele não provava nada sobre o gate. Use
 um mutante que aloque inequivocamente (`fmt.Sprintf`), senão o verde prova que o
 mutante é fraco, e não que o gate é forte.
 
+**O inverso também vale: gate de alocação não prova "só roda na transição".**
+No ciclo da view de alarmes, o godoc atribuía a guarda de uma leitura do payload
+a "evitar alocação", e o gate de alocação se declarava o protetor dela. Mas a
+leitura não alocava (`go build -gcflags=-m`: não escapa), e o mutante que a
+chamava em toda passada passou verde. Antes de afirmar que algo aloca, meça;
+e o que a guarda realmente protege (custo, valor congelado) pede teste que
+observe ISSO.
+
+**Estado publicado só em transição mascara teste de estado interno.** O retrato
+dos alarmes só é republicado numa passada com alguma transição: um teste que
+muda o valor de um grupo JÁ disparado e lê o retrato enxerga o retrato velho e
+passa verde com o mutante que recaptura o valor a cada passada. O teste
+precisa forçar uma transição em OUTRO grupo na mesma passada para expor o
+estado do primeiro.
+
 ## Convenções de documentação
 
 - **`§NN`** cita seção de spec, e o marcador serve a MAIS DE UM documento: a
