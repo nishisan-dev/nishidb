@@ -57,6 +57,11 @@ compara — acima **e abaixo** da baseline falham. PR que fecha apontamento abai
 o número no mesmo PR. `make lint` local sai != 0 enquanto a baseline > 0 (é o
 esperado, não é quebra). Subir versão do linter ou do Go = re-medir a baseline na
 mesma passada. Nunca escrever a contagem corrente em comentário (diverge).
+Com uma worktree em `.claude/worktrees/`, o linter local a varre junto e o
+recorte por arquivo do relatório engana (239 dos 330 apontamentos vinham de lá,
+e concluir daí que o CI veria 91 é errado — o total local bate com o do CI). Só
+`git archive HEAD | tar -x -C <tmpdir>` e rodar o linter lá afere a contagem que
+o CI vai medir.
 
 **Clients** (`make test` NÃO roda os testes Java/Python — só os gates Go que
 leem os manifestos):
@@ -228,6 +233,18 @@ que diziam cobrir — um só enxergava o literal com o tipo escrito e perdia 23 
 58; o outro lia `.go` como bytes crus, contra a doutrina de ler código como
 DADO. Gate de doutrina que não discrimina é pior que gate nenhum: mute o defeito
 NA FORMA DOMINANTE do repositório, não só na que você escreveu no teste.
+
+**Gate de `AllocsPerRun` só cobre o caminho que EXERCITA, e o mutante tem de
+alocar de verdade.** As duas metades doeram no mesmo ciclo (colunas de janela na
+linha do `emit:`). O gate da emissão media a passada SEM métrica nenhuma, e
+passou verde com o nome da coluna sendo composto por grupo — 576 alocações por
+passada sobre 64 grupos. Caminho novo pede gate novo, ao lado do velho, e não
+confiança no velho. E o primeiro mutante escolhido para reprová-lo — concatenar
+o nome da coluna com a vírgula e os dois-pontos por linha — passou: concatenação
+curta que não escapa vai para o buffer de 32 bytes do stack do runtime, e não
+aloca, então ele não provava nada sobre o gate. Use
+um mutante que aloque inequivocamente (`fmt.Sprintf`), senão o verde prova que o
+mutante é fraco, e não que o gate é forte.
 
 ## Convenções de documentação
 

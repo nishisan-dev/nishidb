@@ -547,7 +547,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		mat:     mat,
 		metrics: sampler,
 	}
-	if err := openEmitters(d, spec, st, dir, log); err != nil {
+	if err := openEmitters(d, spec, st, dir, sampler.MetricSource(), log); err != nil {
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	if len(alarmes) > 0 {
@@ -1277,7 +1277,12 @@ func (s *Server) EmitActive(dataset string) bool {
 // A limpeza do diretório roda ANTES de qualquer arquivo ser aberto, e recebe o
 // que está declarado: baixar o keep no YAML devolve o disco na subida seguinte,
 // e o que não está declarado é deixado em paz (series.Cleanup explica por quê).
-func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir string, log *logging.Logger) error {
+//
+// src é a fonte das métricas de janela, e nil é válido: é o dataset em que
+// nenhum contador declara `metrics:`, e também o que o amostrador ausente
+// entrega. As colunas declaradas continuam saindo na linha, todas null — o
+// formato da linha é função do YAML (ver series.Metric).
+func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir string, src counters.MetricSource, log *logging.Logger) error {
 	declared := make(map[string]int)
 	for _, cs := range spec.Counters {
 		if cs.Emit != nil {
@@ -1304,10 +1309,15 @@ func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir s
 		if !ok {
 			return fmt.Errorf("emit: o contador %q não está aberto neste dataset", cs.Name)
 		}
+		metrics, err := emittedMetrics(cs, src)
+		if err != nil {
+			return err
+		}
 		e, err := series.NewEmitter(series.Options{
 			Dataset:  spec.Name,
 			Counter:  cs.Name,
 			Columns:  byName[cs.Name],
+			Metrics:  metrics,
 			Reader:   reader,
 			Dir:      seriesDir,
 			File:     cs.Emit.File,
@@ -1322,6 +1332,34 @@ func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir s
 		d.emitters = append(d.emitters, e)
 	}
 	return nil
+}
+
+// emittedMetrics resolve, na ordem declarada, o leitor de cada métrica de
+// janela do contador, para que o emissor as escreva na linha.
+//
+// Com src nil não há leitor nenhum, e as colunas saem null: é o dataset sem
+// amostrador, e o formato da linha não pode depender de ele estar de pé — a
+// mesma regra que faz o schema de `_counters.<nome>` não depender da fonte.
+//
+// Com a fonte presente, uma métrica declarada que ela não resolve é erro na
+// subida, e não coluna calada para sempre: é a mesma recusa de counters.
+func emittedMetrics(cs schema.CounterSpec, src counters.MetricSource) ([]series.Metric, error) {
+	if len(cs.Metrics) == 0 {
+		return nil, nil
+	}
+	out := make([]series.Metric, 0, len(cs.Metrics))
+	for _, m := range cs.Metrics {
+		e := series.Metric{Name: m.Name, Aggregates: m.Aggregates}
+		if src != nil {
+			reader, ok := src.Metric(cs.Name, m.Name)
+			if !ok || reader == nil {
+				return nil, fmt.Errorf("emit: the metric source has no reader for metric %q of counter %q", m.Name, cs.Name)
+			}
+			e.Reader = reader
+		}
+		out = append(out, e)
+	}
+	return out, nil
 }
 
 // activeAlarmGroups é o retrato dos alarmes em observação deste dataset, para

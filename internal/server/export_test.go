@@ -99,3 +99,43 @@ func (s *Server) QueryRowsForTest(dataset, sql string) ([]string, error) {
 	}
 	return strings.Split(text, "\n"), nil
 }
+
+// StopEmittersForTest para o laço da emissão periódica de cada contador do
+// dataset, para que o teste conduza cada passada com EmitOnceForTest.
+//
+// Existe pela razão do StopSamplingAndAlarmsForTest: o `every` mínimo do YAML é
+// de 10 s, esperar a segunda passada custaria isso em relógio de parede, e
+// EmitOnce não é thread-safe — chamá-lo com o laço de pé seria corrida. O Stop
+// aguarda a passada em voo, e o encerra() continua parando e fechando os
+// emissores (Stop e Close são idempotentes).
+func (s *Server) StopEmittersForTest(dataset string) {
+	d := s.byNome[dataset]
+	if d == nil {
+		return
+	}
+	for _, e := range d.emitters {
+		e.Stop()
+	}
+}
+
+// EmitOnceForTest faz uma passada da emissão de cada contador do dataset e
+// esvazia o buffer, para que a linha esteja no arquivo quando o teste o ler.
+// Só depois de StopEmittersForTest.
+func (s *Server) EmitOnceForTest(dataset string) error {
+	d := s.byNome[dataset]
+	if d == nil {
+		return fmt.Errorf("dataset %q is not open", dataset)
+	}
+	if len(d.emitters) == 0 {
+		return fmt.Errorf("dataset %q has no emitter", dataset)
+	}
+	for _, e := range d.emitters {
+		if err := e.EmitOnce(); err != nil {
+			return err
+		}
+		if err := e.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -1775,6 +1775,27 @@ como texto. A rotação é por tamanho, com o sufixo crescendo para o passado
 Grupo aposentado deixa de ser emitido. Baixar o `keep` devolve o disco na subida
 seguinte.
 
+**Se o contador declara [`metrics:`](#métricas-de-janela-do-contador)**, a linha
+leva também as colunas geradas por elas, entre o `total` e o `at`, na ordem
+declarada — as MESMAS colunas, com os mesmos valores, que um
+`SELECT * FROM _counters.<nome>` devolve para aquele grupo:
+
+```json
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"auth_5m_avg":807.5,"auth_24h_max":830,"at":"2026-09-12T03:30:00.000Z"}
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_09","olt":"BR_SPOAM_OLT_09","total":0,"auth_5m_avg":null,"auth_24h_max":null,"at":"2026-09-12T03:30:00.000Z"}
+```
+
+A chave sai **sempre**, e `null` é o grupo que a janela ainda não viu — nunca
+zero, que é um valor legítimo do contador. O agregado é o publicado pela última
+passada do amostrador, que tem cadência própria (a menor janela ÷ 60, entre 1 s
+e 10 s): o `at` é o instante da **emissão**, e o agregado pode ser de até um
+intervalo antes dele.
+
+Duas consequências de dimensionamento. A linha fica maior, então o mesmo
+`maxBytes × (keep+1)` guarda **menos** histórico — quem já dimensionou o disco
+para um contador com `metrics:` e `emit:` juntos deve reconferir a conta. E
+quem não declara `metrics:` tem a linha inalterada, campo a campo.
+
 ### SQL suportado (v1)
 
 ```sql

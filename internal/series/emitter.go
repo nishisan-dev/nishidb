@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
+	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -25,12 +27,45 @@ type Reader interface {
 	Group(id uint32) (key, text []byte, total, refs int64, live bool)
 }
 
+// MetricReader lê o valor publicado de UMA métrica de janela.
+//
+// A interface é declarada aqui, no consumidor, pelo mesmo motivo do Reader
+// acima: a emissão só precisa do agregado do grupo, e pede menos do que a
+// tabela do contador — o Usage dela alimenta `_meta.counter_metrics`, e a
+// série não tem tabela nenhuma para alimentar. Um counters.MetricReader é
+// atribuível a este sem conversão, que é o que mantém esta aresta inexistente.
+//
+// samples == 0 é "sem valor": ou o grupo não teve amostra na janela, ou nunca
+// foi amostrado. Com samples > 0, avg é FINITO — a garantia é de quem
+// implementa, e não da emissão (ver counters.MetricReader, que explica por que
+// a conferência por linha não se paga).
+type MetricReader interface {
+	Aggregate(id uint32) (samples uint64, avg float64, minimum, maximum int64)
+}
+
+// Metric é uma métrica de janela declarada e os agregados que ela gera na
+// linha, na ordem declarada.
+//
+// Reader nil é válido, e é o que o dataset sem amostrador entrega: as colunas
+// continuam na linha, todas null. O formato da linha é função do YAML, e não
+// de o laço de amostragem estar de pé — é a mesma regra que faz o schema de
+// `_counters.<nome>` não depender da fonte (ver counters.MetricSource).
+type Metric struct {
+	Name       string
+	Aggregates []string
+	Reader     MetricReader
+}
+
 // Options configura a emissão de UM contador.
 type Options struct {
 	Dataset string
 	Counter string
 	// Columns são os nomes das colunas do groupBy, na ordem declarada.
 	Columns []string
+	// Metrics são as métricas de janela do contador, na ordem declarada.
+	// Vazio é o contador que não declara `metrics:`, e a linha dele é a mesma
+	// de sempre, byte a byte.
+	Metrics []Metric
 	Reader  Reader
 	// Dir é o diretório da série dentro do dataset, e File o nome do arquivo.
 	Dir, File string
@@ -64,6 +99,9 @@ type Emitter struct {
 	// emissor, e convertê-los de string a cada linha alocaria por grupo.
 	prefix    []byte
 	colPrefix [][]byte
+	// metrics são as métricas ligadas às colunas que geram, com o prefixo de
+	// cada uma já escapado pelo mesmo motivo do colPrefix.
+	metrics []metricBinding
 
 	// rows, errs e lastSuccess são os acumulados da observabilidade. Atômicos
 	// porque o scrape os lê de outra goroutine enquanto a passada os escreve.
@@ -75,6 +113,75 @@ type Emitter struct {
 	cancel context.CancelFunc
 	active atomic.Bool
 	inKeep sync.WaitGroup
+}
+
+// aggregate identifica o agregado de uma coluna de métrica, para a linha ser
+// montada por um switch em vez de por comparação de texto por grupo.
+//
+// O enum é local, e não importado de internal/counters, que tem o seu igual:
+// trazê-lo de lá criaria a aresta series -> counters que este pacote foi
+// desenhado para não ter (ver Reader). O que NÃO é duplicado é o nome da
+// coluna, cujo dono único é schema.MetricColumnName — o nome é contrato, e o
+// enum é detalhe de montagem.
+type aggregate uint8
+
+const (
+	aggregateAvg aggregate = iota
+	aggregateMin
+	aggregateMax
+)
+
+// aggregateOf traduz o agregado declarado. O YAML já recusou o desconhecido;
+// a recusa aqui é para a Metric montada sem ele.
+func aggregateOf(name string) (aggregate, error) {
+	switch name {
+	case schema.AggregateAvg:
+		return aggregateAvg, nil
+	case schema.AggregateMin:
+		return aggregateMin, nil
+	case schema.AggregateMax:
+		return aggregateMax, nil
+	default:
+		return 0, fmt.Errorf("series: aggregate %q has no column in the emitted line (known: %s, %s, %s)",
+			name, schema.AggregateAvg, schema.AggregateMin, schema.AggregateMax)
+	}
+}
+
+// metricColumn é uma coluna gerada por uma métrica: o prefixo `,"<nome>":` já
+// escapado e o agregado que preenche o valor.
+type metricColumn struct {
+	prefix []byte
+	agg    aggregate
+}
+
+// metricBinding é uma métrica ligada às colunas que ela gera.
+type metricBinding struct {
+	reader  MetricReader
+	columns []metricColumn
+}
+
+// bindMetrics resolve UMA vez, na construção, o agregado e o prefixo escapado
+// de cada coluna gerada. Um contador por PON emite milhares de linhas por
+// intervalo, e compor o nome da coluna por linha alocaria em todas elas.
+func bindMetrics(metrics []Metric) ([]metricBinding, error) {
+	if len(metrics) == 0 {
+		return nil, nil
+	}
+	out := make([]metricBinding, 0, len(metrics))
+	for _, m := range metrics {
+		b := metricBinding{reader: m.Reader, columns: make([]metricColumn, 0, len(m.Aggregates))}
+		for _, a := range m.Aggregates {
+			agg, err := aggregateOf(a)
+			if err != nil {
+				return nil, fmt.Errorf("series: metric %q: %w", m.Name, err)
+			}
+			p := []byte{','}
+			p = executor.AppendJSONString(p, []byte(schema.MetricColumnName(m.Name, a)))
+			b.columns = append(b.columns, metricColumn{prefix: append(p, ':'), agg: agg})
+		}
+		out = append(out, b)
+	}
+	return out, nil
 }
 
 // NewEmitter abre o arquivo da série e devolve o emissor.
@@ -100,6 +207,11 @@ func NewEmitter(opts Options) (*Emitter, error) {
 		p = executor.AppendJSONString(p, []byte(name))
 		e.colPrefix = append(e.colPrefix, append(p, ':'))
 	}
+	metrics, err := bindMetrics(opts.Metrics)
+	if err != nil {
+		return nil, err
+	}
+	e.metrics = metrics
 	w, err := OpenWriter(opts.Dir, opts.File, opts.MaxBytes, opts.Keep)
 	if err != nil {
 		return nil, err
@@ -129,7 +241,7 @@ func (e *Emitter) EmitOnce() error {
 			// faria o gráfico mostrar um equipamento que não existe.
 			continue
 		}
-		line, err := e.appendLine(e.buf[:0], key, text, total)
+		line, err := e.appendLine(e.buf[:0], id, key, text, total)
 		e.buf = line
 		if err != nil {
 			e.errs.Add(1)
@@ -157,7 +269,10 @@ func (e *Emitter) EmitOnce() error {
 // gráfico, e um número que chega como texto obriga quem consome a converter —
 // ou, pior, a ordenar lexicograficamente. Uma segunda renderização também
 // divergiria da primeira nos casos de ponta.
-func (e *Emitter) appendLine(dst, key, text []byte, total int64) ([]byte, error) {
+//
+// id é o id do grupo, e não só o índice do laço: é a chave com que a métrica
+// de janela publica o agregado dele, a mesma que a tabela do contador usa.
+func (e *Emitter) appendLine(dst []byte, id uint32, key, text []byte, total int64) ([]byte, error) {
 	vals, err := valuekey.DecodeComposite(key, e.vals[:0])
 	e.vals = vals
 	if err != nil {
@@ -174,9 +289,53 @@ func (e *Emitter) appendLine(dst, key, text []byte, total int64) ([]byte, error)
 	}
 	dst = append(dst, `,"total":`...)
 	dst = executor.AppendValue(dst, types.Value{Type: types.TypeInt64, I64: total})
+	dst = e.appendMetrics(dst, id)
 	dst = append(dst, `,"at":`...)
 	dst = executor.AppendJSONString(dst, e.atBuf)
 	return append(dst, '}'), nil
+}
+
+// appendMetrics acrescenta as colunas das métricas de janela do grupo, na
+// ordem declarada, entre o `total` e o `at`.
+//
+// A chave sai SEMPRE, e o que falta vira null — nunca zero, que é um valor
+// legítimo de contador, e nunca chave ausente. É o que executor.AppendRow faz
+// com coluna nula, e é o que faz esta linha casar campo a campo com o que um
+// `SELECT * FROM _counters.<nome>` devolve para o mesmo grupo. Quem consome a
+// série tem esquema de linha fixo, que é o que uma ferramenta de gráfico pede.
+//
+// Sem fonte (reader nil) todas as colunas saem null: o formato da linha é
+// função do YAML, e não de o amostrador estar de pé.
+func (e *Emitter) appendMetrics(dst []byte, id uint32) []byte {
+	for _, m := range e.metrics {
+		var samples uint64
+		var avg float64
+		var lowest, highest int64
+		if m.reader != nil {
+			samples, avg, lowest, highest = m.reader.Aggregate(id)
+		}
+		for _, c := range m.columns {
+			dst = append(dst, c.prefix...)
+			if samples == 0 {
+				dst = append(dst, "null"...)
+				continue
+			}
+			switch c.agg {
+			case aggregateAvg:
+				// O double vai pelo mesmo AppendValue do resto da linha, que
+				// já devolve null para não-finito. Conferir aqui pagaria por
+				// grupo o que é propriedade de quem publica.
+				dst = executor.AppendValue(dst, types.Value{
+					Type: types.TypeDouble, I64: int64(math.Float64bits(avg)),
+				})
+			case aggregateMin:
+				dst = executor.AppendValue(dst, types.Value{Type: types.TypeInt64, I64: lowest})
+			case aggregateMax:
+				dst = executor.AppendValue(dst, types.Value{Type: types.TypeInt64, I64: highest})
+			}
+		}
+	}
+	return dst
 }
 
 // Flush esvazia o buffer do escritor.
