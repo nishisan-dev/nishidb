@@ -207,9 +207,19 @@ func validateHistory(n *yaml.Node, baseName string, fields map[string]FieldSpec)
 	if h.Suffix == "" {
 		return nil, specErrf("history.suffix vazio: a tabela irmã teria o mesmo nome do dataset base")
 	}
-	if name := h.TableName(baseName); !isIdentName(name) {
+	siblingName := h.TableName(baseName)
+	if !isIdentName(siblingName) {
 		return nil, specErrf("history.suffix %q produz o nome de tabela %q, inválido (esperado [a-z0-9_]+)",
-			h.Suffix, name)
+			h.Suffix, siblingName)
+	}
+	// ReservedAlarmsTable é a mesma colisão de nome de dataset/contador, pelo
+	// caminho do sufixo: a irmã HERDA o schema do base, e uma tabela irmã
+	// chamada `alarms` disputaria a mesma entrada no catálogo com a view de
+	// alarmes publicada sob CountersNamespace.
+	if siblingName == ReservedAlarmsTable {
+		return nil, specErrf(
+			"history.suffix %q produces table name %q, which is reserved for the alarms view published under %s.%s",
+			h.Suffix, siblingName, CountersNamespace, ReservedAlarmsTable)
 	}
 
 	if err := historyExpiry(m, h); err != nil {

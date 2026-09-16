@@ -151,3 +151,66 @@ func TestAlarmeRecusas(t *testing.T) {
 		})
 	}
 }
+
+// TestAlarmValueKeyIsParsed confere que a chave `value` chega na spec como
+// declarada: é o nome da coluna de `_counters.<contador>` que vira o
+// firingValue do alarme, e aqui só a forma é conferida — o default (`total`)
+// e a validação contra a tabela são papel da compilação em internal/alarm.
+func TestAlarmValueKeyIsParsed(t *testing.T) {
+	spec, err := Parse([]byte(yamlWithCounters(`
+counters:
+  - name: autenticados_por_olt
+    groupBy: [olt]
+    alarms:
+      - name: olt_down
+        when: "total < 100"
+        sustainedFor: 2m
+        value: avgLatency
+`)), BuiltinDefaults)
+	if err != nil {
+		t.Fatalf("a chave value tem de ser aceita: %v", err)
+	}
+	if got, quero := spec.Counters[0].Alarms[0].Value, "avgLatency"; got != quero {
+		t.Fatalf("Value = %q, quero %q", got, quero)
+	}
+}
+
+// TestAlarmBlankValueIsRefused: presente e em branco é recusado, e não lido
+// como ausente — a mesma regra do qualifyWhen (alarm.go): quem escreveu a
+// chave quis uma coluna, e a que ele escreveu não existe.
+func TestAlarmBlankValueIsRefused(t *testing.T) {
+	_, err := Parse([]byte(yamlWithCounters(`
+counters:
+  - name: autenticados_por_olt
+    groupBy: [olt]
+    alarms:
+      - name: olt_down
+        when: "total < 100"
+        sustainedFor: 2m
+        value: "   "
+`)), BuiltinDefaults)
+	if err == nil || !strings.Contains(err.Error(), "value") {
+		t.Fatalf("value em branco tem de ser recusado pelo motivo certo: %v", err)
+	}
+}
+
+// TestAlarmWithoutValueLeavesItEmpty: ausente é "sem coluna declarada", e o
+// zero value da string continua vazio — é o sinal que a compilação lê como
+// "use a coluna total".
+func TestAlarmWithoutValueLeavesItEmpty(t *testing.T) {
+	spec, err := Parse([]byte(yamlWithCounters(`
+counters:
+  - name: autenticados_por_olt
+    groupBy: [olt]
+    alarms:
+      - name: olt_down
+        when: "total < 100"
+        sustainedFor: 2m
+`)), BuiltinDefaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := spec.Counters[0].Alarms[0].Value; got != "" {
+		t.Fatalf("Value = %q, quero vazio (default total)", got)
+	}
+}
