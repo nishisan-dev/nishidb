@@ -1669,6 +1669,14 @@ coluna errado **derruba a subida**, com a coluna nomeada.
 recusado (um alarme que nunca dispara não é um alarme). A varredura roda a cada
 `sustainedFor ÷ 4`.
 
+`value` é opcional e diz **qual número** o alarme sustentou: a coluna cujo
+valor, lido na mesma linha que decidiu o disparo, vira o `firingValue` do
+alarme. Ausente, vale `total`. Só são aceitas `total` e as colunas das métricas
+de janela do contador (`value: auth_5m_avg`); `groupKey`, as colunas do
+`groupBy` e nome inexistente derrubam a subida, com as colunas aceitas listadas.
+Mudar o `value` **não** zera o cronômetro: ele não muda a decisão, só o que se
+mostra dela.
+
 `qualifyWhen` é opcional: uma segunda condição, na mesma linguagem do `when`,
 que diz se o grupo é **elegível** ao alarme. O caso típico é citar uma métrica de
 janela (`qualifyWhen: "auth_24h_max > 10"`), para alarmar só a OLT que teve
@@ -1713,6 +1721,7 @@ O disparo é um `WARN` e a resolução um `INFO`:
 ```json
 {"event":"alarm.firing","counter":"autenticados_por_olt","alarm":"olt_down",
  "groupKey":"BR_SPOAM_OLT_14","total":42,"condition":"total < 100",
+ "valueColumn":"total","firingValue":42,
  "sustainedFor":"2m0s","since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:16:00.000Z",
  "olt":"BR_SPOAM_OLT_14",
  "enrichment":{"servicos_afetados":{"rows":[{"customerId":"cli-4471","ip":"10.0.0.9"}]}}}
@@ -1720,7 +1729,9 @@ O disparo é um `WARN` e a resolução um `INFO`:
  "total":812,"since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:25:00.000Z"}
 ```
 
-`at − since` é a duração do problema. O `reason` distingue **`condition_cleared`**
+`valueColumn` e `firingValue` só vêm no disparo; `firingValue` fica de fora
+quando a coluna não tinha amostra naquele instante. `at − since` é a duração do
+problema. O `reason` distingue **`condition_cleared`**
 (o problema passou) de **`group_retired`** (o grupo saiu do contador) — um
 equipamento removido do inventário não é um equipamento recuperado.
 
@@ -1732,15 +1743,43 @@ desconhecida, e um número grande é a resposta honesta. Mudar o `when`, o
 `qualifyWhen`, o `sustainedFor` ou a janela de uma métrica citada no YAML
 invalida o cronômetro salvo daquele alarme.
 
-Para inspecionar o que está em curso, sem ler log:
+Para inspecionar o que está em curso, sem ler log, consulte a **view de
+alarmes**. Ela deriva dos contadores e mora ao lado deles, no schema do
+dataset, sempre com o nome `alarms`:
 
 ```bash
-nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT groupKey, state, since FROM _meta.alarms ORDER BY since ASC"
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT groupKey, state, since, firedAt, valueColumn, firingValue FROM alarms ORDER BY since ASC"
 ```
 
-`state` é `firing` (já anunciado) ou `pending` (ainda contando o prazo).
-`qualifyCondition` é o `qualifyWhen` do alarme, e NULL quando ele não foi
-declarado.
+Na conexão por schema, `FROM alarms` basta. Fora dela, use a forma qualificada
+`<schemaName>.alarms` ou o atalho `_counters.alarms`, que vale "no dataset da
+requisição". No client Python, cuja conexão é por dataset, use uma dessas duas:
+`FROM alarms` seria lido como o nome de um dataset.
+
+| Coluna | Tipo | O que é |
+|---|---|---|
+| `id` | string | chave da linha: `contador\|alarme\|groupKey` |
+| `counter`, `alarm`, `groupKey` | string | qual alarme, sobre qual grupo |
+| `state` | string | `firing` (já anunciado) ou `pending` (ainda contando o prazo) |
+| `since` | timestamp | quando a condição passou a valer |
+| `firedAt` | timestamp | quando o disparo foi anunciado; NULL enquanto `pending` |
+| `condition`, `sustainedForMs` | string, int64 | a regra, porque quem consulta não tem o YAML à mão |
+| `qualifyCondition` | string | o `qualifyWhen`; NULL quando não foi declarado |
+| `valueColumn` | string | a coluna declarada em `value` (`total` por default) |
+| `firingValue` | double | o valor dessa coluna no disparo; NULL enquanto `pending` ou se a coluna não tinha amostra |
+
+`firingValue` fica **congelado** enquanto o alarme dispara: é o número que o
+disparo sustentou, não o de agora (esse está na tabela do contador). Colunas
+inteiras viram double, com perda de precisão só acima de 2^53. Depois de um
+reinício o alarme restaurado dispara de novo, e `firedAt`/`firingValue`
+descrevem esse novo disparo.
+
+Como a view existe em todo schema, `alarms` é **nome reservado**: contador,
+dataset ou tabela histórica com esse nome são recusados na subida.
+
+> **Mudança incompatível:** até a v0.9.1 esta tabela era `_meta.alarms`. Ela
+> não existe mais; troque por `alarms` (conexão por schema),
+> `<schemaName>.alarms` ou `_counters.alarms`.
 
 ### Emissão periódica: a série de cada grupo
 
@@ -1901,8 +1940,8 @@ SELECT partition, appliedOffset, highWatermark, lag, state FROM _meta.kafka ORDE
 ```
 
 `_meta.tables` lista **toda tabela consultável do dataset**, a começar por ela
-mesma: a base como `TABLE` no schema declarado no YAML, os contadores como
-`VIEW` no mesmo schema, e as tabelas de meta como `VIEW` no schema `_meta`. É a
+mesma: a base como `TABLE` no schema declarado no YAML, os contadores e a view
+`alarms` como `VIEW` no mesmo schema, e as tabelas de meta como `VIEW` no schema `_meta`. É a
 primeira pergunta de quem chega a um dataset que não conhece, e a resposta não
 exige rota HTTP nem suporte em cliente nenhum.
 
@@ -1947,10 +1986,12 @@ instante da última passada de amostragem. `sampledAt` é NULL antes da primeira
 passada, e sempre no `nishidb query --config`, que não amostra. Existe em todo
 dataset, vazia sem `metrics:` (ver "Métricas de janela do contador" acima).
 
-`_meta.alarms` lista os alarmes em observação, um por par (alarme, grupo): qual
-grupo, desde quando, e se o prazo já se cumpriu (ver "Alarme por condição
-sustentada" acima). Vazia num dataset sem alarme declarado — e no
-`nishidb query --config` ela é sempre vazia, porque quem varre é o servidor.
+A view `alarms` (atalho `_counters.alarms`) lista os alarmes em observação, um
+por par (alarme, grupo): qual grupo, desde quando, se o prazo já se cumpriu e
+com que valor disparou (ver "Alarme por condição sustentada" acima). Não mora
+no `_meta` porque descreve o dado, não o motor. Vazia num dataset sem alarme
+declarado — e no `nishidb query --config` ela é sempre vazia, porque quem varre
+é o servidor.
 
 `_meta.kafka` responde o estado da fonte Kafka do dataset, **uma linha por
 partição** — offset aplicado, offset durável do checkpoint, fim do log, lag,

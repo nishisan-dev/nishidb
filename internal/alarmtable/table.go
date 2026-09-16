@@ -1,33 +1,49 @@
-// Package metaalarm serve a tabela virtual `_meta.alarms`: os alarmes em
-// observação no dataset consultado, um por par (alarme, grupo).
+// Package alarmtable serve a view `<schema>.alarms`, atalho `_counters.alarms`:
+// os alarmes em observação no dataset consultado, um por par (alarme, grupo).
 //
 // Mora fora de `internal/alarm` e fora de `internal/query` porque precisa dos
 // dois lados, e nenhum dos dois pode passar a importar o outro — é o mesmo
 // argumento do `internal/counters` e do `internal/metakafka`.
 //
+// # Por que sob `_counters`, e não sob `_meta`
+//
+// A tabela DERIVA dos contadores — todo alarme observa um `_counters.<nome>` —
+// e o catálogo já publica toda tabela virtual fora de `_meta` no schema do
+// dataset (`internal/query/catalog.go`, `catalogEntries`). `_meta` descreve o
+// MOTOR (kafka, counters, tabelas, usuários); esta tabela descreve o DADO — o
+// mesmo corte que já separa `_counters.<nome>` de `_meta.counters`. Por isso
+// ela não é mais `_meta.alarms`: a quebra é deliberada, registrada no plano
+// `planning/alarmes-como-view-do-schema.md`, e sem legado — a v0.9.1, única
+// release publicada até aqui, aceita a mudança de contrato.
+//
+// O nome `alarms` é RESERVADO (`schema.ReservedAlarmsTable`): nenhum contador,
+// dataset ou tabela histórica pode se chamar assim, para que a view nunca
+// colida com uma tabela de verdade.
+//
 // # O que ela responde e o que as métricas não respondem
 //
 // As séries de alarme dão os agregados: quantos grupos em observação, quantos
 // disparados, quantos disparos desde a subida. Esta tabela dá o DETALHE — QUAL
-// equipamento, desde quando, e se o prazo já se cumpriu. É a diferença entre
-// "há três OLTs alarmadas" e "a OLT_14 está assim desde 03:14".
-package metaalarm
+// equipamento, desde quando, com que valor disparou, e se o prazo já se
+// cumpriu. É a diferença entre "há três OLTs alarmadas" e "a OLT_14 está assim
+// desde 03:14, com auth_5m_avg = 0.6".
+package alarmtable
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 
 	"github.com/nishisan-dev/nishidb/internal/alarm"
 	"github.com/nishisan-dev/nishidb/internal/query"
-	"github.com/nishisan-dev/nishidb/internal/query/meta"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// TableMetaAlarms é o nome da tabela sob o `_meta`.
-const TableMetaAlarms = "alarms"
+// TableName é o nome da view, sempre `schema.ReservedAlarmsTable`.
+const TableName = schema.ReservedAlarmsTable
 
 // Estados da coluna `state`. Enum fechado, em inglês, como os do evento.
 const (
@@ -39,10 +55,16 @@ const (
 )
 
 // tableSpec é a spec da tabela, no MESMO YAML de um dataset de verdade,
-// como o `_meta.counters` e o `_meta.kafka`. Reusar o compilador é o que
+// como `_counters.<nome>` e `_meta.kafka`. Reusar o compilador é o que
 // garante que ela obedeça às mesmas regras — tipos, chave, ordem determinística
 // de FieldID — que qualquer outro dataset, e o que dá WHERE, ORDER BY, LIMIT e
 // projeção sem gramática nova.
+//
+// `schemaName` fica `schema.SyntheticSchemaName`: é o nome interno da spec, só
+// para a validação — a view em si é publicada sob o schema do DATASET, pelo
+// `RegisterVirtual` em `Register`. É por isso que a recusa de dataset chamado
+// `alarms` isenta `SchemaName == SyntheticSchemaName` (`internal/schema/spec.go`):
+// a spec sintética desta view se chama `alarms` e não pode recusar a si mesma.
 //
 // A key é `id`, composta de contador, alarme e grupo: a key da v1 é uma coluna
 // string única, e nenhuma das três identifica a linha sozinha. Os nomes de
@@ -58,14 +80,28 @@ const (
 // ausência, e uma string vazia afirmaria uma condição de qualificação vazia que
 // ninguém escreveu. É o que deixa `WHERE qualifyCondition IS NULL` separar os
 // dois tipos de alarme.
+//
+// `valueColumn`, `firedAt` e `firingValue` descrevem o disparo:
+//   - `valueColumn` é SEMPRE preenchida, pendente ou disparado — é propriedade
+//     da REGRA (`value:` no YAML, `total` por padrão), como `condition`;
+//   - `firedAt` é o instante da transição para o disparo, e fica NULL enquanto
+//     pending: não há disparo a descrever ainda. Não é o mesmo que `since` — um
+//     alarme restaurado (`restored=true`) volta pending e dispara de novo, com
+//     `firedAt` descrevendo esse NOVO disparo, não o original;
+//   - `firingValue` é o valor de `valueColumn` capturado NESSE disparo, e fica
+//     NULL enquanto pending, ou se a coluna estava ausente do payload que
+//     decidiu — uma métrica sem amostra na janela, por exemplo. É `double`
+//     mesmo para uma coluna `int64` (`total`, `_min`, `_max`): a conversão
+//     perde precisão acima de 2^53, e é o preço de uma coluna só para os dois
+//     tipos de origem.
 const tableSpec = `version: 1
-name: ` + TableMetaAlarms + `
+name: ` + TableName + `
 schemaName: ` + schema.SyntheticSchemaName + `
 materialization:
   key:
     field: id
 schema:
-  include: [id, counter, alarm, groupKey, state, since, condition, qualifyCondition, sustainedForMs]
+  include: [id, counter, alarm, groupKey, state, since, condition, qualifyCondition, sustainedForMs, valueColumn, firedAt, firingValue]
   fields:
     id:
       type: string
@@ -85,6 +121,12 @@ schema:
       type: string
     sustainedForMs:
       type: int64
+    valueColumn:
+      type: string
+    firedAt:
+      type: timestamp
+    firingValue:
+      type: double
 `
 
 // column é a posição de cada coluna, e columnNames as nomeia na mesma
@@ -101,10 +143,14 @@ const (
 	cCondition
 	cQualifyCondition
 	cSustainedForMs
+	cValueColumn
+	cFiredAt
+	cFiringValue
 )
 
 var columnNames = []string{
 	"id", "counter", "alarm", "groupKey", "state", "since", "condition", "qualifyCondition", "sustainedForMs",
+	"valueColumn", "firedAt", "firingValue",
 }
 
 // Source é o que a tabela precisa do dataset, RESOLVIDO NA HORA.
@@ -114,27 +160,27 @@ var columnNames = []string{
 // Uma fatia capturada no registro descreveria para sempre o estado da subida.
 //
 // nil é aceito e vale "nenhum alarme declarado" — que é uma resposta, não um
-// erro: `SELECT * FROM _meta.alarms` nunca pode falhar por isso.
+// erro: `SELECT * FROM alarms` nunca pode falhar por isso.
 type Source struct {
 	Groups func() []alarm.ActiveGroup
 }
 
-// Table monta o schema sintético e o Store virtual de `_meta.alarms`.
+// Table monta o schema sintético e o Store virtual da view.
 func Table(f Source) (*schema.Compiled, query.Store, error) {
 	spec, err := schema.Parse([]byte(tableSpec), schema.BuiltinDefaults)
 	if err != nil {
-		return nil, nil, fmt.Errorf("metaalarm: spec da tabela %s.%s inválida: %w", meta.Namespace, TableMetaAlarms, err)
+		return nil, nil, fmt.Errorf("alarmtable: spec da tabela %s.%s inválida: %w", schema.CountersNamespace, TableName, err)
 	}
 	sc, err := spec.Compile(schema.NewInMemoryDict())
 	if err != nil {
-		return nil, nil, fmt.Errorf("metaalarm: compilando a tabela %s.%s: %w", meta.Namespace, TableMetaAlarms, err)
+		return nil, nil, fmt.Errorf("alarmtable: compilando a tabela %s.%s: %w", schema.CountersNamespace, TableName, err)
 	}
-	fo := &source{f: f, abertos: map[uint64][]alarm.ActiveGroup{}}
+	fo := &source{f: f, open: map[uint64][]alarm.ActiveGroup{}}
 	fo.columns = make([]columnWithID, 0, len(columnNames))
 	for k, name := range columnNames {
 		field, ok := sc.FieldByName([]byte(name))
 		if !ok {
-			return nil, nil, fmt.Errorf("metaalarm: coluna %q sem FieldID no schema sintético", name)
+			return nil, nil, fmt.Errorf("alarmtable: coluna %q sem FieldID no schema sintético", name)
 		}
 		fo.columns = append(fo.columns, columnWithID{id: field.ID, k: column(k)})
 	}
@@ -153,7 +199,8 @@ type columnWithID struct {
 	k  column
 }
 
-// Register declara `_meta.alarms` sob o dataset já registrado no motor.
+// Register declara a view sob o dataset já registrado no motor, dentro de
+// `schema.CountersNamespace` — o mesmo namespace de `_counters.<nome>`.
 //
 // Chamado SEMPRE, inclusive num dataset sem alarme declarado: "este dataset não
 // observa nada" é uma resposta, e a tabela vazia a dá.
@@ -162,7 +209,7 @@ func Register(eng *query.Engine, dataset string, f Source) error {
 	if err != nil {
 		return err
 	}
-	return eng.RegisterVirtual(dataset, meta.Namespace, TableMetaAlarms, sc, store)
+	return eng.RegisterVirtual(dataset, schema.CountersNamespace, TableName, sc, store)
 }
 
 // source é o Store virtual. Registrada UMA vez no motor, serve TODAS as
@@ -175,8 +222,8 @@ type source struct {
 	columns []columnWithID
 
 	mu        sync.Mutex
-	proxEpoca uint64
-	abertos   map[uint64][]alarm.ActiveGroup
+	nextEpoch uint64
+	open      map[uint64][]alarm.ActiveGroup
 }
 
 // OpenSnapshot congela o retrato DESTA consulta.
@@ -192,12 +239,12 @@ func (f *source) OpenSnapshot() types.Snapshot {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.proxEpoca++
-	epoca := f.proxEpoca
-	f.abertos[epoca] = groups
+	f.nextEpoch++
+	epoch := f.nextEpoch
+	f.open[epoch] = groups
 	// rowID é o índice mais um: eles valem DENTRO deste retrato, e o número
 	// não é coluna — nenhuma consulta o enxerga.
-	return types.Snapshot{Epoch: epoca, LimitRowID: types.RowID(len(groups)) + 1}
+	return types.Snapshot{Epoch: epoch, LimitRowID: types.RowID(len(groups)) + 1}
 }
 
 // CloseSnapshot devolve o retrato. O executor fecha o par em todos os caminhos
@@ -205,13 +252,13 @@ func (f *source) OpenSnapshot() types.Snapshot {
 func (f *source) CloseSnapshot(snap types.Snapshot) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.abertos, snap.Epoch)
+	delete(f.open, snap.Epoch)
 }
 
-func (f *source) retratoOf(snap types.Snapshot) ([]alarm.ActiveGroup, bool) {
+func (f *source) snapshotOf(snap types.Snapshot) ([]alarm.ActiveGroup, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	g, ok := f.abertos[snap.Epoch]
+	g, ok := f.open[snap.Epoch]
 	return g, ok
 }
 
@@ -220,7 +267,7 @@ func (f *source) ScanLive(snap types.Snapshot) types.RowIDIterator {
 }
 
 func (f *source) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
-	groups, ok := f.retratoOf(snap)
+	groups, ok := f.snapshotOf(snap)
 	if !ok || id < 1 || int(id) > len(groups) {
 		return types.Record{}, buf, false, nil
 	}
@@ -229,7 +276,7 @@ func (f *source) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (ty
 }
 
 func (f *source) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
-	groups, ok := f.retratoOf(snap)
+	groups, ok := f.snapshotOf(snap)
 	if !ok {
 		return types.Record{}, buf, false, nil
 	}
@@ -248,7 +295,7 @@ func (f *source) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, [
 func (f *source) Indexed(types.FieldID) bool { return false }
 
 func (f *source) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
-	return nil, fmt.Errorf("metaalarm: %w", types.ErrInvalidArgument)
+	return nil, fmt.Errorf("alarmtable: %w", types.ErrInvalidArgument)
 }
 
 // idOf compõe a key da linha.
@@ -280,6 +327,9 @@ func (f *source) record(row types.RowID, g alarm.ActiveGroup, buf []byte) (types
 		cCondition:        {Type: types.TypeString, Bytes: []byte(g.Condition)},
 		cQualifyCondition: {Type: types.TypeString, Bytes: []byte(g.QualifyCondition)},
 		cSustainedForMs:   {Type: types.TypeInt64, I64: g.SustainedFor.Milliseconds()},
+		cValueColumn:      {Type: types.TypeString, Bytes: []byte(g.ValueColumn)},
+		cFiredAt:          {Type: types.TypeTimestamp, I64: g.FiredAt.UnixMilli()},
+		cFiringValue:      {Type: types.TypeDouble, I64: int64(math.Float64bits(g.FiringValue))},
 	}
 	buf = buf[:0]
 	var err error
@@ -289,8 +339,19 @@ func (f *source) record(row types.RowID, g alarm.ActiveGroup, buf []byte) (types
 		if c.k == cQualifyCondition && g.QualifyCondition == "" {
 			continue
 		}
+		// firedAt e firingValue descrevem o disparo: enquanto pending não há o
+		// que descrever, e as duas ficam fora do payload (NULL). firingValue
+		// também fica fora quando a coluna estava ausente do payload que
+		// decidiu o disparo — HasFiringValue é o que distingue "não disparou"
+		// de "disparou, mas o valor não existia".
+		if c.k == cFiredAt && g.FiredAt.IsZero() {
+			continue
+		}
+		if c.k == cFiringValue && (g.FiredAt.IsZero() || !g.HasFiringValue) {
+			continue
+		}
 		if buf, err = encoding.AppendField(buf, c.id, values[c.k]); err != nil {
-			return types.Record{}, buf, fmt.Errorf("metaalarm: montando a linha %q: %w", id, err)
+			return types.Record{}, buf, fmt.Errorf("alarmtable: montando a linha %q: %w", id, err)
 		}
 	}
 	return types.Record{RowID: row, Sequence: int64(row), Key: id, Payload: buf}, buf, nil

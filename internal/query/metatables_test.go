@@ -12,8 +12,8 @@ import (
 // tabelas de meta — e registra a `_meta.tables`.
 //
 // NÃO é o retrato completo do que um servidor publica: o servidor registra
-// também, por exemplo, a `_meta.alarms` e a `_meta.counter_metrics`, e este
-// harness não. Para o que se cobra aqui — a `_meta.tables` lista o que estiver
+// também, por exemplo, a view `_counters.alarms` e a `_meta.counter_metrics`,
+// e este harness não. Para o que se cobra aqui — a `_meta.tables` lista o que estiver
 // REGISTRADO — qualquer catálogo serve; a lista completa de cada processo é
 // cobrada na fiação dele (TestMetaTablesRespondePelaRotaDeConsultaDoServidor e
 // TestQueryLocalRespondeMetaTablesComOCatalogoDoDataset).

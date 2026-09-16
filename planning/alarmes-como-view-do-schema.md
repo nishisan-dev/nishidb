@@ -50,7 +50,7 @@ A série do `emit:` grava arquivo, não tabela, então não colide.
 
 ### 3. `internal/metaalarm` → `internal/alarmtable`
 Renomeações:
-- `TableMetaAlarms` → `TableName` (igual a `schema.ReservedAlarmsTable`);
+- a constante do nome da tabela passa a se chamar `TableName` (igual a `schema.ReservedAlarmsTable`);
 - em `table.go`, os identificadores PT-BR passam para inglês: `abertos`→`open`, `proxEpoca`→`nextEpoch`, `retratoOf`→`snapshotOf`, `epoca`→`epoch`;
 - em `internal/alarm/snapshot.go:64`, `vazio`→`empty`.
 
@@ -182,7 +182,7 @@ Cada garantia tem mutação: vermelho → verde, com os dois resultados relatado
 
 **Gates e varredura final:**
 - `TestRenamedIdentifiersAreNotCitedByTheirOldNames`, `TestCitacoesDeSecaoResolvem` e `TestEvidenciasCitadasNosDocumentosExistem`.
-- `grep -rn "_meta.alarms\|metaalarm\|TableMetaAlarms" --exclude-dir=.claude`. Só podem sobrar o TSV e o histórico em `planning/` e nos aceites.
+- `grep -rn` por `_meta.alarms`, pelo nome antigo do pacote e pelo nome antigo da constante (o par está no TSV), excluindo `.claude/`. Só podem sobrar o TSV e o histórico em `planning/` e nos aceites.
 
 ## Execução (orquestração)
 **Preparação:**

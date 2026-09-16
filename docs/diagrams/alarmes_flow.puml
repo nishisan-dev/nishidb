@@ -35,7 +35,8 @@ das métricas citadas batem com o YAML?) then (não)
       pela chave CANÔNICA do grupo;
     endif
   endif
-  :Publica o retrato para `_meta.alarms`;
+  :Publica o retrato para a view `<schema>.alarms`
+  (atalho `_counters.alarms`);
 }
 
 partition "Passada (cadência = menor sustainedFor / 4)" {
@@ -104,6 +105,14 @@ partition "Passada (cadência = menor sustainedFor / 4)" {
     stop
   else (dispara)
     :FIRING;
+    :captura firedAt e firingValue
+    (coluna do `value:`, default total)
+    do MESMO payload que decidiu;
+    note right
+      Só nesta transição: enquanto o
+      alarme dispara os dois ficam
+      congelados.
+    end note
     :Enriquecimento: executa as consultas
     com os valores do grupo LIGADOS como
     parâmetro, fora de qualquer lock;
@@ -135,12 +144,13 @@ partition "Fase dois: quem a varredura não viu" {
 partition "Saída" {
   :Evento no log estruturado
   (alarm.firing / alarm.resolved, com
-  qualifyCondition quando declarada e as
+  qualifyCondition quando declarada,
+  valueColumn e firingValue no disparo, e as
   colunas de métrica no grupo `metrics`,
   lidas da MESMA linha que decidiu);
   if (houve transição?) then (sim)
-    :republica o retrato de `_meta.alarms`
-    (com qualifyCondition);
+    :republica o retrato da view `alarms`
+    (com qualifyCondition, firedAt e firingValue);
     :grava checkpoint/alarms.state
     (temp -> fsync -> rename -> dirsync);
   endif
