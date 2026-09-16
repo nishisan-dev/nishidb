@@ -23,8 +23,7 @@
       deixaria uma selector thread viva.
     -->
 
-    <!-- 16-09-2026 alterado para JDK 17 para maior abrangencia e compatibilidade, -->
-    <maven.compiler.release>17</maven.compiler.release>
+    <maven.compiler.release>21</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <junit.version>6.1.3</junit.version>
   </properties>
