@@ -65,6 +65,20 @@ type compiledAlarm struct {
 	// nil quando o alarme não o declara.
 	newQualifier func() counter.Evaluator
 	enrich       []enrichQuery
+	// valueColumn é a coluna de `_counters.<contador>` cujo valor, lido na
+	// linha que decidiu o disparo, vira o `firingValue` do evento —
+	// `spec.Value` compilado, ou schema.CounterTotalColumn quando a chave
+	// `value:` não veio.
+	valueColumn string
+	// valueFieldID é o FieldID de valueColumn NESTE schema — o MESMO que o
+	// avaliador do `when`/`qualifyWhen` usa, resolvido uma vez aqui e não a
+	// cada disparo.
+	valueFieldID types.FieldID
+	// valueType é types.TypeDouble para o agregado `avg` e types.TypeInt64
+	// para `total`, `min` e `max` (counters.TableSchema é quem decide isso).
+	// É o que diz como os 8 bytes do campo viram o float64 do firingValue —
+	// ver floatOfFieldValue em runner.go.
+	valueType types.FieldType
 }
 
 // enrichQuery é uma consulta de enriquecimento com os binds resolvidos.
@@ -204,6 +218,11 @@ func compileAlarm(label string, as schema.AlarmSpec, def counter.Definition, met
 	if err := checkAlarmStateText(label+" metrics fingerprint", a.metricsFingerprint); err != nil {
 		return a, err
 	}
+	col, fieldID, fieldType, err := resolveValueColumn(label, as, metrics, sc)
+	if err != nil {
+		return a, err
+	}
+	a.valueColumn, a.valueFieldID, a.valueType = col, fieldID, fieldType
 	if len(as.Enrich) == 0 {
 		return a, nil
 	}
@@ -304,6 +323,59 @@ func compileEnrich(label string, es schema.EnrichSpec, def counter.Definition) (
 		q.binds = append(q.binds, b)
 	}
 	return q, nil
+}
+
+// resolveValueColumn compila o `value:` do alarme: a coluna efetiva é a
+// declarada em schema.AlarmSpec.Value, ou schema.CounterTotalColumn quando a
+// chave não veio.
+//
+// A validação é POR NOME, e não por tipo: o groupBy aceita int64 e boolean, e
+// aceitá-lo aqui tornaria o `firingValue` ambíguo entre "o total do grupo" e
+// "a OLT que disparou" — a identidade do grupo já está no groupKey e nas
+// Columns do evento, e não é isso que value: declara. Só schema.CounterTotalColumn
+// e as colunas geradas pelas métricas de janela (`<métrica>_<avg|min|max>`)
+// são aceitas, e a lista sai de valueColumnNames — a MESMA enumeração que
+// metricColumnsOf usa para resolver as colunas do laço (runner.go), para que
+// as duas listas nunca divirjam.
+//
+// O FieldID resolvido é o MESMO que o avaliador do `when`/`qualifyWhen` usa
+// sobre esta tabela (sc.FieldByName), e o tipo vem do schema COMPILADO, nunca
+// assumido: é counters.TableSchema quem decide `avg` double e `total`/`min`/
+// `max` int64.
+func resolveValueColumn(label string, as schema.AlarmSpec, metrics []schema.CounterMetricSpec,
+	sc *schema.Compiled) (string, types.FieldID, types.FieldType, error) {
+	col := as.Value
+	if col == "" {
+		col = schema.CounterTotalColumn
+	}
+	accepted := valueColumnNames(metrics)
+	if !slices.Contains(accepted, col) {
+		return "", 0, 0, fmt.Errorf("%s.value: alarm %q: %q is not a valid value column (accepted: %s)",
+			label, as.Name, col, strings.Join(accepted, ", "))
+	}
+	f, ok := sc.FieldByName([]byte(col))
+	if !ok {
+		// Não deveria acontecer: accepted sai da mesma lista de métricas que
+		// gerou o schema. Fica calado seria pior que um erro que nomeia o
+		// alarme.
+		return "", 0, 0, fmt.Errorf("%s.value: alarm %q: column %q has no FieldID in the counter table",
+			label, as.Name, col)
+	}
+	return col, f.ID, f.Type, nil
+}
+
+// valueColumnNames lista os nomes aceitos por `value:`: schema.CounterTotalColumn,
+// seguido das colunas geradas por cada métrica de janela, na ordem declarada
+// (métrica, depois agregado) — a MESMA enumeração que metricColumnsOf usa
+// para resolver as colunas do laço (runner.go), para que as duas listas nunca
+// divirjam.
+func valueColumnNames(metrics []schema.CounterMetricSpec) []string {
+	out := make([]string, 0, 1+len(metrics)*3)
+	out = append(out, schema.CounterTotalColumn)
+	for _, m := range metrics {
+		out = append(out, m.Columns()...)
+	}
+	return out
 }
 
 // resolveBind casa um nome de coluna com a fonte do valor na linha do contador.

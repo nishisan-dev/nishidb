@@ -4,6 +4,9 @@ package alarm
 
 import (
 	"testing"
+	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
 // testingAllocsPerRun é o AllocsPerRun da stdlib, nomeado aqui para que o gate
@@ -69,6 +72,51 @@ func TestSweepWithQualifyWhenDoesNotAllocatePerGroup(t *testing.T) {
 	}
 	if got := r.trackedGroups(); got != 0 {
 		t.Fatalf("%d grupos inelegíveis em observação, quero 0", got)
+	}
+}
+
+// TestPendingGroupsWithDeclaredValueDoNotAllocatePerPass prova só o que um
+// gate de AllocsPerRun pode provar: zero alocação por rodada sobre 64 grupos
+// pending — condição valendo, prazo não cumprido, sem transição — de um
+// alarme com `value:` de métrica declarado.
+//
+// O que ele NÃO prova: que firedValueOf só roda na transição para o disparo.
+// firedValueOf em si não aloca (o FieldReader é valor de pilha e não escapa —
+// `go build -gcflags=-m` confirma), então um mutante que a chamasse em TODO
+// grupo pending passaria por este gate calado; a razão de ela só rodar na
+// transição é custo de CPU (não varrer o payload inteiro por grupo pending do
+// inventário a cada passada) e congelamento do valor capturado — ver o
+// godoc de Runner.decide e de tracker.firedAt —, não alocação. Este gate
+// cobre uma coisa distinta e real: que o caminho pending com `value:`
+// declarado não aloca — a contraparte do caminho saudável é
+// TestPassadaNaoAlocaPorGrupoSaudavel.
+func TestPendingGroupsWithDeclaredValueDoNotAllocatePerPass(t *testing.T) {
+	metrics := defaultWindowMetrics()
+	gs := make([]grupo, 0, 64)
+	for i := int64(0); i < 64; i++ {
+		gs = append(gs, grupo{olt: "OLT_A", slot: i, total: 50, live: true})
+	}
+	f := newFakeCounter(t, defByPON("autenticados_por_pon"), gs...)
+	src := newFakeMetricSource(metrics)
+	for id := uint32(1); id <= 64; id++ {
+		src.setWindows(id, 0.5, 50)
+	}
+	alarm := schema.AlarmSpec{Name: "olt_down", When: "total < 100", Value: "auth_5m_avg", SustainedFor: 10 * time.Minute}
+	r, _, clock := newQualifiedRunner(t, f, src, specWithMetrics(metrics, alarm), "", t0)
+	// Primeira passada: os 64 grupos entram em observação (Absent -> Pending)
+	// — é TRANSIÇÃO, aloca por conta do mapa de trackers, e fica fora do que
+	// o gate mede.
+	passada(t, r)
+	if got := r.trackedGroups(); got != 64 {
+		t.Fatalf("%d grupos em observação, quero 64: o cenário não ficou pending para todos", got)
+	}
+	// Segunda passada antes da medida, para que os buffers reusados já
+	// tenham nascido — o gate mede o regime permanente.
+	clock.advance(time.Minute)
+	passada(t, r)
+	base := allocsOfPass(t, r)
+	if base != 0 {
+		t.Fatalf("a passada alocou %v vez(es) por rodada sobre 64 grupos pending com value: declarado", base)
 	}
 }
 

@@ -89,6 +89,23 @@ func TestSufixoVazioEhRecusado(t *testing.T) {
 	refusesHistory(t, "history:\n  suffix: \"\"\n  expireAfterWrite: 7d\n", "suffix")
 }
 
+// TestHistorySiblingNamedAlarmsIsRefused confere a colisão de
+// ReservedAlarmsTable pelo caminho do sufixo: a tabela irmã HERDA o schema do
+// dataset base, e um nome resolvido `alarms` (aqui, base "alarm" + suffix "s")
+// disputaria a mesma entrada no catálogo que a view de alarmes publicada sob
+// CountersNamespace. yamlWithHistory não serve porque fixa o nome do dataset
+// em "events" — nenhum sufixo produz "alarms" a partir dele.
+func TestHistorySiblingNamedAlarmsIsRefused(t *testing.T) {
+	yaml := "version: 1\nname: alarm\nschemaName: telecom\n" +
+		"materialization:\n  key:\n    field: id\n" +
+		"history:\n  suffix: s\n  expireAfterWrite: 7d\n" +
+		"schema:\n  fields:\n    id:\n      type: string\n"
+	_, err := Parse([]byte(yaml), BuiltinDefaults)
+	if err == nil || !strings.Contains(err.Error(), "reserved") || !strings.Contains(err.Error(), CountersNamespace) {
+		t.Fatalf("tabela histórica irmã chamada %q tem de ser recusada pelo motivo certo: %v", ReservedAlarmsTable, err)
+	}
+}
+
 func TestExpireAfterWriteAbaixoDaResolucaoEhRecusado(t *testing.T) {
 	refusesHistory(t, "history:\n  expireAfterWrite: 30s\n", "resolução")
 }

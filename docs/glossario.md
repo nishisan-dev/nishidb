@@ -542,13 +542,13 @@ inglês correspondente.
 | sustentação / sustentar-se (o prazo pelo qual a condição tem de valer antes de disparar) | sustain / sustainedFor | internal/alarm, internal/schema |
 | disparar / disparado (o alarme anunciado depois de a condição se sustentar) | fire / firing | internal/alarm |
 | resolver / resolvido (o alarme que deixou de valer) | resolve / resolved | internal/alarm |
-| pendente (a condição que vale e ainda não cumpriu o prazo) | pending | internal/alarm, internal/metaalarm |
+| pendente (a condição que vale e ainda não cumpriu o prazo) | pending | internal/alarm, internal/alarmtable |
 | cronômetro (o instante em que a condição passou a valer, e o que dele se persiste) | tracker | internal/alarm |
 | enriquecimento (o resultado das consultas que acompanham o evento de disparo) | enrichment | internal/alarm |
 | ligar (dar valor a um parâmetro `?` da consulta de enriquecimento) | bind | internal/alarm, internal/query/binder |
 | canal (o destino do evento de alarme: o log hoje, tópico e webhook depois) | sink | internal/alarm |
 | lacuna (quanto tempo o processo ficou sem observar, reportada no alarme restaurado) | downtime | internal/alarm |
-| retrato (a lista imutável de alarmes em observação, publicada a cada passada) | snapshot | internal/alarm, internal/metaalarm |
+| retrato (a lista imutável de alarmes em observação, publicada a cada passada) | snapshot | internal/alarm, internal/alarmtable |
 | aposentado (o grupo que saiu do contador, e o motivo de resolução que ele produz) | retired | internal/alarm, internal/storage/counter |
 | emissão (a escrita periódica do valor de cada grupo num arquivo) | emission / emit | internal/series, internal/schema |
 | série (o arquivo NDJSON com uma linha por grupo por intervalo) | series | internal/series |
@@ -585,13 +585,18 @@ inglês correspondente.
 | coluna gerada (a coluna `<métrica>_<agregado>` que uma métrica de janela produz na tabela do contador) | generated column | internal/schema |
 | coluna fixa (`groupKey` e `total`, presentes em toda tabela de contador) | fixed column | internal/schema, internal/counters |
 | origem da coluna (o trecho do contador, colunas fixas, `groupBy` ou `metrics[i]`, que produz a coluna) | origin | internal/schema |
-| qualificação do alarme / qualificar (a condição `qualifyWhen` que habilita o alarme para o grupo; distinta do qualificador de coluna) | qualify / qualifyWhen | internal/schema, internal/alarm, internal/metaalarm, internal/storage/checkpoint |
+| qualificação do alarme / qualificar (a condição `qualifyWhen` que habilita o alarme para o grupo; distinta do qualificador de coluna) | qualify / qualifyWhen | internal/schema, internal/alarm, internal/alarmtable, internal/storage/checkpoint |
 | qualificado (o grupo elegível ao alarme porque o `qualifyWhen` vale, ou não foi declarado) | qualified | internal/alarm |
 | desqualificado (o alarme disparado que resolve porque o `qualifyWhen` deixou de valer; motivo distinto de `condition_cleared` e `group_retired`) | disqualified / ReasonDisqualified | internal/alarm |
-| condição de qualificação (o texto do `qualifyWhen` levado ao evento e ao `_meta.alarms`) | QualifyCondition | internal/alarm, internal/metaalarm |
+| condição de qualificação (o texto do `qualifyWhen` levado ao evento e à view de alarmes) | QualifyCondition | internal/alarm, internal/alarmtable |
 | impressão das métricas (o texto canônico das métricas de janela citadas pela condição, gravado no estado para invalidar o cronômetro quando a janela muda) | metrics fingerprint / MetricsFingerprint | internal/alarm, internal/storage/checkpoint |
 | diretório das métricas de janela (o `counter_metrics/` dentro de `indexes/`, irmão do diretório dos contadores, com um `<contador>/<métrica>.win` por métrica) | counter metrics directory / CounterMetricsDir | internal/storage, internal/server, internal/cli |
 | amostragem (o laço do amostrador de pé, e a série que diz se ele está) | sampling | internal/server, internal/metrics |
+| view de alarmes (a tabela `<schema>.alarms`, atalho `_counters.alarms`, que lista os alarmes em observação no schema de todo dataset) | alarms view / alarmtable | internal/alarmtable, internal/server, internal/cli |
+| nome reservado (o nome `alarms`, recusado para contador, dataset e tabela histórica porque a view de alarmes o ocupa em todo schema) | reserved name / ReservedAlarmsTable | internal/schema |
+| coluna do valor (a coluna da tabela do contador, escolhida pela chave `value:` do alarme, cujo valor o disparo guarda; `total` por default) | value column / valueColumn | internal/schema, internal/alarm, internal/alarmtable |
+| valor de disparo (o valor da coluna do valor lido no payload que decidiu o disparo, congelado enquanto o alarme dispara) | firing value / firingValue | internal/alarm, internal/alarmtable |
+| instante do disparo (quando o disparo foi anunciado; distinto do `since`, que é quando a condição passou a valer) | fired at / firedAt | internal/alarm, internal/alarmtable |
 
 ## 4. Como usar
 

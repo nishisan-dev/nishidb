@@ -54,7 +54,7 @@ func idsOfMetaTables(t *testing.T, a *env, dataset string) string {
 func TestQueryLocalRespondeMetaTablesComOCatalogoDoDataset(t *testing.T) {
 	a := newEnv(t)
 	writeDatasetServices(t, a)
-	const want = "_counters.autenticados_por_olt,_meta.alarms,_meta.counter_metrics,_meta.counters,_meta.fields,_meta.kafka,_meta.tables,servicos"
+	const want = "_counters.alarms,_counters.autenticados_por_olt,_meta.counter_metrics,_meta.counters,_meta.fields,_meta.kafka,_meta.tables,servicos"
 	if got := idsOfMetaTables(t, a, "servicos"); got != want {
 		t.Fatalf("catálogo = %s, quero %s", got, want)
 	}
@@ -88,13 +88,17 @@ schema:
 // fiação que é assimétrica. Consertá-la é decisão de produto; este teste é o
 // que muda junto quando ela for tomada.
 //
+// A view `alarms` NÃO aparece aqui: como `_meta.kafka`, ela é registrada só
+// para a base (`spec != nil` em cli/query.go) — a irmã não tem fonte própria de
+// alarme, e publicar a view sob ela descreveria um alarme que não é dela.
+//
 // O par do lado do servidor é TestMetaTablesRespondeNaTabelaIrmaAbertaPeloServidor.
 func TestQueryLocalListaMetaCountersNaIrmaQueOServidorNaoLista(t *testing.T) {
 	a := newEnv(t)
 	if err := os.WriteFile(filepath.Join(a.dir, "datasets", "eventos.yaml"), []byte(specWithHistoryCLI), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	const want = "_meta.alarms,_meta.counter_metrics,_meta.counters,_meta.fields,_meta.tables,eventos_history"
+	const want = "_meta.counter_metrics,_meta.counters,_meta.fields,_meta.tables,eventos_history"
 	if got := idsOfMetaTables(t, a, "eventos_history"); got != want {
 		t.Fatalf("catálogo da irmã = %s, quero %s", got, want)
 	}

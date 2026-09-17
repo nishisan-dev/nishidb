@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/protocol"
+	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -111,10 +112,17 @@ func TestTheConnectionTreeAndTheConnectionSqlAgree(t *testing.T) {
 				if strings.HasPrefix(tab.Schema, "_") {
 					continue
 				}
-				for _, sql := range []string{
-					"SELECT * FROM " + tab.Schema + "." + tab.Name + " LIMIT 1",
-					"SELECT * FROM " + tab.Name + " LIMIT 1",
-				} {
+				sqls := []string{"SELECT * FROM " + tab.Schema + "." + tab.Name + " LIMIT 1"}
+				// `alarms` é o nome RESERVADO (schema.ReservedAlarmsTable) que
+				// TODO schema publica — inclusive o da própria conexão. O nome
+				// NU dentro da conexão a `s` sempre resolve para o `alarms` de
+				// `s`, nunca para o do outro schema: não é o falso negativo que
+				// este teste combate, é a mesma tabela reservada por desenho.
+				// Só o endereço QUALIFICADO prova a recusa aqui.
+				if tab.Name != schema.ReservedAlarmsTable {
+					sqls = append(sqls, "SELECT * FROM "+tab.Name+" LIMIT 1")
+				}
+				for _, sql := range sqls {
 					if code := drain(t, consulta(t, srv, queryBody(s, sql))); code != protocol.CodeBind {
 						t.Errorf("conexão %s: %q fora da árvore respondeu %q, quer %s", s, sql, code, protocol.CodeBind)
 					}

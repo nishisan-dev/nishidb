@@ -322,11 +322,11 @@ func onlySample(t *testing.T, samples []amostraExposta, name string, labels map[
 	return found[0]
 }
 
-// alarmStates devolve groupKey → state de `_meta.alarms`.
+// alarmStates devolve groupKey → state de `_counters.alarms`.
 func alarmStates(t *testing.T, srv *server.Server) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	for _, row := range queryRows(t, srv, "SELECT groupKey, state FROM _meta.alarms") {
+	for _, row := range queryRows(t, srv, "SELECT groupKey, state FROM _counters.alarms") {
 		key, _ := row["groupKey"].(string)
 		state, _ := row["state"].(string)
 		out[key] = state
@@ -429,12 +429,12 @@ func TestWindowMetricsFeedTheTableTheAlarmAndSurviveARestart(t *testing.T) {
 	// A OLT_B esvaziou também, mas nunca passou de 10: o `when` vale e ela não
 	// é qualificada, então nem entra em observação.
 	if states := alarmStates(t, srv); len(states) != 1 || states["OLT_A"] != "pending" {
-		t.Fatalf("_meta.alarms = %v, quero só OLT_A pending", states)
+		t.Fatalf("_counters.alarms = %v, quero só OLT_A pending", states)
 	}
 
 	drivePass(t, srv, clock, restart.Add(6*time.Minute))
 	if states := alarmStates(t, srv); len(states) != 1 || states["OLT_A"] != "firing" {
-		t.Fatalf("_meta.alarms = %v, quero só OLT_A firing depois do prazo", states)
+		t.Fatalf("_counters.alarms = %v, quero só OLT_A firing depois do prazo", states)
 	}
 	byAlarm := map[string]string{
 		metrics.LabelDataset: windowDataset,
@@ -452,7 +452,7 @@ func TestWindowMetricsFeedTheTableTheAlarmAndSurviveARestart(t *testing.T) {
 	rows = rowsByGroupKey(t, queryRows(t, srv, tableSQL))
 	wantColumn(t, rows, "OLT_A", "auth_24h_max", 0.0)
 	if states := alarmStates(t, srv); len(states) != 0 {
-		t.Fatalf("_meta.alarms = %v depois da desqualificação, quero vazio", states)
+		t.Fatalf("_counters.alarms = %v depois da desqualificação, quero vazio", states)
 	}
 	samples = coletaSamples(t, srv)
 	if v := onlySample(t, samples, metrics.MetAlarmDisqualifiedTotal, byAlarm).Value; v != 1 {

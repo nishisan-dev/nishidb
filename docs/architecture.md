@@ -3038,12 +3038,32 @@ laços e antes do `closeDatasets` (ver a seção anterior).
 [`metricas.md`](metricas.md)), todas nascendo com zero. Falha e pulo de
 enriquecimento são séries separadas porque pedem ações opostas, e
 `nishidb_alarm_disqualified_total` é SUBCONJUNTO de
-`nishidb_alarm_resolved_total`, nunca somada a ela. E a tabela
-virtual `_meta.alarms` dá o detalhe que os agregados não dão:
+`nishidb_alarm_resolved_total`, nunca somada a ela. E a view `alarms`,
+publicada no schema de todo dataset, dá o detalhe que os agregados não dão:
 
 ```sql
-SELECT groupKey, state, since, condition FROM _meta.alarms WHERE state = 'firing' ORDER BY since ASC
+SELECT groupKey, state, since, firedAt, valueColumn, firingValue FROM alarms WHERE state = 'firing' ORDER BY since ASC
 ```
+
+A view mora sob o namespace `_counters` (atalho `_counters.alarms`), e não no
+`_meta`: ela deriva dos contadores e descreve o dado, não o motor. Nenhum código
+novo de catálogo foi preciso para isso — o catálogo publica toda tabela virtual
+fora do `_meta` no schema do dataset, como `VIEW`, e é por essa mesma regra que
+ela abre como `<schema>.alarms` e aparece na árvore do JDBC. O preço é que
+`alarms` vira nome reservado: contador, dataset ou tabela histórica com esse
+nome são recusados na subida (`TestCounterNamedAlarmsIsRefused`,
+`TestDatasetNamedAlarmsIsRefused`, `TestHistorySiblingNamedAlarmsIsRefused`).
+Até a v0.9.1 ela era `_meta.alarms`, removida sem período de convivência.
+
+`firedAt` e `firingValue` são gravados no tracker SÓ na transição para o
+disparo, lidos do MESMO payload que decidiu — inclusive quando a coluna é
+`total`, porque o total que a varredura tem em mãos vem de outra leitura do
+contador e pode divergir (`TestFiringValueIsReadFromTheDecidingPayload`). A
+coluna vem da chave `value:` do alarme (default `total`), aceita só entre
+`total` e as colunas das métricas de janela. Enquanto o alarme dispara os dois
+ficam congelados (`TestFiringValueAndFiredAtStayFrozenWhileFiring`). O
+`alarms.state` não os guarda: a fase já não é persistida, o alarme restaurado
+dispara de novo, e os dois passam a descrever esse novo disparo.
 
 `state = 'pending'` é o alarme que ainda conta o prazo — "vai alarmar em
 quarenta segundos" é informação que só existe antes do disparo.

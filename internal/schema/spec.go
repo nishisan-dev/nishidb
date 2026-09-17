@@ -750,6 +750,19 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 			"name %q: o prefixo \"_\" é reservado aos espaços de nome do produto (_meta, %s); escolha outro nome",
 			raw.Name, CountersNamespace)
 	}
+	// ReservedAlarmsTable colide pelo mesmo motivo do prefixo "_": a view de
+	// alarmes publicada sob CountersNamespace usa este nome fixo em todo
+	// dataset, e um dataset chamado `alarms` disputaria a mesma entrada no
+	// catálogo. A spec SINTÉTICA da própria view escapa por SchemaName ==
+	// SyntheticSchemaName — mesmo padrão da isenção do prefixo "_" em
+	// schemaName, abaixo —, porque ela também se chama `alarms`, de propósito.
+	// A isenção só é segura porque o Load recusa `_virtual` vindo de arquivo:
+	// nenhum dataset de usuário chega aqui com esse schemaName.
+	if raw.Name == ReservedAlarmsTable && raw.SchemaName != SyntheticSchemaName {
+		return nil, specErrf(
+			"name %q is reserved for the alarms view published under %s.%s; choose another name",
+			raw.Name, CountersNamespace, ReservedAlarmsTable)
+	}
 	s.Name = raw.Name
 
 	// O schema é o container de tudo que o dataset publica, e ele é

@@ -61,6 +61,19 @@ type Event struct {
 	// Total é o valor observado no instante da decisão — não o do disparo
 	// original, quando o evento é uma resolução.
 	Total int64
+	// ValueColumn é a coluna de `_counters.<contador>` cujo valor decidiu o
+	// disparo — `total` por padrão, ou a coluna declarada em `value:` do
+	// alarme. Vai SÓ no disparo (vazia na resolução): a resolução não
+	// descreve um valor novo, descreve que o problema passou.
+	ValueColumn string
+	// FiringValue é o valor de ValueColumn lido do MESMO payload que decidiu
+	// o disparo — a mesma garantia de Metrics, e não uma releitura. Só faz
+	// sentido com HasFiringValue, e só acompanha o disparo.
+	FiringValue float64
+	// HasFiringValue diz se ValueColumn estava presente no payload do
+	// disparo. Uma coluna de métrica de janela sem amostra ainda (NULL) sai
+	// com false: um zero aqui afirmaria um valor que ninguém observou.
+	HasFiringValue bool
 	// Condition e SustainedFor são a regra que produziu o evento. Vão no
 	// evento porque quem o recebe não tem o YAML, e "total baixo" sem o limiar
 	// não é acionável.
