@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-integration test-python test-python-it lint-python lint bench bench-micro cover build-jdbc test-jdbc-unit test-jdbc
+.PHONY: build test test-race test-integration test-python test-python-it lint-python lint bench bench-micro cover build-jdbc test-jdbc-unit test-jdbc build-deb
 
 # `go build ./...` sozinho DESCARTA o binário: o módulo tem dois packages
 # main (cmd/nishidb e benchmark/ingest-bench), e sem -o o toolchain só
@@ -16,6 +16,28 @@ LDFLAGS := -X github.com/nishisan-dev/nishidb/internal/buildinfo.Version=$(VERSI
 build:
 	go build ./...
 	go build -ldflags "$(LDFLAGS)" -o nishidb ./cmd/nishidb
+
+# DEB_ARCH segue o GOARCH corrente por default — cross-compilar exige passar
+# os dois juntos, já que `go build` (dentro de `build`, acima) só lê GOARCH
+# do ambiente: `GOARCH=arm64 CGO_ENABLED=0 make build-deb` gera o binário
+# arm64 (não há cgo no repositório, então CGO_ENABLED=0 não muda nada aqui —
+# é defensivo contra quem roda de uma máquina com cgo habilitado por default)
+# e DEB_ARCH acompanha por herdar o mesmo GOARCH do ambiente, sem precisar
+# repetir.
+#
+# DEB_VERSION tira o `v` inicial do describe: `git describe` (VERSION, acima)
+# gera `v0.9.1-4-g4239716`, e o formato de versão Debian não aceita o
+# prefixo.
+#
+# `build-deb` DEPENDE de `build`, e não builda por conta própria — é o
+# `build` quem carimba os ldflags de buildinfo no binário; um segundo `go
+# build` aqui divergiria dele em silêncio, o mesmo erro que o comentário
+# acima já proíbe para o alvo `build`.
+DEB_ARCH ?= $(shell go env GOARCH)
+DEB_VERSION ?= $(patsubst v%,%,$(VERSION))
+
+build-deb: build
+	scripts/build-deb.sh --binary ./nishidb --version $(DEB_VERSION) --arch $(DEB_ARCH) --out dist
 
 # Suíte completa, INCLUINDO os gates de medida — os de alocação
 # (testing.AllocsPerRun) e o de vazão da ingestão pelo CLI —, que são

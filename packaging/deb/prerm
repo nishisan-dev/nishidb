@@ -1,0 +1,38 @@
+#!/bin/sh
+# prerm do pacote nishidb — para e desabilita o serviço só em `remove`, a
+# saída DEFINITIVA do pacote.
+#
+# `upgrade`/`failed-upgrade` e `deconfigure` são TRANSIÇÕES PASSAGEIRAS, não
+# saída, e nenhuma delas para o serviço:
+#
+#   - UPGRADE in-place: o dpkg chama `prerm upgrade <versão-nova>` ANTES de
+#     trocar os arquivos no disco — parar aqui deixaria o serviço fora do ar
+#     pela janela inteira do upgrade, por um binário que nem chegou a ser
+#     trocado ainda.
+#   - DECONFIGURE: o dpkg desmonta o pacote TEMPORARIAMENTE para satisfazer
+#     a instalação de outra dependência, e reconfigura em seguida com
+#     `postinst configure <MESMA versão>` — esse configure, com $2 cheio,
+#     cai no ramo de UPGRADE do postinst (religa, mas NUNCA chama enable).
+#     Parar/desabilitar aqui em deconfigure faria a unit perder o autostart
+#     em silêncio, sem ninguém para reabilitá-lo depois — o mesmo risco do
+#     upgrade, por outra porta.
+#
+# Quem religa depois de qualquer uma dessas transições é o
+# `postinst configure <versão-velha>` seguinte, via try-restart
+# (restart-after-upgrade) — este script NÃO toca no serviço fora de
+# `remove`, de propósito.
+set -e
+
+case "$1" in
+  remove)
+    if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+      systemctl stop nishidb.service || true
+      systemctl disable nishidb.service || true
+    fi
+    ;;
+  upgrade|failed-upgrade|deconfigure)
+    # Intencional: NÃO para nem desabilita o serviço aqui — ver cabeçalho.
+    ;;
+esac
+
+exit 0

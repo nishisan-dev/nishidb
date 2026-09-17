@@ -1,0 +1,73 @@
+# Unit do PACOTE .deb, instalada em /usr/lib/systemd/system/nishidb.service
+# pelo próprio pacote (scripts/build-deb.sh a copia daqui). O caminho é
+# usr/lib, não lib: em host com usrmerge /lib é symlink para /usr/lib, e o
+# dpkg 1.22+ (Debian trixie) recusa pacote que instale pelo caminho aliased.
+#
+# Esta é a unit do layout FHS (/usr/bin, /etc/nishidb, /var/lib/nishidb),
+# operada por `dpkg`/`apt` e `systemctl`. A unit de packaging/systemd/ é a do
+# PILOTO — layout de releases com symlink, operado por
+# scripts/nishidb-update.sh. As duas divergem só em caminhos e usuário; o
+# resto (KillSignal, TimeoutStopSec, Restart, LimitNOFILE, ausência de
+# MemoryMax, destino do log) é o MESMO ajuste, pelo mesmo motivo — replicado
+# aqui em vez de compartilhado porque as duas units empacotam de formas
+# diferentes (uma vai dentro do .deb, a outra é copiada manualmente pelo
+# operador).
+
+[Unit]
+Description=NishiDB — materialização e consulta de fluxos de eventos JSON
+Documentation=https://github.com/nishisan-dev/nishidb
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nishidb
+Group=nishidb
+WorkingDirectory=/var/lib/nishidb
+ExecStart=/usr/bin/nishidb server --config /etc/nishidb/nishidb.yaml --log-format json --pprof 127.0.0.1:9144
+
+# pprof em LOOPBACK, e o endereço é obrigatoriamente explícito: o código
+# binda onde mandarem, sem forçar 127.0.0.1. Exposto, ele entrega despejo de
+# heap e o /debug/pprof/profile vira vetor de negação de serviço. Mesma
+# razão da unit do piloto (débito 91).
+
+# SIGTERM é o encerramento gracioso do §51: drena a fila, checkpointa e
+# devolve o flock do dataset. Matar com SIGKILL não perde estado confirmado
+# (o replay do tail reconstrói), mas custa reprocessar desde o último
+# checkpoint — por isso o prazo é generoso.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+Restart=on-failure
+RestartSec=15
+
+# O storage usa mmap e um arquivo por segmento; com o backlog inteiro são
+# centenas de arquivos abertos, mais um bitmap denso por valor distinto.
+LimitNOFILE=65536
+
+# SEM MemoryMax de propósito: os índices são mmap, e tamanho de arquivo
+# mapeado não é RSS residente (§79). Um teto aqui produziria OOM kill no meio
+# de uma escrita por causa de páginas que o kernel pode descartar.
+
+SyslogIdentifier=nishidb
+
+# StateDirectory/LogsDirectory criam /var/lib/nishidb e /var/log/nishidb com
+# o dono certo (nishidb:nishidb) antes do ExecStart — o postinst não cria nem
+# ajusta permissão desses dois diretórios, para não duplicar o que o
+# systemd já decide aqui. *Mode fixa 0750: dado materializado e log não
+# precisam ser legíveis por outro usuário do host.
+StateDirectory=nishidb
+StateDirectoryMode=0750
+LogsDirectory=nishidb
+LogsDirectoryMode=0750
+
+# O log estruturado vai para ARQUIVO, e não para o journal — mesma decisão
+# da unit do piloto: o acompanhamento é por tail de arquivo, e o journald não
+# dá o caminho estável que um `tail -F` e um coletor esperam. StandardOutput
+# aceita UM valor: com `append:`, `journalctl -u nishidb` mostra só
+# Started/Stopped, nunca as linhas do processo.
+StandardOutput=append:/var/log/nishidb/service.log
+StandardError=append:/var/log/nishidb/service.log
+
+[Install]
+WantedBy=multi-user.target
