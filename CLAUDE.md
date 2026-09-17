@@ -264,6 +264,17 @@ passa verde com o mutante que recaptura o valor a cada passada. O teste
 precisa forçar uma transição em OUTRO grupo na mesma passada para expor o
 estado do primeiro.
 
+**Gate de recusa só prova a guarda PRÓPRIA se assevera a mensagem própria.** O
+ciclo do pacote `.deb` teve dois gates que passavam com a guarda removida:
+`--version v0.9.2` era recusado pelo próprio `dpkg-deb` e `--arch mips` pela
+checagem de `e_machine`, e o teste só procurava o valor rejeitado no stderr.
+Quando outra ferramenta ou outra guarda também recusa a entrada, o vermelho
+vem de graça e o gate não discrimina. Assevere a mensagem que a guarda em
+teste emite, e escolha o mutante que só ela pegaria. O mesmo vale para teste
+que só afirma ausência (script de mantenedor que "não chama nada" no upgrade):
+um script morto — `exit 0` no topo — o deixa verde. Pareie a ausência com uma
+asserção positiva no mesmo teste, e prove a vitalidade matando o script.
+
 ## Convenções de documentação
 
 - **`§NN`** cita seção de spec, e o marcador serve a MAIS DE UM documento: a
