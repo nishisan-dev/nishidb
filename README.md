@@ -192,11 +192,63 @@ go build -o nishidb ./cmd/nishidb
 Binário único, sem dependência externa em runtime. Requer Go 1.25+ e Linux
 (o storage usa `mmap` e `fallocate` diretamente).
 
-### Rodar como serviço (systemd)
+### Pacote .deb (amd64 e arm64)
 
-A unit está versionada em
-[`packaging/systemd/nishidb.service`](packaging/systemd/nishidb.service), para
-ser empacotada com a distribuição:
+Toda release publica um `.deb` por arquitetura
+(`nishidb_<versão>_amd64.deb`, `nishidb_<versão>_arm64.deb`), no layout FHS
+padrão de qualquer pacote Debian/Ubuntu — instale pelo próprio `dpkg`:
+
+```bash
+# baixe o .deb da release em https://github.com/nishisan-dev/nishidb/releases
+sudo dpkg -i nishidb_<versão>_<arch>.deb
+```
+
+O que o pacote entrega:
+
+| O quê | Onde |
+|---|---|
+| Binário | `/usr/bin/nishidb` |
+| Config (conffile) | `/etc/nishidb/nishidb.yaml` |
+| Datasets | `/etc/nishidb/datasets/` (vazio na instalação) |
+| Dado materializado | `/var/lib/nishidb` |
+| Log estruturado | `/var/log/nishidb/service.log` |
+| Unit systemd | `/usr/lib/systemd/system/nishidb.service` |
+
+O `postinst` cria o usuário de sistema `nishidb`. Na **instalação NOVA**
+(primeira vez que o pacote é configurado), habilita o autostart da unit —
+mas **não a inicia**: declare ao menos um dataset em
+`/etc/nishidb/datasets/` (formato na seção "Definição do dataset", abaixo)
+antes de subir, senão o servidor recusa a partida com "nenhum dataset em
+/etc/nishidb/datasets". Num **upgrade** de um pacote já instalado, o
+`postinst` religa o serviço sozinho (`try-restart`, só se já estiver
+ativo — não precisa reiniciar manualmente) e **não mexe no autostart**: se
+você desabilitou a unit de propósito entre uma versão e outra, o upgrade
+não a reabilita por trás. `/var/lib/nishidb` e `/var/log/nishidb` são
+criados e mantidos pelo próprio systemd (`StateDirectory`/`LogsDirectory`
+da unit, modo `0750`), não pelo `postinst`. Depois de declarar o primeiro
+dataset:
+
+```bash
+sudo systemctl start nishidb
+curl -s http://127.0.0.1:9142/v1/health
+```
+
+A config empacotada sobe sem TLS/autenticação, em loopback — veja
+"Segurança: autenticação e TLS" para ligar os dois antes de expor a porta
+além de `127.0.0.1`. `apt remove nishidb` preserva dado e config; só
+`apt purge nishidb` os remove, junto do usuário de sistema.
+
+Este pacote é independente do fluxo do piloto, abaixo: o piloto continua no
+layout de releases com symlink, operado por
+[`scripts/nishidb-update.sh`](scripts/nishidb-update.sh), com a unit em
+`packaging/systemd/nishidb.service` — o `.deb` usa a unit separada
+[`packaging/deb/nishidb.service`](packaging/deb/nishidb.service), que
+`scripts/build-deb.sh` empacota.
+
+### Rodar como serviço (systemd) — layout do piloto
+
+A unit do PILOTO está versionada em
+[`packaging/systemd/nishidb.service`](packaging/systemd/nishidb.service):
 
 ```bash
 sudo cp packaging/systemd/nishidb.service /lib/systemd/system/
