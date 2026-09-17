@@ -597,6 +597,11 @@ inglês correspondente.
 | coluna do valor (a coluna da tabela do contador, escolhida pela chave `value:` do alarme, cujo valor o disparo guarda; `total` por default) | value column / valueColumn | internal/schema, internal/alarm, internal/alarmtable |
 | valor de disparo (o valor da coluna do valor lido no payload que decidiu o disparo, congelado enquanto o alarme dispara) | firing value / firingValue | internal/alarm, internal/alarmtable |
 | instante do disparo (quando o disparo foi anunciado; distinto do `since`, que é quando a condição passou a valer) | fired at / firedAt | internal/alarm, internal/alarmtable |
+| pacote Debian (o `.deb` de cada arquitetura que a release publica ao lado do binário solto; layout FHS, distinto do layout de symlink do piloto) | Debian package / deb | scripts/build-deb.sh, packaging/deb, internal/gates |
+| empacotador (o `scripts/build-deb.sh`, que monta o pacote Debian com dpkg-deb a partir do binário que `make build` emitiu) | packager / build-deb | scripts/build-deb.sh, Makefile |
+| scripts de mantenedor (`postinst`, `prerm` e `postrm`, que o dpkg executa na instalação, no upgrade, na remoção e na purga) | maintainer scripts | packaging/deb, internal/gates |
+| arquivo de configuração do pacote (o `/etc/nishidb/nishidb.yaml` listado em `conffiles`, que o dpkg preserva quando o operador o editou e não entra no `md5sums`) | conffile | scripts/build-deb.sh, internal/gates |
+| dublê de comando (o executável de mentira que o sandbox de PATH dos gates põe no lugar de `systemctl`, `useradd` e afins, só registrando a chamada) | command stub / stubTools | internal/gates |
 
 ## 4. Como usar
 
