@@ -1,0 +1,74 @@
+#!/bin/sh
+# postinst do pacote nishidb.
+#
+# Em instalação NOVA (`configure` com $2 vazio): cria o usuário de sistema,
+# prepara /etc/nishidb/datasets e HABILITA o autostart da unit (não a
+# inicia agora — o operador ainda vai declarar datasets antes de subir com
+# dado de verdade).
+#
+# Em UPGRADE in-place (`configure <versão-antiga>`, $2 não vazio): o dpkg já
+# trocou /usr/bin/nishidb no disco antes de chegar aqui, mas o processo
+# antigo segue rodando com o binário antigo até alguém religar o serviço —
+# nem o dpkg nem o systemd fazem isso sozinhos. Este é o padrão debhelper
+# "restart-after-upgrade": religa SÓ o serviço (`try-restart`, no-op se a
+# unit não estiver ativa) — NUNCA chama enable aqui. Re-habilitar autostart
+# num upgrade desfaria a decisão de um operador que desligou a unit de
+# propósito entre uma versão e outra; enable é ato de primeira instalação,
+# não de toda reconfiguração.
+set -e
+
+case "$1" in
+  configure)
+    if ! getent passwd nishidb >/dev/null 2>&1; then
+      useradd --system --user-group --home-dir /var/lib/nishidb \
+        --shell /usr/sbin/nologin nishidb
+    fi
+
+    # /etc/nishidb/datasets não é gerenciado pelo systemd (StateDirectory/
+    # LogsDirectory da unit só cobrem /var/lib e /var/log). mkdir -p ANTES
+    # do chmod: um admin que tenha apagado o diretório por engano não pode
+    # deixar o pacote pela metade na próxima configuração — a chave
+    # `datasets.directory` do nishidb.yaml empacotado aponta pra cá, e sem
+    # o diretório o servidor nem chega a listar datasets. Dono continua
+    # root — é config, não estado.
+    mkdir -p /etc/nishidb/datasets
+    chmod 0755 /etc/nishidb/datasets
+
+    if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+      systemctl daemon-reload || true
+    fi
+
+    if [ -z "$2" ]; then
+      # Instalação NOVA: habilita o autostart, não inicia agora.
+      if [ -d /run/systemd/system ]; then
+        # deb-systemd-helper é o mecanismo debhelper padrão para isto — ele
+        # registra o estado em /var/lib/systemd/deb-systemd-helper-enabled/
+        # e respeita unit já mascarada pelo admin; cai para `systemctl
+        # enable` quando ele não existir (host sem debhelper instalado).
+        if command -v deb-systemd-helper >/dev/null 2>&1; then
+          deb-systemd-helper enable nishidb.service >/dev/null || true
+        elif command -v systemctl >/dev/null 2>&1; then
+          systemctl enable nishidb.service || true
+        fi
+      fi
+      echo "nishidb installed. Declare a dataset under /etc/nishidb/datasets/, then: systemctl start nishidb"
+    else
+      # Upgrade in-place: religa para carregar o binário novo. Tolera
+      # falha aqui de propósito — a unit pode estar mascarada/desabilitada
+      # pelo operador, e isso não é um erro deste script.
+      if [ -d /run/systemd/system ]; then
+        if command -v deb-systemd-invoke >/dev/null 2>&1; then
+          deb-systemd-invoke try-restart nishidb.service >/dev/null || true
+        elif command -v systemctl >/dev/null 2>&1; then
+          systemctl try-restart nishidb.service >/dev/null || true
+        fi
+      fi
+    fi
+    ;;
+  abort-upgrade|abort-remove|abort-deconfigure)
+    # dpkg desfazendo uma transição que falhou antes de chegar a
+    # reconfigurar o pacote — nada deste script rodou ainda, nada a desfazer.
+    ;;
+esac
+
+exit 0

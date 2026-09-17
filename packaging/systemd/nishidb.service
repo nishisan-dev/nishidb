@@ -1,8 +1,10 @@
 # Unit do NishiDB, para instalar em /lib/systemd/system/nishidb.service.
 #
-# Versionada aqui para ser empacotada com a distribuição (.deb) em vez de viver
-# só no host — a cópia do piloto divergia do repositório a cada ajuste, e
-# nenhum dos dois lados sabia qual estava certo.
+# Versionada aqui para não viver só no host — a cópia do piloto divergia do
+# repositório a cada ajuste, e nenhum dos dois lados sabia qual estava certo.
+# Esta é a unit do PILOTO (layout de releases com symlink); a unit do pacote
+# .deb — layout FHS, outro usuário, outros caminhos — está em
+# packaging/deb/nishidb.service, e scripts/build-deb.sh é quem a empacota.
 #
 # O layout que ela pressupõe é o de releases com symlink, que scripts/
 # nishidb-update.sh opera:

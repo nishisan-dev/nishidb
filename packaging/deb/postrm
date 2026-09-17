@@ -1,0 +1,34 @@
+#!/bin/sh
+# postrm do pacote nishidb.
+#
+# Em `remove`, só recarrega o systemd (a unit já saiu do disco). Em
+# `purge`, some com o estado, o log, a config e o usuário de sistema — dado
+# materializado é conteúdo de produção, e por isso só sai no purge
+# explícito, nunca num remove comum.
+#
+# Em UPGRADE in-place, o dpkg chama `old-postrm upgrade <versão-nova>` ANTES
+# de configurar o pacote novo (`old-prerm upgrade` → `old-postrm upgrade` →
+# `new-postinst configure <velha>`): nada aqui pode mexer em estado ou
+# config, que têm de sobreviver intactos até o postinst da versão nova
+# rodar e religar o serviço.
+set -e
+
+case "$1" in
+  remove)
+    if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+      systemctl daemon-reload || true
+    fi
+    ;;
+  purge)
+    rm -rf /var/lib/nishidb /var/log/nishidb /etc/nishidb
+    if getent passwd nishidb >/dev/null 2>&1; then
+      userdel nishidb || true
+    fi
+    ;;
+  upgrade|failed-upgrade|abort-install|abort-upgrade)
+    # Intencional: nada a fazer aqui — ver cabeçalho. Estado e config
+    # sobrevivem ao upgrade sem qualquer ação deste script.
+    ;;
+esac
+
+exit 0

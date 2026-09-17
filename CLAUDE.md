@@ -45,6 +45,9 @@ make test               # suíte completa, COM os gates de medida (allocs/vazão
 make test-race          # -race; os gates de medida viram SKIP. Complementar ao test — nenhum
                         # substitui o outro.
 make test-integration   # go test -race -tags integration ./...
+make build-deb          # empacota o .deb (depende de build; DEB_ARCH/DEB_VERSION
+                        # controlam arquitetura/versão — cross-compila com
+                        # GOARCH=arm64 CGO_ENABLED=0 DEB_ARCH=arm64 make build-deb)
 make lint               # golangci-lint v2.12.2 pinado, tetos zerados
 make bench-micro        # exige NISHIDB_BENCH_DIR apontando para DISCO REAL (fallocate de verdade,
                         # centenas de MiB por rodada; em tmpfs trava a máquina)
@@ -363,7 +366,18 @@ código, que é o ponto mais caro para descobrir.
 
 ## Release
 
-Release/tag é ato manual: `gh release create` ANTES da tag. `release.yml`
-dispara em `release: published`, roda `make build` (nunca um `go build` próprio —
-sem os ldflags o `scripts/nishidb-update.sh` dispara rollback espúrio no piloto)
-e anexa o binário.
+Release/tag é ato manual, mas o disparo é automático: um push de tag
+`v*.*.*` no branch dispara `release.yml` — não há `gh release create` antes
+da tag, é o workflow quem cria a release (rascunho primeiro, publicada só
+depois do upload confirmado). O job `validate` recusa tag fora do formato
+estrito antes de qualquer build; o job `anexa-binario` roda a suíte Go e o
+teste de `scripts/release.py`, roda `make test-jdbc` (driver contra o
+servidor real, antes de qualquer artefato de release), builda amd64 e arm64
+(`make build`, NUNCA um `go build` próprio — sem os ldflags o
+`scripts/nishidb-update.sh` dispara rollback espúrio no piloto) e empacota
+o `.deb` de cada arquitetura (`make build-deb`, que depende de `make build`
+pelo mesmo motivo — o binário que vai para `dist/` é copiado DEPOIS do
+`build-deb`, para ser o mesmo que foi para dentro do `.deb`), builda o
+driver JDBC, e por fim `scripts/release.py publish` cria/atualiza a release
+com `--generate-notes` e sobe os cinco assets (dois binários, dois `.deb`,
+o jar), mantendo as cinco últimas publicações sem apagar tag nenhuma.
