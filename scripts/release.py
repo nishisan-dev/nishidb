@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Publish both release assets, then retain five publications without deleting tags.
+"""Publish all five release assets, then retain five publications without deleting tags.
 
-Requires gh, GH_TOKEN and GH_REPO. All remote operations use argument arrays;
-release titles, tags and API responses are never evaluated as shell commands.
+The five assets are the two platform binaries (linux-amd64, linux-arm64),
+the two .deb packages (amd64, arm64) and the JDBC driver jar. Requires gh,
+GH_TOKEN and GH_REPO. All remote operations use argument arrays; release
+titles, tags and API responses are never evaluated as shell commands.
 """
 
 import argparse
@@ -60,7 +62,14 @@ def retain_five(repo, snapshot):
 
 def publish(repo, tag, directory):
     validate_tag(tag)
-    assets = [directory / f"nishidb-{tag}-linux-amd64", directory / "nishidb-jdbc.jar"]
+    version = tag[1:]  # tag is v<version>; the .deb file names carry <version> without the v.
+    assets = [
+        directory / f"nishidb-{tag}-linux-amd64",
+        directory / f"nishidb-{tag}-linux-arm64",
+        directory / f"nishidb_{version}_amd64.deb",
+        directory / f"nishidb_{version}_arm64.deb",
+        directory / "nishidb-jdbc.jar",
+    ]
     sizes = {asset.name: asset.stat().st_size for asset in assets}
     if not all(sizes.values()):
         raise ValueError("Release artifacts must not be empty")
