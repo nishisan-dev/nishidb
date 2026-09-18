@@ -380,6 +380,32 @@ func TestSpecSinteticaAtravessaAValidacaoComOSchemaReservado(t *testing.T) {
 	}
 }
 
+// TestDatasetNamedAlarmsIsRefused confere a colisão de ReservedAlarmsTable
+// pelo caminho do nome de dataset: a view de alarmes publicada sob
+// CountersNamespace usa o nome fixo `alarms` em todo dataset, e um dataset de
+// usuário chamado assim disputaria a mesma entrada no catálogo.
+func TestDatasetNamedAlarmsIsRefused(t *testing.T) {
+	_, err := Parse([]byte("version: 1\nname: "+ReservedAlarmsTable+"\nschemaName: telecom\n"+minimalMaterialization), BuiltinDefaults)
+	if err == nil || !strings.Contains(err.Error(), "reserved") || !strings.Contains(err.Error(), CountersNamespace) {
+		t.Fatalf("dataset chamado %q tem de ser recusado pelo motivo certo: %v", ReservedAlarmsTable, err)
+	}
+}
+
+// TestSyntheticSpecNamedAlarmsIsAccepted é a contrapartida: a própria view de
+// alarmes é uma spec SINTÉTICA com `name: alarms`, e ela tem de atravessar a
+// mesma validação que acaba de recusar um dataset de usuário com este nome —
+// a isenção é por SchemaName == SyntheticSchemaName, não por não existir
+// checagem nenhuma.
+func TestSyntheticSpecNamedAlarmsIsAccepted(t *testing.T) {
+	spec, err := Parse([]byte("version: 1\nname: "+ReservedAlarmsTable+"\nschemaName: "+SyntheticSchemaName+"\n"+minimalMaterialization), BuiltinDefaults)
+	if err != nil {
+		t.Fatalf("a spec sintética da view de alarmes tem de passar na validação: %v", err)
+	}
+	if spec.Name != ReservedAlarmsTable {
+		t.Fatalf("Name = %q, quer %q", spec.Name, ReservedAlarmsTable)
+	}
+}
+
 // As quatro grafias recusadas são as quatro formas de o schema deixar de ser
 // um identificador SQL simples e sem ambiguidade: o prefixo reservado aos
 // espaços de nome do produto, a maiúscula (que obrigaria o cliente a citar o

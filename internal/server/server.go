@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/alarm"
+	"github.com/nishisan-dev/nishidb/internal/alarmtable"
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/countermetrics"
@@ -34,7 +35,6 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/kafka"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
-	"github.com/nishisan-dev/nishidb/internal/metaalarm"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
 	"github.com/nishisan-dev/nishidb/internal/metausers"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
@@ -587,13 +587,13 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	}); err != nil {
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
-	// `_meta.alarms` entra pelo mesmo caminho, e SEMPRE — inclusive num
-	// dataset sem alarme declarado, onde ela responde a lista vazia: "este
-	// dataset não observa nada" é uma resposta.
+	// A view `<schema>.alarms` (atalho `_counters.alarms`) entra pelo mesmo
+	// caminho, e SEMPRE — inclusive num dataset sem alarme declarado, onde ela
+	// responde a lista vazia: "este dataset não observa nada" é uma resposta.
 	//
 	// Groups é closure sobre d, e não a fatia: o retrato TROCA a cada passada,
 	// e uma fatia capturada aqui descreveria para sempre o estado da subida.
-	if err := metaalarm.Register(s.eng, spec.Name, metaalarm.Source{
+	if err := alarmtable.Register(s.eng, spec.Name, alarmtable.Source{
 		Groups: d.activeAlarmGroups,
 	}); err != nil {
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
@@ -1363,8 +1363,8 @@ func emittedMetrics(cs schema.CounterSpec, src counters.MetricSource) ([]series.
 }
 
 // activeAlarmGroups é o retrato dos alarmes em observação deste dataset, para
-// a tabela `_meta.alarms`. nil quando o dataset não declara alarme — e a lista
-// vazia é a resposta certa, não um erro.
+// a view `<schema>.alarms` (atalho `_counters.alarms`). nil quando o dataset
+// não declara alarme — e a lista vazia é a resposta certa, não um erro.
 func (d *dataset) activeAlarmGroups() []alarm.ActiveGroup {
 	if d.alarms == nil {
 		return nil

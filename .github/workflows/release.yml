@@ -66,12 +66,28 @@ jobs:
         run: make test-jdbc
       - name: Build release artifacts
         run: |
-          make build
-          make build-jdbc
           mkdir -p dist
-          cp nishidb "dist/nishidb-${VERSION}-linux-amd64"
+          for arch in amd64 arm64; do
+            export CGO_ENABLED=0
+            export GOARCH="$arch"
+            export DEB_ARCH="$arch"
+            export DEB_VERSION="${VERSION#v}"
+            make build
+            make build-deb
+            cp nishidb "dist/nishidb-${VERSION}-linux-${arch}"
+          done
+          unset CGO_ENABLED GOARCH DEB_ARCH DEB_VERSION
+          make build-jdbc
           cp clients/jdbc/target/nishidb-jdbc.jar dist/nishidb-jdbc.jar
-      - name: Publish both assets and retain five releases
+          ls -l dist
+      - name: Verify packaged .deb assets
+        run: |
+          for deb in dist/*.deb; do
+            echo "== $deb =="
+            dpkg-deb --info "$deb"
+            dpkg-deb --contents "$deb"
+          done
+      - name: Publish all release assets and retain five releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

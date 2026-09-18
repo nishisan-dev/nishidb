@@ -388,8 +388,27 @@ func TestWorkflowDeCIFixaADistribuicaoDoJdk(t *testing.T) {
 	}
 }
 
-// Release publication deletes old releases, so its trigger, serialization and
-// test/build ordering are part of the release contract.
+// A publicação da release apaga releases antigas, então o gatilho, a
+// serialização e a ORDEM entre teste e build fazem parte do contrato da
+// release. `make build-deb` entrou na lista ordenada porque o job passou a
+// empacotar o .deb logo depois de buildar o binário de cada arquitetura — na
+// mesma passada do `make build`, antes de `make build-jdbc` —, e um
+// reordenamento que movesse o empacotamento para antes do build, ou para
+// depois da publicação, produziria um .deb com o binário errado ou uma
+// release sem .deb algum sem que nada no CI acusasse.
+//
+// `cp nishidb` entrou DEPOIS de `make build-deb` na lista por um motivo
+// mais sutil: `build-deb` DEPENDE do alvo `build` (Makefile), que é
+// PHONY e sempre recompila — com ldflags que carimbam a hora corrente
+// (buildinfo.Date). Copiar o binário para dist/ ANTES de `make build-deb`
+// pegaria o binário de UM build, e o `.deb` empacotaria o binário de
+// OUTRO — mesma release com dois `nishidb --version` divergentes (Date
+// diferente), e ninguém acusando. Copiar DEPOIS garante que dist/ e o
+// `.deb` carregam o MESMO binário: o que `build-deb` acabou de compilar
+// por último.
+//
+// (Comentário original em inglês, corrigido para PT-BR ao estender o gate —
+// a doutrina do projeto pede prosa em português em comentário/godoc.)
 func TestReleaseWorkflowPublishesOnlyValidatedTagsAfterTests(t *testing.T) {
 	var wf struct {
 		On map[string]struct {
@@ -433,7 +452,7 @@ func TestReleaseWorkflowPublishesOnlyValidatedTagsAfterTests(t *testing.T) {
 	}
 	script := jobScriptInFile(t, releaseWorkflowPath, "anexa-binario")
 	last := -1
-	for _, command := range []string{"go test ./...", "python3 scripts/release_test.py", "make test-jdbc", "make build\n", "make build-jdbc", "scripts/release.py publish"} {
+	for _, command := range []string{"go test ./...", "python3 scripts/release_test.py", "make test-jdbc", "make build\n", "make build-deb", "cp nishidb", "make build-jdbc", "scripts/release.py publish"} {
 		index := strings.Index(script, command)
 		if index <= last {
 			t.Fatalf("missing or out of order release step: %s", command)
@@ -451,5 +470,26 @@ func TestReleaseWorkflowPublishesOnlyValidatedTagsAfterTests(t *testing.T) {
 	}
 	if !checkout || !java {
 		t.Fatal("release must build the tagged commit with full history and the JDBC Java version")
+	}
+}
+
+// TestReleaseWorkflowBuildsBothArchitectures fixa que o job `anexa-binario`
+// builda amd64 E arm64 — sem isso a release publicaria só o binário e o .deb
+// da arquitetura do runner (amd64), e um usuário arm64 nunca teria asset
+// nenhum para instalar sem que nada no CI acusasse. A verificação roda sobre
+// o SCRIPT do job (jobScriptInFile, que decodifica o YAML como DADO via
+// yaml.v3), não sobre o arquivo bruto — mesma doutrina dos gates vizinhos
+// deste arquivo: um comentário mencionando "arm64" não pode satisfazer o
+// teste com o laço de fato removido.
+func TestReleaseWorkflowBuildsBothArchitectures(t *testing.T) {
+	script := jobScriptInFile(t, releaseWorkflowPath, "anexa-binario")
+	if !regexp.MustCompile(`(?m)for\s+arch\s+in\s+amd64\s+arm64\s*;\s*do`).MatchString(script) {
+		t.Error("o job `anexa-binario` não itera sobre `amd64 arm64` — a release pode ter voltado a publicar uma arquitetura só")
+	}
+	if !strings.Contains(script, `GOARCH="$arch"`) {
+		t.Error(`o job "anexa-binario" não builda com GOARCH="$arch" — o binário e o .deb de cada arquitetura podem ter parado de variar com o laço`)
+	}
+	if !strings.Contains(script, `DEB_ARCH="$arch"`) {
+		t.Error(`o job "anexa-binario" não passa DEB_ARCH="$arch" para "make build-deb" — o .deb pode ter parado de casar com o binário da mesma arquitetura`)
 	}
 }

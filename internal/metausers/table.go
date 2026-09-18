@@ -4,7 +4,7 @@
 //
 // Mora fora de `internal/users` e de `internal/query` porque precisa dos dois,
 // e nenhum dos dois pode passar a importar o outro — o mesmo argumento do
-// `internal/metaalarm`.
+// `internal/alarmtable`.
 //
 // A tabela é registrada como SÓ-ADMIN no motor: a lista de contas e de quem é
 // ADMIN é informação que um usuário READ não recebe, e a barreira mora no

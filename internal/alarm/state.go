@@ -109,6 +109,32 @@ type tracker struct {
 	// delete, nunca para atribuição. Com a marca aqui, só quem já tem estado é
 	// marcado, e o grupo saudável não custa nada.
 	seen uint64
+
+	// firedAt, firingValue e hasFiringValue descrevem a transição para
+	// phaseFiring — zero/false em phaseAbsent e em phasePending, porque
+	// nenhuma delas ainda aconteceu. São escritos SÓ nessa transição (ver
+	// Runner.decide) por dois motivos: custo — reler o payload a cada passada
+	// para todo grupo pending ou já disparado do inventário seria trabalho
+	// proporcional ao tamanho do contador, não ao problema, mesmo a leitura
+	// em si não alocando — e CONGELAMENTO — os dois campos descrevem O
+	// disparo, e um grupo disparado cuja condição oscila (continua valendo,
+	// mas o número muda) não pode anunciar, na próxima passada, um valor que
+	// não foi o que decidiu.
+	//
+	// firingValue é o valor da coluna declarada em `value:` (padrão `total`),
+	// lido do MESMO payload que decidiu o disparo — nunca uma releitura.
+	// hasFiringValue diz se a coluna estava presente nele: uma métrica de
+	// janela sem amostra ainda sai com false, nunca um zero que se pareceria
+	// com um valor observado.
+	//
+	// Não fazem parte do estado durável (alarms.state v2 não muda): um
+	// tracker resolvido é APAGADO do mapa (Runner.decide), nunca reaproveitado
+	// — e um alarme restaurado do disco volta a phasePending e passa de novo
+	// por decide ao completar o prazo, então firedAt e firingValue descrevem
+	// SEMPRE o disparo deste processo, nunca o que o processo anterior viu.
+	firedAt        time.Time
+	firingValue    float64
+	hasFiringValue bool
 }
 
 // restore instala o estado lido do arquivo durável.

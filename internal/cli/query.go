@@ -8,11 +8,11 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/nishisan-dev/nishidb/internal/alarmtable"
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/countermetrics"
 	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/logging"
-	"github.com/nishisan-dev/nishidb/internal/metaalarm"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/query"
@@ -214,14 +214,21 @@ func runQuery(args []string, amb Context) int {
 			return ExitUsageError
 		}
 	}
-	// `_meta.alarms` responde a lista VAZIA aqui, e é a resposta certa: este
+	// A view `alarms` responde a lista VAZIA aqui, e é a resposta certa: este
 	// processo não observa alarme nenhum — quem varre é o servidor, que tem o
-	// flock. Registrá-la de qualquer forma é o que faz o `SELECT` ter a mesma
-	// forma nos dois caminhos, em vez de falhar com "tabela desconhecida" só
-	// no CLI.
-	if err := metaalarm.Register(eng, *dataset, metaalarm.Source{}); err != nil {
-		notify(amb, "query: %v\n", err)
-		return ExitUsageError
+	// flock.
+	//
+	// Só no dataset DECLARADO, como `_meta.kafka`: a irmã não tem fonte
+	// própria, e registrar a view para ela publicaria `<irmã>.alarms` (e
+	// `_counters.alarms` sob a irmã) descrevendo um alarme que não é dela. É a
+	// ÚNICA garantia comum às duas fiações — o resto da árvore da irmã diverge
+	// entre CLI e servidor (débito 117, TestQueryLocalListaMetaCountersNaIrmaQueOServidorNaoLista
+	// e TestMetaTablesRespondeNaTabelaIrmaAbertaPeloServidor).
+	if spec != nil {
+		if err := alarmtable.Register(eng, *dataset, alarmtable.Source{}); err != nil {
+			notify(amb, "query: %v\n", err)
+			return ExitUsageError
+		}
 	}
 	// `_meta.tables` entra por último só por leitura: ela lista as tabelas
 	// acima, e as linhas são montadas a cada consulta, a partir do catálogo do

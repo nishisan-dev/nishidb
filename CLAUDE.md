@@ -45,6 +45,9 @@ make test               # suíte completa, COM os gates de medida (allocs/vazão
 make test-race          # -race; os gates de medida viram SKIP. Complementar ao test — nenhum
                         # substitui o outro.
 make test-integration   # go test -race -tags integration ./...
+make build-deb          # empacota o .deb (depende de build; DEB_ARCH/DEB_VERSION
+                        # controlam arquitetura/versão — cross-compila com
+                        # GOARCH=arm64 CGO_ENABLED=0 DEB_ARCH=arm64 make build-deb)
 make lint               # golangci-lint v2.12.2 pinado, tetos zerados
 make bench-micro        # exige NISHIDB_BENCH_DIR apontando para DISCO REAL (fallocate de verdade,
                         # centenas de MiB por rodada; em tmpfs trava a máquina)
@@ -246,6 +249,32 @@ aloca, então ele não provava nada sobre o gate. Use
 um mutante que aloque inequivocamente (`fmt.Sprintf`), senão o verde prova que o
 mutante é fraco, e não que o gate é forte.
 
+**O inverso também vale: gate de alocação não prova "só roda na transição".**
+No ciclo da view de alarmes, o godoc atribuía a guarda de uma leitura do payload
+a "evitar alocação", e o gate de alocação se declarava o protetor dela. Mas a
+leitura não alocava (`go build -gcflags=-m`: não escapa), e o mutante que a
+chamava em toda passada passou verde. Antes de afirmar que algo aloca, meça;
+e o que a guarda realmente protege (custo, valor congelado) pede teste que
+observe ISSO.
+
+**Estado publicado só em transição mascara teste de estado interno.** O retrato
+dos alarmes só é republicado numa passada com alguma transição: um teste que
+muda o valor de um grupo JÁ disparado e lê o retrato enxerga o retrato velho e
+passa verde com o mutante que recaptura o valor a cada passada. O teste
+precisa forçar uma transição em OUTRO grupo na mesma passada para expor o
+estado do primeiro.
+
+**Gate de recusa só prova a guarda PRÓPRIA se assevera a mensagem própria.** O
+ciclo do pacote `.deb` teve dois gates que passavam com a guarda removida:
+`--version v0.9.2` era recusado pelo próprio `dpkg-deb` e `--arch mips` pela
+checagem de `e_machine`, e o teste só procurava o valor rejeitado no stderr.
+Quando outra ferramenta ou outra guarda também recusa a entrada, o vermelho
+vem de graça e o gate não discrimina. Assevere a mensagem que a guarda em
+teste emite, e escolha o mutante que só ela pegaria. O mesmo vale para teste
+que só afirma ausência (script de mantenedor que "não chama nada" no upgrade):
+um script morto — `exit 0` no topo — o deixa verde. Pareie a ausência com uma
+asserção positiva no mesmo teste, e prove a vitalidade matando o script.
+
 ## Convenções de documentação
 
 - **`§NN`** cita seção de spec, e o marcador serve a MAIS DE UM documento: a
@@ -348,7 +377,18 @@ código, que é o ponto mais caro para descobrir.
 
 ## Release
 
-Release/tag é ato manual: `gh release create` ANTES da tag. `release.yml`
-dispara em `release: published`, roda `make build` (nunca um `go build` próprio —
-sem os ldflags o `scripts/nishidb-update.sh` dispara rollback espúrio no piloto)
-e anexa o binário.
+Release/tag é ato manual, mas o disparo é automático: um push de tag
+`v*.*.*` no branch dispara `release.yml` — não há `gh release create` antes
+da tag, é o workflow quem cria a release (rascunho primeiro, publicada só
+depois do upload confirmado). O job `validate` recusa tag fora do formato
+estrito antes de qualquer build; o job `anexa-binario` roda a suíte Go e o
+teste de `scripts/release.py`, roda `make test-jdbc` (driver contra o
+servidor real, antes de qualquer artefato de release), builda amd64 e arm64
+(`make build`, NUNCA um `go build` próprio — sem os ldflags o
+`scripts/nishidb-update.sh` dispara rollback espúrio no piloto) e empacota
+o `.deb` de cada arquitetura (`make build-deb`, que depende de `make build`
+pelo mesmo motivo — o binário que vai para `dist/` é copiado DEPOIS do
+`build-deb`, para ser o mesmo que foi para dentro do `.deb`), builda o
+driver JDBC, e por fim `scripts/release.py publish` cria/atualiza a release
+com `--generate-notes` e sobe os cinco assets (dois binários, dois `.deb`,
+o jar), mantendo as cinco últimas publicações sem apagar tag nenhuma.

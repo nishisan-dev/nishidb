@@ -92,7 +92,10 @@ class ReleaseTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
-        (self.directory / f"nishidb-{TAG}-linux-amd64").write_bytes(b"server")
+        (self.directory / f"nishidb-{TAG}-linux-amd64").write_bytes(b"server-amd64")
+        (self.directory / f"nishidb-{TAG}-linux-arm64").write_bytes(b"server-arm64")
+        (self.directory / f"nishidb_{TAG[1:]}_amd64.deb").write_bytes(b"deb-amd64")
+        (self.directory / f"nishidb_{TAG[1:]}_arm64.deb").write_bytes(b"deb-arm64")
         (self.directory / "nishidb-jdbc.jar").write_bytes(b"driver")
 
     def publish(self, github):
@@ -156,16 +159,30 @@ class ReleaseTest(unittest.TestCase):
                 self.assertEqual(published, github.records[0]["published_at"])
 
     def test_missing_or_empty_local_asset_never_calls_github(self):
-        driver = self.directory / "nishidb-jdbc.jar"
-        for missing in [False, True]:
-            if missing:
-                driver.unlink()
-            else:
-                driver.write_bytes(b"")
-            github = GitHub([])
-            with self.assertRaises((ValueError, FileNotFoundError)):
-                self.publish(github)
-            self.assertEqual([], github.calls)
+        # The five assets are the two platform binaries, the two .deb
+        # packages and the driver jar: missing ANY one of them — arm64 and
+        # each .deb included, not just the jar — must refuse before ever
+        # touching the network.
+        asset_names = [
+            f"nishidb-{TAG}-linux-amd64",
+            f"nishidb-{TAG}-linux-arm64",
+            f"nishidb_{TAG[1:]}_amd64.deb",
+            f"nishidb_{TAG[1:]}_arm64.deb",
+            "nishidb-jdbc.jar",
+        ]
+        for name in asset_names:
+            asset = self.directory / name
+            original = asset.read_bytes()
+            for missing in [False, True]:
+                if missing:
+                    asset.unlink()
+                else:
+                    asset.write_bytes(b"")
+                github = GitHub([])
+                with self.subTest(asset=name, missing=missing), self.assertRaises((ValueError, FileNotFoundError)):
+                    self.publish(github)
+                self.assertEqual([], github.calls)
+            asset.write_bytes(original)
 
     def test_remote_failures_never_reach_retention(self):
         for action in ["create", "upload", "edit"]:

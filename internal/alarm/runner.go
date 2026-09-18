@@ -69,8 +69,9 @@ type Runner struct {
 	pass uint64
 
 	// snapshot é o retrato dos grupos em observação, republicado a cada
-	// passada que muda algo. É como a tabela `_meta.alarms` lê o estado sem
-	// disputar o mapa de trackers com a varredura.
+	// passada que muda algo. É como a view `<schema>.alarms` (atalho de
+	// `_counters.alarms`) lê o estado sem disputar o mapa de trackers com a
+	// varredura.
 	snapshot snapshotHolder
 
 	// lastSweep é a duração da última passada, em nanossegundos, e
@@ -209,8 +210,8 @@ func New(defs []Definition, readers map[string]counters.Reader, opts Options) (*
 	}
 	r.restore()
 	// O retrato nasce com o que veio do disco: um processo que volta com
-	// alarmes em curso tem de responder a `_meta.alarms` antes da primeira
-	// passada, senão a tabela diria que não há nada acontecendo durante a
+	// alarmes em curso tem de responder a `<schema>.alarms` antes da primeira
+	// passada, senão a view diria que não há nada acontecendo durante a
 	// janela de subida — justamente quando alguém está olhando.
 	r.publishSnapshot()
 	return r, nil
@@ -416,6 +417,23 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 	if tr.phase != before {
 		r.dirty = true
 	}
+	if d.verdict == verdictFiring {
+		// A captura mora AQUI, na transição, e não em tracker.evaluate: é em
+		// decide que payload e now existem. Lê do MESMO payload que ra.eval
+		// acabou de avaliar — nunca do `total` que o sweep tem em mãos
+		// (rc.reader.Group vem de uma leitura diferente de
+		// counters/table.go, (*source).record, e pode divergir dele — ver
+		// firedValueOf). Só roda NESTA transição, e não em toda passada sobre
+		// um grupo já disparado ou ainda pending, por dois motivos: custo — um
+		// contador por PON tem milhares de grupos, e varrer o payload de cada
+		// um a cada passada para nada seria proporcional ao inventário, não ao
+		// problema — e CONGELAMENTO — firedAt e firingValue descrevem O
+		// disparo, e reler a cada passada faria um grupo disparado que oscila
+		// (a condição continua valendo, mas o número muda) anunciar um valor
+		// que não foi o que decidiu.
+		tr.firedAt = now
+		tr.firingValue, tr.hasFiringValue = firedValueOf(payload, ra.compiled)
+	}
 	if !tr.active() {
 		// delete com string(chave) também não copia a chave.
 		delete(ra.trackers, string(key))
@@ -437,10 +455,15 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 		ra.stats.firing.Add(-1)
 	}
 	e := r.event(rc, ra, key, text, total, payload, d, now)
-	// Só o DISPARO enriquece. O enriquecimento existe para dar contexto ao
-	// problema; na resolução o fato relevante é que ele passou, e executar as
-	// consultas outra vez dobraria o custo para contar isso.
+	// Só o DISPARO enriquece e carrega o valor capturado. O enriquecimento
+	// existe para dar contexto ao problema; na resolução o fato relevante é
+	// que ele passou, e executar as consultas outra vez dobraria o custo
+	// para contar isso — e o valor que decidiu o disparo não é um valor novo
+	// que a resolução esteja anunciando.
 	if d.verdict == verdictFiring {
+		e.ValueColumn = ra.compiled.valueColumn
+		e.FiringValue = tr.firingValue
+		e.HasFiringValue = tr.hasFiringValue
 		e.Enrichment = r.enrich(ra, key, text, total)
 	}
 	r.sink.Emit(e)
@@ -543,6 +566,54 @@ func (r *Runner) metricsOf(rc *runnerCounter, payload []byte) []Column {
 		}
 	}
 	return out
+}
+
+// firedValueOf lê, do MESMO payload que a decisão avaliou, o valor da coluna
+// declarada em `value:` de um alarme — inclusive quando ela é `total`: o
+// total que o sweep tem em mãos (rc.reader.Group, uma leitura por texto/refs)
+// vem de uma leitura diferente da que produziu ESTE payload
+// (internal/counters/table.go, (*source).record), e os dois podem divergir
+// entre a leitura da chave e a da linha. Ler do payload garante que o número
+// do evento é o número que decidiu.
+//
+// Coluna ausente do payload (amostra de métrica de janela ainda inexistente)
+// devolve hasValue=false — nunca um zero que se pareceria com um valor
+// observado.
+//
+// Só é chamada na transição para o disparo (ver Runner.decide), nunca sobre
+// um grupo pending sem transição nem sobre o caminho saudável — não por
+// alocação (o FieldReader é valor de pilha e não escapa; `go build
+// -gcflags=-m` confirma), mas por CUSTO: percorrer o payload inteiro a cada
+// passada, para milhares de grupos saudáveis ou pending do inventário, seria
+// trabalho proporcional ao tamanho do contador, não ao problema. A mesma
+// guarda também é o que CONGELA firedAt e firingValue no instante do disparo
+// — ver o comentário da chamada em Runner.decide.
+func firedValueOf(payload []byte, a *compiledAlarm) (value float64, hasValue bool) {
+	if payload == nil {
+		return 0, false
+	}
+	var fr encoding.FieldReader
+	fr.Reset(payload)
+	for id, v, ok := fr.Next(); ok; id, v, ok = fr.Next() {
+		if id == a.valueFieldID {
+			return floatOfFieldValue(a.valueType, v), true
+		}
+	}
+	return 0, false
+}
+
+// floatOfFieldValue converte o valor de uma coluna da linha do contador para
+// o float64 do firingValue: direto para types.TypeDouble (a média de uma
+// métrica de janela, que já chega como os 8 bytes do float64) e por conversão
+// de inteiro para types.TypeInt64 (total, min e max). A conversão perde
+// precisão acima de 2^53 — o maior inteiro que um float64 representa
+// exatamente —, limite aceito porque o dado nasce como contagem de linhas
+// materializadas, ordens de grandeza abaixo disso.
+func floatOfFieldValue(t types.FieldType, v types.Value) float64 {
+	if t == types.TypeDouble {
+		return math.Float64frombits(uint64(v.I64))
+	}
+	return float64(v.I64)
 }
 
 // groupKeyOf renderiza o texto do grupo a partir da chave canônica, pelo MESMO

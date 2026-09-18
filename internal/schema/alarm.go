@@ -62,6 +62,11 @@ type AlarmSpec struct {
 	// lida e recusada em branco: compilá-la contra a tabela do contador e
 	// decidir o que ela faz com um alarme em curso não é papel do schema.
 	QualifyWhen string
+	// Value é o nome da coluna de `_counters.<contador>` cujo valor, lido na
+	// linha que decidiu o disparo, vira o `firingValue` do alarme; vazio vale
+	// `total` (a compilação do alarme resolve o default e valida a coluna
+	// contra a tabela — aqui só a forma).
+	Value string
 	// SustainedFor é quanto tempo o When precisa valer antes de o alarme
 	// disparar. Sempre >= MinSustainedFor.
 	SustainedFor time.Duration
@@ -94,6 +99,7 @@ type rawAlarm struct {
 	Name         string
 	When         *string
 	QualifyWhen  *string
+	Value        *string
 	SustainedFor string
 	Enrich       []rawEnrich
 }
@@ -117,7 +123,7 @@ func alarmsFromNode(n *yaml.Node, keyPath string) ([]rawAlarm, error) {
 	out := make([]rawAlarm, 0, len(n.Content))
 	for i, item := range n.Content {
 		path := fmt.Sprintf("%s[%d]", keyPath, i)
-		keys, err := block(item, path, "name", "when", "qualifyWhen", "sustainedFor", "enrich")
+		keys, err := block(item, path, "name", "when", "qualifyWhen", "value", "sustainedFor", "enrich")
 		if err != nil {
 			return nil, err
 		}
@@ -135,6 +141,10 @@ func alarmsFromNode(n *yaml.Node, keyPath string) ([]rawAlarm, error) {
 				var q string
 				err = decodeInto(value, path+".qualifyWhen", &q)
 				r.QualifyWhen = &q
+			case "value":
+				var v string
+				err = decodeInto(value, path+".value", &v)
+				r.Value = &v
 			case "sustainedFor":
 				err = decodeInto(value, path+".sustainedFor", &r.SustainedFor)
 			case "enrich":
@@ -225,6 +235,16 @@ func validateAlarms(raws []rawAlarm, keyPath string) ([]AlarmSpec, error) {
 				return nil, specErrf("%s.qualifyWhen is blank — omit the key for an alarm without qualification", path)
 			}
 			a.QualifyWhen = q
+		}
+		// Ausente é "sem coluna declarada" (o firingValue usa `total`);
+		// presente em branco é recusado, pela mesma razão do qualifyWhen: quem
+		// escreveu a chave quis uma coluna, e a que ele escreveu não existe.
+		if r.Value != nil {
+			v := strings.TrimSpace(*r.Value)
+			if v == "" {
+				return nil, specErrf("%s.value is blank — omit the key to use the counter's total column", path)
+			}
+			a.Value = v
 		}
 		if r.SustainedFor == "" {
 			return nil, specErrf(

@@ -192,11 +192,63 @@ go build -o nishidb ./cmd/nishidb
 Binário único, sem dependência externa em runtime. Requer Go 1.25+ e Linux
 (o storage usa `mmap` e `fallocate` diretamente).
 
-### Rodar como serviço (systemd)
+### Pacote .deb (amd64 e arm64)
 
-A unit está versionada em
-[`packaging/systemd/nishidb.service`](packaging/systemd/nishidb.service), para
-ser empacotada com a distribuição:
+Toda release publica um `.deb` por arquitetura
+(`nishidb_<versão>_amd64.deb`, `nishidb_<versão>_arm64.deb`), no layout FHS
+padrão de qualquer pacote Debian/Ubuntu — instale pelo próprio `dpkg`:
+
+```bash
+# baixe o .deb da release em https://github.com/nishisan-dev/nishidb/releases
+sudo dpkg -i nishidb_<versão>_<arch>.deb
+```
+
+O que o pacote entrega:
+
+| O quê | Onde |
+|---|---|
+| Binário | `/usr/bin/nishidb` |
+| Config (conffile) | `/etc/nishidb/nishidb.yaml` |
+| Datasets | `/etc/nishidb/datasets/` (vazio na instalação) |
+| Dado materializado | `/var/lib/nishidb` |
+| Log estruturado | `/var/log/nishidb/service.log` |
+| Unit systemd | `/usr/lib/systemd/system/nishidb.service` |
+
+O `postinst` cria o usuário de sistema `nishidb`. Na **instalação NOVA**
+(primeira vez que o pacote é configurado), habilita o autostart da unit —
+mas **não a inicia**: declare ao menos um dataset em
+`/etc/nishidb/datasets/` (formato na seção "Definição do dataset", abaixo)
+antes de subir, senão o servidor recusa a partida com "nenhum dataset em
+/etc/nishidb/datasets". Num **upgrade** de um pacote já instalado, o
+`postinst` religa o serviço sozinho (`try-restart`, só se já estiver
+ativo — não precisa reiniciar manualmente) e **não mexe no autostart**: se
+você desabilitou a unit de propósito entre uma versão e outra, o upgrade
+não a reabilita por trás. `/var/lib/nishidb` e `/var/log/nishidb` são
+criados e mantidos pelo próprio systemd (`StateDirectory`/`LogsDirectory`
+da unit, modo `0750`), não pelo `postinst`. Depois de declarar o primeiro
+dataset:
+
+```bash
+sudo systemctl start nishidb
+curl -s http://127.0.0.1:9142/v1/health
+```
+
+A config empacotada sobe sem TLS/autenticação, em loopback — veja
+"Segurança: autenticação e TLS" para ligar os dois antes de expor a porta
+além de `127.0.0.1`. `apt remove nishidb` preserva dado e config; só
+`apt purge nishidb` os remove, junto do usuário de sistema.
+
+Este pacote é independente do fluxo do piloto, abaixo: o piloto continua no
+layout de releases com symlink, operado por
+[`scripts/nishidb-update.sh`](scripts/nishidb-update.sh), com a unit em
+`packaging/systemd/nishidb.service` — o `.deb` usa a unit separada
+[`packaging/deb/nishidb.service`](packaging/deb/nishidb.service), que
+`scripts/build-deb.sh` empacota.
+
+### Rodar como serviço (systemd) — layout do piloto
+
+A unit do PILOTO está versionada em
+[`packaging/systemd/nishidb.service`](packaging/systemd/nishidb.service):
 
 ```bash
 sudo cp packaging/systemd/nishidb.service /lib/systemd/system/
@@ -1669,6 +1721,14 @@ coluna errado **derruba a subida**, com a coluna nomeada.
 recusado (um alarme que nunca dispara não é um alarme). A varredura roda a cada
 `sustainedFor ÷ 4`.
 
+`value` é opcional e diz **qual número** o alarme sustentou: a coluna cujo
+valor, lido na mesma linha que decidiu o disparo, vira o `firingValue` do
+alarme. Ausente, vale `total`. Só são aceitas `total` e as colunas das métricas
+de janela do contador (`value: auth_5m_avg`); `groupKey`, as colunas do
+`groupBy` e nome inexistente derrubam a subida, com as colunas aceitas listadas.
+Mudar o `value` **não** zera o cronômetro: ele não muda a decisão, só o que se
+mostra dela.
+
 `qualifyWhen` é opcional: uma segunda condição, na mesma linguagem do `when`,
 que diz se o grupo é **elegível** ao alarme. O caso típico é citar uma métrica de
 janela (`qualifyWhen: "auth_24h_max > 10"`), para alarmar só a OLT que teve
@@ -1713,6 +1773,7 @@ O disparo é um `WARN` e a resolução um `INFO`:
 ```json
 {"event":"alarm.firing","counter":"autenticados_por_olt","alarm":"olt_down",
  "groupKey":"BR_SPOAM_OLT_14","total":42,"condition":"total < 100",
+ "valueColumn":"total","firingValue":42,
  "sustainedFor":"2m0s","since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:16:00.000Z",
  "olt":"BR_SPOAM_OLT_14",
  "enrichment":{"servicos_afetados":{"rows":[{"customerId":"cli-4471","ip":"10.0.0.9"}]}}}
@@ -1720,7 +1781,9 @@ O disparo é um `WARN` e a resolução um `INFO`:
  "total":812,"since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:25:00.000Z"}
 ```
 
-`at − since` é a duração do problema. O `reason` distingue **`condition_cleared`**
+`valueColumn` e `firingValue` só vêm no disparo; `firingValue` fica de fora
+quando a coluna não tinha amostra naquele instante. `at − since` é a duração do
+problema. O `reason` distingue **`condition_cleared`**
 (o problema passou) de **`group_retired`** (o grupo saiu do contador) — um
 equipamento removido do inventário não é um equipamento recuperado.
 
@@ -1732,15 +1795,43 @@ desconhecida, e um número grande é a resposta honesta. Mudar o `when`, o
 `qualifyWhen`, o `sustainedFor` ou a janela de uma métrica citada no YAML
 invalida o cronômetro salvo daquele alarme.
 
-Para inspecionar o que está em curso, sem ler log:
+Para inspecionar o que está em curso, sem ler log, consulte a **view de
+alarmes**. Ela deriva dos contadores e mora ao lado deles, no schema do
+dataset, sempre com o nome `alarms`:
 
 ```bash
-nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT groupKey, state, since FROM _meta.alarms ORDER BY since ASC"
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT groupKey, state, since, firedAt, valueColumn, firingValue FROM alarms ORDER BY since ASC"
 ```
 
-`state` é `firing` (já anunciado) ou `pending` (ainda contando o prazo).
-`qualifyCondition` é o `qualifyWhen` do alarme, e NULL quando ele não foi
-declarado.
+Na conexão por schema, `FROM alarms` basta. Fora dela, use a forma qualificada
+`<schemaName>.alarms` ou o atalho `_counters.alarms`, que vale "no dataset da
+requisição". No client Python, cuja conexão é por dataset, use uma dessas duas:
+`FROM alarms` seria lido como o nome de um dataset.
+
+| Coluna | Tipo | O que é |
+|---|---|---|
+| `id` | string | chave da linha: `contador\|alarme\|groupKey` |
+| `counter`, `alarm`, `groupKey` | string | qual alarme, sobre qual grupo |
+| `state` | string | `firing` (já anunciado) ou `pending` (ainda contando o prazo) |
+| `since` | timestamp | quando a condição passou a valer |
+| `firedAt` | timestamp | quando o disparo foi anunciado; NULL enquanto `pending` |
+| `condition`, `sustainedForMs` | string, int64 | a regra, porque quem consulta não tem o YAML à mão |
+| `qualifyCondition` | string | o `qualifyWhen`; NULL quando não foi declarado |
+| `valueColumn` | string | a coluna declarada em `value` (`total` por default) |
+| `firingValue` | double | o valor dessa coluna no disparo; NULL enquanto `pending` ou se a coluna não tinha amostra |
+
+`firingValue` fica **congelado** enquanto o alarme dispara: é o número que o
+disparo sustentou, não o de agora (esse está na tabela do contador). Colunas
+inteiras viram double, com perda de precisão só acima de 2^53. Depois de um
+reinício o alarme restaurado dispara de novo, e `firedAt`/`firingValue`
+descrevem esse novo disparo.
+
+Como a view existe em todo schema, `alarms` é **nome reservado**: contador,
+dataset ou tabela histórica com esse nome são recusados na subida.
+
+> **Mudança incompatível:** até a v0.9.1 esta tabela era `_meta.alarms`. Ela
+> não existe mais; troque por `alarms` (conexão por schema),
+> `<schemaName>.alarms` ou `_counters.alarms`.
 
 ### Emissão periódica: a série de cada grupo
 
@@ -1901,8 +1992,8 @@ SELECT partition, appliedOffset, highWatermark, lag, state FROM _meta.kafka ORDE
 ```
 
 `_meta.tables` lista **toda tabela consultável do dataset**, a começar por ela
-mesma: a base como `TABLE` no schema declarado no YAML, os contadores como
-`VIEW` no mesmo schema, e as tabelas de meta como `VIEW` no schema `_meta`. É a
+mesma: a base como `TABLE` no schema declarado no YAML, os contadores e a view
+`alarms` como `VIEW` no mesmo schema, e as tabelas de meta como `VIEW` no schema `_meta`. É a
 primeira pergunta de quem chega a um dataset que não conhece, e a resposta não
 exige rota HTTP nem suporte em cliente nenhum.
 
@@ -1947,10 +2038,12 @@ instante da última passada de amostragem. `sampledAt` é NULL antes da primeira
 passada, e sempre no `nishidb query --config`, que não amostra. Existe em todo
 dataset, vazia sem `metrics:` (ver "Métricas de janela do contador" acima).
 
-`_meta.alarms` lista os alarmes em observação, um por par (alarme, grupo): qual
-grupo, desde quando, e se o prazo já se cumpriu (ver "Alarme por condição
-sustentada" acima). Vazia num dataset sem alarme declarado — e no
-`nishidb query --config` ela é sempre vazia, porque quem varre é o servidor.
+A view `alarms` (atalho `_counters.alarms`) lista os alarmes em observação, um
+por par (alarme, grupo): qual grupo, desde quando, se o prazo já se cumpriu e
+com que valor disparou (ver "Alarme por condição sustentada" acima). Não mora
+no `_meta` porque descreve o dado, não o motor. Vazia num dataset sem alarme
+declarado — e no `nishidb query --config` ela é sempre vazia, porque quem varre
+é o servidor.
 
 `_meta.kafka` responde o estado da fonte Kafka do dataset, **uma linha por
 partição** — offset aplicado, offset durável do checkpoint, fim do log, lag,

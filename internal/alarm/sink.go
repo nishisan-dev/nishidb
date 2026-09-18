@@ -36,7 +36,7 @@ func NewLogSink(log *logging.Logger) Sink {
 }
 
 func (s *logSink) Emit(e Event) {
-	args := make([]any, 0, 28+2*len(e.Columns))
+	args := make([]any, 0, 32+2*len(e.Columns))
 	args = append(args,
 		"counter", e.Counter,
 		"alarm", e.Alarm,
@@ -54,6 +54,17 @@ func (s *logSink) Emit(e Event) {
 	// obrigaria quem consome a distinguir "não declarei" de "declarei vazio".
 	if e.QualifyCondition != "" {
 		args = append(args, "qualifyCondition", e.QualifyCondition)
+	}
+	// valueColumn e firingValue só saem no disparo — Event.ValueColumn fica
+	// vazio na resolução, de propósito (ver o godoc do campo): ela não
+	// descreve um valor novo. firingValue some sozinho quando a coluna não
+	// tinha amostra, pela mesma razão da lacuna abaixo: presente e zerado, ele
+	// diria "o valor era zero" para "ninguém observou o valor".
+	if e.ValueColumn != "" {
+		args = append(args, "valueColumn", e.ValueColumn)
+		if e.HasFiringValue {
+			args = append(args, "firingValue", e.FiringValue)
+		}
 	}
 	// A marca de restauro e a lacuna saem SÓ quando houve restauro: um campo
 	// sempre presente, com zero, diria "o processo não ficou fora" para todo

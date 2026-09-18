@@ -9,8 +9,8 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
 
-// ActiveGroup é um par (alarme, grupo) em observação, como a tabela
-// `_meta.alarms` o mostra.
+// ActiveGroup é um par (alarme, grupo) em observação, como a view
+// `<schema>.alarms` (atalho de `_counters.alarms`) o mostra.
 //
 // Pendente e disparado são estados DISTINTOS e os dois aparecem: "vai alarmar
 // em quarenta segundos" é informação que só existe antes do disparo, e é
@@ -29,6 +29,19 @@ type ActiveGroup struct {
 	SustainedFor time.Duration
 	// QualifyCondition é o `qualifyWhen` declarado; vazio quando não há.
 	QualifyCondition string
+	// ValueColumn é a coluna de `_counters.<contador>` cujo valor vira
+	// FiringValue ao disparar — `total` por padrão, ou a coluna declarada em
+	// `value:`. SEMPRE preenchida, pendente ou disparado: é propriedade da
+	// REGRA, como Condition, e não da transição.
+	ValueColumn string
+	// FiredAt é o instante da transição para o disparo; ZERO enquanto
+	// pending — não há disparo a descrever ainda.
+	FiredAt time.Time
+	// FiringValue é o valor de ValueColumn capturado NESSA transição, e
+	// HasFiringValue diz se ele existia no payload que decidiu o disparo. Os
+	// dois são zero/false enquanto pending, pela mesma razão de FiredAt.
+	FiringValue    float64
+	HasFiringValue bool
 }
 
 // ActiveGroups devolve o retrato publicado pela última passada.
@@ -63,8 +76,8 @@ func (r *Runner) publishSnapshot() {
 		}
 	}
 	if total == 0 {
-		var vazio []ActiveGroup
-		r.snapshot.Store(&vazio)
+		var empty []ActiveGroup
+		r.snapshot.Store(&empty)
 		return
 	}
 	out := make([]ActiveGroup, 0, total)
@@ -88,6 +101,10 @@ func (r *Runner) publishSnapshot() {
 					Condition:        ra.compiled.when,
 					SustainedFor:     ra.compiled.sustainedFor,
 					QualifyCondition: ra.compiled.qualifyWhen,
+					ValueColumn:      ra.compiled.valueColumn,
+					FiredAt:          tr.firedAt,
+					FiringValue:      tr.firingValue,
+					HasFiringValue:   tr.hasFiringValue,
 				})
 			}
 		}

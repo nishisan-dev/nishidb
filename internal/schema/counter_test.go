@@ -280,6 +280,20 @@ counters:
 	}
 }
 
+// TestCounterNamedAlarmsIsRefused é a terceira colisão de ReservedAlarmsTable:
+// a view de alarmes publicada sob CountersNamespace usa o nome fixo `alarms`
+// em todo dataset, e um contador com este nome disputaria a mesma entrada.
+func TestCounterNamedAlarmsIsRefused(t *testing.T) {
+	_, err := Parse([]byte(yamlWithCounters(`
+counters:
+  - name: alarms
+    groupBy: [olt]
+`)), BuiltinDefaults)
+	if err == nil || !strings.Contains(err.Error(), "reserved") || !strings.Contains(err.Error(), CountersNamespace) {
+		t.Fatalf("contador chamado %q tem de ser recusado pelo motivo certo: %v", ReservedAlarmsTable, err)
+	}
+}
+
 func TestOPrefixoReservadoNomeiaOsDoisNamespaces(t *testing.T) {
 	_, err := Parse([]byte(strings.Replace(yamlWithCounters(""), "name: servicos", "name: _counters", 1)), BuiltinDefaults)
 	if err == nil || !strings.Contains(err.Error(), "_counters") || !strings.Contains(err.Error(), "_meta") {

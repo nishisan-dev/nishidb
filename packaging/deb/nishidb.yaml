@@ -1,0 +1,22 @@
+# Config mínima empacotada pelo .deb em /etc/nishidb/nishidb.yaml
+# (DEBIAN/conffiles — o dpkg preserva edição local em upgrade).
+#
+# Sobe o servidor com ZERO datasets declarados (etc/nishidb/datasets/ vem
+# vazio no pacote): é o operador quem declara o primeiro dataset depois da
+# instalação. Sem TLS/autenticação — ver README "Segurança: autenticação e
+# TLS" para ligar os dois antes de expor a porta além de 127.0.0.1.
+version: 1
+
+storage:
+  # Dado materializado: segmentos append-only + índices mmap. StateDirectory
+  # da unit systemd garante o dono; o pacote não precisa.
+  path: /var/lib/nishidb
+
+datasets:
+  # Um arquivo .yaml por dataset. Vazio na instalação — README "Definição do
+  # dataset" tem o formato.
+  directory: /etc/nishidb/datasets
+
+server:
+  bind: 127.0.0.1
+  port: 9142

@@ -53,6 +53,10 @@ const (
 	CounterKeyColumn = "groupKey"
 	// CounterTotalColumn é a coluna com a contagem.
 	CounterTotalColumn = "total"
+	// ReservedAlarmsTable é o nome da view de alarmes publicada no schema de
+	// todo dataset, sob `_counters` — por isso nenhum contador, dataset ou
+	// tabela histórica pode usá-lo.
+	ReservedAlarmsTable = "alarms"
 )
 
 // CounterSpec é um contador validado, com defaults aplicados.
@@ -235,6 +239,15 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 				"%s.name %q é o nome da tabela histórica deste dataset (history.suffix): "+
 					"as duas moram no mesmo schema e seriam a mesma tabela no catálogo",
 				keyPath, r.Name)
+		}
+		// ReservedAlarmsTable é a mesma colisão pelo terceiro caminho: a view
+		// de alarmes publicada sob CountersNamespace usa este nome fixo em
+		// todo dataset, e um contador chamado `alarms` disputaria a mesma
+		// entrada no catálogo.
+		if r.Name == ReservedAlarmsTable {
+			return nil, specErrf(
+				"%s.name %q is reserved for the alarms view published under %s.%s",
+				keyPath, r.Name, CountersNamespace, ReservedAlarmsTable)
 		}
 		if j, dup := seenNames[r.Name]; dup {
 			return nil, specErrf("%s.name %q repetido (já declarado em counters[%d])", keyPath, r.Name, j)
