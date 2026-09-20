@@ -341,3 +341,30 @@ inventário, para quem precisa saber o que existe antes de escolher.
 
 Números medidos de desempenho não moram aqui — eles ficam nos `aceite-*.md`,
 com a bancada que os produziu.
+
+
+### Entrega de alarmes por webhook
+
+Rótulos `dataset` e `destination`; `dropped_total` acrescenta `reason`, de um
+conjunto fechado. As séries existem desde a abertura da fila e vêm da mesma
+estrutura de `datasets[].alarmDelivery` em `/v1/stats`. Contadores reiniciam
+com o processo; gauges de disco são recuperadas dos arquivos. Motivos de
+descarte: `memory_full`, `disk_full` (bytes ou quantidade), `event_too_large`,
+`encoding_error`, `destination_failed`, `closed`. Perdas numa queda antes da
+persistência não têm contagem exata recuperável.
+
+| Métrica | Tipo | Significado |
+|---|---|---|
+| `nishidb_alarm_delivery_memory_events` | gauge | eventos aguardando persistência, incluindo a gravação em curso |
+| `nishidb_alarm_delivery_memory_bytes` | gauge | bytes dos corpos no buffer, incluindo a gravação em curso |
+| `nishidb_alarm_delivery_disk_events` | gauge | eventos duráveis ainda sem remoção confirmada |
+| `nishidb_alarm_delivery_disk_bytes` | gauge | bytes dos arquivos publicados, incluindo cabeçalhos |
+| `nishidb_alarm_delivery_oldest_pending_seconds` | gauge | idade do evento durável mais antigo |
+| `nishidb_alarm_delivery_delivered_total` | counter | entregas HTTP 2xx com remoção durável confirmada |
+| `nishidb_alarm_delivery_failed_attempts_total` | counter | tentativas HTTP malsucedidas |
+| `nishidb_alarm_delivery_persistence_errors_total` | counter | erros locais que suspendem a fila |
+| `nishidb_alarm_delivery_dropped_total` | counter | novos eventos descartados, por motivo |
+| `nishidb_alarm_delivery_last_success_timestamp` | gauge | último sucesso confirmado, em segundos do epoch; zero antes do primeiro |
+| `nishidb_alarm_delivery_active` | gauge | 1 enquanto o remetente está ligado, inclusive durante retentativa |
+| `nishidb_alarm_delivery_failed` | gauge | 1 após falha local que exige intervenção e reinício |
+| `nishidb_alarm_delivery_paused` | gauge | 1 quando o destino foi removido e a fila foi preservada |

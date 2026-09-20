@@ -284,11 +284,13 @@ type EngineStats struct {
 
 // DatasetStats é o que TEM granularidade por dataset.
 type DatasetStats struct {
-	Name      string         `json:"name"`
-	Storage   StorageStats   `json:"storage"`
-	Schema    SchemaStats    `json:"schema"`
-	Query     RouteStats     `json:"query"`
-	Ingestion IngestionStats `json:"ingestion"`
+	// AlarmDelivery é omitido quando não existem rotas nem filas antigas.
+	AlarmDelivery []AlarmDeliveryStats `json:"alarmDelivery,omitempty"`
+	Name          string               `json:"name"`
+	Storage       StorageStats         `json:"storage"`
+	Schema        SchemaStats          `json:"schema"`
+	Query         RouteStats           `json:"query"`
+	Ingestion     IngestionStats       `json:"ingestion"`
 	// Materialization são os efeitos das políticas de escrita e das regras de
 	// TTL. Fica FORA de Ingestion pela mesma razão do SchemaStats: aquele
 	// bloco só é preenchido quando há consumidor Kafka, e estes números valem
@@ -621,4 +623,20 @@ type IngestionStats struct {
 	Discarded int64  `json:"discarded"`
 	Failed    int64  `json:"failed"`
 	Paused    string `json:"paused,omitempty"`
+}
+
+// AlarmDeliveryStats descreve uma fila de webhook, sem credenciais nem URL.
+type AlarmDeliveryStats struct {
+	Destination          string            `json:"destination"`
+	State                string            `json:"state"`
+	MemoryEvents         int               `json:"memoryEvents"`
+	MemoryBytes          int64             `json:"memoryBytes"`
+	DiskEvents           int               `json:"diskEvents"`
+	DiskBytes            int64             `json:"diskBytes"`
+	OldestPendingSeconds float64           `json:"oldestPendingSeconds"`
+	Delivered            uint64            `json:"delivered"`
+	FailedAttempts       uint64            `json:"failedAttempts"`
+	PersistenceErrors    uint64            `json:"persistenceErrors"`
+	Dropped              map[string]uint64 `json:"dropped"`
+	LastSuccessTimestamp float64           `json:"lastSuccessTimestamp"`
 }

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/alarm"
+	"github.com/nishisan-dev/nishidb/internal/alarmdelivery"
 	"github.com/nishisan-dev/nishidb/internal/alarmtable"
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/config"
@@ -70,6 +71,8 @@ type dataset struct {
 	// porque o enriquecimento de um evento precisa do motor de consulta — que
 	// o Store não conhece, e nem deve.
 	alarms *alarm.Runner
+	// delivery guarda as filas, inclusive pendências de alarmes removidos.
+	delivery *alarmdelivery.Manager
 
 	// emitters são as emissões periódicas declaradas nos contadores, uma por
 	// contador com bloco `emit`. Moram aqui pelo mesmo motivo dos alarmes: o
@@ -279,6 +282,9 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := alarmdelivery.Validate(cfg, specs); err != nil {
+		return nil, err
+	}
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("nenhum dataset em %s", cfg.Datasets.Directory)
 	}
@@ -391,6 +397,9 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		// mesma ordem do encerra(): seguram mmap próprio e leem os contadores
 		// pelo campo do Store.
 		s.forCounterMetrics()
+		if err := s.closeAlarmDelivery(); err != nil {
+			log.Warn("alarm.delivery.close", "failed to close alarm delivery on aborted startup", "error", err.Error())
+		}
 		if err := s.closeDatasets(); err != nil {
 			log.Warn("datasets.close", "falha ao fechar datasets na subida abortada", "erro", err.Error())
 		}
@@ -521,8 +530,9 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	}
 	// Daqui em diante, toda falha fecha o amostrador ANTES do Store: ele segura
 	// mmap próprio e lê os contadores pelo campo do Store, sem a guarda de vida.
+	var delivery *alarmdelivery.Manager
 	failing := func(err error) error {
-		return closingStore(st, closingSampler(sampler, err))
+		return closingStore(st, closingSampler(sampler, errors.Join(err, delivery.Close())))
 	}
 	// As tabelas `_counters.<nome>` entram no motor sob o dataset — e o
 	// namespace é declarado mesmo sem contador, para que a recusa nomeie o
@@ -550,9 +560,14 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	if err := openEmitters(d, spec, st, dir, sampler.MetricSource(), log); err != nil {
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
+	delivery, err = alarmdelivery.Open(dir, spec, s.cfg, log)
+	if err != nil {
+		return nil, failing(err)
+	}
+	d.delivery = delivery
 	if len(alarmes) > 0 {
 		runner, err := alarm.New(alarmes, readersOfCounters(st), alarm.Options{
-			Sink: alarm.NewLogSink(log),
+			Sink: delivery,
 			Log:  log,
 			// O motor é o MESMO que serve as consultas remotas. As de
 			// enriquecimento passam pelo mesmo binder, pelo mesmo planner e
@@ -698,6 +713,9 @@ func (s *Server) Run(ctx context.Context, pprofAddr string) error {
 	s.turnonExpiration(ctx)
 	s.turnonRetirementOfGroups(ctx)
 	s.turnonCounterMetrics(ctx)
+	for _, d := range s.datasets {
+		d.delivery.Start(ctx)
+	}
 	s.turnonAlarms(ctx)
 	s.turnonEmit(ctx)
 	s.turnonRetention(ctx)
@@ -1164,6 +1182,7 @@ func (s *Server) encerra() error {
 	// do Close — a ordem entre os dois laços é de frescor, e não de memória; a
 	// que não pode inverter é a de ambos antes do closeDatasets.)
 	s.forAlarms()
+	errs = append(errs, s.closeAlarmDelivery())
 	s.forEmitters()
 	s.forCounterMetrics()
 	errs = append(errs, s.closeDatasets())
@@ -1438,4 +1457,13 @@ func (s *Server) EnderecoLoopback() string {
 		return ""
 	}
 	return s.loopbackLn.Addr().String()
+}
+
+// closeAlarmDelivery drena os buffers antes de liberar os flocks dos datasets.
+func (s *Server) closeAlarmDelivery() error {
+	var errs []error
+	for _, d := range s.datasets {
+		errs = append(errs, d.delivery.Close())
+	}
+	return errors.Join(errs...)
 }

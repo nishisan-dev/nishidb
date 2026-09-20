@@ -1,6 +1,7 @@
 package alarm
 
 import (
+	"encoding/json"
 	"log/slog"
 
 	"github.com/nishisan-dev/nishidb/internal/logging"
@@ -35,9 +36,10 @@ func NewLogSink(log *logging.Logger) Sink {
 	return &logSink{log: log.Component("alarm")}
 }
 
-func (s *logSink) Emit(e Event) {
+func eventArguments(e Event) []any {
 	args := make([]any, 0, 32+2*len(e.Columns))
 	args = append(args,
+		"eventId", e.ID,
 		"counter", e.Counter,
 		"alarm", e.Alarm,
 		"groupKey", e.GroupKey,
@@ -84,14 +86,60 @@ func (s *logSink) Emit(e Event) {
 	if g, ok := enrichmentAttr(e.Enrichment); ok {
 		args = append(args, g)
 	}
+	return args
+}
+
+func (s *logSink) Emit(e Event) {
+	args := eventArguments(e)
+	log := s.log.Dataset(e.Dataset)
 	switch e.State {
 	case StateFiring:
-		s.log.Warn(eventFiring,
-			"a condição do alarme se sustentou pelo prazo declarado", args...)
+		log.Warn(eventFiring, "a condição do alarme se sustentou pelo prazo declarado", args...)
 	case StateResolved:
-		s.log.Info(eventResolved,
-			"o alarme deixou de valer", args...)
+		log.Info(eventResolved, "o alarme deixou de valer", args...)
 	}
+}
+
+// MarshalJSON usa a mesma projeção e a mesma supressão de chaves do log.
+// Os metadados do logger (nível, timestamp e prosa) não pertencem ao evento.
+func (e Event) MarshalJSON() ([]byte, error) {
+	fields := map[string]any{"dataset": e.Dataset}
+	switch e.State {
+	case StateFiring:
+		fields["event"] = eventFiring
+	case StateResolved:
+		fields["event"] = eventResolved
+	}
+	var record slog.Record
+	record.Add(eventArguments(e)...)
+	record.Attrs(func(a slog.Attr) bool { fields[a.Key] = eventAttributeValue(a); return true })
+	return json.Marshal(fields)
+}
+
+func eventAttributeValue(a slog.Attr) any {
+	if a.Value.Kind() == slog.KindGroup {
+		group := make(map[string]any)
+		for _, child := range a.Value.Group() {
+			group[child.Key] = eventAttributeValue(child)
+		}
+		return group
+	}
+	if logging.IsSensitiveKey(a.Key) {
+		return logging.Redacted
+	}
+	return a.Value.Any()
+}
+
+// ReservedEventKey impede JSON ambíguo nos alarmes que habilitam push.
+func ReservedEventKey(key string) bool {
+	switch key {
+	case "eventId", "event", "dataset", "counter", "alarm", "groupKey", "total",
+		"condition", "sustainedFor", "since", "at", "reason", "qualifyCondition",
+		"valueColumn", "firingValue", "restored", "downtimeMs", "metrics", "enrichment",
+		"timestamp", "level", "component", "message", "time", "msg":
+		return true
+	}
+	return false
 }
 
 // metricsAttr monta o grupo `metrics` com as colunas das métricas de janela.

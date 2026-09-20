@@ -142,12 +142,27 @@ partition "Fase dois: quem a varredura não viu" {
 }
 
 partition "Saída" {
+  :Atribui eventId único;
   :Evento no log estruturado
   (alarm.firing / alarm.resolved, com
   qualifyCondition quando declarada,
   valueColumn e firingValue no disparo, e as
   colunas de métrica no grupo `metrics`,
   lidas da MESMA linha que decidiu);
+  if (notify seleciona destinos?) then (sim)
+    :Admite corpo JSON imutável no buffer
+    de cada destino, sem I/O de entrega;
+    note right
+      Buffer ou disco reservado cheio:
+      descarta o novo e conta o motivo.
+      Gravador independente publica arquivo
+      (temp -> fsync -> rename -> dirsync).
+      Só então remetente faz POST.
+      HTTP 2xx -> remove arquivo -> dirsync.
+      Outros resultados -> retenta em FIFO.
+      Crash após 2xx pode repetir eventId.
+    end note
+  endif
   if (houve transição?) then (sim)
     :republica o retrato da view `alarms`
     (com qualifyCondition, firedAt e firingValue);

@@ -1787,6 +1787,15 @@ problema. O `reason` distingue **`condition_cleared`**
 (o problema passou) de **`group_retired`** (o grupo saiu do contador) — um
 equipamento removido do inventário não é um equipamento recuperado.
 
+Cada emissão também carrega `eventId`, compartilhado pelo log e pelos destinos
+HTTP. Para receber os eventos por webhook, declare um destino em
+`alarmDelivery.webhooks` no arquivo global e `notify: [nome_do_destino]` no
+alarme. A entrega usa fila durável por dataset/destino, retenta até HTTP 2xx e
+preserva o corpo e o identificador nas retentativas. O receptor deduplica pelo
+`eventId`. Eventos ainda em memória podem ser perdidos em uma queda, e fila
+cheia descarta novos eventos com métrica. Veja [configuração, limites e
+recuperação dos webhooks](docs/operacao-webhook.md).
+
 O cronômetro **sobrevive ao reinício**: o "desde quando" é gravado em
 `checkpoint/alarms.state`, e um alarme restaurado dispara com `"restored":true` e
 `"downtimeMs"`. Num encerramento gracioso esse número é o tempo de parada; num

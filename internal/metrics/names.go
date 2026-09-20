@@ -736,3 +736,21 @@ const (
 	// pé.
 	MetSeriesEmitting = "nishidb_series_emitting"
 )
+
+// Entrega de alarmes: os labels são destinos declarados e motivos fechados.
+const (
+	LabelDestination                       = "destination"
+	MetAlarmDeliveryMemoryEvents           = "nishidb_alarm_delivery_memory_events"
+	MetAlarmDeliveryMemoryBytes            = "nishidb_alarm_delivery_memory_bytes"
+	MetAlarmDeliveryDiskEvents             = "nishidb_alarm_delivery_disk_events"
+	MetAlarmDeliveryDiskBytes              = "nishidb_alarm_delivery_disk_bytes"
+	MetAlarmDeliveryOldestPendingSeconds   = "nishidb_alarm_delivery_oldest_pending_seconds"
+	MetAlarmDeliveryDeliveredTotal         = "nishidb_alarm_delivery_delivered_total"
+	MetAlarmDeliveryFailedAttemptsTotal    = "nishidb_alarm_delivery_failed_attempts_total"
+	MetAlarmDeliveryPersistenceErrorsTotal = "nishidb_alarm_delivery_persistence_errors_total"
+	MetAlarmDeliveryDroppedTotal           = "nishidb_alarm_delivery_dropped_total"
+	MetAlarmDeliveryLastSuccessTimestamp   = "nishidb_alarm_delivery_last_success_timestamp"
+	MetAlarmDeliveryActive                 = "nishidb_alarm_delivery_active"
+	MetAlarmDeliveryFailed                 = "nishidb_alarm_delivery_failed"
+	MetAlarmDeliveryPaused                 = "nishidb_alarm_delivery_paused"
+)

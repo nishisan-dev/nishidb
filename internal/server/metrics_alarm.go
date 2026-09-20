@@ -21,6 +21,9 @@ func registerMetricsOfAlarms(reg *metrics.Registry, s *Server) {
 	reg.Register(metrics.CollectorFunc(func() []metrics.Sample {
 		out := make([]metrics.Sample, 0, len(s.datasets)*8)
 		for _, d := range s.datasets {
+			for _, delivery := range d.delivery.Stats() {
+				out = append(out, samplesOfAlarmDelivery(d.nome, delivery)...)
+			}
 			if d.alarms != nil {
 				out = append(out, samplesOfAlarms(d.nome, d.alarms)...)
 			}

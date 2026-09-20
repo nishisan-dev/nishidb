@@ -998,3 +998,15 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
   `ByKey`, e as duas recebem `[]byte`: trocá-las compila. Vira `KeyText`; o
   arquivo `textkey.go`, que é o que a linha `chave-texto → textkey` nomeia,
   fica como está.
+
+
+### Entrega de alarmes
+
+| Termo na prosa | Identificador / contrato | Pacote |
+|---|---|---|
+| destino nomeado de webhook | webhook / `alarmDelivery.webhooks` | internal/config |
+| destinos selecionados pelo alarme | `notify` / Notify | internal/schema |
+| identidade da emissão | `eventId` / Event.ID | internal/alarm |
+| fila durável de entrega | delivery queue / Manager | internal/alarmdelivery |
+| retrato da entrega por destino | AlarmDeliveryStats | internal/protocol |
+| descarte de evento novo | dropped / `alarm.delivery.dropped` | internal/alarmdelivery |

@@ -42,7 +42,7 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 	// Os laços que têm de parar antes, e o que os para. Um laço novo que more
 	// no servidor entra nesta lista — e o gate falha enquanto ele não estiver
 	// no encerra(), que é o ponto.
-	paradas := []string{"forAlarms", "forEmitters", "forCounterMetrics"}
+	paradas := []string{"forAlarms", "forEmitters", "forCounterMetrics", "closeAlarmDelivery"}
 	const quiesce = "closeDatasets"
 
 	pos := map[string]int{}
@@ -68,6 +68,9 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 	posQuiesce, ok := pos[quiesce]
 	if !ok {
 		t.Fatalf("encerra() não chama %s(): este gate precisa dele para comparar", quiesce)
+	}
+	if pos["forAlarms"] >= pos["closeAlarmDelivery"] {
+		t.Error("as filas devem fechar depois de parar os alarmes")
 	}
 	for _, parada := range paradas {
 		p, ok := pos[parada]

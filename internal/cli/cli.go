@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/nishisan-dev/nishidb/internal/alarmdelivery"
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/counters"
@@ -262,6 +263,10 @@ func errorCode(err error) int {
 		// gravação falhou depois de começar a mexer no disco, e só reabrir a
 		// tabela (reiniciar o processo) devolve a gestão.
 		return ExitWriter
+	case errors.Is(err, alarmdelivery.ErrQueue):
+		return ExitDataset
+	case errors.Is(err, nishiconfig.ErrAlarmDelivery):
+		return ExitUsageError
 	case errors.Is(err, users.ErrUsersLocked), errors.Is(err, users.ErrCorruptUsers):
 		// A tabela de usuários travada pelo servidor no ar, ou ilegível, é a
 		// mesma decisão do dataset travado ou corrompido: o problema não está

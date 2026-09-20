@@ -53,6 +53,8 @@ const MinSustainedFor = 10 * time.Second
 // AlarmSpec é um alarme validado de um contador.
 type AlarmSpec struct {
 	Name string
+	// Notify referencia os destinos globais; vazio mantém apenas o log.
+	Notify []string
 	// When é a condição normalizada (espaços colapsados) sobre as colunas da
 	// tabela do contador. Nunca vazia.
 	When string
@@ -96,6 +98,7 @@ type EnrichSpec struct {
 
 // rawAlarm é um item do bloco como lido do YAML, antes da validação.
 type rawAlarm struct {
+	Notify       []string
 	Name         string
 	When         *string
 	QualifyWhen  *string
@@ -123,7 +126,7 @@ func alarmsFromNode(n *yaml.Node, keyPath string) ([]rawAlarm, error) {
 	out := make([]rawAlarm, 0, len(n.Content))
 	for i, item := range n.Content {
 		path := fmt.Sprintf("%s[%d]", keyPath, i)
-		keys, err := block(item, path, "name", "when", "qualifyWhen", "value", "sustainedFor", "enrich")
+		keys, err := block(item, path, "name", "when", "qualifyWhen", "value", "sustainedFor", "enrich", "notify")
 		if err != nil {
 			return nil, err
 		}
@@ -147,6 +150,8 @@ func alarmsFromNode(n *yaml.Node, keyPath string) ([]rawAlarm, error) {
 				r.Value = &v
 			case "sustainedFor":
 				err = decodeInto(value, path+".sustainedFor", &r.SustainedFor)
+			case "notify":
+				err = decodeInto(value, path+".notify", &r.Notify)
 			case "enrich":
 				r.Enrich, err = enrichFromNode(value, path+".enrich")
 			}
@@ -217,7 +222,14 @@ func validateAlarms(raws []rawAlarm, keyPath string) ([]AlarmSpec, error) {
 			return nil, specErrf("%s.name %q repetido (já declarado em %s[%d])", path, r.Name, keyPath, j)
 		}
 		seenNames[r.Name] = i
-		a := AlarmSpec{Name: r.Name}
+		a := AlarmSpec{Name: r.Name, Notify: r.Notify}
+		destinations := make(map[string]bool)
+		for _, name := range r.Notify {
+			if !isIdentName(name) || destinations[name] {
+				return nil, specErrf("%s.notify: invalid or duplicate destination %q", path, name)
+			}
+			destinations[name] = true
+		}
 		if r.When == nil {
 			return nil, specErrf("%s.when obrigatório (a condição que dispara o alarme)", path)
 		}

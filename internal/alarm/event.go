@@ -40,11 +40,13 @@ type Column struct {
 
 // Event é o que sai quando um alarme dispara ou resolve.
 //
-// É UM tipo, e não um por canal: o log é o único destino hoje, e quando um
-// tópico ou um webhook entrarem eles publicam ESTE evento. Um segundo formato
+// É UM tipo, e não um por canal: log e webhook publicam ESTE evento.
+// Um segundo formato
 // por canal divergiria do primeiro na primeira correção, e quem consome os dois
 // veria dois fatos onde há um.
 type Event struct {
+	// ID identifica esta emissão, preservado em todos os canais e tentativas.
+	ID      string
 	Dataset string
 	Counter string
 	Alarm   string
@@ -124,9 +126,8 @@ type Event struct {
 
 // Sink é para onde os eventos vão.
 //
-// Interface de um método, com uma implementação (o log) neste ciclo. É o ponto
-// de extensão para tópico e webhook: eles entram como outro Sink, sobre o
-// MESMO Event.
+// Log e entrega HTTP implementam esta interface sobre o MESMO Event.
+// O envio externo admite em memória; sua persistência e rede rodam fora da passada.
 type Sink interface {
 	Emit(Event)
 }

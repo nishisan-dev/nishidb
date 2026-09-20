@@ -34,6 +34,7 @@ import (
 // 11: continuam opcionais, mas quando presentes têm forma validada — ver
 // TLSSpec/AuthenticationSpec/LoopbackSpec, em config_security.go.
 type Config struct {
+	AlarmDelivery AlarmDeliverySpec `yaml:"alarmDelivery"`
 	// Version é a versão do PRÓPRIO arquivo (§78). Era aceita e nunca lida:
 	// no dia em que existisse um `version: 2` global, este binário leria o
 	// arquivo novo como se fosse v1, silenciosamente.
@@ -430,6 +431,9 @@ func Load(path string) (*Config, error) {
 		c.Server.Bind = defaultServerBind
 	}
 	if err := validateServerSecurity(&c, &root, path); err != nil {
+		return nil, err
+	}
+	if err := c.validateAlarmDelivery(&root); err != nil {
 		return nil, err
 	}
 	return &c, nil

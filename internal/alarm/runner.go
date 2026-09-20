@@ -1,6 +1,7 @@
 package alarm
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"math"
@@ -473,7 +474,7 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 func (r *Runner) event(rc *runnerCounter, ra *runnerAlarm, key, text []byte, total int64,
 	payload []byte, d decision, now time.Time) Event {
 	e := Event{
-		Dataset:          rc.def.Dataset,
+		ID: fmt.Sprintf("%x", randomEventID()), Dataset: rc.def.Dataset,
 		Counter:          rc.def.Counter,
 		Alarm:            ra.compiled.name,
 		GroupKey:         string(text),
@@ -716,4 +717,11 @@ func textOfValue(v types.Value) string {
 		// renderização antes.
 		return ""
 	}
+}
+
+// randomEventID gera a identidade somente quando existe evento a emitir.
+func randomEventID() [16]byte {
+	var id [16]byte
+	_, _ = rand.Read(id[:]) // crypto/rand.Read não retorna erro no Go suportado.
+	return id
 }
