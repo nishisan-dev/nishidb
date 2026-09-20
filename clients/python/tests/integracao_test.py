@@ -15,6 +15,7 @@ integração executado.
 from __future__ import annotations
 
 import os
+import time as clock
 import tracemalloc
 import unittest
 from datetime import datetime, time, timezone
@@ -158,7 +159,10 @@ class Metadados(unittest.TestCase):
         self.assertIn(("_counters", "rows_by_text"), tabelas)
 
         with self.cx.cursor() as cur:
-            cur.execute("SELECT id, counter, name, columns FROM _meta.counter_metrics")
+            cur.execute(
+                "SELECT id, counter, name, columns FROM _meta.counter_metrics "
+                "WHERE counter = 'rows_by_text'"
+            )
             linhas = cur.fetchall()
         self.assertEqual(len(linhas), 1, "esperava exatamente a métrica do corpus")
         self.assertEqual(linhas[0]["id"], "rows_by_text|rows_5m")
@@ -178,6 +182,29 @@ class Metadados(unittest.TestCase):
             for nome in nomes:
                 valor = row[nome]
                 self.assertTrue(valor is None or isinstance(valor, float), f"{nome} = {valor!r}")
+
+    def test_event_rates_and_disabled_total_reach_the_client(self):
+        deadline = clock.monotonic() + 10
+        with self.cx.cursor() as cur:
+            while True:
+                cur.execute(
+                    "SELECT total, event_rate, rates_1m_avg, rates_1m_min, rates_1m_max "
+                    "FROM _counters.events_by_text WHERE texto = ?",
+                    ('linha com "aspas" e \\barra',),
+                )
+                self.assertEqual([d[1] for d in cur.description], ["BIGINT"] + ["DOUBLE"] * 4)
+                self.assertTrue(cur.description[0][6])
+                row = cur.fetchone()
+                self.assertIsNotNone(row)
+                self.assertIsNone(row["total"])
+                self.assertAlmostEqual(row["event_rate"], 1 / 3600)
+                if row["rates_1m_min"] is not None:
+                    break
+                self.assertLess(clock.monotonic(), deadline, "o amostrador não publicou a taxa")
+                clock.sleep(0.1)
+            for name in ("rates_1m_avg", "rates_1m_min", "rates_1m_max"):
+                self.assertIsInstance(row[name], float)
+                self.assertAlmostEqual(row[name], 1 / 3600)
 
     def test_a_chave_e_a_sequence_sao_nao_nulaveis(self):
         cur = self.cx.cursor()

@@ -1552,8 +1552,8 @@ molde escolhe o separador dele e pode reordenar); `condition`
 `refused` e `orphans` são os mesmos números do `nishidb counters`;
 `auditDivergent` e `auditAt` são NULL até a primeira auditoria conclusiva
 desde a subida — zero divergências e "nunca auditado" são afirmações
-diferentes. `rows` e `total`, ao contrário desses dois, nunca são NULL: zero
-linhas é um fato medido.
+diferentes. `rows` nunca é NULL. `total` é NULL com `total: false`; quando habilitado,
+zero linhas é um fato medido.
 
 ```bash
 nishidb counters --server 127.0.0.1:9142 --dataset servicos --audit
@@ -1585,6 +1585,103 @@ produtor precisa publicar **com chave** (senão eventos da mesma entidade caem
 em partições diferentes e chegam fora de ordem) e com um **número de sequência
 inteiro no primeiro nível** do documento, para que o stale check descarte o
 evento atrasado. Sem isso o contador está certo sobre um estado errado.
+
+### Taxas de eventos do contador
+
+`measures` conta os eventos **aceitos e aplicados** cujo estado materializado
+resultante satisfaz o `where`, por grupo. Cada atualização conta uma ocorrência,
+inclusive quando a entidade, o grupo e a condição permanecem iguais. Um patch
+que omite os campos do grupo usa o estado após o merge. Eventos descartados pelo
+controle de sequência, inválidos, sem grupo ou fora da condição não contam.
+Expiração, compactação e reconstrução administrativa também não são eventos.
+
+```yaml
+counters:
+  - name: stops_by_olt
+    groupBy: [olt]
+    where: status = 'Stop'
+    total: false
+    measures:
+      - name: stop_rate
+        window: 1m
+        unit: second
+    metrics:
+      - name: stops_24h
+        type: window
+        source: stop_rate
+        window: 24h
+        aggregates: [avg, min, max]
+    alarms:
+      - name: stop_burst
+        when: stop_rate > 25
+        value: stop_rate
+        sustainedFor: 30s
+    emit:
+      every: 10s
+      target: [file, metricas_olt]
+```
+
+O destino `metricas_olt` deve existir em `seriesDelivery.kafka`, conforme o
+[guia de emissão Kafka](docs/operacao-series-kafka.md). `emit` e `metrics` são
+opcionais: a medida pode ser consultada diretamente em
+`_counters.stops_by_olt`, sem amostrador ou emissão.
+
+A taxa é `ocorrências na janela × duração da unidade ÷ duração da janela`.
+Assim, 1.800 eventos em `1m`, com `unit: second`, produzem `30.0`. O divisor é
+sempre a janela inteira, inclusive durante o aquecimento. Sem novos eventos,
+a medida cai a zero quando os baldes expiram; não fica congelada no último
+valor. Cada janela tem 60 baldes: o atual e os 59 anteriores. A resolução é
+`window / 60`, e um evento sai ao vencer seu balde, podendo sair até um balde
+antes de completar a duração exata da janela.
+
+São aceitas de 1 a 8 medidas por contador. `name` segue
+`[a-z_][a-z0-9_]*`, sem colisão com colunas, métricas ou alarmes do contador;
+`window` vai de `1m` a `30d`, em múltiplos de `1m`; `unit` aceita `second`,
+`minute`, `hour` e `day`. Nomes desconhecidos em `source` são recusados.
+
+`total` é `true` por padrão. Com `false`, o contador mantém grupos e referências
+às entidades, mas não mantém o total por grupo. A coluna `total` continua
+existindo, com tipo `BIGINT`, e sai como **NULL** no SQL, em `_meta.counters`,
+na API administrativa, nos alarmes e nas linhas emitidas. A CLI mostra `NULL`;
+a série Prometheus de total desse contador é omitida. `source: total` exige
+que o total esteja habilitado; `total: false` exige ao menos uma medida.
+A auditoria continua conferindo grupos e referências, sem recalcular taxas a
+partir do estado atual das entidades.
+
+Medidas são `DOUBLE`. Uma métrica de janela que usa uma medida como `source`
+publica `avg`, `min` e `max` como `DOUBLE`; os agregados sobre `total` mantêm
+os tipos anteriores. Ela amostra os valores observados da taxa, incluindo
+zeros, na cadência de 1 a 10 segundos definida pela menor janela envolvida.
+Essa média é das amostras da taxa; não recalcula uma taxa sobre os eventos de
+toda a janela histórica.
+
+As ocorrências são persistidas junto ao checkpoint do dataset e recuperadas
+com o tail dos segmentos. `_writtenAt`, acrescentado automaticamente, é o
+instante de aplicação usado tanto na escrita como no replay. Os baldes nunca
+regridem ao reaplicar um evento cujo instante seja anterior ao último observado.
+Snapshots ausentes ou corrompidos impedem a abertura. O formato inclui uma
+extensão crítica no manifest: **versões anteriores não abrem um dataset com
+medidas persistidas**. Para rollback, restaure um backup anterior à ativação;
+não remova arquivos de checkpoint manualmente.
+
+Adicionar uma medida, mudar seu nome, unidade ou janela, ou mudar `groupBy`/
+`where` inicia uma janela vazia, sem backfill; o log `counter_measure.reset`
+registra isso. Medidas inalteradas sobrevivem ao reinício e à troca de `total`.
+A mudança de significado também reinicia métricas históricas dependentes e o
+prazo de sustentação dos alarmes que as citam. O histórico amostrado de `metrics`
+continua com sua própria política de recuperação, descrita abaixo.
+
+A entrega de entrada mantém sua semântica: com sequência declarada, uma
+reentrega descartada não conta; sem sequência, uma reentrega aceita conta
+como outra aplicação. Recuperar o tail local não duplica ocorrências já
+cobertas pelo checkpoint. A emissão Kafka permanece sem replay de saída.
+
+O estado temporal ocupa 960 bytes por posição e por medida, em mmap, com
+capacidade que cresce até o pico de grupos simultâneos; posições de grupos
+aposentados são reutilizadas. Há também o snapshot durável e um mapa de posições
+em heap. `maxGroups` limita esse custo. O checkpoint escreve uma nova geração
+antes de remover a anterior, exigindo espaço temporário para ambas. Um grupo
+vazio só pode ser aposentado depois de suas medidas expirarem.
 
 ### Métricas de janela do contador
 
@@ -1671,8 +1768,8 @@ A subida recusa, nomeando o caminho da chave:
   letra ou `_`, como um identificador do SQL, porque as colunas geradas são
   citadas sem aspas: `name: 5m` daria `5m_avg`, que nenhuma condição consegue
   citar;
-- `type` ausente ou diferente de `window`, e `source` ausente ou diferente de
-  `total`, os únicos valores de cada chave;
+- `type` ausente ou diferente de `window`; `source` ausente, desconhecido,
+  ou `total` quando sua materialização está desativada;
 - `window` ausente, `never`, zero, menor que `1m`, maior que `30d` ou **não
   múltipla de `1m`**. A janela é dividida em 60 baldes, e só uma janela
   múltipla de `1m` dá a cada balde um número inteiro de segundos: `90s` é
@@ -1843,6 +1940,14 @@ dataset ou tabela histórica com esse nome são recusados na subida.
 > `<schemaName>.alarms` ou `_counters.alarms`.
 
 ### Emissão periódica: a série de cada grupo
+
+A emissão também suporta [destinos Kafka nomeados](docs/operacao-series-kafka.md).
+Declare brokers e tópico em `seriesDelivery.kafka` no `nishidb.yaml` e selecione
+`target: [file, metricas_olt]` no bloco abaixo para arquivo e Kafka, ou
+`target: metricas_olt` para somente Kafka (removendo `file`, `maxBytes` e `keep`).
+Cada grupo vira uma mensagem JSON com os nomes das colunas, `dataset` e
+`counter`. O envio é assíncrono e falhas descartam a amostra daquele destino,
+sem reenvio. Sem `target`, permanece a emissão em arquivo.
 
 Para alimentar gráfico por equipamento, o contador pode escrever o valor de
 **cada grupo** num arquivo NDJSON, periodicamente:

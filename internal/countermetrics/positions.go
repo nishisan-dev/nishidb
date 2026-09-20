@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/metricwindow"
 )
 
@@ -112,9 +113,13 @@ func (p *positionMap) ensure(limit uint32) {
 //   - Restauração: O(capacidade × métricas) leituras de identidade, mais um
 //     mapa temporário hash → posição do tamanho da capacidade. Só na abertura.
 type counterState struct {
-	name    string
-	reader  Reader
-	metrics []*Metric
+	measureReader measureReader
+	measures      []schema.CounterMeasureSpec
+	groupBy       []string
+	where         string
+	name          string
+	reader        Reader
+	metrics       []*Metric
 
 	positions positionMap
 	// free é a pilha de posições livres; next é a próxima posição nunca usada.
@@ -166,7 +171,11 @@ func (c *counterState) sample(now time.Time) error {
 		}
 		h := keyHash(key)
 		for i, m := range c.metrics {
-			m.observe(position, id, h, total, c.epochs[i])
+			value := total
+			if m.measureIndex >= 0 && c.measureReader != nil {
+				value = c.measureReader.MeasureCount(id, m.measureIndex, now.UnixMilli())
+			}
+			m.observe(position, id, h, value, c.epochs[i])
 		}
 	}
 	ms := now.UnixMilli()

@@ -62,7 +62,8 @@ type Event struct {
 	Columns []Column
 	// Total é o valor observado no instante da decisão — não o do disparo
 	// original, quando o evento é uma resolução.
-	Total int64
+	Total         int64
+	TotalDisabled bool
 	// ValueColumn é a coluna de `_counters.<contador>` cujo valor decidiu o
 	// disparo — `total` por padrão, ou a coluna declarada em `value:` do
 	// alarme. Vai SÓ no disparo (vazia na resolução): a resolução não

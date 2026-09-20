@@ -271,7 +271,8 @@ responde a segunda pergunta.
 ### Emissão periódica de contador
 
 Só nos datasets que declaram `emit:` dentro de algum contador. As cinco
-primeiras saem por contador, com o rótulo `counter`.
+primeiras saem por contador com destino `file`, com o rótulo `counter`.
+`nishidb_series_emitting` também considera emissores exclusivamente Kafka.
 
 | série | tipo | labels | o que responde |
 |---|---|---|---|
@@ -281,6 +282,22 @@ primeiras saem por contador, com o rótulo `counter`.
 | `nishidb_series_bytes` | gauge | `counter`, `dataset` | tamanho do arquivo corrente. O teto de disco de um contador é `maxBytes × (keep+1)` |
 | `nishidb_series_last_success_timestamp` | gauge | `counter`, `dataset` | epoch segundos da última passada que escreveu sem erro; 0 até a primeira. É a série que um alerta de "a emissão parou" observa |
 | `nishidb_series_emitting` | gauge | `dataset` | 1 enquanto algum laço de emissão do dataset está de pé |
+
+Destinos Kafka publicam as séries abaixo por `dataset`, `counter` e
+`destination`, inclusive antes da primeira entrega. A origem é a mesma de
+`datasets[].seriesDelivery` no `/v1/stats`.
+
+| série | tipo | o que responde |
+|---|---|---|
+| `nishidb_series_kafka_delivered_total` | counter | mensagens confirmadas pelo Kafka desde a subida |
+| `nishidb_series_kafka_dropped_total` | counter | mensagens descartadas ou não confirmadas; label adicional `reason`: `buffer_full`, `message_too_large`, `timeout`, `publish_error`, `shutdown` |
+| `nishidb_series_kafka_pending_records` | gauge | mensagens aguardando conclusão, incluindo as em voo |
+| `nishidb_series_kafka_pending_bytes` | gauge | bytes de chave e corpo das mensagens pendentes |
+| `nishidb_series_kafka_last_success_timestamp` | gauge | última confirmação em segundos do epoch; zero até a primeira |
+
+Timeout pode ocorrer após o broker armazenar a mensagem. Os descartes medem
+resultados locais, sem afirmar perda exata no tópico. Limites e garantias estão
+na [operação da emissão Kafka](operacao-series-kafka.md).
 
 ### Autenticação e TLS
 

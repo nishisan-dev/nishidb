@@ -1,5 +1,14 @@
 package metrics
 
+// Kafka counter outputs, labelled by dataset, counter and destination.
+const (
+	MetSeriesKafkaDeliveredTotal       = "nishidb_series_kafka_delivered_total"
+	MetSeriesKafkaDroppedTotal         = "nishidb_series_kafka_dropped_total"
+	MetSeriesKafkaPendingRecords       = "nishidb_series_kafka_pending_records"
+	MetSeriesKafkaPendingBytes         = "nishidb_series_kafka_pending_bytes"
+	MetSeriesKafkaLastSuccessTimestamp = "nishidb_series_kafka_last_success_timestamp"
+)
+
 // Os nomes das métricas do §92, LITERAIS.
 //
 // Ficam em constantes por um motivo operacional: dashboard e alerta casam

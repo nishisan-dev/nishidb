@@ -84,6 +84,20 @@ counters:
         window: 5m
         aggregates: [avg, max]
 
+  - name: events_by_text
+    groupBy: [texto]
+    total: false
+    measures:
+      - name: event_rate
+        window: 1h
+        unit: second
+    metrics:
+      - name: rates_1m
+        type: window
+        source: event_rate
+        window: 1m
+        aggregates: [avg, min, max]
+
 query:
   maxRows: 1000
   timeout: 30s

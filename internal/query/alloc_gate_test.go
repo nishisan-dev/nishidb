@@ -173,9 +173,14 @@ func TestResolucaoQualificadaNaoAlocaPorCampoDoDataset(t *testing.T) {
 // bytesPerRun é o AllocsPerRun em bytes: quanto f aloca por execução, medido
 // pelo TotalAlloc, que é monotônico e não é afetado pelo coletor.
 //
-// O GC é forçado antes da primeira leitura para que o custo de uma coleta
-// disparada por trabalho ANTERIOR não entre na conta.
+// Como testing.AllocsPerRun, aquece o caminho e mede com um único P: TotalAlloc
+// é global ao processo; alocações fora do trecho medido podem contaminar a
+// comparação exata (o CI registrou uma diferença intermitente de 28 B/query).
+// O GC é forçado antes da primeira leitura; a igualdade permanece sem folga.
 func bytesPerRun(runs int, f func()) uint64 {
+	previous := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previous)
+	f()
 	runtime.GC()
 	var antes, depois runtime.MemStats
 	runtime.ReadMemStats(&antes)

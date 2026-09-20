@@ -101,11 +101,11 @@ type ConsumerSpec struct {
 // consumer, não no parse — é isso que mantém o fixture do §12 válido numa
 // suíte que roda sem KAFKA_USERNAME/KAFKA_PASSWORD no ambiente.
 type SecuritySpec struct {
-	Protocol      string
-	SASLMechanism string
-	UsernameEnv   string
-	PasswordEnv   string
-	CAFile        string
+	Protocol      string `yaml:"protocol,omitempty"`
+	SASLMechanism string `yaml:"saslMechanism,omitempty"`
+	UsernameEnv   string `yaml:"usernameEnv,omitempty"`
+	PasswordEnv   string `yaml:"passwordEnv,omitempty"`
+	CAFile        string `yaml:"caFile,omitempty"`
 }
 
 // ErrorsSpec é o bloco `errors` da raiz do dataset (§101, §102).
@@ -359,21 +359,26 @@ func validateKafka(n *yaml.Node) (*KafkaSpec, error) {
 // ([2001:db8::1]:9092) inconfigurável — e não com um erro de conexão, mas com
 // um erro de PARSE, que impediria até `nishidb query` de abrir o dataset.
 func validateBootstrap(items []string) error {
+	return ValidateKafkaBootstrap(items, "source.kafka.bootstrapServers")
+}
+
+// ValidateKafkaBootstrap checks connection addresses for consumers and producers.
+func ValidateKafkaBootstrap(items []string, keyPath string) error {
 	if len(items) == 0 {
-		return specErrf("source.kafka.bootstrapServers não pode ser lista vazia")
+		return specErrf("%s não pode ser lista vazia", keyPath)
 	}
 	for i, item := range items {
 		item = strings.TrimSpace(item)
 		host, port, err := net.SplitHostPort(item)
 		if err != nil {
-			return specErrf("source.kafka.bootstrapServers[%d] %q inválido (esperado host:porta)", i, item)
+			return specErrf("%s[%d] %q inválido (esperado host:porta)", keyPath, i, item)
 		}
 		if host == "" {
-			return specErrf("source.kafka.bootstrapServers[%d] %q sem host", i, item)
+			return specErrf("%s[%d] %q sem host", keyPath, i, item)
 		}
 		p, err := strconv.Atoi(port)
 		if err != nil || p < 1 || p > 65535 {
-			return specErrf("source.kafka.bootstrapServers[%d] %q: porta inválida (1..65535)", i, item)
+			return specErrf("%s[%d] %q: porta inválida (1..65535)", keyPath, i, item)
 		}
 	}
 	return nil
@@ -490,38 +495,43 @@ func integer(m map[string]*yaml.Node, keyPath, key string, defaultValue int) (in
 }
 
 func validateSecurity(n *yaml.Node) (SecuritySpec, error) {
+	return ParseKafkaSecurity(n, "source.kafka.security")
+}
+
+// ParseKafkaSecurity validates the shared producer/consumer security contract.
+func ParseKafkaSecurity(n *yaml.Node, keyPath string) (SecuritySpec, error) {
 	s := SecuritySpec{Protocol: ProtocolPlaintext}
 	if n == nil {
 		return s, nil
 	}
-	m, err := block(n, "source.kafka.security",
+	m, err := block(n, keyPath,
 		"protocol", "saslMechanism", "usernameEnv", "passwordEnv", "caFile")
 	if err != nil {
 		return s, err
 	}
 
-	if v, err := text(m, "source.kafka.security", "protocol"); err != nil {
+	if v, err := text(m, keyPath, "protocol"); err != nil {
 		return s, err
 	} else if v != "" {
 		switch v {
 		case ProtocolPlaintext, ProtocolSSL, ProtocolSASLPlaintext, ProtocolSASLSSL:
 			s.Protocol = v
 		default:
-			return s, specErrf("source.kafka.security.protocol %q inválido (%s|%s|%s|%s)",
-				v, ProtocolPlaintext, ProtocolSSL, ProtocolSASLPlaintext, ProtocolSASLSSL)
+			return s, specErrf("%s.protocol %q inválido (%s|%s|%s|%s)",
+				keyPath, v, ProtocolPlaintext, ProtocolSSL, ProtocolSASLPlaintext, ProtocolSASLSSL)
 		}
 	}
 
-	if s.SASLMechanism, err = text(m, "source.kafka.security", "saslMechanism"); err != nil {
+	if s.SASLMechanism, err = text(m, keyPath, "saslMechanism"); err != nil {
 		return s, err
 	}
-	if s.UsernameEnv, err = text(m, "source.kafka.security", "usernameEnv"); err != nil {
+	if s.UsernameEnv, err = text(m, keyPath, "usernameEnv"); err != nil {
 		return s, err
 	}
-	if s.PasswordEnv, err = text(m, "source.kafka.security", "passwordEnv"); err != nil {
+	if s.PasswordEnv, err = text(m, keyPath, "passwordEnv"); err != nil {
 		return s, err
 	}
-	if s.CAFile, err = text(m, "source.kafka.security", "caFile"); err != nil {
+	if s.CAFile, err = text(m, keyPath, "caFile"); err != nil {
 		return s, err
 	}
 
@@ -532,34 +542,34 @@ func validateSecurity(n *yaml.Node) (SecuritySpec, error) {
 		switch s.SASLMechanism {
 		case SASLPlain, SASLScramSHA256, SASLScramSHA512:
 		case "":
-			return s, specErrf("source.kafka.security.saslMechanism obrigatório com protocol %s", s.Protocol)
+			return s, specErrf("%s.saslMechanism obrigatório com protocol %s", keyPath, s.Protocol)
 		default:
-			return s, specErrf("source.kafka.security.saslMechanism %q inválido (%s|%s|%s)",
-				s.SASLMechanism, SASLPlain, SASLScramSHA256, SASLScramSHA512)
+			return s, specErrf("%s.saslMechanism %q inválido (%s|%s|%s)",
+				keyPath, s.SASLMechanism, SASLPlain, SASLScramSHA256, SASLScramSHA512)
 		}
 		if s.UsernameEnv == "" {
-			return s, specErrf("source.kafka.security.usernameEnv obrigatório com protocol %s", s.Protocol)
+			return s, specErrf("%s.usernameEnv obrigatório com protocol %s", keyPath, s.Protocol)
 		}
 		if s.PasswordEnv == "" {
-			return s, specErrf("source.kafka.security.passwordEnv obrigatório com protocol %s", s.Protocol)
+			return s, specErrf("%s.passwordEnv obrigatório com protocol %s", keyPath, s.Protocol)
 		}
-		if err := validateEnvName("source.kafka.security.usernameEnv", s.UsernameEnv); err != nil {
+		if err := validateEnvName(keyPath+".usernameEnv", s.UsernameEnv); err != nil {
 			return s, err
 		}
-		if err := validateEnvName("source.kafka.security.passwordEnv", s.PasswordEnv); err != nil {
+		if err := validateEnvName(keyPath+".passwordEnv", s.PasswordEnv); err != nil {
 			return s, err
 		}
 	} else {
 		if s.SASLMechanism != "" {
-			return s, specErrf("source.kafka.security.saslMechanism não se aplica a protocol %s", s.Protocol)
+			return s, specErrf("%s.saslMechanism não se aplica a protocol %s", keyPath, s.Protocol)
 		}
 		if s.UsernameEnv != "" || s.PasswordEnv != "" {
-			return s, specErrf("source.kafka.security.usernameEnv/passwordEnv não se aplicam a protocol %s", s.Protocol)
+			return s, specErrf("%s.usernameEnv/passwordEnv não se aplicam a protocol %s", keyPath, s.Protocol)
 		}
 	}
 	if s.CAFile != "" && !s.TLS() {
-		return s, specErrf("source.kafka.security.caFile não se aplica a protocol %s (use %s ou %s)",
-			s.Protocol, ProtocolSSL, ProtocolSASLSSL)
+		return s, specErrf("%s.caFile não se aplica a protocol %s (use %s ou %s)",
+			keyPath, s.Protocol, ProtocolSSL, ProtocolSASLSSL)
 	}
 	return s, nil
 }

@@ -185,12 +185,12 @@ func New(defs []Definition, readers map[string]counters.Reader, opts Options) (*
 		// compartilhar a das consultas poria dois donos no mesmo estado
 		// interno. Montá-la custa uma compilação de schema na subida. Sem
 		// MetricSource as colunas das métricas existem e saem NULL.
-		sc, store, err := counters.Table(d.def, reader, d.metrics, opts.Metrics)
+		sc, store, err := counters.Table(d.def, reader, d.metrics, opts.Metrics, r.now)
 		if err != nil {
 			return nil, fmt.Errorf("alarm: tabela do contador %q: %w", d.Counter, err)
 		}
 		rc.store = store
-		if rc.metricColumns, err = metricColumnsOf(sc, d.metrics); err != nil {
+		if rc.metricColumns, err = metricColumnsOf(sc, d.metrics, d.def.Measures...); err != nil {
 			return nil, fmt.Errorf("alarm: counter %q: %w", d.Counter, err)
 		}
 		rc.names, rc.format = d.def.Names, d.def.Format
@@ -220,8 +220,15 @@ func New(defs []Definition, readers map[string]counters.Reader, opts Options) (*
 
 // metricColumnsOf resolve, no schema da tabela própria do laço, o FieldID de
 // cada coluna gerada pelas métricas, na ordem declarada.
-func metricColumnsOf(sc *schema.Compiled, metrics []schema.CounterMetricSpec) ([]metricColumn, error) {
+func metricColumnsOf(sc *schema.Compiled, metrics []schema.CounterMetricSpec, measures ...counter.MeasureDefinition) ([]metricColumn, error) {
 	var out []metricColumn
+	for _, m := range measures {
+		f, ok := sc.FieldByName([]byte(m.Name))
+		if !ok {
+			return nil, fmt.Errorf("measure %s has no column", m.Name)
+		}
+		out = append(out, metricColumn{id: f.ID, name: m.Name})
+	}
 	for _, m := range metrics {
 		for _, col := range m.Columns() {
 			f, ok := sc.FieldByName([]byte(col))
@@ -333,6 +340,7 @@ func (r *Runner) EvaluateOnce() error {
 // dele na passada — e não um evento do storage — que resolve o alarme.
 func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
 	snap := rc.store.OpenSnapshot()
+	snap.Instant = now
 	for id := types.RowID(1); id <= snap.LimitRowID; id++ {
 		key, text, total, _, live := rc.reader.Group(uint32(id))
 		if !live {
@@ -479,6 +487,7 @@ func (r *Runner) event(rc *runnerCounter, ra *runnerAlarm, key, text []byte, tot
 		Alarm:            ra.compiled.name,
 		GroupKey:         string(text),
 		Total:            total,
+		TotalDisabled:    rc.def.def.DisableTotal,
 		Condition:        ra.compiled.when,
 		SustainedFor:     ra.compiled.sustainedFor,
 		QualifyCondition: ra.compiled.qualifyWhen,

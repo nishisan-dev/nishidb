@@ -60,6 +60,37 @@ func alarmeDe(when string, enrich ...schema.EnrichSpec) schema.AlarmSpec {
 	return schema.AlarmSpec{Name: "olt_down", When: when, SustainedFor: 2 * time.Minute, Enrich: enrich}
 }
 
+func TestMeasureAlarmFingerprintChangesWithRateDefinition(t *testing.T) {
+	def := defByPON("autenticados_por_pon")
+	def.Measures = []counter.MeasureDefinition{{Name: "event_rate", Window: time.Minute, Unit: time.Second}}
+	compile := func(d counter.Definition) string {
+		t.Helper()
+		spec := alarmeDe("event_rate > 1")
+		spec.Value = "event_rate"
+		out, err := Compile("telecom", specWith(spec), []counter.Definition{d})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out[0].alarms[0].metricsFingerprint
+	}
+	original := compile(def)
+	for _, change := range []string{"unit", "window", "where"} {
+		d := def
+		d.Measures = append([]counter.MeasureDefinition(nil), def.Measures...)
+		switch change {
+		case "unit":
+			d.Measures[0].Unit = time.Minute
+		case "window":
+			d.Measures[0].Window = 5 * time.Minute
+		case "where":
+			d.Where = "authenticated = true"
+		}
+		if compile(d) == original {
+			t.Fatalf("%s não invalidou a sustentação", change)
+		}
+	}
+}
+
 // TestCondicaoCompiladaAvaliaALinhaDoContador é o que fecha o desenho: a
 // condição roda pelo avaliador compartilhado, sobre o payload que a tabela
 // virtual produz. É por isso que não há gramática nova — `total < 100` no

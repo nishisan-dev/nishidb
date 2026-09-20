@@ -1,6 +1,7 @@
 package alarm
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -107,6 +108,7 @@ const (
 // diferença entre uma consulta e uma injeção: o nome de um equipamento é dado
 // vindo do cliente, e um apóstrofo dentro dele reescreveria a consulta.
 type bind struct {
+	null bool
 	// column é o nome declarado, para a mensagem de erro.
 	column string
 	kind   bindKind
@@ -214,11 +216,21 @@ func compileAlarm(label string, as schema.AlarmSpec, def counter.Definition, met
 		a.newQualifier = func() counter.Evaluator { return predicate.NewAvaliadorOfPayload(qualifyProg, qualifyIDs) }
 		cited = slices.Concat(ids, qualifyIDs)
 	}
-	a.metricsFingerprint = metricsFingerprintOf(sc, metrics, cited)
+	a.metricsFingerprint = metricsFingerprintOf(sc, metrics, cited, def.Measures...)
+	if citesMeasure(sc, def, metrics, cited) {
+		context, err := json.Marshal(struct {
+			GroupBy []string
+			Where   string
+		}{def.Names, def.Where})
+		if err != nil {
+			return a, err
+		}
+		a.metricsFingerprint += ";context:" + string(context)
+	}
 	if err := checkAlarmStateText(label+" metrics fingerprint", a.metricsFingerprint); err != nil {
 		return a, err
 	}
-	col, fieldID, fieldType, err := resolveValueColumn(label, as, metrics, sc)
+	col, fieldID, fieldType, err := resolveValueColumn(label, as, metrics, sc, def.Measures...)
 	if err != nil {
 		return a, err
 	}
@@ -258,8 +270,8 @@ func compileAlarm(label string, as schema.AlarmSpec, def counter.Definition, met
 //
 // A ordem sai dos nomes, e não dos FieldIDs nem da declaração, para que o texto
 // dependa só do que as métricas SÃO.
-func metricsFingerprintOf(sc *schema.Compiled, metrics []schema.CounterMetricSpec, ids []types.FieldID) string {
-	if len(metrics) == 0 || len(ids) == 0 {
+func metricsFingerprintOf(sc *schema.Compiled, metrics []schema.CounterMetricSpec, ids []types.FieldID, measures ...counter.MeasureDefinition) string {
+	if (len(metrics) == 0 && len(measures) == 0) || len(ids) == 0 {
 		return ""
 	}
 	byColumn := make(map[string]int, len(metrics)*3)
@@ -275,16 +287,25 @@ func metricsFingerprintOf(sc *schema.Compiled, metrics []schema.CounterMetricSpe
 		if !ok {
 			continue
 		}
+		for _, m := range measures {
+			if f.Name == m.Name {
+				parts = append(parts, fmt.Sprintf("%s:rate:%d:%d", m.Name, m.Window, m.Unit))
+			}
+		}
 		i, ok := byColumn[f.Name]
 		if !ok || cited[i] {
 			continue
 		}
 		cited[i] = true
 		m := metrics[i]
-		parts = append(parts, fmt.Sprintf("%s:%s:%s:%d", m.Name, m.Type, m.Source, m.Window.Milliseconds()))
+		part := fmt.Sprintf("%s:%s:%s:%d", m.Name, m.Type, m.Source, m.Window.Milliseconds())
+		if m.Rate != nil {
+			part += fmt.Sprintf(":%d:%s", m.Rate.Window, m.Rate.Unit)
+		}
+		parts = append(parts, part)
 	}
 	slices.Sort(parts)
-	return strings.Join(parts, ";")
+	return strings.Join(slices.Compact(parts), ";")
 }
 
 func compileEnrich(label string, es schema.EnrichSpec, def counter.Definition) (enrichQuery, error) {
@@ -343,12 +364,12 @@ func compileEnrich(label string, es schema.EnrichSpec, def counter.Definition) (
 // assumido: é counters.TableSchema quem decide `avg` double e `total`/`min`/
 // `max` int64.
 func resolveValueColumn(label string, as schema.AlarmSpec, metrics []schema.CounterMetricSpec,
-	sc *schema.Compiled) (string, types.FieldID, types.FieldType, error) {
+	sc *schema.Compiled, measures ...counter.MeasureDefinition) (string, types.FieldID, types.FieldType, error) {
 	col := as.Value
 	if col == "" {
 		col = schema.CounterTotalColumn
 	}
-	accepted := valueColumnNames(metrics)
+	accepted := valueColumnNames(metrics, measures...)
 	if !slices.Contains(accepted, col) {
 		return "", 0, 0, fmt.Errorf("%s.value: alarm %q: %q is not a valid value column (accepted: %s)",
 			label, as.Name, col, strings.Join(accepted, ", "))
@@ -369,9 +390,12 @@ func resolveValueColumn(label string, as schema.AlarmSpec, metrics []schema.Coun
 // (métrica, depois agregado) — a MESMA enumeração que metricColumnsOf usa
 // para resolver as colunas do laço (runner.go), para que as duas listas nunca
 // divirjam.
-func valueColumnNames(metrics []schema.CounterMetricSpec) []string {
+func valueColumnNames(metrics []schema.CounterMetricSpec, measures ...counter.MeasureDefinition) []string {
 	out := make([]string, 0, 1+len(metrics)*3)
 	out = append(out, schema.CounterTotalColumn)
+	for _, m := range measures {
+		out = append(out, m.Name)
+	}
 	for _, m := range metrics {
 		out = append(out, m.Columns()...)
 	}
@@ -387,7 +411,7 @@ func resolveBind(label, col string, def counter.Definition) (bind, error) {
 	case schema.CounterKeyColumn:
 		return bind{column: col, kind: bindGroupKey, groupIndex: -1, fieldType: types.TypeString}, nil
 	case schema.CounterTotalColumn:
-		return bind{column: col, kind: bindTotal, groupIndex: -1, fieldType: types.TypeInt64}, nil
+		return bind{null: def.DisableTotal, column: col, kind: bindTotal, groupIndex: -1, fieldType: types.TypeInt64}, nil
 	}
 	for i, n := range def.Names {
 		if n == col {
@@ -396,4 +420,25 @@ func resolveBind(label, col string, def counter.Definition) (bind, error) {
 	}
 	return bind{}, fmt.Errorf("%s.bind: %q não é coluna da tabela do contador %q (ligáveis: %s, %s e as do groupBy: %v)",
 		label, col, def.Name, schema.CounterKeyColumn, schema.CounterTotalColumn, def.Names)
+}
+
+// citesMeasure identifica dependência de uma taxa, direta ou por agregado.
+func citesMeasure(sc *schema.Compiled, def counter.Definition, metrics []schema.CounterMetricSpec, ids []types.FieldID) bool {
+	for _, id := range ids {
+		field, ok := sc.FieldByID(id)
+		if !ok {
+			continue
+		}
+		for _, measure := range def.Measures {
+			if measure.Name == field.Name {
+				return true
+			}
+		}
+		for _, metric := range metrics {
+			if metric.Rate != nil && slices.Contains(metric.Columns(), field.Name) {
+				return true
+			}
+		}
+	}
+	return false
 }

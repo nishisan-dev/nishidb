@@ -125,32 +125,44 @@ func ResolveKafkaConfig(dataset string, k *schema.KafkaSpec, e schema.ErrorsSpec
 		DecodeWorkers:      k.Consumer.DecodeWorkers,
 	}
 
-	sec := k.Security
+	var err error
+	c.dialTLS, c.mechanism, err = ResolveSecurity(k.Security)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// ResolveSecurity loads Kafka TLS and SASL settings for both consumers and producers.
+// Credentials are resolved only at activation, and never included in diagnostics.
+func ResolveSecurity(sec schema.SecuritySpec) (*tls.Config, sasl.Mechanism, error) {
+	var dialTLS *tls.Config
+	var mechanism sasl.Mechanism
 	if sec.TLS() {
 		t := &tls.Config{MinVersion: tls.VersionTLS12}
 		if sec.CAFile != "" {
 			pem, err := os.ReadFile(sec.CAFile)
 			if err != nil {
-				return nil, fmt.Errorf("%w: security.caFile: %w", ErrConfig, err)
+				return nil, nil, fmt.Errorf("%w: security.caFile: %w", ErrConfig, err)
 			}
 			pool := x509.NewCertPool()
 			if !pool.AppendCertsFromPEM(pem) {
-				return nil, fmt.Errorf("%w: security.caFile %s não contém certificado PEM válido",
+				return nil, nil, fmt.Errorf("%w: security.caFile %s não contém certificado PEM válido",
 					ErrConfig, sec.CAFile)
 			}
 			t.RootCAs = pool
 		}
-		c.dialTLS = t
+		dialTLS = t
 	}
 
 	if sec.SASL() {
 		user, err := env(sec.UsernameEnv)
 		if err != nil {
-			return nil, fmt.Errorf("%w: security.usernameEnv: %w", ErrConfig, err)
+			return nil, nil, fmt.Errorf("%w: security.usernameEnv: %w", ErrConfig, err)
 		}
 		pass, err := env(sec.PasswordEnv)
 		if err != nil {
-			return nil, fmt.Errorf("%w: security.passwordEnv: %w", ErrConfig, err)
+			return nil, nil, fmt.Errorf("%w: security.passwordEnv: %w", ErrConfig, err)
 		}
 		auth := func(context.Context) (plain.Auth, error) {
 			return plain.Auth{User: user, Pass: pass}, nil
@@ -160,17 +172,17 @@ func ResolveKafkaConfig(dataset string, k *schema.KafkaSpec, e schema.ErrorsSpec
 		}
 		switch sec.SASLMechanism {
 		case schema.SASLPlain:
-			c.mechanism = plain.Plain(auth)
+			mechanism = plain.Plain(auth)
 		case schema.SASLScramSHA256:
-			c.mechanism = scram.Sha256(scramAuth)
+			mechanism = scram.Sha256(scramAuth)
 		case schema.SASLScramSHA512:
-			c.mechanism = scram.Sha512(scramAuth)
+			mechanism = scram.Sha512(scramAuth)
 		default:
 			// O parse já fechou o enum; chegar aqui é bug nosso.
-			return nil, fmt.Errorf("%w: saslMechanism %q sem implementação", ErrConfig, sec.SASLMechanism)
+			return nil, nil, fmt.Errorf("%w: saslMechanism %q sem implementação", ErrConfig, sec.SASLMechanism)
 		}
 	}
-	return c, nil
+	return dialTLS, mechanism, nil
 }
 
 // env lê a variável exigindo valor NÃO VAZIO.

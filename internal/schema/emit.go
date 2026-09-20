@@ -60,6 +60,9 @@ const (
 
 // EmitSpec é a emissão periódica validada de um contador.
 type EmitSpec struct {
+	// Targets selects file and/or globally named Kafka destinations.
+	// Empty is the legacy file-only default for Go callers.
+	Targets []string
 	// Every é o intervalo entre passadas; sempre >= MinEmitEvery.
 	Every time.Duration
 	// File é o nome do arquivo dentro de <dataset>/series, nunca um caminho.
@@ -72,22 +75,49 @@ type EmitSpec struct {
 
 // rawEmit é o bloco como lido do YAML, antes da validação.
 type rawEmit struct {
-	Every    string
-	File     string
-	MaxBytes string
-	Keep     *int
+	Targets     []string
+	FileOptions bool
+	Every       string
+	File        string
+	MaxBytes    string
+	Keep        *int
 }
 
 // emitFromNode decodifica o bloco `emit` de um contador.
 func emitFromNode(n *yaml.Node, keyPath string) (*rawEmit, error) {
-	m, err := block(n, keyPath, "every", "file", "maxBytes", "keep")
+	m, err := block(n, keyPath, "every", "file", "maxBytes", "keep", "target")
 	if err != nil {
 		return nil, err
 	}
 	var r rawEmit
+	r.FileOptions = m["file"] != nil || m["maxBytes"] != nil || m["keep"] != nil
+	r.Targets = []string{"file"}
 	for key, value := range m {
 		var err error
 		switch key {
+		case "target":
+			for value.Kind == yaml.AliasNode {
+				value = value.Alias
+			}
+			if value.Kind == yaml.ScalarNode && value.Tag == "!!str" {
+				r.Targets = []string{value.Value}
+			} else if value.Kind == yaml.SequenceNode {
+				r.Targets = nil
+				for _, item := range value.Content {
+					for item.Kind == yaml.AliasNode {
+						item = item.Alias
+					}
+					if item.Kind != yaml.ScalarNode || item.Tag != "!!str" {
+						return nil, specErrf("%s.target must contain destination names", keyPath)
+					}
+					r.Targets = append(r.Targets, item.Value)
+				}
+			} else {
+				return nil, specErrf("%s.target must be a name or a non-empty list", keyPath)
+			}
+			if len(r.Targets) == 0 {
+				return nil, specErrf("%s.target must not be empty", keyPath)
+			}
 		case "every":
 			err = decodeInto(value, keyPath+".every", &r.Every)
 		case "file":
@@ -112,7 +142,19 @@ func emitFromNode(n *yaml.Node, keyPath string) (*rawEmit, error) {
 // mesmo arquivo intercalariam séries de contadores diferentes no mesmo fluxo, e
 // cada um rotacionaria por baixo do outro.
 func validateEmit(r *rawEmit, keyPath, counterName string, seenFiles map[string]string) (*EmitSpec, error) {
-	e := &EmitSpec{File: counterName + DefaultEmitFileExt, MaxBytes: DefaultEmitMaxBytes, Keep: DefaultEmitKeep}
+	e := &EmitSpec{Targets: r.Targets}
+	seen := make(map[string]bool)
+	for _, target := range e.Targets {
+		if !ValidDeliveryName(target) || seen[target] {
+			return nil, specErrf("%s.target: invalid or duplicate destination %q", keyPath, target)
+		}
+		seen[target] = true
+	}
+	if e.HasFile() {
+		e.File, e.MaxBytes, e.Keep = counterName+DefaultEmitFileExt, DefaultEmitMaxBytes, DefaultEmitKeep
+	} else if r.FileOptions {
+		return nil, specErrf("%s: file, maxBytes and keep require target file", keyPath)
+	}
 	if r.Every == "" {
 		return nil, specErrf("%s.every obrigatório — é o intervalo entre passadas", keyPath)
 	}
@@ -127,6 +169,9 @@ func validateEmit(r *rawEmit, keyPath, counterName string, seenFiles map[string]
 		return nil, specErrf("%s.every %s é menor que o mínimo de %s", keyPath, r.Every, MinEmitEvery)
 	}
 	e.Every = d
+	if !e.HasFile() {
+		return e, nil
+	}
 	if r.File != "" {
 		if err := validateEmitFile(keyPath, r.File); err != nil {
 			return nil, err
@@ -156,6 +201,42 @@ func validateEmit(r *rawEmit, keyPath, counterName string, seenFiles map[string]
 		e.Keep = *r.Keep
 	}
 	return e, nil
+}
+
+// ValidDeliveryName is shared by named series and alarm destinations.
+func ValidDeliveryName(name string) bool {
+	if len(name) == 0 || len(name) > 64 {
+		return false
+	}
+	for _, c := range name {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// HasFile reports whether local NDJSON output is selected.
+func (e *EmitSpec) HasFile() bool {
+	if len(e.Targets) == 0 {
+		return true
+	}
+	for _, t := range e.Targets {
+		if t == "file" {
+			return true
+		}
+	}
+	return false
+}
+
+// HasKafka reports whether any named output is selected.
+func (e *EmitSpec) HasKafka() bool {
+	for _, t := range e.Targets {
+		if t != "file" {
+			return true
+		}
+	}
+	return false
 }
 
 // validateEmitFile recusa qualquer coisa que não seja um nome de arquivo

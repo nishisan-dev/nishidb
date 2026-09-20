@@ -61,7 +61,10 @@ const (
 
 // CounterSpec é um contador validado, com defaults aplicados.
 type CounterSpec struct {
-	Name string
+	// DisableTotal preserva o default legado no valor zero dos callers Go.
+	DisableTotal bool
+	Measures     []CounterMeasureSpec
+	Name         string
 	// GroupBy são as colunas de agrupamento, na ordem declarada — a ordem dos
 	// componentes da chave e das colunas da tabela.
 	GroupBy []string
@@ -95,6 +98,8 @@ var groupingTypes = map[string]bool{"string": true, "int64": true, "boolean": tr
 
 // rawCounter é um item do bloco como lido do YAML, antes da validação.
 type rawCounter struct {
+	Total             *bool
+	Measures          []CounterMeasureSpec
 	Name              string
 	GroupBy           []string
 	Where             *string
@@ -125,7 +130,7 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 	for i, item := range n.Content {
 		keyPath := fmt.Sprintf("counters[%d]", i)
 		keys, err := block(item, keyPath, "name", "groupBy", "where", "keyFormat",
-			"maxGroups", "retainEmptyGroups", "alarms", "metrics", "emit")
+			"maxGroups", "retainEmptyGroups", "alarms", "metrics", "emit", "total", "measures")
 		if err != nil {
 			return nil, err
 		}
@@ -133,6 +138,18 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 		for key, value := range keys {
 			var err error
 			switch key {
+			case "total":
+				for value.Kind == yaml.AliasNode {
+					value = value.Alias
+				}
+				if value.Kind != yaml.ScalarNode || value.Tag != "!!bool" {
+					return nil, specErrf("%s.total must be a boolean", keyPath)
+				}
+				var total bool
+				err = decodeInto(value, keyPath+".total", &total)
+				r.Total = &total
+			case "measures":
+				r.Measures, err = measuresFromNode(value, keyPath+".measures")
 			case "name":
 				err = decodeInto(value, keyPath+".name", &r.Name)
 			case "groupBy":
@@ -264,6 +281,8 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 			seenColumns[col] = true
 		}
 		c := CounterSpec{Name: r.Name, GroupBy: r.GroupBy, MaxGroups: DefaultMaxGroups, RetainEmptyGroups: DefaultRetainEmptyGroups}
+		c.Measures = r.Measures
+		c.DisableTotal = r.Total != nil && !*r.Total
 		if r.Alarms != nil {
 			if c.Alarms, err = validateAlarms(r.Alarms, keyPath+".alarms"); err != nil {
 				return nil, err
@@ -273,6 +292,9 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 			if c.Metrics, err = validateMetrics(r.Metrics, keyPath+".metrics"); err != nil {
 				return nil, err
 			}
+		}
+		if err := validateMeasureSources(keyPath, &c); err != nil {
+			return nil, err
 		}
 		// As colisões de nome vêm ANTES da checagem de cada coluna do groupBy:
 		// um groupBy `total` tem de ser recusado pela colisão com a coluna fixa,
@@ -315,6 +337,17 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 		if r.Emit != nil {
 			if c.Emit, err = validateEmit(r.Emit, keyPath+".emit", r.Name, seenFiles); err != nil {
 				return nil, err
+			}
+			if c.Emit.HasKafka() {
+				for _, col := range CounterColumns(c.GroupBy, c.Metrics, c.Measures...) {
+					if col.Origin == "" { // Fixed counter columns are emitted exactly once.
+						continue
+					}
+					switch col.Name {
+					case "dataset", "counter", "groupKey", "total", "at":
+						return nil, specErrf("%s.emit: column %q collides with a reserved Kafka field", keyPath, col.Name)
+					}
+				}
 			}
 		}
 		out = append(out, c)

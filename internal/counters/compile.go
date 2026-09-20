@@ -36,12 +36,19 @@ func Compile(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definitio
 		label := fmt.Sprintf("counters[%d]", i)
 		def := counter.Definition{
 			Name:              cs.Name,
+			DisableTotal:      cs.DisableTotal,
 			Columns:           make([]types.FieldID, 0, len(cs.GroupBy)),
 			Names:             cs.GroupBy,
 			Types:             make([]types.FieldType, 0, len(cs.GroupBy)),
 			Where:             cs.Where,
 			MaxGroups:         cs.MaxGroups,
 			RetainEmptyGroups: cs.RetainEmptyGroups,
+		}
+		if sc.WriteInstantField != nil {
+			def.WriteInstantField = sc.WriteInstantField.ID
+		}
+		for _, m := range cs.Measures {
+			def.Measures = append(def.Measures, counter.MeasureDefinition{Name: m.Name, Window: m.Window, Unit: m.UnitDuration()})
 		}
 		for _, col := range cs.GroupBy {
 			f, ok := sc.FieldByName([]byte(col))

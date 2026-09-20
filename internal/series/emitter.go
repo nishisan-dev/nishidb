@@ -51,6 +51,7 @@ type MetricReader interface {
 // de o laço de amostragem estar de pé — é a mesma regra que faz o schema de
 // `_counters.<nome>` não depender da fonte (ver counters.MetricSource).
 type Metric struct {
+	Scale      float64
 	Name       string
 	Aggregates []string
 	Reader     MetricReader
@@ -58,8 +59,15 @@ type Metric struct {
 
 // Options configura a emissão de UM contador.
 type Options struct {
-	Dataset string
-	Counter string
+	DisableTotal bool
+	Measures     []schema.CounterMeasureSpec
+	// Outputs are asynchronous destinations. Publish must copy retained bytes
+	// before returning; the emitter reuses its buffers for the next group.
+	Outputs []Output
+	// DisableFile selects Kafka-only output; zero preserves legacy callers.
+	DisableFile bool
+	Dataset     string
+	Counter     string
 	// Columns são os nomes das colunas do groupBy, na ordem declarada.
 	Columns []string
 	// Metrics são as métricas de janela do contador, na ordem declarada.
@@ -77,15 +85,27 @@ type Options struct {
 	Now func() time.Time
 }
 
+// Output accepts a self-contained Kafka record without waiting for network I/O.
+type Output interface {
+	Publish(key, body []byte, at time.Time)
+}
+
 // Emitter escreve periodicamente a série de um contador: uma linha por grupo
 // vivo, a cada intervalo.
 //
 // Não é thread-safe: o dono é o laço.
 type Emitter struct {
-	opts Options
-	log  *logging.Logger
-	now  func() time.Time
-	w    *Writer
+	measureReader interface {
+		MeasureCount(uint32, int, int64) int64
+	}
+	measurePrefixes                          [][]byte
+	atMillis                                 int64
+	opts                                     Options
+	log                                      *logging.Logger
+	now                                      func() time.Time
+	w                                        *Writer
+	fileFailed                               bool
+	kafkaPrefix, kafkaBuf, keyPrefix, keyBuf []byte
 
 	// buf é o scratch da linha, vals o da decomposição da chave e atBuf o do
 	// instante. Existem para que a passada não aloque por grupo — num contador
@@ -156,6 +176,7 @@ type metricColumn struct {
 
 // metricBinding é uma métrica ligada às colunas que ela gera.
 type metricBinding struct {
+	scale   float64
 	reader  MetricReader
 	columns []metricColumn
 }
@@ -169,7 +190,7 @@ func bindMetrics(metrics []Metric) ([]metricBinding, error) {
 	}
 	out := make([]metricBinding, 0, len(metrics))
 	for _, m := range metrics {
-		b := metricBinding{reader: m.Reader, columns: make([]metricColumn, 0, len(m.Aggregates))}
+		b := metricBinding{scale: m.Scale, reader: m.Reader, columns: make([]metricColumn, 0, len(m.Aggregates))}
 		for _, a := range m.Aggregates {
 			agg, err := aggregateOf(a)
 			if err != nil {
@@ -184,7 +205,7 @@ func bindMetrics(metrics []Metric) ([]metricBinding, error) {
 	return out, nil
 }
 
-// NewEmitter abre o arquivo da série e devolve o emissor.
+// NewEmitter binds the selected outputs and opens the optional series file.
 func NewEmitter(opts Options) (*Emitter, error) {
 	if opts.Reader == nil {
 		return nil, errors.New("series: Reader obrigatório")
@@ -212,11 +233,35 @@ func NewEmitter(opts Options) (*Emitter, error) {
 		return nil, err
 	}
 	e.metrics = metrics
-	w, err := OpenWriter(opts.Dir, opts.File, opts.MaxBytes, opts.Keep)
-	if err != nil {
-		return nil, err
+	if len(opts.Measures) > 0 {
+		var ok bool
+		e.measureReader, ok = opts.Reader.(interface {
+			MeasureCount(uint32, int, int64) int64
+		})
+		if !ok {
+			return nil, errors.New("series: measure reader required")
+		}
+		for _, m := range opts.Measures {
+			p := executor.AppendJSONString([]byte{','}, []byte(m.Name))
+			e.measurePrefixes = append(e.measurePrefixes, append(p, ':'))
+		}
 	}
-	e.w = w
+	if !opts.DisableFile {
+		w, err := OpenWriter(opts.Dir, opts.File, opts.MaxBytes, opts.Keep)
+		if err != nil {
+			return nil, err
+		}
+		e.w = w
+	}
+	if len(opts.Outputs) > 0 {
+		e.kafkaPrefix = executor.AppendJSONString([]byte(`{"dataset":`), []byte(opts.Dataset))
+		e.kafkaPrefix = append(e.kafkaPrefix, ',')
+		e.keyPrefix = executor.AppendJSONString([]byte{'['}, []byte(opts.Dataset))
+		e.keyPrefix = executor.AppendJSONString(append(e.keyPrefix, ','), []byte(opts.Counter))
+	}
+	if e.w == nil && len(opts.Outputs) == 0 {
+		return nil, errors.New("series: no output selected")
+	}
 	return e, nil
 }
 
@@ -232,7 +277,9 @@ func (e *Emitter) EmitOnce() error {
 	// AppendFormat no scratch, e não Format: o segundo devolve uma string
 	// nova, e uma alocação por passada num laço que roda para sempre é lixo
 	// que nunca para de crescer.
-	e.atBuf = e.now().UTC().AppendFormat(e.atBuf[:0], timeLayout)
+	at := e.now().UTC()
+	e.atMillis = at.UnixMilli()
+	e.atBuf = at.AppendFormat(e.atBuf[:0], timeLayout)
 	limit := e.opts.Reader.Limit()
 	for id := uint32(1); id < limit; id++ {
 		key, text, total, _, live := e.opts.Reader.Group(id)
@@ -247,17 +294,44 @@ func (e *Emitter) EmitOnce() error {
 			e.errs.Add(1)
 			return err
 		}
-		if err := e.w.Write(line); err != nil {
-			e.errs.Add(1)
-			return err
+		if len(e.opts.Outputs) > 0 {
+			e.kafkaBuf = append(e.kafkaBuf[:0], e.kafkaPrefix...)
+			e.kafkaBuf = append(e.kafkaBuf, line[1:]...)
+			e.keyBuf = append(e.keyBuf[:0], e.keyPrefix...)
+			for _, value := range e.vals {
+				e.keyBuf = executor.AppendValue(append(e.keyBuf, ','), value)
+			}
+			e.keyBuf = append(e.keyBuf, ']')
+			for _, output := range e.opts.Outputs {
+				output.Publish(e.keyBuf, e.kafkaBuf, at)
+			}
 		}
-		e.rows.Add(1)
+		if e.w != nil && !e.fileFailed {
+			if err := e.w.Write(line); err != nil {
+				if err := e.failFile(err); err != nil {
+					return err
+				}
+			} else {
+				e.rows.Add(1)
+			}
+		}
 	}
-	if err := e.w.Flush(); err != nil {
-		e.errs.Add(1)
+	if e.w != nil && !e.fileFailed {
+		if err := e.w.Flush(); err != nil {
+			return e.failFile(err)
+		}
+		e.lastSuccess.Store(e.now().UnixMilli())
+	}
+	return nil
+}
+
+func (e *Emitter) failFile(err error) error {
+	e.errs.Add(1)
+	e.fileFailed = true
+	if len(e.opts.Outputs) == 0 {
 		return err
 	}
-	e.lastSuccess.Store(e.now().UnixMilli())
+	e.log.Error("series.file_stopped", "local series output failed; other destinations remain active", "dataset", e.opts.Dataset, "counter", e.opts.Counter)
 	return nil
 }
 
@@ -288,7 +362,16 @@ func (e *Emitter) appendLine(dst []byte, id uint32, key, text []byte, total int6
 		dst = executor.AppendValue(dst, vals[i])
 	}
 	dst = append(dst, `,"total":`...)
-	dst = executor.AppendValue(dst, types.Value{Type: types.TypeInt64, I64: total})
+	if e.opts.DisableTotal {
+		dst = append(dst, "null"...)
+	} else {
+		dst = executor.AppendValue(dst, types.Value{Type: types.TypeInt64, I64: total})
+	}
+	for i, m := range e.opts.Measures {
+		dst = append(dst, e.measurePrefixes[i]...)
+		v := float64(e.measureReader.MeasureCount(id, i, e.atMillis)) * m.Scale()
+		dst = executor.AppendValue(dst, types.Value{Type: types.TypeDouble, I64: int64(math.Float64bits(v))})
+	}
 	dst = e.appendMetrics(dst, id)
 	dst = append(dst, `,"at":`...)
 	dst = executor.AppendJSONString(dst, e.atBuf)
@@ -320,6 +403,17 @@ func (e *Emitter) appendMetrics(dst []byte, id uint32) []byte {
 				dst = append(dst, "null"...)
 				continue
 			}
+			if m.scale != 0 {
+				value := avg
+				switch c.agg {
+				case aggregateMin:
+					value = float64(lowest)
+				case aggregateMax:
+					value = float64(highest)
+				}
+				dst = executor.AppendValue(dst, types.Value{Type: types.TypeDouble, I64: int64(math.Float64bits(value * m.scale))})
+				continue
+			}
 			switch c.agg {
 			case aggregateAvg:
 				// O double vai pelo mesmo AppendValue do resto da linha, que
@@ -339,11 +433,19 @@ func (e *Emitter) appendMetrics(dst []byte, id uint32) []byte {
 }
 
 // Flush esvazia o buffer do escritor.
-func (e *Emitter) Flush() error { return e.w.Flush() }
+func (e *Emitter) Flush() error {
+	if e.w == nil {
+		return nil
+	}
+	return e.w.Flush()
+}
 
-// Close para o laço e fecha o arquivo.
+// Close stops the loop and closes the optional file. The owner closes shared outputs.
 func (e *Emitter) Close() error {
 	e.Stop()
+	if e.w == nil {
+		return nil
+	}
 	return e.w.Close()
 }
 
@@ -413,6 +515,7 @@ func (e *Emitter) run(ctx context.Context) {
 
 // Stats é o retrato da emissão de um contador para a observabilidade.
 type Stats struct {
+	File    bool
 	Dataset string
 	Counter string
 	// Rows são as linhas escritas desde a subida, e Rotations quantas vezes o
@@ -432,15 +535,18 @@ type Stats struct {
 
 // Stats devolve o retrato corrente.
 func (e *Emitter) Stats() Stats {
-	return Stats{
+	st := Stats{
+		File:              e.w != nil,
 		Dataset:           e.opts.Dataset,
 		Counter:           e.opts.Counter,
 		Rows:              e.rows.Load(),
-		Rotations:         e.w.Rotations(),
 		Errors:            e.errs.Load(),
-		Bytes:             e.w.Size(),
 		LastSuccessUnixMs: e.lastSuccess.Load(),
 	}
+	if e.w != nil {
+		st.Rotations, st.Bytes = e.w.Rotations(), e.w.Size()
+	}
+	return st
 }
 
 // timeLayout é o formato do instante da linha: RFC3339 com milissegundos em

@@ -284,6 +284,7 @@ type EngineStats struct {
 
 // DatasetStats é o que TEM granularidade por dataset.
 type DatasetStats struct {
+	SeriesDelivery []SeriesDeliveryStats `json:"seriesDelivery,omitempty"`
 	// AlarmDelivery é omitido quando não existem rotas nem filas antigas.
 	AlarmDelivery []AlarmDeliveryStats `json:"alarmDelivery,omitempty"`
 	Name          string               `json:"name"`
@@ -330,6 +331,17 @@ type DatasetStats struct {
 	Counters []CounterStats `json:"counters"`
 }
 
+// SeriesDeliveryStats describes a counter's best-effort Kafka output.
+type SeriesDeliveryStats struct {
+	Counter              string            `json:"counter"`
+	Destination          string            `json:"destination"`
+	Delivered            uint64            `json:"delivered"`
+	Dropped              map[string]uint64 `json:"dropped"`
+	PendingRecords       int64             `json:"pendingRecords"`
+	PendingBytes         int64             `json:"pendingBytes"`
+	LastSuccessTimestamp float64           `json:"lastSuccessTimestamp"`
+}
+
 // CounterStats é o retrato de UM contador mantido na escrita
 // (planning/contadores-mantidos-na-escrita.md §11.5).
 //
@@ -342,7 +354,8 @@ type DatasetStats struct {
 // AuditLastSuccessUnix são a última auditoria conclusiva — zero e zero até a
 // primeira, e é o timestamp que separa "nunca auditado" de "auditado e certo".
 type CounterStats struct {
-	Name string `json:"name"`
+	TotalDisabled bool   `json:"-"`
+	Name          string `json:"name"`
 	// Rows e Total são os agregados do contador inteiro: quantas linhas vivas
 	// apontam para algum grupo, e quantas satisfazem a condição no dataset
 	// inteiro. Rows abaixo do rows do dataset são as linhas SEM alguma coluna

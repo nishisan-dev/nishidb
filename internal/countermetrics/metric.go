@@ -163,10 +163,12 @@ var entryBytes = int64(reflect.TypeFor[entry]().Size())
 // Aggregate e Usage são seguros de qualquer goroutine e não alocam; o resto é
 // do amostrador.
 type Metric struct {
-	counter string
-	name    string
-	window  time.Duration
-	widthMs int64
+	measureIndex  int
+	measureWindow time.Duration
+	counter       string
+	name          string
+	window        time.Duration
+	widthMs       int64
 	// state é o contador dono da métrica: o mapa id → posição e as posições
 	// ocupadas.
 	state *counterState

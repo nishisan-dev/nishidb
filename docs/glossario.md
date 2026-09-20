@@ -1010,3 +1010,14 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | fila durável de entrega | delivery queue / Manager | internal/alarmdelivery |
 | retrato da entrega por destino | AlarmDeliveryStats | internal/protocol |
 | descarte de evento novo | dropped / `alarm.delivery.dropped` | internal/alarmdelivery |
+
+## Medidas de contadores (issue #75)
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| medida de taxa | `measures` / CounterMeasureSpec | internal/schema |
+| materialização do total desativada | `total: false` / DisableTotal | internal/schema |
+| ocorrência aceita | FlagCounterEvent / ApplyEvent | internal/types, internal/storage/counter |
+| numerador da janela | MeasureCount | internal/storage/counter |
+| geração de medidas | `measures.<epoch>.snapshot` / MeasureCounters | internal/storage/counter, internal/storage/checkpoint |
+| identidade da fonte amostrada | `.win.source` / reconcileSource | internal/countermetrics |

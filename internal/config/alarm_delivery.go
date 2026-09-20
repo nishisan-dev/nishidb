@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/units"
 	"gopkg.in/yaml.v3"
 )
@@ -34,10 +34,8 @@ type WebhookSpec struct {
 // DefaultWebhookQueueBytes é o limite também usado para filas pausadas.
 const DefaultWebhookQueueBytes = 256 << 20
 
-var destinationName = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
-
 // ValidDestinationName também limita os nomes dos diretórios e dos labels.
-func ValidDestinationName(name string) bool { return destinationName.MatchString(name) }
+func ValidDestinationName(name string) bool { return schema.ValidDeliveryName(name) }
 
 // Limits resolve os defaults e recusa limites explícitos inválidos.
 func (w WebhookSpec) Limits() (time.Duration, int64, error) {

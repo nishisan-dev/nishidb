@@ -172,6 +172,11 @@ func (s *DatasetSpec) RequiresWriteInstant() bool {
 	if s == nil {
 		return false
 	}
+	for _, c := range s.Counters {
+		if len(c.Measures) > 0 {
+			return true
+		}
+	}
 	if len(s.Materialization.TTLRules) > 0 {
 		return true
 	}

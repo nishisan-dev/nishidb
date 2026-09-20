@@ -43,14 +43,15 @@ type Writer struct {
 	buf  []byte
 
 	// rotations é lido pelo scrape, de outra goroutine.
-	rotations atomic.Uint64
+	rotations     atomic.Uint64
+	publishedSize atomic.Int64
 }
 
 // Rotations são as rotações desde a abertura.
 func (w *Writer) Rotations() uint64 { return w.rotations.Load() }
 
 // Size é o tamanho corrente do arquivo, incluindo o que está no buffer.
-func (w *Writer) Size() int64 { return w.size }
+func (w *Writer) Size() int64 { return w.publishedSize.Load() }
 
 // OpenWriter abre (ou cria) o arquivo corrente da série.
 //
@@ -90,6 +91,7 @@ func (w *Writer) open() error {
 		return fmt.Errorf("series: stat de %s: %w", w.path(0), err)
 	}
 	w.f, w.size = f, info.Size()
+	w.publishedSize.Store(w.size)
 	return nil
 }
 
@@ -119,6 +121,7 @@ func (w *Writer) Write(line []byte) error {
 	w.buf = append(w.buf, line...)
 	w.buf = append(w.buf, '\n')
 	w.size += int64(len(line)) + 1
+	w.publishedSize.Store(w.size)
 	if len(w.buf) >= bufSize {
 		return w.flushBuf()
 	}

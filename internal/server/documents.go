@@ -239,6 +239,7 @@ func counterStats(ests []counter.Stats) []protocol.CounterStats {
 			Name:                 e.Name,
 			Rows:                 e.Rows,
 			Total:                e.Total,
+			TotalDisabled:        e.TotalDisabled,
 			Groups:               e.Groups,
 			MaxGroups:            e.Ceiling,
 			Retired:              e.Retired,
@@ -296,8 +297,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		st := d.st.Stats()
 		state, detalhe := stateOfIngestion(d)
 		ds := protocol.DatasetStats{
-			AlarmDelivery: d.delivery.Stats(),
-			Name:          d.nome,
+			AlarmDelivery:  d.delivery.Stats(),
+			SeriesDelivery: s.seriesDelivery.Stats(d.nome),
+			Name:           d.nome,
 			// O bloco de schema sai do COMPILADO e é preenchido sempre, fora
 			// de qualquer condicional de consumidor: o dicionário cresce por
 			// toda rota de escrita, não só pela do Kafka.

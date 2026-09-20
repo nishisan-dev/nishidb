@@ -143,6 +143,7 @@ func countersError(err error) (int, protocol.ErrorDetail) {
 
 func auditCounter(rel counter.Report) protocol.CounterAudit {
 	out := protocol.CounterAudit{
+		TotalDisabled:   rel.TotalDisabled,
 		Name:            rel.Name,
 		Groups:          rel.Groups,
 		Maintained:      rel.Maintained,
@@ -159,7 +160,8 @@ func auditCounter(rel counter.Report) protocol.CounterAudit {
 	}
 	for _, d := range rel.Sample {
 		out.Sample = append(out.Sample, protocol.GroupDivergence{
-			GroupKey: d.Text, Maintained: d.Maintained, Recomputed: d.Recomputed,
+			TotalDisabled: rel.TotalDisabled,
+			GroupKey:      d.Text, Maintained: d.Maintained, Recomputed: d.Recomputed,
 			RefsMaintained: d.RefsMaintained, RefsRecomputed: d.RefsRecomputed,
 		})
 	}

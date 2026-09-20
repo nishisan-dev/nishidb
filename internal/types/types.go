@@ -207,6 +207,8 @@ type RowID uint64
 const (
 	// FlagTombstone marca o record como tombstone (Fase 9; M1 grava sempre 0).
 	FlagTombstone uint8 = 1 << 0
+	// FlagCounterEvent marca a escrita de ingestão; cópias da compactação limpam este bit.
+	FlagCounterEvent uint8 = 1 << 1
 )
 
 // RowIDIterator percorre rowIds em ordem CRESCENTE — a ordem é

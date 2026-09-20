@@ -38,12 +38,16 @@ func NewLogSink(log *logging.Logger) Sink {
 
 func eventArguments(e Event) []any {
 	args := make([]any, 0, 32+2*len(e.Columns))
+	var total any = e.Total
+	if e.TotalDisabled {
+		total = nil
+	}
 	args = append(args,
 		"eventId", e.ID,
 		"counter", e.Counter,
 		"alarm", e.Alarm,
 		"groupKey", e.GroupKey,
-		"total", e.Total,
+		"total", total,
 		"condition", e.Condition,
 		"sustainedFor", e.SustainedFor.String(),
 		"since", e.Since.UTC().Format(logTimeLayout),

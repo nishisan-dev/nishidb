@@ -53,6 +53,9 @@ func (c *Counter) RetireEmptyGroups(now time.Time) (int, error) {
 		if c.lastTouch[g] > c.coveredTouches {
 			continue
 		}
+		if !c.retireMeasures(g, now.UnixMilli()) {
+			continue
+		}
 		if err := c.dict.Retire(g); err != nil {
 			return retired, err
 		}

@@ -130,6 +130,6 @@ func removeOrphanFiles(dataset, dir string, declared map[string]map[string]bool,
 // metricOfFileName devolve o nome da métrica de um arquivo deste pacote
 // (<metric>.win ou <metric>.win.tmp), e false para qualquer outro nome.
 func metricOfFileName(name string) (string, bool) {
-	metric, ok := strings.CutSuffix(strings.TrimSuffix(name, tmpSuffix), fileExtension)
+	metric, ok := strings.CutSuffix(strings.TrimSuffix(strings.TrimSuffix(name, tmpSuffix), ".source"), fileExtension)
 	return metric, ok && metric != ""
 }

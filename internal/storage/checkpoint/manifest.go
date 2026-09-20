@@ -142,6 +142,8 @@ const (
 	// ignorável do formato, e por isso a menor: sai antes de todas as críticas
 	// na cauda em ordem crescente.
 	tagCounters = 0x0001
+	// tagCounterMeasures exige manutenção das janelas de ocorrência em todo checkpoint.
+	tagCounterMeasures = 0x8005
 
 	// tlvHeaderSize é `tag u16 | len u32`.
 	tlvHeaderSize = 6
@@ -265,6 +267,8 @@ type Manifest struct {
 	// Counters é a seção 0x0001; vazia (ou nil) no dataset sem contador
 	// declarado, e nesse caso a seção não é emitida.
 	Counters []CounterInfo
+	// MeasureCounters referencia measures.<Epoch>.snapshot de cada contador.
+	MeasureCounters []string
 
 	// StoreMode é a engine do dataset: 0 materializado, 1 histórico. O tipo é
 	// uint8 cru e não um enum do storage porque este pacote descreve um
@@ -297,6 +301,12 @@ func TLVTailSize(m *Manifest) int {
 	}
 	if len(m.Counters) > 0 {
 		n += tlvHeaderSize + countersSectionSize(m.Counters)
+	}
+	if len(m.MeasureCounters) > 0 {
+		n += tlvHeaderSize + 2
+		for _, name := range m.MeasureCounters {
+			n += 2 + len(name)
+		}
 	}
 	return n
 }
@@ -396,7 +406,21 @@ func (m *Manifest) appendTLVTail(b []byte) []byte {
 	// arquivo por uma alteração de configuração.
 	b = binary.LittleEndian.AppendUint16(b, tagPerSegmentIndex)
 	b = binary.LittleEndian.AppendUint32(b, indexInfoSize)
-	return append(b, currentIndexFormat)
+	b = append(b, currentIndexFormat)
+	if len(m.MeasureCounters) > 0 {
+		n := 2
+		for _, name := range m.MeasureCounters {
+			n += 2 + len(name)
+		}
+		b = binary.LittleEndian.AppendUint16(b, tagCounterMeasures)
+		b = binary.LittleEndian.AppendUint32(b, uint32(n))
+		b = binary.LittleEndian.AppendUint16(b, uint16(len(m.MeasureCounters)))
+		for _, name := range m.MeasureCounters {
+			b = binary.LittleEndian.AppendUint16(b, uint16(len(name)))
+			b = append(b, name...)
+		}
+	}
+	return b
 }
 
 // reader é um cursor de decodificação com detecção de truncamento.
@@ -524,6 +548,27 @@ func decodeTLVTail(r *reader, m *Manifest) error {
 		case tag == tagCounters:
 			if err := decodeCounters(payload, m); err != nil {
 				return err
+			}
+		case tag == tagCounterMeasures:
+			if m.MeasureCounters != nil {
+				return fmt.Errorf("%w: duplicate counter measures section", ErrCorruptManifest)
+			}
+			p := &reader{b: payload}
+			count := p.u16()
+			if count == 0 || int(count) > len(payload)/2 {
+				return fmt.Errorf("%w: invalid counter measures count", ErrCorruptManifest)
+			}
+			seen := make(map[string]bool)
+			for i := 0; i < int(count); i++ {
+				name := string(p.take(int(p.u16())))
+				if name == "" || seen[name] {
+					return fmt.Errorf("%w: invalid counter measures name", ErrCorruptManifest)
+				}
+				seen[name] = true
+				m.MeasureCounters = append(m.MeasureCounters, name)
+			}
+			if p.bad || p.pos != len(payload) {
+				return fmt.Errorf("%w: invalid counter measures section", ErrCorruptManifest)
 			}
 		case tag&tagCritical != 0:
 			// Ignorar uma seção crítica desconhecida é o modo de falha que

@@ -1337,6 +1337,9 @@ func Open(opts Options) (*Store, error) {
 
 	// Checkpoint imediato: manifest desde a criação e estado limpo pós-
 	// recovery (novo S = tail; epoch nunca regride).
+	for _, c := range s.counters {
+		c.ActivateMeasures()
+	}
 	if err := s.Checkpoint(); err != nil {
 		return nil, err
 	}
@@ -1739,6 +1742,12 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	// 1. encode. O BuildRecord revalida por conta própria e deriva o
 	// fieldCount por construção (§I4: nunca aceito do caller) — a segunda
 	// varredura do payload é deliberada, o custo é medido na S13.
+	for _, c := range s.counters {
+		if len(c.Def().Measures) > 0 && flags&types.FlagTombstone == 0 {
+			flags |= types.FlagCounterEvent
+			break
+		}
+	}
 	rec, err := encoding.BuildRecord(s.buildBuf[:0], rowID, seq, flags, key, payload)
 	s.buildBuf = rec
 	if err != nil {
@@ -2005,7 +2014,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// como um erro na agenda. Não é sticky.
 	lapide := a.flags&types.FlagTombstone != 0
 	for _, c := range s.counters {
-		if err := c.Transition(a.rowID, a.payload, lapide); err != nil {
+		if err := c.ApplyEvent(a.rowID, a.payload, lapide, a.flags&types.FlagCounterEvent != 0); err != nil {
 			return err
 		}
 	}
