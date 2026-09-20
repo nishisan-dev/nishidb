@@ -1625,6 +1625,8 @@ O destino `metricas_olt` deve existir em `seriesDelivery.kafka`, conforme o
 [guia de emissão Kafka](docs/operacao-series-kafka.md). `emit` e `metrics` são
 opcionais: a medida pode ser consultada diretamente em
 `_counters.stops_by_olt`, sem amostrador ou emissão.
+Para configurar somente o alarme, veja o
+[exemplo de alarme por taxa](#alarme-por-taxa-de-eventos-measures).
 
 A taxa é `ocorrências na janela × duração da unidade ÷ duração da janela`.
 Assim, 1.800 eventos em `1m`, com `unit: second`, produzem `30.0`. O divisor é
@@ -1709,9 +1711,11 @@ counters:
 ```
 
 Cada agregado vira uma coluna `<name>_<aggregate>` em `_counters.<nome>`,
-depois de `total` e na ordem declarada: `auth_5m_avg`, `auth_24h_max`,
-`auth_24h_min`. `avg` é `double`; `min` e `max` são `int64`, porque são valores
-que o `total` de fato teve. É o mesmo nome no SELECT e na condição de um
+depois de `total` e das medidas, na ordem declarada: `auth_5m_avg`,
+`auth_24h_max`, `auth_24h_min`. Com `source: total`, `avg` é `double` e
+`min`/`max` são `int64`. O `source` também aceita o nome de uma medida, como
+`stop_rate`: nesse caso, os três agregados são `double` e descrevem as amostras
+da taxa na janela histórica. É o mesmo nome no SELECT e na condição de um
 alarme:
 
 ```bash
@@ -1723,7 +1727,7 @@ projeção descritas em "SQL suportado": `SELECT groupKey, auth_5m_avg,
 auth_5m_avg AS x, auth_5m_avg FROM _counters.autenticados_por_olt` devolve as
 colunas `groupKey`, `auth_5m_avg`, `x` e `auth_5m_avg_1`.
 
-O servidor amostra o `total` de cada grupo vivo a cada `menor janela ÷ 60`,
+O servidor amostra a fonte declarada de cada grupo vivo a cada `menor janela ÷ 60`,
 entre 1 s e 10 s (5 s com a janela de `5m`), e cada janela é dividida em 60
 baldes, então ela desliza no passo de um balde. Uma janela ainda incompleta — a
 OLT que apareceu há dois minutos — responde com o agregado das amostras que
@@ -1810,9 +1814,10 @@ counters:
 ```
 
 O `when` fala a **mesma linguagem do `WHERE`** — é o mesmo avaliador — sobre as
-colunas da tabela do contador: `groupKey`, as do `groupBy`, `total` e as geradas
-pelas métricas de janela do contador (`auth_5m_avg`, ver acima). Um nome de
-coluna errado **derruba a subida**, com a coluna nomeada.
+colunas da tabela do contador: `groupKey`, as do `groupBy`, `total`, as medidas
+de taxa (`stop_rate`) e as geradas pelas métricas de janela do contador
+(`auth_5m_avg`, ver acima). O `qualifyWhen` aceita essas mesmas colunas. Um
+nome de coluna errado **derruba a subida**, com a coluna nomeada.
 
 `sustainedFor` é o que separa alarme de rajada: mínimo de 10 s, e `never` é
 recusado (um alarme que nunca dispara não é um alarme). A varredura roda a cada
@@ -1820,9 +1825,13 @@ recusado (um alarme que nunca dispara não é um alarme). A varredura roda a cad
 
 `value` é opcional e diz **qual número** o alarme sustentou: a coluna cujo
 valor, lido na mesma linha que decidiu o disparo, vira o `firingValue` do
-alarme. Ausente, vale `total`. Só são aceitas `total` e as colunas das métricas
-de janela do contador (`value: auth_5m_avg`); `groupKey`, as colunas do
-`groupBy` e nome inexistente derrubam a subida, com as colunas aceitas listadas.
+alarme. Ausente, vale `total`. São aceitas `total`, as medidas de taxa
+(`value: stop_rate`) e as colunas das métricas de janela do contador
+(`value: auth_5m_avg`); `groupKey`, as colunas do `groupBy` e nome inexistente
+derrubam a subida, com as colunas aceitas listadas. Com `total: false`, declare
+`value` explicitamente para registrar a taxa no disparo: o padrão continua
+sendo `total`, que nesse caso é NULL. Comparações como `total > 0` também
+avaliam falso quando o total está desativado.
 Mudar o `value` **não** zera o cronômetro: ele não muda a decisão, só o que se
 mostra dela.
 
@@ -1854,9 +1863,11 @@ antigo sai no log como `alarm.state_unreadable`, e os alarmes em curso recomeça
 a contar o prazo, uma vez.
 
 O `enrich` acompanha o evento com o resultado de consultas parametrizadas pelo
-grupo que alarmou — `bind` liga cada `?` a uma coluna do contador (`total` e
-`groupKey` incluídos; as colunas das métricas de janela **não** são ligáveis, e a
-subida as recusa). O valor vai como **parâmetro**, nunca concatenado: um nome
+grupo que alarmou — `bind` liga cada `?` a `groupKey`, `total` ou uma coluna do
+`groupBy`. Medidas de taxa e colunas de métricas de janela **não** são ligáveis
+em `enrich.bind`, e a subida as recusa, embora possam ser usadas em `when`,
+`qualifyWhen` e `value`. Com `total: false`, `bind: [total]` liga NULL.
+O valor vai como **parâmetro**, nunca concatenado: um nome
 de OLT com apóstrofo não reescreve a consulta. `LIMIT` é obrigatório, no máximo
 100. Cada consulta precisa de `name`, que é como o bloco é identificado no
 evento.
@@ -1879,7 +1890,11 @@ O disparo é um `WARN` e a resolução um `INFO`:
 ```
 
 `valueColumn` e `firingValue` só vêm no disparo; `firingValue` fica de fora
-quando a coluna não tinha amostra naquele instante. `at − since` é a duração do
+quando a coluna é NULL naquele instante, inclusive `total` desativado.
+O campo `metrics` reúne as medidas de taxa e os agregados de janela disponíveis
+na linha que gerou o evento, com valores textuais (por exemplo,
+`"metrics":{"stop_rate":"30"}`). O campo `total` sai como `null` quando
+desativado, mesmo em um alarme disparado por taxa. `at − since` é a duração do
 problema. O `reason` distingue **`condition_cleared`**
 (o problema passou) de **`group_retired`** (o grupo saiu do contador) — um
 equipamento removido do inventário não é um equipamento recuperado.
@@ -1898,8 +1913,12 @@ O cronômetro **sobrevive ao reinício**: o "desde quando" é gravado em
 `"downtimeMs"`. Num encerramento gracioso esse número é o tempo de parada; num
 crash é "desde quando não há registro", que é maior — a lacuna real é
 desconhecida, e um número grande é a resposta honesta. Mudar o `when`, o
-`qualifyWhen`, o `sustainedFor` ou a janela de uma métrica citada no YAML
-invalida o cronômetro salvo daquele alarme.
+`qualifyWhen`, o `sustainedFor`, a fonte ou a janela de uma métrica citada nas
+condições invalida o cronômetro salvo daquele alarme. Quando uma condição usa
+uma medida, diretamente ou por uma métrica histórica, mudar a janela ou a
+unidade dessa medida, ou o `groupBy`/`where` do contador, também reinicia o
+prazo. Mudar uma medida que só aparece em `value` não altera a condição nem
+reinicia o prazo.
 
 Para inspecionar o que está em curso, sem ler log, consulte a **view de
 alarmes**. Ela deriva dos contadores e mora ao lado deles, no schema do
@@ -1938,6 +1957,69 @@ dataset ou tabela histórica com esse nome são recusados na subida.
 > **Mudança incompatível:** até a v0.9.1 esta tabela era `_meta.alarms`. Ela
 > não existe mais; troque por `alarms` (conexão por schema),
 > `<schemaName>.alarms` ou `_counters.alarms`.
+
+#### Alarme por taxa de eventos (`measures`)
+
+Disponível desde a v0.11.0. No YAML do dataset, declare a medida e o alarme
+no **mesmo contador**. Neste exemplo, `olt` e `status` são campos `string`
+do schema do dataset:
+
+```yaml
+counters:
+  - name: stops_by_olt
+    groupBy: [olt]
+    where: "status = 'Stop'"
+    total: false
+    measures:
+      - name: stop_rate
+        window: 1m
+        unit: second
+    alarms:
+      - name: stop_burst
+        when: "stop_rate > 25"
+        value: stop_rate
+        sustainedFor: 30s
+```
+
+`stop_rate` mede eventos aceitos por segundo, calculados sobre a janela de um
+minuto. O alarme dispara quando a taxa permanece acima de 25 nas avaliações
+por pelo menos 30 segundos, contados desde a primeira observação da condição.
+`window` define a janela da taxa; `sustainedFor` define o prazo do alarme.
+O limiar usa a unidade de `unit`: com `second`, `25` significa 25 eventos/s;
+com `minute`, significaria 25 eventos/min. Cada atualização aceita cujo estado
+resultante é `Stop` conta, mesmo que a entidade já estivesse em `Stop`.
+Veja a [semântica e os limites das medidas](#taxas-de-eventos-do-contador).
+
+Com o servidor em execução, o alarme avalia a medida sem exigir `metrics` ou
+`emit`. A taxa decai com a expiração dos baldes mesmo sem novos eventos; na
+primeira avaliação em que ela fica em 25 ou menos, um alarme já disparado
+resolve com `condition_cleared`. Se isso ocorrer antes do disparo, o prazo é
+cancelado sem emitir resolução.
+
+O evento registra `valueColumn: stop_rate` e a taxa do instante do disparo em
+`firingValue`. Para acompanhar a taxa atual e os alarmes pendentes/disparados,
+execute estas consultas na conexão do schema do dataset:
+
+```sql
+SELECT groupKey, stop_rate FROM _counters.stops_by_olt
+ORDER BY stop_rate DESC LIMIT 10;
+
+SELECT groupKey, state, since, valueColumn, firingValue FROM alarms
+WHERE counter = 'stops_by_olt' AND alarm = 'stop_burst';
+```
+
+Para qualificar pelo histórico da taxa, adicione uma métrica com
+`source: stop_rate` e use sua coluna em `qualifyWhen`, por exemplo
+`qualifyWhen: "stops_24h_max > 25"` com a métrica `stops_24h` do
+[exemplo completo](#taxas-de-eventos-do-contador). Sem amostras históricas,
+essa comparação é falsa e o grupo ainda não se qualifica. Uma medida também
+pode ser citada diretamente em `qualifyWhen`.
+
+Sem `notify`, os eventos saem no log. Para recebê-los por HTTP, acrescente
+`notify: [noc]` ao alarme depois de configurar o destino no
+[guia de webhooks](docs/operacao-webhook.md). `emit.target` controla a emissão
+periódica dos valores do contador; os destinos dos eventos de alarme são
+selecionados por `notify`.
 
 ### Emissão periódica: a série de cada grupo
 

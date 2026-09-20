@@ -4,6 +4,11 @@ O webhook publica `alarm.firing` e `alarm.resolved` com os mesmos campos de
 negócio do log. `notify` escolhe destinos nomeados por alarme; sem essa chave,
 o alarme continua saindo apenas no log. Kafka não é um destino nesta versão.
 
+As condições, o prazo e a escolha do valor publicado estão na
+[referência de alarmes](../README.md#alarme-por-condição-sustentada), incluindo
+o [exemplo de alarme por taxa com `measures`](../README.md#alarme-por-taxa-de-eventos-measures).
+O mesmo `notify` pode ser usado nesses alarmes.
+
 ## Configuração
 
 No `nishidb.yaml`:
@@ -55,6 +60,14 @@ O identificador também sai no log. Campos próprios do logger — nível,
 componente, timestamp do log e mensagem textual — não integram o corpo HTTP.
 A supressão de chaves sensíveis, os tipos e a ausência dos campos opcionais
 seguem o log. Métricas do evento mantêm seus valores textuais.
+
+Em alarmes sobre `measures`, `valueColumn` identifica a medida escolhida em
+`value` e `firingValue` é sua taxa numérica no disparo. As medidas disponíveis
+também aparecem em `metrics`, como `"metrics":{"stop_rate":"30"}`.
+Com `total: false`, o campo `total` é `null`; configure `value: stop_rate`
+para que o disparo registre a taxa, pois o padrão de `value` continua `total`.
+Consulte a unidade (`second`, `minute`, `hour` ou `day`) na configuração da
+medida para interpretar o limiar e o valor recebido.
 
 Somente HTTP 2xx confirma a entrega. Timeout, erro de rede e todos os outros
 status, inclusive 400/401/403, retêm o evento e provocam nova tentativa.
