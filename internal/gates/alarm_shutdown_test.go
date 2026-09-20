@@ -42,7 +42,7 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 	// Os laços que têm de parar antes, e o que os para. Um laço novo que more
 	// no servidor entra nesta lista — e o gate falha enquanto ele não estiver
 	// no encerra(), que é o ponto.
-	paradas := []string{"forAlarms", "forEmitters", "forCounterMetrics", "closeAlarmDelivery"}
+	paradas := []string{"forAlarms", "forEmitters", "forCounterMetrics", "closeAlarmDelivery", "seriesDelivery.Close"}
 	const quiesce = "closeDatasets"
 
 	pos := map[string]int{}
@@ -56,8 +56,12 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 		if !ok {
 			return true
 		}
-		if _, visto := pos[sel.Sel.Name]; !visto {
-			pos[sel.Sel.Name] = i
+		name := sel.Sel.Name
+		if receiver, ok := sel.X.(*ast.SelectorExpr); ok && receiver.Sel.Name == "seriesDelivery" {
+			name = "seriesDelivery." + name
+		}
+		if _, visto := pos[name]; !visto {
+			pos[name] = i
 		}
 		i++
 		return true
@@ -71,6 +75,9 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 	}
 	if pos["forAlarms"] >= pos["closeAlarmDelivery"] {
 		t.Error("as filas devem fechar depois de parar os alarmes")
+	}
+	if pos["forEmitters"] >= pos["seriesDelivery.Close"] {
+		t.Error("Kafka producers must close after all counter emitters have stopped")
 	}
 	for _, parada := range paradas {
 		p, ok := pos[parada]

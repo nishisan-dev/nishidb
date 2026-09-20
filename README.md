@@ -1844,6 +1844,14 @@ dataset ou tabela histórica com esse nome são recusados na subida.
 
 ### Emissão periódica: a série de cada grupo
 
+A emissão também suporta [destinos Kafka nomeados](docs/operacao-series-kafka.md).
+Declare brokers e tópico em `seriesDelivery.kafka` no `nishidb.yaml` e selecione
+`target: [file, metricas_olt]` no bloco abaixo para arquivo e Kafka, ou
+`target: metricas_olt` para somente Kafka (removendo `file`, `maxBytes` e `keep`).
+Cada grupo vira uma mensagem JSON com os nomes das colunas, `dataset` e
+`counter`. O envio é assíncrono e falhas descartam a amostra daquele destino,
+sem reenvio. Sem `target`, permanece a emissão em arquivo.
+
 Para alimentar gráfico por equipamento, o contador pode escrever o valor de
 **cada grupo** num arquivo NDJSON, periodicamente:
 

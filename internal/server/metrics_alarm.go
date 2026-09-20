@@ -21,6 +21,9 @@ func registerMetricsOfAlarms(reg *metrics.Registry, s *Server) {
 	reg.Register(metrics.CollectorFunc(func() []metrics.Sample {
 		out := make([]metrics.Sample, 0, len(s.datasets)*8)
 		for _, d := range s.datasets {
+			for _, delivery := range s.seriesDelivery.Stats(d.nome) {
+				out = append(out, samplesOfSeriesDelivery(d.nome, delivery)...)
+			}
 			for _, delivery := range d.delivery.Stats() {
 				out = append(out, samplesOfAlarmDelivery(d.nome, delivery)...)
 			}
@@ -145,6 +148,9 @@ func samplesOfSeries(dataset string, es []*series.Emitter) []metrics.Sample {
 			emitindo = 1
 		}
 		st := e.Stats()
+		if !st.File {
+			continue
+		}
 		rotulo := []metrics.Label{
 			{Name: metrics.LabelDataset, Value: dataset},
 			{Name: metrics.LabelCounter, Value: st.Counter},

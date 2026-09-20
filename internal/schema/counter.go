@@ -316,6 +316,17 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 			if c.Emit, err = validateEmit(r.Emit, keyPath+".emit", r.Name, seenFiles); err != nil {
 				return nil, err
 			}
+			if c.Emit.HasKafka() {
+				for _, col := range CounterColumns(c.GroupBy, c.Metrics) {
+					if col.Origin == "" { // Fixed counter columns are emitted exactly once.
+						continue
+					}
+					switch col.Name {
+					case "dataset", "counter", "groupKey", "total", "at":
+						return nil, specErrf("%s.emit: column %q collides with a reserved Kafka field", keyPath, col.Name)
+					}
+				}
+			}
 		}
 		out = append(out, c)
 	}

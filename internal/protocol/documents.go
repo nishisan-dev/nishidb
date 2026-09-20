@@ -284,6 +284,7 @@ type EngineStats struct {
 
 // DatasetStats é o que TEM granularidade por dataset.
 type DatasetStats struct {
+	SeriesDelivery []SeriesDeliveryStats `json:"seriesDelivery,omitempty"`
 	// AlarmDelivery é omitido quando não existem rotas nem filas antigas.
 	AlarmDelivery []AlarmDeliveryStats `json:"alarmDelivery,omitempty"`
 	Name          string               `json:"name"`
@@ -328,6 +329,17 @@ type DatasetStats struct {
 	// MESMA leitura que alimenta as séries nishidb_counter_*. Lista vazia — e
 	// não omitida — no dataset sem `counters:`, pela razão do Index.
 	Counters []CounterStats `json:"counters"`
+}
+
+// SeriesDeliveryStats describes a counter's best-effort Kafka output.
+type SeriesDeliveryStats struct {
+	Counter              string            `json:"counter"`
+	Destination          string            `json:"destination"`
+	Delivered            uint64            `json:"delivered"`
+	Dropped              map[string]uint64 `json:"dropped"`
+	PendingRecords       int64             `json:"pendingRecords"`
+	PendingBytes         int64             `json:"pendingBytes"`
+	LastSuccessTimestamp float64           `json:"lastSuccessTimestamp"`
 }
 
 // CounterStats é o retrato de UM contador mantido na escrita

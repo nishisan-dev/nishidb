@@ -43,6 +43,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/budget"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/series"
+	"github.com/nishisan-dev/nishidb/internal/seriesdelivery"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/users"
@@ -143,11 +144,12 @@ func (d *dataset) falha(err error) {
 
 // Server é o processo de longa duração.
 type Server struct {
-	cfg      *config.Config
-	log      *logging.Logger
-	reg      *metrics.Registry
-	eng      *query.Engine
-	datasets []*dataset
+	seriesDelivery *seriesdelivery.Manager
+	cfg            *config.Config
+	log            *logging.Logger
+	reg            *metrics.Registry
+	eng            *query.Engine
+	datasets       []*dataset
 	// byNome resolve o dataset de uma requisição. É construído na subida e
 	// só lido depois: nenhum dataset entra ou sai com o processo de pé, então
 	// não precisa de lock.
@@ -327,6 +329,17 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 			return nil, err
 		}
 	}
+	// Validate series routes and credentials before taking dataset locks.
+	seriesManager, err := seriesdelivery.Open(cfg, specs, log)
+	if err != nil {
+		return nil, err
+	}
+	seriesOwned := false
+	defer func() {
+		if !seriesOwned {
+			seriesManager.Close()
+		}
+	}()
 	// A tabela de usuários abre antes do bind, pela mesma razão do resto da
 	// segurança: tabela ilegível ou já aberta por outro processo recusa a
 	// subida sem listener nenhum aberto. Na primeira subida é aqui que nasce a
@@ -350,19 +363,20 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:         cfg,
-		log:         log,
-		reg:         reg,
-		eng:         query.NewEngine(),
-		byNome:      make(map[string]*dataset, len(names)),
-		bySchema:    make(map[string]*dataset, len(names)),
-		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
-		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
-		inVoo:       newInVoo(),
-		budget:      budget.NewGlobal(cfg.MemoryTarget()),
-		users:       userTable,
-		tlsCert:     cert,
-		now:         o.Now,
+		seriesDelivery: seriesManager,
+		cfg:            cfg,
+		log:            log,
+		reg:            reg,
+		eng:            query.NewEngine(),
+		byNome:         make(map[string]*dataset, len(names)),
+		bySchema:       make(map[string]*dataset, len(names)),
+		vagas:          make(chan struct{}, cfg.MaxConcurrent()),
+		vagasLongas:    make(chan struct{}, cfg.MaxLongRunning()),
+		inVoo:          newInVoo(),
+		budget:         budget.NewGlobal(cfg.MemoryTarget()),
+		users:          userTable,
+		tlsCert:        cert,
+		now:            o.Now,
 	}
 	s.met = registerMetricsOfQuery(reg, s.eng, s.inVoo, s.budget)
 	s.authFalhas = registerMetricsOfAuth(reg)
@@ -396,6 +410,8 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		// Os amostradores dos datasets já abertos fecham ANTES dos Stores, pela
 		// mesma ordem do encerra(): seguram mmap próprio e leem os contadores
 		// pelo campo do Store.
+		s.forEmitters()
+		s.seriesDelivery.Close()
 		s.forCounterMetrics()
 		if err := s.closeAlarmDelivery(); err != nil {
 			log.Warn("alarm.delivery.close", "failed to close alarm delivery on aborted startup", "error", err.Error())
@@ -435,6 +451,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 	registerMetricsOfAlarms(reg, s)
 	registerMetricsOfCounterMetrics(reg, s)
 	ok = true
+	seriesOwned = true
 	return s, nil
 }
 
@@ -531,7 +548,13 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	// Daqui em diante, toda falha fecha o amostrador ANTES do Store: ele segura
 	// mmap próprio e lê os contadores pelo campo do Store, sem a guarda de vida.
 	var delivery *alarmdelivery.Manager
+	var d *dataset
 	failing := func(err error) error {
+		if d != nil {
+			for _, e := range d.emitters {
+				err = errors.Join(err, e.Close())
+			}
+		}
 		return closingStore(st, closingSampler(sampler, errors.Join(err, delivery.Close())))
 	}
 	// As tabelas `_counters.<nome>` entram no motor sob o dataset — e o
@@ -549,7 +572,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	if err != nil {
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
-	d := &dataset{
+	d = &dataset{
 		nome:    spec.Name,
 		spec:    spec,
 		sch:     compilado,
@@ -557,7 +580,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		mat:     mat,
 		metrics: sampler,
 	}
-	if err := openEmitters(d, spec, st, dir, sampler.MetricSource(), log); err != nil {
+	if err := openEmitters(d, spec, st, dir, sampler.MetricSource(), log, s.seriesDelivery); err != nil {
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	delivery, err = alarmdelivery.Open(dir, spec, s.cfg, log)
@@ -1184,6 +1207,7 @@ func (s *Server) encerra() error {
 	s.forAlarms()
 	errs = append(errs, s.closeAlarmDelivery())
 	s.forEmitters()
+	s.seriesDelivery.Close()
 	s.forCounterMetrics()
 	errs = append(errs, s.closeDatasets())
 	// A tabela de usuários fecha por último: até aqui o http.Server ainda
@@ -1301,19 +1325,26 @@ func (s *Server) EmitActive(dataset string) bool {
 // nenhum contador declara `metrics:`, e também o que o amostrador ausente
 // entrega. As colunas declaradas continuam saindo na linha, todas null — o
 // formato da linha é função do YAML (ver series.Metric).
-func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir string, src counters.MetricSource, log *logging.Logger) error {
+func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir string, src counters.MetricSource, log *logging.Logger, delivery *seriesdelivery.Manager) error {
 	declared := make(map[string]int)
+	hasEmit := false
 	for _, cs := range spec.Counters {
-		if cs.Emit != nil {
+		if cs.Emit == nil {
+			continue
+		}
+		hasEmit = true
+		if cs.Emit.HasFile() {
 			declared[cs.Emit.File] = cs.Emit.Keep
 		}
 	}
-	if len(declared) == 0 {
+	if !hasEmit {
 		return nil
 	}
 	seriesDir := filepath.Join(dir, schema.EmitDirName)
-	if err := series.Cleanup(seriesDir, declared); err != nil {
-		return err
+	if len(declared) > 0 {
+		if err := series.Cleanup(seriesDir, declared); err != nil {
+			return err
+		}
 	}
 	readers := readersOfCounters(st)
 	byName := make(map[string][]string, len(spec.Counters))
@@ -1333,17 +1364,19 @@ func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir s
 			return err
 		}
 		e, err := series.NewEmitter(series.Options{
-			Dataset:  spec.Name,
-			Counter:  cs.Name,
-			Columns:  byName[cs.Name],
-			Metrics:  metrics,
-			Reader:   reader,
-			Dir:      seriesDir,
-			File:     cs.Emit.File,
-			Every:    cs.Emit.Every,
-			MaxBytes: cs.Emit.MaxBytes,
-			Keep:     cs.Emit.Keep,
-			Log:      log,
+			DisableFile: !cs.Emit.HasFile(),
+			Outputs:     delivery.Outputs(spec.Name, cs.Name),
+			Dataset:     spec.Name,
+			Counter:     cs.Name,
+			Columns:     byName[cs.Name],
+			Metrics:     metrics,
+			Reader:      reader,
+			Dir:         seriesDir,
+			File:        cs.Emit.File,
+			Every:       cs.Emit.Every,
+			MaxBytes:    cs.Emit.MaxBytes,
+			Keep:        cs.Emit.Keep,
+			Log:         log,
 		})
 		if err != nil {
 			return err
