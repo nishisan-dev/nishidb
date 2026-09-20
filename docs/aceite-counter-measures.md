@@ -48,6 +48,13 @@ O teste isolado e as suítes completas posteriores passaram sem alteração dess
 harness. O gate do glossário apontou um cabeçalho duplicado, corrigido nesta
 entrega antes da rodada final.
 
+O primeiro CI apontou diferença intermitente de 28 B/query no gate existente
+`TestResolucaoQualificadaNaoAlocaPorCampoDoDataset`. A medição de TotalAlloc
+passou a aquecer o caminho e usar um único P, como testing.AllocsPerRun, mantendo
+a igualdade exata entre 40 e 4.000 campos. Trinta execuções posteriores passaram.
+Reintroduzir a montagem de colunas no roteamento continuou reprovando o gate:
+2.880 contra 35.296 B/query. O código de produção de consultas não mudou.
+
 ## Custo medido
 
 [Saída bruta do microbenchmark](../benchmark/baselines/2026-09-20-counter-measures.txt),
