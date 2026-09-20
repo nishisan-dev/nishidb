@@ -20,7 +20,7 @@ import (
 //	    metrics:
 //	      - name: auth_5m          # nome livre; as colunas saem <name>_<aggregate>
 //	        type: window           # único tipo
-//	        source: total          # única fonte
+//	        source: total          # total habilitado ou nome de uma measure
 //	        window: 5m             # múltiplo de 1m, de 1m a 30d
 //	        aggregates: [avg]      # avg, min e/ou max, na ordem das colunas
 //
@@ -33,9 +33,7 @@ const (
 	// MetricTypeWindow é o único tipo de métrica. A chave `type` existe mesmo
 	// com um valor só para que um tipo novo entre sem mudar a forma do bloco.
 	MetricTypeWindow = "window"
-	// MetricSourceTotal é a única fonte: a coluna `total` do grupo. Como o
-	// `type`, a chave existe para que uma fonte nova (a razão entre
-	// contadores, issue #61) entre sem mudar a forma do bloco.
+	// MetricSourceTotal nomeia a população do grupo quando total está habilitado.
 	MetricSourceTotal = "total"
 	// AggregateAvg, AggregateMin e AggregateMax são os agregados da janela.
 	AggregateAvg = "avg"
@@ -70,11 +68,13 @@ var windowAggregates = []string{AggregateAvg, AggregateMin, AggregateMax}
 
 // CounterMetricSpec é uma métrica de janela validada de um contador.
 type CounterMetricSpec struct {
+	// Rate resolve a fonte quando source nomeia uma measure; nil significa total.
+	Rate *CounterMeasureSpec
 	// Name é o nome livre da métrica, prefixo das colunas geradas.
 	Name string
 	// Type é sempre MetricTypeWindow.
 	Type string
-	// Source é sempre MetricSourceTotal.
+	// Source é MetricSourceTotal habilitado ou o nome de uma measure.
 	Source string
 	// Window é a janela: entre MinMetricWindow e MaxMetricWindow, múltipla de
 	// time.Minute.
@@ -140,7 +140,7 @@ func (c CounterColumn) String() string {
 // `total` vem depois do groupBy): as fixas vêm primeiro para que, numa
 // colisão, a coluna apontada como culpada seja sempre a declarada pelo
 // operador, que é a que ele pode renomear.
-func CounterColumns(groupBy []string, metrics []CounterMetricSpec) []CounterColumn {
+func CounterColumns(groupBy []string, metrics []CounterMetricSpec, measures ...CounterMeasureSpec) []CounterColumn {
 	n := 2 + len(groupBy)
 	for _, m := range metrics {
 		n += len(m.Aggregates)
@@ -149,6 +149,9 @@ func CounterColumns(groupBy []string, metrics []CounterMetricSpec) []CounterColu
 	out = append(out, CounterColumn{Name: CounterKeyColumn}, CounterColumn{Name: CounterTotalColumn})
 	for _, g := range groupBy {
 		out = append(out, CounterColumn{Name: g, Origin: counterColumnOriginGroupBy})
+	}
+	for i, m := range measures {
+		out = append(out, CounterColumn{Name: m.Name, Origin: fmt.Sprintf("measures[%d]", i)})
 	}
 	for i, m := range metrics {
 		origin := fmt.Sprintf("metrics[%d]", i)
@@ -163,8 +166,8 @@ func CounterColumns(groupBy []string, metrics []CounterMetricSpec) []CounterColu
 // contador com o mesmo nome: first é a que vem antes na ordem de
 // CounterColumns, second a que a repete. found é false quando os nomes são
 // todos distintos.
-func FindCounterColumnCollision(groupBy []string, metrics []CounterMetricSpec) (first, second CounterColumn, found bool) {
-	columns := CounterColumns(groupBy, metrics)
+func FindCounterColumnCollision(groupBy []string, metrics []CounterMetricSpec, measures ...CounterMeasureSpec) (first, second CounterColumn, found bool) {
+	columns := CounterColumns(groupBy, metrics, measures...)
 	seen := make(map[string]CounterColumn, len(columns))
 	for _, col := range columns {
 		if prev, dup := seen[col.Name]; dup {
@@ -279,9 +282,6 @@ func validateMetrics(raws []rawMetric, keyPath string) ([]CounterMetricSpec, err
 		}
 		if r.Source == "" {
 			return nil, specErrf("%s.source required (the only source is %q)", path, MetricSourceTotal)
-		}
-		if r.Source != MetricSourceTotal {
-			return nil, specErrf("%s.source %q unknown (the only source is %q)", path, r.Source, MetricSourceTotal)
 		}
 		window, err := metricWindow(path, r.Window)
 		if err != nil {

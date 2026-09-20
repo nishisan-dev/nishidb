@@ -1,5 +1,5 @@
 // Package countermetrics é o amostrador das métricas de janela dos contadores:
-// a cada poucos segundos lê o total de cada grupo vivo, dobra a amostra no
+// a cada poucos segundos lê o total ou o numerador de uma medida de cada grupo vivo, dobra a amostra no
 // balde aberto em heap, grava o balde quando ele fecha e publica, por grupo, o
 // agregado da janela (quantidade de amostras, avg, min e max) para leitura
 // concorrente sem lock e sem alocação.
@@ -10,8 +10,9 @@
 // argumento de internal/alarm e internal/series. O storage não pode ter estado
 // que dependa do relógio no caminho de aplicação: tudo o que o applyRecord
 // alimenta tem de ser reconstruível a partir do payload, e uma média "dos
-// últimos cinco minutos" não é. O amostrador lê os contadores só pelo lock
-// FOLHA do dicionário (Limit/Group) e nunca toma o lock do writer.
+// últimos cinco minutos" não é. Medidas registram o instante persistido do
+// evento, enquanto este amostrador observa o presente. Ele nunca toma o lock
+// do writer: usa o dicionário e o lock da medida.
 //
 // # Dono dos arquivos
 //
@@ -225,7 +226,7 @@ func Open(opts Options) (*Sampler, error) {
 		}
 	}
 	for _, in := range opts.Counters {
-		c := &counterState{name: in.Spec.Name, reader: in.Reader, next: 1}
+		c := &counterState{name: in.Spec.Name, reader: in.Reader, next: 1, measures: in.Spec.Measures, groupBy: in.Spec.GroupBy, where: in.Spec.Where}
 		for _, spec := range in.Spec.Metrics {
 			m, err := s.openMetric(c, spec)
 			if err != nil {
@@ -301,7 +302,7 @@ func metricHeader(m schema.CounterMetricSpec) (metricwindow.Header, error) {
 	if m.Type != schema.MetricTypeWindow {
 		return metricwindow.Header{}, fmt.Errorf("metric %q: type %q unsupported", m.Name, m.Type)
 	}
-	if m.Source != schema.MetricSourceTotal {
+	if m.Source != schema.MetricSourceTotal && (m.Rate == nil || m.Rate.Name != m.Source) {
 		return metricwindow.Header{}, fmt.Errorf("metric %q: source %q unsupported", m.Name, m.Source)
 	}
 	ms := m.Window.Milliseconds()
@@ -329,12 +330,32 @@ func (s *Sampler) openMetric(c *counterState, spec schema.CounterMetricSpec) (*M
 	}
 	dir := filepath.Join(s.dir, c.name)
 	path := filepath.Join(dir, spec.Name+fileExtension)
+	index, err := bindMeasure(c, spec)
+	if err != nil {
+		return nil, err
+	}
 	m := &Metric{
-		counter: c.name,
-		name:    spec.Name,
-		window:  spec.Window,
-		widthMs: header.BucketWidthMs,
-		state:   c,
+		measureIndex: index,
+		counter:      c.name,
+		name:         spec.Name,
+		window:       spec.Window,
+		widthMs:      header.BucketWidthMs,
+		state:        c,
+	}
+	if spec.Rate != nil {
+		m.measureWindow = spec.Rate.Window
+	}
+	if !s.readOnly {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	valid, err := s.reconcileSource(path, c, spec)
+	if err != nil {
+		return nil, err
+	}
+	if !valid {
+		return m, nil
 	}
 	if s.readOnly {
 		f, err := metricwindow.OpenReadOnly(path)
@@ -385,8 +406,12 @@ func (s *Sampler) openMetric(c *counterState, spec schema.CounterMetricSpec) (*M
 func sampleInterval(metrics []*Metric) time.Duration {
 	smallest := time.Duration(0)
 	for _, m := range metrics {
-		if smallest == 0 || m.window < smallest {
-			smallest = m.window
+		window := m.window
+		if m.measureWindow > 0 {
+			window = min(window, m.measureWindow)
+		}
+		if smallest == 0 || window < smallest {
+			smallest = window
 		}
 	}
 	if smallest == 0 {

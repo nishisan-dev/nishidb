@@ -239,6 +239,7 @@ func counterStats(ests []counter.Stats) []protocol.CounterStats {
 			Name:                 e.Name,
 			Rows:                 e.Rows,
 			Total:                e.Total,
+			TotalDisabled:        e.TotalDisabled,
 			Groups:               e.Groups,
 			MaxGroups:            e.Ceiling,
 			Retired:              e.Retired,

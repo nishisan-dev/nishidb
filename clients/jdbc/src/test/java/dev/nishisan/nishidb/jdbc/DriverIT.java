@@ -1,6 +1,7 @@
 package dev.nishisan.nishidb.jdbc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -161,7 +162,7 @@ class DriverIT {
 
             try (Statement st = c.createStatement();
                     ResultSet rs = st.executeQuery(
-                            "SELECT id, counter, name, columns FROM _meta.counter_metrics")) {
+                            "SELECT id, counter, name, columns FROM _meta.counter_metrics WHERE counter = 'rows_by_text'")) {
                 assertTrue(rs.next(), "_meta.counter_metrics não trouxe a métrica do corpus");
                 assertEquals("rows_by_text|rows_5m", rs.getString("id"));
                 assertEquals("rows_by_text", rs.getString("counter"));
@@ -187,6 +188,40 @@ class DriverIT {
                     Object value = rs.getObject(name);
                     assertTrue(value == null || value instanceof Double, name + " = " + value);
                 }
+            }
+        }
+    }
+
+    @Test
+    void eventRatesAndDisabledTotalReachTheClient() throws Exception {
+        long deadline = System.nanoTime() + 10_000_000_000L;
+        try (Connection c = conecta(); java.sql.PreparedStatement st = c.prepareStatement(
+                "SELECT total, event_rate, rates_1m_avg, rates_1m_min, rates_1m_max "
+                        + "FROM _counters.events_by_text WHERE texto = ?")) {
+            st.setString(1, "linha com \"aspas\" e \\barra");
+            while (true) {
+                try (ResultSet rs = st.executeQuery()) {
+                    ResultSetMetaData md = rs.getMetaData();
+                    assertEquals(Types.BIGINT, md.getColumnType(1));
+                    assertEquals(ResultSetMetaData.columnNullable, md.isNullable(1));
+                    for (int column = 2; column <= 5; column++) {
+                        assertEquals(Types.DOUBLE, md.getColumnType(column));
+                    }
+                    assertTrue(rs.next(), "grupo da taxa ausente");
+                    assertNull(rs.getObject("total"));
+                    assertEquals(0, rs.getLong("total"));
+                    assertTrue(rs.wasNull(), "total desativado deve ser NULL");
+                    assertEquals(1.0 / 3600, rs.getDouble("event_rate"), 1e-12);
+                    if (rs.getObject("rates_1m_min") != null) {
+                        for (String name : new String[]{"rates_1m_avg", "rates_1m_min", "rates_1m_max"}) {
+                            assertTrue(rs.getObject(name) instanceof Double, name);
+                            assertEquals(1.0 / 3600, rs.getDouble(name), 1e-12);
+                        }
+                        break;
+                    }
+                }
+                assertTrue(System.nanoTime() < deadline, "o amostrador não publicou a taxa");
+                Thread.sleep(100);
             }
         }
     }

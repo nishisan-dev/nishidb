@@ -3112,3 +3112,33 @@ O estado item a item está em [`aceite-m1.md`](aceite-m1.md),
 `benchmark/ingest-bench` sobre disco real, com `GOMEMLIMIT=512MiB`, corpus
 determinístico e checkpoint periódico. O comando exato de reprodução está no
 cabeçalho da baseline.
+
+
+## Medidas de taxa dos contadores
+
+O materializer publica `_writtenAt` quando há `measures`. O Store marca o
+record aceito com `FlagCounterEvent`; `applyRecord` alimenta a janela antes
+da guarda que elimina transições idênticas de grupo. A compactação conserva
+apenas a flag de lápide e não gera uma nova ocorrência. Cada medida mantém
+60 pares de época/contagem de 64 bits em mmap por posição de grupo, com slots
+reciclados após aposentadoria. A leitura usa um único instante por consulta
+ou passada de emissão; o tempo avança a janela mesmo sem novas escritas.
+
+O checkpoint faz segSync, publica os índices derivados, grava a geração
+imutável das medidas e então publica o manifest que a referencia por época.
+A abertura descarta o mmap de trabalho, carrega exclusivamente essa geração
+e reaplica os records posteriores marcados como eventos. Um snapshot não
+referenciado nunca é adotado. Ausência ou corrupção do snapshot exigido
+impede a abertura; falha de gravação torna o writer falho. A extensão crítica
+do manifest impede que um binário anterior ignore esse estado.
+
+`total: false` preserva referências e grupos, mas elimina o vetor de totais.
+As projeções mantêm `total` nulo. O amostrador histórico recebe numeradores
+inteiros das taxas e a projeção aplica a razão unidade/janela aos três
+agregados, preservando o formato inteiro anterior das métricas de população.
+O arquivo `.win.source` distingue a grandeza e reinicia o histórico quando
+ela muda. As ocorrências duráveis e o histórico amostrado têm políticas de
+recuperação diferentes; o segundo conserva a política anterior de baldes.
+
+Medições, testes de falha e limites estão no
+[aceite das medidas](aceite-counter-measures.md).

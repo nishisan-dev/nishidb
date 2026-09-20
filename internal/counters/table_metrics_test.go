@@ -394,7 +394,7 @@ func TestTableRefusesMetricSourceWithoutDeclaredMetric(t *testing.T) {
 // record.
 const (
 	ceilingGroupingColumns = 16
-	ceilingColumns         = ceilingGroupingColumns + 2 + schema.MaxCounterMetrics*3
+	ceilingColumns         = ceilingGroupingColumns + 2 + schema.MaxCounterMetrics*3 + schema.MaxCounterMeasures
 )
 
 // ceilingGroupText é o groupKey do único grupo da tabela no teto.
@@ -407,7 +407,8 @@ type ceilingReader struct {
 	text []byte
 }
 
-func (r *ceilingReader) Limit() uint32 { return 2 }
+func (r *ceilingReader) Limit() uint32                                   { return 2 }
+func (r *ceilingReader) MeasureCount(_ uint32, index int, _ int64) int64 { return int64(index+1) * 30 }
 
 func (r *ceilingReader) Group(id uint32) ([]byte, []byte, int64, int64, bool) {
 	if id != 1 {
@@ -473,6 +474,11 @@ func ceilingTable(t *testing.T) (*schema.Compiled, query.Store, map[string]types
 		want[schema.MetricColumnName(name, schema.AggregateMin)] = types.Value{Type: types.TypeInt64, I64: lowest}
 		want[schema.MetricColumnName(name, schema.AggregateMax)] = types.Value{Type: types.TypeInt64, I64: highest}
 	}
+	for i := range schema.MaxCounterMeasures {
+		name := fmt.Sprintf("rate%d", i)
+		def.Measures = append(def.Measures, counter.MeasureDefinition{Name: name, Window: time.Minute, Unit: time.Second})
+		want[name] = types.Value{Type: types.TypeDouble, I64: int64(math.Float64bits(float64(i+1) * 0.5))}
+	}
 	if len(want) != ceilingColumns {
 		t.Fatalf("a bancada montou %d colunas, o teto é %d", len(want), ceilingColumns)
 	}
@@ -529,7 +535,7 @@ func checkCeilingPayload(t *testing.T, sc *schema.Compiled, payload []byte, want
 }
 
 // TestCounterTableAtRowCeilingPublishesEveryColumn: a linha no teto — 16
-// colunas do groupBy, as duas fixas e 8 métricas com os três agregados — sai
+// colunas do groupBy, duas fixas, oito medidas e oito métricas com três agregados — sai
 // inteira, em FieldID crescente, com cada média igual bit a bit à publicada.
 // É o único teste que ENCHE o array de pilha do record: abaixo do teto, um
 // array com uma posição a menos passaria verde.

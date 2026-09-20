@@ -304,14 +304,7 @@ func samplesOfCounters(dataset string, ests []counter.Stats) []metrics.Sample {
 				Labels: rotulo,
 				Value:  float64(e.Rows),
 			},
-			metrics.Sample{
-				Family: metrics.MetCounterCountedRows,
-				Name:   metrics.MetCounterCountedRows,
-				Help:   "linhas que satisfazem a condição deste contador no dataset inteiro; sem `where`, igual ao rows do contador",
-				Type:   metrics.TypeGauge,
-				Labels: rotulo,
-				Value:  float64(e.Total),
-			},
+
 			metrics.Sample{
 				Family: metrics.MetCounterAuditDivergentGroups,
 				Name:   metrics.MetCounterAuditDivergentGroups,
@@ -329,6 +322,16 @@ func samplesOfCounters(dataset string, ests []counter.Stats) []metrics.Sample {
 				Value:  float64(e.AuditLastUnix),
 			},
 		)
+		if !e.TotalDisabled {
+			out = append(out, metrics.Sample{
+				Family: metrics.MetCounterCountedRows,
+				Name:   metrics.MetCounterCountedRows,
+				Help:   "linhas que satisfazem a condição deste contador no dataset inteiro; sem `where`, igual ao rows do contador",
+				Type:   metrics.TypeGauge,
+				Labels: rotulo,
+				Value:  float64(e.Total),
+			})
+		}
 	}
 	return out
 }

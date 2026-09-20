@@ -38,7 +38,10 @@ type Evaluator interface {
 
 // Definition é um contador como declarado no YAML e compilado contra o schema.
 type Definition struct {
-	Name string
+	DisableTotal      bool
+	Measures          []MeasureDefinition
+	WriteInstantField types.FieldID
+	Name              string
 	// Columns são os FieldIDs do groupBy, na ordem DECLARADA — é a ordem dos
 	// componentes da chave composta e das colunas da tabela virtual.
 	Columns []types.FieldID
@@ -105,10 +108,12 @@ const (
 // o lock FOLHA do dicionário, que os leitores tomam para indexar. Nada aqui
 // toma lock do Store.
 type Counter struct {
-	def    Definition
-	dir    string
-	dict   *Dict
-	vector *rowindex.Dense32
+	measures             []*measureState
+	measureSnapshotBytes atomic.Int64
+	def                  Definition
+	dir                  string
+	dict                 *Dict
+	vector               *rowindex.Dense32
 	// over é o overlay: transições ainda não aplicadas ao mmap. Writer-only —
 	// ninguém lê o vetor além do writer, então não precisa de lock.
 	over map[types.RowID]uint32
@@ -209,6 +214,9 @@ func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, 
 }
 
 func validateDefinition(def Definition) error {
+	if err := validateMeasures(def); err != nil {
+		return err
+	}
 	switch {
 	case def.Name == "":
 		return errors.New("contador: definição sem nome")
@@ -235,9 +243,11 @@ func (c *Counter) catchUpWithDict() error {
 	c.dict.mu.Lock()
 	defer c.dict.mu.Unlock()
 	limit := len(c.dict.keys) + 1
-	for len(c.totals) < limit {
-		id := uint32(len(c.totals))
-		c.totals = append(c.totals, 0)
+	for len(c.refs) < limit {
+		id := uint32(len(c.refs))
+		if !c.def.DisableTotal {
+			c.totals = append(c.totals, 0)
+		}
 		c.refs = append(c.refs, 0)
 		c.lastTouch = append(c.lastTouch, 0)
 		c.emptySince = append(c.emptySince, 0)
@@ -370,7 +380,7 @@ func (c *Counter) entry(rowID types.RowID) uint32 {
 	return v
 }
 
-// Transition é o ÚNICO ponto de escrita do contador: aplica ao estado a
+// Transition aplica ao estado, sem registrar uma ocorrência de evento, a
 // transição da linha do que ela era (a entrada do vetor) para o que passou a
 // ser (derivado do payload). tombstone=true força "sem grupo" — a lápide não
 // carrega o groupBy, e é a entrada antiga que lembra de onde a linha saiu.
@@ -383,6 +393,15 @@ func (c *Counter) entry(rowID types.RowID) uint32 {
 // somando os grupos no meio da transição vê a linha em dois lugares, nunca
 // em nenhum — o contador nunca subestima.
 func (c *Counter) Transition(rowID types.RowID, payload []byte, tombstone bool) error {
+	return c.transition(rowID, payload, tombstone, false)
+}
+
+// ApplyEvent distingue ocorrência de evento da reconstrução de estado.
+func (c *Counter) ApplyEvent(rowID types.RowID, payload []byte, tombstone, occurrence bool) error {
+	return c.transition(rowID, payload, tombstone, occurrence)
+}
+
+func (c *Counter) transition(rowID types.RowID, payload []byte, tombstone, occurrence bool) error {
 	newEntry := WithoutGroup
 	if !tombstone {
 		key, cond, hasGroup, err := c.deriv.Derive(payload)
@@ -415,7 +434,7 @@ func (c *Counter) Transition(rowID types.RowID, payload []byte, tombstone bool) 
 			case err != nil:
 				return fmt.Errorf("contador %s: internar o grupo da linha %d: %w", c.def.Name, rowID, err)
 			default:
-				if int(id) >= len(c.totals) {
+				if int(id) >= len(c.refs) {
 					if err := c.catchUpWithDict(); err != nil {
 						return err
 					}
@@ -427,6 +446,11 @@ func (c *Counter) Transition(rowID types.RowID, payload []byte, tombstone bool) 
 			}
 		}
 	}
+	if occurrence {
+		if err := c.observeMeasures(newEntry, payload); err != nil {
+			return err
+		}
+	}
 	oldEntry := c.entry(rowID)
 	if oldEntry == newEntry {
 		return nil
@@ -435,21 +459,21 @@ func (c *Counter) Transition(rowID types.RowID, payload []byte, tombstone bool) 
 	// O agregado anda COLADO ao grupo, nas duas pontas: cada Add do agregado
 	// fica ao lado do AddInt64 do vetor que ele soma, e DENTRO das mesmas
 	// guardas. O do decremento, em especial, mora dentro do
-	// `int(g) < len(c.totals)`: quando essa guarda é falsa não existe slot e
+	// `int(g) < len(c.refs)`: quando essa guarda é falsa não existe slot e
 	// nenhum grupo desce, então um agregado que descesse ali derivaria da soma
 	// dos grupos em silêncio.
 	if g := newEntry &^ conditionBit; g != WithoutGroup {
 		atomic.AddInt64(&c.refs[g], 1)
 		c.rows.Add(1)
-		if newEntry&conditionBit != 0 {
+		if !c.def.DisableTotal && newEntry&conditionBit != 0 {
 			atomic.AddInt64(&c.totals[g], 1)
 			c.total.Add(1)
 		}
 		c.lastTouch[g] = c.transitions
 		c.emptySince[g] = 0
 	}
-	if g := oldEntry &^ conditionBit; g != WithoutGroup && int(g) < len(c.totals) {
-		if oldEntry&conditionBit != 0 {
+	if g := oldEntry &^ conditionBit; g != WithoutGroup && int(g) < len(c.refs) {
+		if !c.def.DisableTotal && oldEntry&conditionBit != 0 {
 			atomic.AddInt64(&c.totals[g], -1)
 			c.total.Add(-1)
 		}
@@ -481,8 +505,10 @@ func (c *Counter) Fold() error {
 	c.dict.mu.RLock()
 	live := slices.Clone(c.dict.live)
 	c.dict.mu.RUnlock()
-	for i := range c.totals {
-		atomic.StoreInt64(&c.totals[i], 0)
+	for i := range c.refs {
+		if !c.def.DisableTotal {
+			atomic.StoreInt64(&c.totals[i], 0)
+		}
 		atomic.StoreInt64(&c.refs[i], 0)
 	}
 	// Zerar ANTES do laço é o que torna a Fold idempotente; sem isto uma
@@ -512,7 +538,7 @@ func (c *Counter) Fold() error {
 		// nenhum recebe também não pode ser creditada ao agregado.
 		atomic.AddInt64(&c.refs[g], 1)
 		rows++
-		if v&conditionBit != 0 {
+		if !c.def.DisableTotal && v&conditionBit != 0 {
 			atomic.AddInt64(&c.totals[g], 1)
 			total++
 		}
@@ -539,8 +565,10 @@ func (c *Counter) Clear() error {
 		return err
 	}
 	clear(c.over)
-	for i := range c.totals {
-		atomic.StoreInt64(&c.totals[i], 0)
+	for i := range c.refs {
+		if !c.def.DisableTotal {
+			atomic.StoreInt64(&c.totals[i], 0)
+		}
 		atomic.StoreInt64(&c.refs[i], 0)
 		c.emptySince[i] = 0
 	}
@@ -609,14 +637,16 @@ func (c *Counter) AuditSnapshot() AuditSnapshot {
 	c.dict.mu.RLock()
 	defer c.dict.mu.RUnlock()
 	snap := AuditSnapshot{
-		Totals: make([]int64, len(c.totals)),
+		Totals: make([]int64, len(c.refs)),
 		Refs:   make([]int64, len(c.refs)),
 		Limit:  uint32(len(c.dict.keys)) + 1,
 		Rows:   c.rows.Load(),
 		Total:  c.total.Load(),
 	}
-	for i := range c.totals {
-		snap.Totals[i] = atomic.LoadInt64(&c.totals[i])
+	for i := range c.refs {
+		if !c.def.DisableTotal {
+			snap.Totals[i] = atomic.LoadInt64(&c.totals[i])
+		}
 		snap.Refs[i] = atomic.LoadInt64(&c.refs[i])
 	}
 	return snap
@@ -633,11 +663,13 @@ func (c *Counter) Limit() uint32 { return c.dict.Limit() }
 func (c *Counter) Group(id uint32) (key, text []byte, total, refs int64, live bool) {
 	c.dict.mu.RLock()
 	defer c.dict.mu.RUnlock()
-	if id < 1 || int(id) > len(c.dict.keys) || int(id) >= len(c.totals) {
+	if id < 1 || int(id) > len(c.dict.keys) || int(id) >= len(c.refs) {
 		return nil, nil, 0, 0, false
 	}
-	return c.dict.keys[id-1], c.texts[id],
-		atomic.LoadInt64(&c.totals[id]), atomic.LoadInt64(&c.refs[id]), c.dict.live[id-1]
+	if !c.def.DisableTotal {
+		total = atomic.LoadInt64(&c.totals[id])
+	}
+	return c.dict.keys[id-1], c.texts[id], total, atomic.LoadInt64(&c.refs[id]), c.dict.live[id-1]
 }
 
 // checkTextCollision recusa uma chave NOVA cujo texto já pertence a um grupo
@@ -705,13 +737,14 @@ func (c *Counter) ByText(text []byte) (uint32, bool) {
 // Stats é o retrato do contador para métricas e /v1/stats — a MESMA
 // estrutura nos dois.
 type Stats struct {
-	Name    string
-	Groups  uint32 // vivos
-	Retired uint32
-	Ceiling uint32
-	Refused uint64 // grupos novos recusados pelo teto nesta abertura
-	Orphans uint64 // entradas órfãs vistas na dobra desta abertura
-	Bytes   int64  // vetor + dicionário
+	TotalDisabled bool
+	Name          string
+	Groups        uint32 // vivos
+	Retired       uint32
+	Ceiling       uint32
+	Refused       uint64 // grupos novos recusados pelo teto nesta abertura
+	Orphans       uint64 // entradas órfãs vistas na dobra desta abertura
+	Bytes         int64  // vetor + dicionário + mmap e snapshot das medidas
 	// Rows é quantas linhas vivas apontam para algum grupo — a soma dos refs.
 	// Menor que o rows do dataset é diagnóstico direto: são as linhas SEM
 	// alguma coluna do groupBy, que o contador não conta por desenho.
@@ -734,9 +767,10 @@ func (c *Counter) Stats() Stats {
 		Ceiling:          c.def.MaxGroups,
 		Refused:          c.refused.Load(),
 		Orphans:          c.orphans.Load(),
-		Bytes:            c.vector.SizeBytes() + c.dict.SizeBytes(),
+		Bytes:            c.vector.SizeBytes() + c.dict.SizeBytes() + c.measureBytes(),
 		Rows:             c.rows.Load(),
 		Total:            c.total.Load(),
+		TotalDisabled:    c.def.DisableTotal,
 		AuditDivergences: c.auditDivergences.Load(),
 		AuditLastUnix:    c.auditLast.Load(),
 	}
@@ -769,5 +803,5 @@ func (c *Counter) RemoveOld() error {
 
 // Close libera o vetor e o dicionário.
 func (c *Counter) Close() error {
-	return errors.Join(c.vector.Close(), c.dict.Close())
+	return errors.Join(c.closeMeasures(), c.vector.Close(), c.dict.Close())
 }

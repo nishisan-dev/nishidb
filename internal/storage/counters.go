@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -112,6 +113,21 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 			return fmt.Errorf("storage: abrir o contador %q de %s: %w", def.Name, opts.Dir, err)
 		}
 		s.counters = append(s.counters, c)
+		var measureEpoch uint64
+		var persistedMeasures bool
+		if m != nil {
+			measureEpoch = m.Epoch
+			persistedMeasures = slices.Contains(m.MeasureCounters, def.Name)
+		}
+		if err := c.OpenMeasures(measureEpoch, persistedMeasures, recria); err != nil {
+			if errors.Is(err, counter.ErrMeasureSnapshotCorrupt) {
+				return fmt.Errorf("%w: %w", ErrDatasetCorrupt, err)
+			}
+			return err
+		}
+		for _, measure := range c.MeasureResetNames() {
+			s.opts.Log.Info("counter_measure.reset", "measure starts a new window without backfill", "counter", def.Name, "measure", measure)
+		}
 		if !recria && m != nil && ((c.Born() && m.NextRowID > 0) || !c.Covers(types.RowID(m.NextRowID))) {
 			// O manifest declara os parâmetros, não a existência dos arquivos —
 			// a mesma pergunta que a agenda faz com NeedsRebuild.
@@ -415,7 +431,7 @@ func (s *Store) AuditaCounters(ctx context.Context) ([]counter.Report, error) {
 				continue
 			}
 			recalc[i].refs[g]++
-			if cond {
+			if cond && !c.Def().DisableTotal {
 				recalc[i].totais[g]++
 			}
 		}
@@ -432,11 +448,12 @@ func (s *Store) AuditaCounters(ctx context.Context) ([]counter.Report, error) {
 	for i, c := range s.counters {
 		cg, rc := congelados[i], recalc[i]
 		r := counter.Report{
-			Name:        c.Def().Name,
-			Groups:      c.Stats().Groups,
-			NotInterned: rc.naoInternadas,
-			RowsScanned: rows,
-			Duration:    duration,
+			TotalDisabled: c.Def().DisableTotal,
+			Name:          c.Def().Name,
+			Groups:        c.Stats().Groups,
+			NotInterned:   rc.naoInternadas,
+			RowsScanned:   rows,
+			Duration:      duration,
 		}
 		for g := uint32(1); g < cg.Limit; g++ {
 			m, mr := cg.Totals[g], cg.Refs[g]

@@ -84,6 +84,17 @@ TLS valida o certificado e o nome do broker; sem `caFile`, usa as CAs do sistema
 Cada mensagem contém seus nomes de coluna e sua identificação. Não há mensagem
 separada de cabeçalho nem lote de linhas dentro do JSON. Os valores mantêm seus
 tipos; métricas de janela sem amostras aparecem como `null`.
+Medidas de taxa também entram na mesma linha, por nome, como números `double`.
+Com `total: false`, a chave `total` permanece e seu valor é `null`. Por exemplo,
+1.800 ocorrências em uma janela de um minuto, por segundo:
+
+```json
+{"dataset":"telecom","counter":"stops_by_olt","groupKey":"OLT_A","olt":"OLT_A","total":null,"stop_rate":30,"stops_24h_avg":12.5,"stops_24h_min":0,"stops_24h_max":30,"at":"2026-09-20T15:00:00.000Z"}
+```
+
+A persistência das ocorrências permite retomar o cálculo após reinício, mas não
+altera a entrega desta série: mensagens de saída perdidas não são reemitidas.
+
 `at` é o instante da passada em UTC, com milissegundos. A passagem pelos
 destinos usa os mesmos valores e timestamp, sem reler o contador por destino.
 O arquivo continua com o formato anterior, sem acrescentar `dataset`.

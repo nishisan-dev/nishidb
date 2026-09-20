@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/internal/storage/counter
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkCounterMeasures/membership-12         	 1000000	       124.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCounterMeasures/membership-12         	 1000000	       129.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCounterMeasures/membership-12         	 1000000	       129.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCounterMeasures/two_measures-12       	 1000000	       287.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCounterMeasures/two_measures-12       	 1000000	       295.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCounterMeasures/two_measures-12       	 1000000	       283.0 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/nishisan-dev/nishidb/internal/storage/counter	1.295s

@@ -29,6 +29,7 @@ type DatasetAudit struct {
 // groupKey, com teto — um contador inteiramente errado não vira um relatório
 // do tamanho do inventário.
 type CounterAudit struct {
+	TotalDisabled   bool   `json:"-"`
 	Name            string `json:"name"`
 	Groups          uint32 `json:"groups"`
 	Maintained      int64  `json:"maintained"`
@@ -52,6 +53,7 @@ type CounterAudit struct {
 
 // GroupDivergence é um grupo que divergiu, pelo groupKey.
 type GroupDivergence struct {
+	TotalDisabled  bool   `json:"-"`
 	GroupKey       string `json:"groupKey"`
 	Maintained     int64  `json:"maintained"`
 	Recomputed     int64  `json:"recomputed"`

@@ -170,6 +170,7 @@ func countersRemote(server, dataset string, audit, rebuild bool, cred remoteCred
 // o número venha do Store aberto localmente, quer do servidor.
 
 type rowOfCounter struct {
+	totalDisabled                bool
 	name                         string
 	rows, total                  int64
 	groups, ceiling, aposentados uint32
@@ -179,14 +180,14 @@ type rowOfCounter struct {
 }
 
 func storageCounter(e counter.Stats) rowOfCounter {
-	return rowOfCounter{name: e.Name, rows: e.Rows, total: e.Total,
+	return rowOfCounter{totalDisabled: e.TotalDisabled, name: e.Name, rows: e.Rows, total: e.Total,
 		groups: e.Groups, ceiling: e.Ceiling, aposentados: e.Retired,
 		refusedCount: e.Refused, orphanCount: e.Orphans, bytes: e.Bytes,
 		auditDivergentes: e.AuditDivergences, auditUnix: e.AuditLastUnix}
 }
 
 func wireCounter(c protocol.CounterStats) rowOfCounter {
-	return rowOfCounter{name: c.Name, rows: c.Rows, total: c.Total,
+	return rowOfCounter{totalDisabled: c.TotalDisabled, name: c.Name, rows: c.Rows, total: c.Total,
 		groups: c.Groups, ceiling: c.MaxGroups, aposentados: c.Retired,
 		refusedCount: c.Refused, orphanCount: c.OrphanEntries, bytes: c.Bytes,
 		auditDivergentes: c.AuditDivergentGroups, auditUnix: c.AuditLastSuccessUnix}
@@ -208,7 +209,11 @@ func writeCounters(w io.Writer, dataset string, rows []rowOfCounter) {
 		if l.auditUnix != 0 {
 			audit = strconv.FormatInt(l.auditDivergentes, 10) + " divergente(s)"
 		}
-		line(w, l.name, strconv.FormatInt(l.rows, 10), strconv.FormatInt(l.total, 10),
+		total := strconv.FormatInt(l.total, 10)
+		if l.totalDisabled {
+			total = "NULL"
+		}
+		line(w, l.name, strconv.FormatInt(l.rows, 10), total,
 			u32(l.groups), u32(l.ceiling), u32(l.aposentados),
 			strconv.FormatUint(l.refusedCount, 10), strconv.FormatUint(l.orphanCount, 10),
 			bytesToReadableString(l.bytes), audit)
@@ -221,6 +226,7 @@ type amostraOfDivergencia struct {
 }
 
 type rowOfAudit struct {
+	totalDisabled        bool
 	name                 string
 	groups               uint32
 	mantido, recalculado int64
@@ -237,7 +243,7 @@ type rowOfAudit struct {
 }
 
 func auditOfStorage(r counter.Report) rowOfAudit {
-	l := rowOfAudit{name: r.Name, groups: r.Groups, mantido: r.Maintained, recalculado: r.Recomputed,
+	l := rowOfAudit{totalDisabled: r.TotalDisabled, name: r.Name, groups: r.Groups, mantido: r.Maintained, recalculado: r.Recomputed,
 		divergentes: r.DivergentGroups, naoInternadas: r.NotInterned,
 		agregadosDivergentes: r.DivergentAggregates, rowsVarridas: r.RowsScanned,
 		durationMs: r.Duration.Milliseconds()}
@@ -248,7 +254,7 @@ func auditOfStorage(r counter.Report) rowOfAudit {
 }
 
 func auditOfWire(c protocol.CounterAudit) rowOfAudit {
-	l := rowOfAudit{name: c.Name, groups: c.Groups, mantido: c.Maintained, recalculado: c.Recomputed,
+	l := rowOfAudit{totalDisabled: c.TotalDisabled, name: c.Name, groups: c.Groups, mantido: c.Maintained, recalculado: c.Recomputed,
 		divergentes: c.DivergentGroups, naoInternadas: c.NotInterned,
 		agregadosDivergentes: c.DivergentAggregates, rowsVarridas: c.RowsScanned,
 		durationMs: c.DurationMs}
@@ -274,7 +280,7 @@ func writeAudit(w io.Writer, dataset string, rows []rowOfAudit) {
 		if l.agregadosDivergentes > 0 {
 			divergencia += " (+" + strconv.Itoa(l.agregadosDivergentes) + " agregado(s) divergente(s))"
 		}
-		line(w, l.name, u32(l.groups), strconv.FormatInt(l.mantido, 10), strconv.FormatInt(l.recalculado, 10),
+		line(w, l.name, u32(l.groups), auditTotal(l.totalDisabled, l.mantido), auditTotal(l.totalDisabled, l.recalculado),
 			divergencia, strconv.FormatUint(l.rowsVarridas, 10), duration(l.durationMs))
 	}
 	for _, l := range rows {
@@ -285,7 +291,7 @@ func writeAudit(w io.Writer, dataset string, rows []rowOfAudit) {
 		title(w, "divergências de %s (até %d):", l.name, counter.SampleCeiling)
 		line(w, "  GRUPO", "MANTIDO", "RECALCULADO", "REFS MANTIDO", "REFS RECALCULADO")
 		for _, d := range l.amostra {
-			line(w, "  "+d.groupKey, strconv.FormatInt(d.mantido, 10), strconv.FormatInt(d.recalculado, 10),
+			line(w, "  "+d.groupKey, auditTotal(l.totalDisabled, d.mantido), auditTotal(l.totalDisabled, d.recalculado),
 				strconv.FormatInt(d.refsMantido, 10), strconv.FormatInt(d.refsRecalculado, 10))
 		}
 	}
@@ -332,3 +338,10 @@ func writeReconstruction(w io.Writer, dataset string, rows []rowOfRebuild) {
 }
 
 func u32(v uint32) string { return strconv.FormatUint(uint64(v), 10) }
+
+func auditTotal(disabled bool, value int64) string {
+	if disabled {
+		return "NULL"
+	}
+	return strconv.FormatInt(value, 10)
+}

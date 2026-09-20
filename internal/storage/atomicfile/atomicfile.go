@@ -1,5 +1,5 @@
 // Package atomicfile é o ÚNICO caminho de gravação durável de arquivo
-// pequeno inteiro do projeto: tmp → fsync → rename → fsync do diretório (a
+// inteiro do projeto: tmp → fsync → rename → fsync do diretório (a
 // política de rename durável do design §9/M18).
 //
 // Nasceu dentro de internal/storage/checkpoint, onde servia ao manifest.bin,
@@ -11,6 +11,7 @@ package atomicfile
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -47,6 +48,15 @@ func Write(path string, data []byte, perm os.FileMode) error {
 // CRIAÇÃO, então um tmp que sobrou de uma gravação interrompida é removido
 // antes — senão herdaria o modo antigo.
 func WriteWithHook(path string, data []byte, perm os.FileMode, hook Hook) error {
+	return writeStream(path, perm, func(w io.Writer) error { _, err := w.Write(data); return err }, hook)
+}
+
+// WriteStream grava um snapshot por blocos, sem carregar o arquivo inteiro no heap.
+func WriteStream(path string, perm os.FileMode, write func(io.Writer) error) error {
+	return writeStream(path, perm, write, nil)
+}
+
+func writeStream(path string, perm os.FileMode, write func(io.Writer) error, hook Hook) error {
 	tmp := path + ".tmp"
 	if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("atomicfile: remover sobra %s: %w", tmp, err)
@@ -56,8 +66,7 @@ func WriteWithHook(path string, data []byte, perm os.FileMode, hook Hook) error 
 		return fmt.Errorf("atomicfile: criar %s: %w", tmp, err)
 	}
 	if err := step(hook, StepWrite, func() error {
-		_, werr := f.Write(data)
-		return werr
+		return write(f)
 	}); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("atomicfile: escrever %s: %w", tmp, err)

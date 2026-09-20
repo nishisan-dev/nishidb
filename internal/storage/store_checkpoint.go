@@ -248,12 +248,26 @@ func (s *Store) checkpoint() error {
 	s.secCount.Store(segmentos)
 	s.liveBytesAll.Store(vivoTotal)
 	s.diskBytesAll.Store(diskTotal)
+	for _, c := range s.counters {
+		if len(c.Def().Measures) == 0 {
+			continue
+		}
+		m.MeasureCounters = append(m.MeasureCounters, c.Def().Name)
+		if err := s.traceStep("counterMeasures", func() error { return c.SaveMeasures(m.Epoch) }); err != nil {
+			return s.failWriter(err)
+		}
+	}
 	if err := s.traceStep("manifest", func() error {
 		return checkpoint.Write(s.manifestPath(), &m)
 	}); err != nil {
 		return s.failWriter(err)
 	}
 	s.epoch = m.Epoch
+	for _, c := range s.counters {
+		if err := c.CleanupMeasures(m.Epoch); err != nil {
+			s.opts.Log.Warn("counter_measure.cleanup_failed", "old measure snapshot cleanup failed", "counter", c.Def().Name, "error", err.Error())
+		}
+	}
 
 	// Passo 8: a posição no tópico, DEPOIS do manifest — nunca antes.
 	//

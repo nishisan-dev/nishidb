@@ -21,8 +21,9 @@ type Divergence struct {
 // dicionário não tem: é a divergência que não cabe num grupo, porque o grupo
 // não existe.
 type Report struct {
-	Name   string
-	Groups uint32
+	TotalDisabled bool
+	Name          string
+	Groups        uint32
 	// Maintained e Recomputed são as SOMAS dos totais, para a linha da tabela.
 	Maintained, Recomputed int64
 	// RowsMaintained e RowsRecomputed são o mesmo par para os REFS:

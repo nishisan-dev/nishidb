@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/query"
@@ -29,11 +30,11 @@ const maxAggregatesPerMetric = 3
 
 // maxRowColumns é o teto de colunas de UMA linha da tabela e o tamanho do array
 // de pilha em que record a compõe: o groupBy no teto (maxGroupingColumns), as
-// duas fixas (groupKey e total) e as geradas pelas métricas —
+// duas fixas (groupKey e total), as medidas e as geradas pelas métricas —
 // schema.MaxCounterMetrics métricas com os maxAggregatesPerMetric agregados
-// cada. Os três tetos são conferidos no TableSchema, e é isso que garante que a
+// cada. Os tetos são conferidos no TableSchema, e é isso que garante que a
 // linha nunca transborda o array nem precisa de uma fatia do heap por grupo.
-const maxRowColumns = maxGroupingColumns + 2 + schema.MaxCounterMetrics*maxAggregatesPerMetric
+const maxRowColumns = maxGroupingColumns + 2 + schema.MaxCounterMetrics*maxAggregatesPerMetric + schema.MaxCounterMeasures
 
 // Reader é o que a tabela virtual precisa do contador. Interface, e não o
 // *counter.Counter, para que o teste da tabela e o do contador não se
@@ -107,12 +108,29 @@ type MetricSource interface {
 //
 // metrics são as métricas declaradas do contador, e src resolve o leitor de
 // cada uma (ver MetricSource, inclusive sobre src nil).
-func Table(def counter.Definition, l Reader, metrics []schema.CounterMetricSpec, src MetricSource) (*schema.Compiled, query.Store, error) {
+func Table(def counter.Definition, l Reader, metrics []schema.CounterMetricSpec, src MetricSource, clocks ...func() time.Time) (*schema.Compiled, query.Store, error) {
 	sc, err := TableSchema(def, metrics)
 	if err != nil {
 		return nil, nil, err
 	}
-	f := &source{l: l, columns: make([]types.FieldID, len(def.Names))}
+	f := &source{now: time.Now, l: l, disableTotal: def.DisableTotal, columns: make([]types.FieldID, len(def.Names))}
+	if len(clocks) > 0 && clocks[0] != nil {
+		f.now = clocks[0]
+	}
+	if len(def.Measures) > 0 {
+		var ok bool
+		f.measureReader, ok = l.(MeasureReader)
+		if !ok {
+			return nil, nil, fmt.Errorf("counter %s: measure reader required", def.Name)
+		}
+		for _, m := range def.Measures {
+			id, e := idOfColumn(sc, m.Name)
+			if e != nil {
+				return nil, nil, e
+			}
+			f.measures = append(f.measures, measureBinding{id: id, scale: float64(m.Unit) / float64(m.Window)})
+		}
+	}
 	if f.idKey, err = idOfColumn(sc, schema.CounterKeyColumn); err != nil {
 		return nil, nil, err
 	}
@@ -152,6 +170,9 @@ func TableSchema(def counter.Definition, metrics []schema.CounterMetricSpec) (*s
 	// O teto de métricas é conferido aqui, e não só no YAML, porque é dele que
 	// sai o tamanho do array de pilha de record (maxRowColumns): uma Definition
 	// montada sem YAML com métricas demais transbordaria a linha.
+	if len(def.Measures) > schema.MaxCounterMeasures {
+		return nil, fmt.Errorf("counter %s: too many measures", def.Name)
+	}
 	if len(metrics) > schema.MaxCounterMetrics {
 		return nil, fmt.Errorf("counters: %q declares %d metrics; the table accepts at most %d", def.Name, len(metrics), schema.MaxCounterMetrics)
 	}
@@ -160,7 +181,11 @@ func TableSchema(def counter.Definition, metrics []schema.CounterMetricSpec) (*s
 	// Aqui ela é defensiva: toda Definition compilada de um YAML já foi
 	// recusada na subida se colidisse. Fica porque a Definition é montável sem
 	// YAML, e sem ela o schema sintético declararia a mesma coluna duas vezes.
-	if first, second, found := schema.FindCounterColumnCollision(def.Names, metrics); found {
+	measureColumns := make([]schema.CounterMeasureSpec, len(def.Measures))
+	for i, measure := range def.Measures {
+		measureColumns[i].Name = measure.Name
+	}
+	if first, second, found := schema.FindCounterColumnCollision(def.Names, metrics, measureColumns...); found {
 		return nil, fmt.Errorf("counters: %q: %s collides with %s", def.Name, second, first)
 	}
 	var sb strings.Builder
@@ -170,6 +195,9 @@ func TableSchema(def counter.Definition, metrics []schema.CounterMetricSpec) (*s
 		fmt.Fprintf(&sb, ", %s", n)
 	}
 	fmt.Fprintf(&sb, ", %s", schema.CounterTotalColumn)
+	for _, m := range def.Measures {
+		fmt.Fprintf(&sb, ", %s", m.Name)
+	}
 	for _, m := range metrics {
 		for _, col := range m.Columns() {
 			fmt.Fprintf(&sb, ", %s", col)
@@ -184,13 +212,20 @@ func TableSchema(def counter.Definition, metrics []schema.CounterMetricSpec) (*s
 		fmt.Fprintf(&sb, "    %s:\n      type: %s\n", n, kind)
 	}
 	fmt.Fprintf(&sb, "    %s:\n      type: int64\n", schema.CounterTotalColumn)
+	for _, m := range def.Measures {
+		fmt.Fprintf(&sb, "    %s:\n      type: double\n", m.Name)
+	}
 	for _, m := range metrics {
 		for _, a := range m.Aggregates {
 			agg, err := aggregateOf(a)
 			if err != nil {
 				return nil, fmt.Errorf("counters: %q, metric %q: %w", def.Name, m.Name, err)
 			}
-			fmt.Fprintf(&sb, "    %s:\n      type: %s\n", schema.MetricColumnName(m.Name, a), agg.typeName())
+			typ := agg.typeName()
+			if m.Rate != nil {
+				typ = "double"
+			}
+			fmt.Fprintf(&sb, "    %s:\n      type: %s\n", schema.MetricColumnName(m.Name, a), typ)
 		}
 	}
 
@@ -264,6 +299,7 @@ func (a aggregate) typeName() string {
 // metricBinding é uma métrica ligada às suas colunas: o leitor resolvido na
 // montagem e o FieldID de cada agregado declarado, na ordem declarada.
 type metricBinding struct {
+	scale   float64 // zero mantém a tipagem legada de total
 	reader  MetricReader
 	columns []metricColumn
 }
@@ -288,6 +324,9 @@ func bindMetrics(sc *schema.Compiled, counterName string, metrics []schema.Count
 			return nil, fmt.Errorf("counters: the metric source has no reader for metric %q of counter %q", m.Name, counterName)
 		}
 		b := metricBinding{reader: reader, columns: make([]metricColumn, 0, len(m.Aggregates))}
+		if m.Rate != nil {
+			b.scale = m.Rate.Scale()
+		}
 		for _, a := range m.Aggregates {
 			agg, err := aggregateOf(a)
 			if err != nil {
@@ -317,7 +356,7 @@ func bindMetrics(sc *schema.Compiled, counterName string, metrics []schema.Count
 // sem spec é erro de programação — o Store só abre o que o YAML declara —, e
 // segui-lo sem métricas publicaria uma tabela com schema diferente do que o
 // alarme compila. src é a fonte das métricas; nil é válido (ver MetricSource).
-func Register(eng *query.Engine, dataset string, st *storage.Store, specs []schema.CounterSpec, src MetricSource) error {
+func Register(eng *query.Engine, dataset string, st *storage.Store, specs []schema.CounterSpec, src MetricSource, clocks ...func() time.Time) error {
 	if err := eng.DeclaraNamespace(dataset, schema.CountersNamespace); err != nil {
 		return err
 	}
@@ -334,7 +373,7 @@ func Register(eng *query.Engine, dataset string, st *storage.Store, specs []sche
 		if !ok {
 			return fmt.Errorf("counters: counter %q is open in dataset %q but has no declared spec", def.Name, dataset)
 		}
-		sc, store, err := Table(def, c, specs[i].Metrics, src)
+		sc, store, err := Table(def, c, specs[i].Metrics, src, clocks...)
 		if err != nil {
 			return err
 		}
@@ -361,21 +400,33 @@ func Register(eng *query.Engine, dataset string, st *storage.Store, specs []sche
 	return eng.RegisterVirtual(dataset, meta.Namespace, TableMetaCounterMetrics, mmsc, metricsStore)
 }
 
-// source é o Store virtual: cada rowID é um id de grupo, e o record é
-// codificado sob demanda a partir do que o contador tem em memória.
+// MeasureReader fornece numeradores das taxas ao instante da leitura.
+type MeasureReader interface {
+	MeasureCount(id uint32, index int, at int64) int64
+}
+type measureBinding struct {
+	id    types.FieldID
+	scale float64
+}
+
+// source codifica cada grupo sob demanda para o Store virtual.
 type source struct {
-	l       Reader
-	idKey   types.FieldID
-	idTotal types.FieldID
-	columns []types.FieldID // FieldID de cada coluna do groupBy, na ordem declarada
-	metrics []metricBinding // só as métricas com leitor; vazio sem MetricSource
+	now           func() time.Time
+	disableTotal  bool
+	measureReader MeasureReader
+	measures      []measureBinding
+	l             Reader
+	idKey         types.FieldID
+	idTotal       types.FieldID
+	columns       []types.FieldID // FieldID de cada coluna do groupBy, na ordem declarada
+	metrics       []metricBinding // só as métricas com leitor; vazio sem MetricSource
 }
 
 // OpenSnapshot congela o conjunto de grupos: ids a partir do limite nasceram
 // depois da consulta. Época e instante ficam zerados e são ignorados — os
 // totais são lidos no presente.
 func (f *source) OpenSnapshot() types.Snapshot {
-	return types.Snapshot{LimitRowID: types.RowID(f.l.Limit())}
+	return types.Snapshot{LimitRowID: types.RowID(f.l.Limit()), Instant: f.now()}
 }
 
 // CloseSnapshot é no-op: a fonte não retém nada.
@@ -394,7 +445,7 @@ func (f *source) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (ty
 	if !live {
 		return types.Record{}, buf, false, nil
 	}
-	return f.record(id, group, key, text, total, buf)
+	return f.record(id, group, key, text, total, snap.Instant, buf)
 }
 
 func (f *source) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
@@ -424,13 +475,16 @@ type pair struct {
 // record codifica UM grupo como uma linha. O payload exige FieldID crescente;
 // os pares são ordenados num array de pilha, sem alocar — a linha é montada
 // por grupo a cada consulta do alarme.
-func (f *source) record(row types.RowID, group uint32, key, text []byte, total int64, buf []byte) (types.Record, []byte, bool, error) {
+func (f *source) record(row types.RowID, group uint32, key, text []byte, total int64, instant time.Time, buf []byte) (types.Record, []byte, bool, error) {
 	var pairs [maxRowColumns]pair
 	n := 0
 	pairs[n] = pair{f.idKey, types.Value{Type: types.TypeString, Bytes: text}}
 	n++
-	pairs[n] = pair{f.idTotal, types.Value{Type: types.TypeInt64, I64: total}}
-	n++
+	if !f.disableTotal {
+		pairs[n] = pair{f.idTotal, types.Value{Type: types.TypeInt64, I64: total}}
+		n++
+	}
+	base := n
 	err := valuekey.WalkComposite(key, func(i int, v types.Value) error {
 		if i >= len(f.columns) {
 			return fmt.Errorf("counters: the key of group %d has more components than the groupBy", row)
@@ -442,8 +496,16 @@ func (f *source) record(row types.RowID, group uint32, key, text []byte, total i
 	if err != nil {
 		return types.Record{}, buf, false, err
 	}
-	if n != len(f.columns)+2 {
-		return types.Record{}, buf, false, fmt.Errorf("counters: the key of group %d has %d components, the groupBy has %d", row, n-2, len(f.columns))
+	if n != len(f.columns)+base {
+		return types.Record{}, buf, false, fmt.Errorf("counters: the key of group %d has %d components, the groupBy has %d", row, n-base, len(f.columns))
+	}
+	if len(f.measures) > 0 {
+		at := instant.UnixMilli()
+		for i, m := range f.measures {
+			v := float64(f.measureReader.MeasureCount(group, i, at)) * m.scale
+			pairs[n] = pair{m.id, types.Value{Type: types.TypeDouble, I64: int64(math.Float64bits(v))}}
+			n++
+		}
 	}
 	for _, m := range f.metrics {
 		samples, avg, lowest, highest := m.reader.Aggregate(group)
@@ -463,6 +525,16 @@ func (f *source) record(row types.RowID, group uint32, key, text []byte, total i
 				v.I64 = lowest
 			case aggregateMax:
 				v.I64 = highest
+			}
+			if m.scale != 0 {
+				value := avg
+				switch c.agg {
+				case aggregateMin:
+					value = float64(lowest)
+				case aggregateMax:
+					value = float64(highest)
+				}
+				v = types.Value{Type: types.TypeDouble, I64: int64(math.Float64bits(value * m.scale))}
 			}
 			pairs[n] = pair{c.id, v}
 			n++

@@ -172,6 +172,10 @@ func (r *Runner) paramsOf(q *enrichQuery, key, text []byte, total int64) ([]type
 	}
 	params := r.params[:0]
 	for _, b := range q.binds {
+		if b.null {
+			params = append(params, types.Value{})
+			continue
+		}
 		switch b.kind {
 		case bindGroupKey:
 			params = append(params, types.Value{Type: types.TypeString, Bytes: text})

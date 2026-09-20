@@ -560,7 +560,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	// As tabelas `_counters.<nome>` entram no motor sob o dataset — e o
 	// namespace é declarado mesmo sem contador, para que a recusa nomeie o
 	// que existe.
-	if err := counters.Register(s.eng, spec.Name, st, spec.Counters, sampler.MetricSource()); err != nil {
+	if err := counters.Register(s.eng, spec.Name, st, spec.Counters, sampler.MetricSource(), s.now); err != nil {
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	// Os alarmes são compilados DEPOIS do counters.Register, que é quando as
@@ -580,7 +580,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		mat:     mat,
 		metrics: sampler,
 	}
-	if err := openEmitters(d, spec, st, dir, sampler.MetricSource(), log, s.seriesDelivery); err != nil {
+	if err := openEmitters(d, spec, st, dir, sampler.MetricSource(), log, s.seriesDelivery, s.now); err != nil {
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	delivery, err = alarmdelivery.Open(dir, spec, s.cfg, log)
@@ -1325,7 +1325,7 @@ func (s *Server) EmitActive(dataset string) bool {
 // nenhum contador declara `metrics:`, e também o que o amostrador ausente
 // entrega. As colunas declaradas continuam saindo na linha, todas null — o
 // formato da linha é função do YAML (ver series.Metric).
-func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir string, src counters.MetricSource, log *logging.Logger, delivery *seriesdelivery.Manager) error {
+func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir string, src counters.MetricSource, log *logging.Logger, delivery *seriesdelivery.Manager, now func() time.Time) error {
 	declared := make(map[string]int)
 	hasEmit := false
 	for _, cs := range spec.Counters {
@@ -1364,19 +1364,22 @@ func openEmitters(d *dataset, spec *schema.DatasetSpec, st *storage.Store, dir s
 			return err
 		}
 		e, err := series.NewEmitter(series.Options{
-			DisableFile: !cs.Emit.HasFile(),
-			Outputs:     delivery.Outputs(spec.Name, cs.Name),
-			Dataset:     spec.Name,
-			Counter:     cs.Name,
-			Columns:     byName[cs.Name],
-			Metrics:     metrics,
-			Reader:      reader,
-			Dir:         seriesDir,
-			File:        cs.Emit.File,
-			Every:       cs.Emit.Every,
-			MaxBytes:    cs.Emit.MaxBytes,
-			Keep:        cs.Emit.Keep,
-			Log:         log,
+			Now:          now,
+			DisableTotal: cs.DisableTotal,
+			Measures:     cs.Measures,
+			DisableFile:  !cs.Emit.HasFile(),
+			Outputs:      delivery.Outputs(spec.Name, cs.Name),
+			Dataset:      spec.Name,
+			Counter:      cs.Name,
+			Columns:      byName[cs.Name],
+			Metrics:      metrics,
+			Reader:       reader,
+			Dir:          seriesDir,
+			File:         cs.Emit.File,
+			Every:        cs.Emit.Every,
+			MaxBytes:     cs.Emit.MaxBytes,
+			Keep:         cs.Emit.Keep,
+			Log:          log,
 		})
 		if err != nil {
 			return err
@@ -1402,6 +1405,9 @@ func emittedMetrics(cs schema.CounterSpec, src counters.MetricSource) ([]series.
 	out := make([]series.Metric, 0, len(cs.Metrics))
 	for _, m := range cs.Metrics {
 		e := series.Metric{Name: m.Name, Aggregates: m.Aggregates}
+		if m.Rate != nil {
+			e.Scale = m.Rate.Scale()
+		}
 		if src != nil {
 			reader, ok := src.Metric(cs.Name, m.Name)
 			if !ok || reader == nil {

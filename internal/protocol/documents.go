@@ -354,7 +354,8 @@ type SeriesDeliveryStats struct {
 // AuditLastSuccessUnix são a última auditoria conclusiva — zero e zero até a
 // primeira, e é o timestamp que separa "nunca auditado" de "auditado e certo".
 type CounterStats struct {
-	Name string `json:"name"`
+	TotalDisabled bool   `json:"-"`
+	Name          string `json:"name"`
 	// Rows e Total são os agregados do contador inteiro: quantas linhas vivas
 	// apontam para algum grupo, e quantas satisfazem a condição no dataset
 	// inteiro. Rows abaixo do rows do dataset são as linhas SEM alguma coluna

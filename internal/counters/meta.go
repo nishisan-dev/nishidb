@@ -38,9 +38,9 @@ type ListedCounter interface {
 // verdade, como o `_meta.fields` e o `_counters.<nome>`.
 //
 // `rows` e `total` são os agregados do contador — quantas linhas apontam para
-// algum grupo e quantas satisfazem a condição, no dataset inteiro. Ao
-// contrário das duas da auditoria, NUNCA são NULL: zero linhas é um fato
-// medido, e o contador sabe dizê-lo desde a abertura. `total` repete de
+// algum grupo e quantas satisfazem a condição, no dataset inteiro. `rows`
+// nunca é NULL; `total` é NULL com total: false. Quando habilitado, zero é
+// um fato medido desde a abertura. `total` repete de
 // propósito o nome da coluna do `_counters.<nome>`: é a soma dela. E `rows`
 // menor que o rows do dataset é diagnóstico direto — são as linhas sem alguma
 // coluna do groupBy, que o contador não conta por desenho.
@@ -260,6 +260,9 @@ func (f *metaSource) record(row types.RowID, buf []byte) (types.Record, []byte, 
 		case cmRows:
 			v = types.Value{Type: types.TypeInt64, I64: est.Rows}
 		case cmTotal:
+			if l.c.Def().DisableTotal {
+				continue
+			}
 			v = types.Value{Type: types.TypeInt64, I64: est.Total}
 		case cmGroups:
 			v = types.Value{Type: types.TypeInt64, I64: int64(est.Groups)}

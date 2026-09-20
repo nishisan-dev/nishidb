@@ -51,6 +51,7 @@ type MetricReader interface {
 // de o laço de amostragem estar de pé — é a mesma regra que faz o schema de
 // `_counters.<nome>` não depender da fonte (ver counters.MetricSource).
 type Metric struct {
+	Scale      float64
 	Name       string
 	Aggregates []string
 	Reader     MetricReader
@@ -58,6 +59,8 @@ type Metric struct {
 
 // Options configura a emissão de UM contador.
 type Options struct {
+	DisableTotal bool
+	Measures     []schema.CounterMeasureSpec
 	// Outputs are asynchronous destinations. Publish must copy retained bytes
 	// before returning; the emitter reuses its buffers for the next group.
 	Outputs []Output
@@ -92,6 +95,11 @@ type Output interface {
 //
 // Não é thread-safe: o dono é o laço.
 type Emitter struct {
+	measureReader interface {
+		MeasureCount(uint32, int, int64) int64
+	}
+	measurePrefixes                          [][]byte
+	atMillis                                 int64
 	opts                                     Options
 	log                                      *logging.Logger
 	now                                      func() time.Time
@@ -168,6 +176,7 @@ type metricColumn struct {
 
 // metricBinding é uma métrica ligada às colunas que ela gera.
 type metricBinding struct {
+	scale   float64
 	reader  MetricReader
 	columns []metricColumn
 }
@@ -181,7 +190,7 @@ func bindMetrics(metrics []Metric) ([]metricBinding, error) {
 	}
 	out := make([]metricBinding, 0, len(metrics))
 	for _, m := range metrics {
-		b := metricBinding{reader: m.Reader, columns: make([]metricColumn, 0, len(m.Aggregates))}
+		b := metricBinding{scale: m.Scale, reader: m.Reader, columns: make([]metricColumn, 0, len(m.Aggregates))}
 		for _, a := range m.Aggregates {
 			agg, err := aggregateOf(a)
 			if err != nil {
@@ -224,6 +233,19 @@ func NewEmitter(opts Options) (*Emitter, error) {
 		return nil, err
 	}
 	e.metrics = metrics
+	if len(opts.Measures) > 0 {
+		var ok bool
+		e.measureReader, ok = opts.Reader.(interface {
+			MeasureCount(uint32, int, int64) int64
+		})
+		if !ok {
+			return nil, errors.New("series: measure reader required")
+		}
+		for _, m := range opts.Measures {
+			p := executor.AppendJSONString([]byte{','}, []byte(m.Name))
+			e.measurePrefixes = append(e.measurePrefixes, append(p, ':'))
+		}
+	}
 	if !opts.DisableFile {
 		w, err := OpenWriter(opts.Dir, opts.File, opts.MaxBytes, opts.Keep)
 		if err != nil {
@@ -256,6 +278,7 @@ func (e *Emitter) EmitOnce() error {
 	// nova, e uma alocação por passada num laço que roda para sempre é lixo
 	// que nunca para de crescer.
 	at := e.now().UTC()
+	e.atMillis = at.UnixMilli()
 	e.atBuf = at.AppendFormat(e.atBuf[:0], timeLayout)
 	limit := e.opts.Reader.Limit()
 	for id := uint32(1); id < limit; id++ {
@@ -339,7 +362,16 @@ func (e *Emitter) appendLine(dst []byte, id uint32, key, text []byte, total int6
 		dst = executor.AppendValue(dst, vals[i])
 	}
 	dst = append(dst, `,"total":`...)
-	dst = executor.AppendValue(dst, types.Value{Type: types.TypeInt64, I64: total})
+	if e.opts.DisableTotal {
+		dst = append(dst, "null"...)
+	} else {
+		dst = executor.AppendValue(dst, types.Value{Type: types.TypeInt64, I64: total})
+	}
+	for i, m := range e.opts.Measures {
+		dst = append(dst, e.measurePrefixes[i]...)
+		v := float64(e.measureReader.MeasureCount(id, i, e.atMillis)) * m.Scale()
+		dst = executor.AppendValue(dst, types.Value{Type: types.TypeDouble, I64: int64(math.Float64bits(v))})
+	}
 	dst = e.appendMetrics(dst, id)
 	dst = append(dst, `,"at":`...)
 	dst = executor.AppendJSONString(dst, e.atBuf)
@@ -369,6 +401,17 @@ func (e *Emitter) appendMetrics(dst []byte, id uint32) []byte {
 			dst = append(dst, c.prefix...)
 			if samples == 0 {
 				dst = append(dst, "null"...)
+				continue
+			}
+			if m.scale != 0 {
+				value := avg
+				switch c.agg {
+				case aggregateMin:
+					value = float64(lowest)
+				case aggregateMax:
+					value = float64(highest)
+				}
+				dst = executor.AppendValue(dst, types.Value{Type: types.TypeDouble, I64: int64(math.Float64bits(value * m.scale))})
 				continue
 			}
 			switch c.agg {
