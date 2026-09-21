@@ -202,6 +202,7 @@ const (
 	// da classe 42 (sintaxe).
 	CodeUnsupportedClause = "UNSUPPORTED_CLAUSE"
 	CodeUnknownDataset    = "UNKNOWN_DATASET"
+	CodeFollowerNotReady  = "FOLLOWER_NOT_READY"
 	// CodeUnknownSchema é o schema da conexão que nenhum dataset declara, no
 	// /v1/query e no /v1/metadata?schema=. Tem código próprio, e não o
 	// UNKNOWN_DATASET, porque a pergunta é outra — e porque a URL que nomeava o

@@ -1,5 +1,8 @@
 # NishiDB
 
+O fluxo master/follower com lotes configuráveis e resync automático está
+documentado em [`docs/replication.md`](docs/replication.md).
+
 Engine de materialização e consulta para fluxos de eventos JSON parciais.
 
 Recebe eventos, mantém o **estado corrente** de cada entidade (merge por campo,

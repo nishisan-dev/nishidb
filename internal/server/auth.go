@@ -155,6 +155,9 @@ func (s *Server) buildMux() *router {
 	rt.register("/v1/users/password", config.RoleRead, s.handleUserPassword)
 	rt.register("/v1/users/role", config.RoleAdmin, s.handleUserRole)
 	rt.register("/v1/users/delete", config.RoleAdmin, s.handleUserDelete)
+	rt.register("/v1/replication/cursor", config.RoleAdmin, s.handleReplicationCursor)
+	rt.register("/v1/replication/batch", config.RoleAdmin, s.handleReplicationBatch)
+	rt.register("/v1/replication/snapshot", config.RoleAdmin, s.handleReplicationSnapshot)
 	return rt
 }
 

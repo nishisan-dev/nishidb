@@ -32,6 +32,7 @@ SYNTAX = "SYNTAX"
 BIND = "BIND"
 UNSUPPORTED_CLAUSE = "UNSUPPORTED_CLAUSE"
 UNKNOWN_DATASET = "UNKNOWN_DATASET"
+FOLLOWER_NOT_READY = "FOLLOWER_NOT_READY"
 UNKNOWN_SCHEMA = "UNKNOWN_SCHEMA"
 METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
 UNSUPPORTED_MEDIA_TYPE = "UNSUPPORTED_MEDIA_TYPE"
@@ -178,7 +179,9 @@ class NotSupportedError(DatabaseError):
 #: geral duram milissegundos. TOO_MANY_LONG_QUERIES sai com Retry-After: 30,
 #: porque quem ocupa as vagas de consulta LONGA pode estar lá por minutos, e
 #: repetir em um segundo é quase certo que falha de novo.
-TRANSIENTES = frozenset({TOO_MANY_QUERIES, TOO_MANY_LONG_QUERIES, COMPACTION_BUSY})
+TRANSIENTES = frozenset(
+    {TOO_MANY_QUERIES, TOO_MANY_LONG_QUERIES, COMPACTION_BUSY, FOLLOWER_NOT_READY}
+)
 
 #: Código do protocolo -> classe da PEP 249.
 #:
@@ -193,6 +196,7 @@ CODIGOS: dict[str, type[Warning] | type[Error]] = {
     BIND: ProgrammingError,
     RESERVED_COLUMN: ProgrammingError,
     UNKNOWN_DATASET: ProgrammingError,
+    FOLLOWER_NOT_READY: OperationalError,
     UNKNOWN_SCHEMA: ProgrammingError,
     # "Isto não existe nesta versão" — separado de "você digitou errado".
     UNSUPPORTED_CLAUSE: NotSupportedError,

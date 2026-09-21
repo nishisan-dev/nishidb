@@ -103,6 +103,7 @@ public final class SqlStates {
             Map.entry(Codigos.BIND, new Entrada(BIND, SQLSyntaxErrorException::new)),
             Map.entry(Codigos.RESERVED_COLUMN, new Entrada(BIND, SQLSyntaxErrorException::new)),
             Map.entry(Codigos.UNKNOWN_DATASET, new Entrada(TABELA_INEXISTENTE, SQLSyntaxErrorException::new)),
+            Map.entry(Codigos.FOLLOWER_NOT_READY, new Entrada(RECURSO_INSUFICIENTE, SQLTransientException::new)),
             // O schema da conexão (o caminho da URL) que o servidor não tem. É
             // a classe 3F (invalid schema name), e não 42S02: não é a tabela do
             // SQL que falta, é o endereço da própria conexão.

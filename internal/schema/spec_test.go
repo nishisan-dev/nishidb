@@ -72,6 +72,55 @@ func parseOK(t *testing.T, yml string) *DatasetSpec {
 	return s
 }
 
+func TestReplicationDefaultsAndLimits(t *testing.T) {
+	s := parseOK(t, baseYAML+`replication:
+  enabled: true
+  flushInterval: 0s
+  maxMessages: 123
+  maxBatchBytes: 1MiB
+  maxBufferedBytes: 4MiB
+`)
+	if !s.Replication.Enabled || s.Replication.FlushInterval != 0 || s.Replication.MaxMessages != 123 || s.Replication.MaxBatchBytes != 1<<20 || s.Replication.MaxBufferedBytes != 4<<20 {
+		t.Fatalf("unexpected replication spec: %+v", s.Replication)
+	}
+	if s.Replication.Role != "master" {
+		t.Fatalf("role=%q", s.Replication.Role)
+	}
+	defaulted := parseOK(t, baseYAML)
+	if defaulted.Replication.Enabled || defaulted.Replication.FlushInterval != 5*time.Second || defaulted.Replication.MaxMessages != 10000 {
+		t.Fatalf("unexpected replication defaults: %+v", defaulted.Replication)
+	}
+}
+
+func TestReplicationRejectsBufferedLimitBelowBatch(t *testing.T) {
+	_, err := Parse([]byte(baseYAML+`replication:
+  enabled: true
+  maxBatchBytes: 2MiB
+  maxBufferedBytes: 1MiB
+`), BuiltinDefaults)
+	if err == nil || !strings.Contains(err.Error(), "maxBufferedBytes") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestReplicationFollowerRequiresMasterURL(t *testing.T) {
+	_, err := Parse([]byte(baseYAML+`replication:
+  enabled: true
+  role: follower
+`), BuiltinDefaults)
+	if err == nil || !strings.Contains(err.Error(), "masterURL") {
+		t.Fatalf("err=%v", err)
+	}
+	s := parseOK(t, baseYAML+`replication:
+  enabled: true
+  role: follower
+  masterURL: https://master.example
+`)
+	if s.Replication.Role != "follower" || s.Replication.MasterURL == "" {
+		t.Fatalf("replication=%+v", s.Replication)
+	}
+}
+
 func parseErr(t *testing.T, yml, wantSubstr string) {
 	t.Helper()
 	_, err := Parse([]byte(yml), BuiltinDefaults)

@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
+	"github.com/nishisan-dev/nishidb/internal/replication"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // validateHistoryNames recusa o nome derivado que colide com um dataset
@@ -92,6 +95,16 @@ func (s *Server) openHistory(base *dataset, log *logging.Logger) (*dataset, erro
 		WriteInstantFieldName: schema.WriteInstantFieldName,
 		Log:                   log,
 		Metrics:               s.reg,
+		OnReplicationChange: func(table string, op replication.Operation, rec types.Record, at time.Time) {
+			if base.replication != nil {
+				base.replication.Publish(table, op, rec, at)
+			}
+		},
+		OnReplicationRetain: func(table string, floor types.RowID, at time.Time) {
+			if base.replication != nil {
+				base.replication.Publish(table, replication.Retain, types.Record{RowID: floor}, at)
+			}
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tabela histórica de %q: %w", base.nome, err)
@@ -170,6 +183,9 @@ func (s *Server) openHistory(base *dataset, log *logging.Logger) (*dataset, erro
 func (s *Server) turnonRetention(ctx context.Context) {
 	var withRetention []string
 	for _, d := range s.datasets {
+		if d.follower != nil {
+			continue
+		}
 		if !d.ehHistorico || d.spec.History == nil {
 			continue
 		}
@@ -207,6 +223,9 @@ func (s *Server) turnonRetention(ctx context.Context) {
 func (s *Server) turnonRebuild(ctx context.Context) {
 	var withRebuild []string
 	for _, d := range s.datasets {
+		if d.follower != nil {
+			continue
+		}
 		d.st.StartRebuild(ctx, windowOfDataset(d))
 		if d.st.RebuildActive() {
 			withRebuild = append(withRebuild, d.nome)

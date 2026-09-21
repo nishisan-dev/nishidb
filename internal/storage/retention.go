@@ -261,8 +261,22 @@ func (s *Store) advanceMarkDagua(prazo time.Duration) (uint64, error) {
 	if lo <= base {
 		return 0, nil
 	}
-	s.rowIDBase.Store(lo)
+	s.advanceHistoryFloor(lo)
 	return lo - base, nil
+}
+
+// advanceHistoryFloor publishes the logical retention boundary once. The
+// callback is intentionally after the atomic store: a follower receiving the
+// Retain entry must never expose a row below the floor the master already
+// hides.
+func (s *Store) advanceHistoryFloor(floor uint64) {
+	if floor <= s.rowIDBase.Load() {
+		return
+	}
+	s.rowIDBase.Store(floor)
+	if s.opts.OnReplicationRetain != nil {
+		s.opts.OnReplicationRetain(s.opts.Dataset, types.RowID(floor), s.now())
+	}
 }
 
 // vencidaIn lê o _writtenAt da linha e o compara com o corte. conhecido=false
@@ -368,7 +382,7 @@ func (s *Store) aposentaUntilCaber(ctx context.Context, maxBytes int64, res *Res
 // durável ANTES de qualquer byte sair do disco.
 func (s *Store) aposentaOfHistory(sec uint32, newMarca *uint64) error {
 	if newMarca != nil && *newMarca > s.rowIDBase.Load() {
-		s.rowIDBase.Store(*newMarca)
+		s.advanceHistoryFloor(*newMarca)
 	}
 	if err := s.aposentaSegment(sec); err != nil {
 		return err

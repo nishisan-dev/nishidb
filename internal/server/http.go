@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/pprof"
@@ -15,6 +16,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/kafka"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
+	"github.com/nishisan-dev/nishidb/internal/replication"
 )
 
 // permitidoInLeitura é o valor do header Allow das duas rotas que aceitam HEAD.
@@ -143,6 +145,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // palavras diferentes no dia em que uma delas ganhasse um caso novo — e o
 // operador teria de descobrir qual das duas está certa.
 func stateOfIngestion(d *dataset) (estado, detalhe string) {
+	if d.follower != nil {
+		state, epoch, cursor := d.follower.Replica.State()
+		switch state {
+		case replication.ReplicaFollowing:
+			return protocol.StateUp, ""
+		case replication.ReplicaDisconnected:
+			return protocol.StateDown, fmt.Sprintf("master offline (epoch=%s cursor=%d)", epoch, cursor)
+		default:
+			return protocol.StateDegraded, fmt.Sprintf("replicação em estado %s (epoch=%s cursor=%d)", state, epoch, cursor)
+		}
+	}
 	d.mu.Lock()
 	cons, err := d.cons, d.erroIngestao
 	d.mu.Unlock()

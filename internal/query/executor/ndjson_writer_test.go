@@ -289,6 +289,9 @@ func TestGateAppendValueZeroAllocPorTipo(t *testing.T) {
 // (bufSize + maiorLinha) e SÓ DEPOIS entra em regime. Medir o aquecimento
 // junto mediria o crescimento, não o regime.
 func TestGateStreamWriterZeroAllocEmRegime(t *testing.T) {
+	if raceBuild {
+		t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+	}
 	s := NewStreamWriter(io.Discard, 4096, withoutCeiling())
 	row := rowOfTest(1)
 	for i := 0; i < 2000; i++ { // aquecimento: leva o buffer ao teto

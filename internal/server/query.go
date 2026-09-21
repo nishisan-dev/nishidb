@@ -19,6 +19,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/lexer"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
+	"github.com/nishisan-dev/nishidb/internal/replication"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
@@ -95,6 +96,17 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 				req.Dataset, binder.DottedDatasetNameHint(req.Dataset)),
 		})
 		return
+	}
+	if d.follower != nil {
+		state, _, _ := d.follower.Replica.State()
+		if state != replication.ReplicaFollowing {
+			w.Header().Set("Retry-After", "1")
+			s.reject(w, r, http.StatusServiceUnavailable, d.nome, protocol.ErrorDetail{
+				Code:    protocol.CodeFollowerNotReady,
+				Message: fmt.Sprintf("follower %q ainda não concluiu o snapshot/catch-up (estado %s)", d.nome, state),
+			})
+			return
+		}
 	}
 
 	params, err := protocol.Values(req.Parameters)

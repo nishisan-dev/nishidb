@@ -397,6 +397,10 @@ func TestParidadeDeEscapingComEncodingJSON(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := strings.TrimSuffix(sb.String(), "\n")
+			// Go 1.27 changed encoding/json to emit raw U+FFFD for invalid
+			// UTF-8, while the supported Go 1.26 line emits the escaped form.
+			// The wire format deliberately stays escaped for compatibility.
+			want = strings.ReplaceAll(want, "�", `\ufffd`)
 			if got := string(AppendJSONString(nil, []byte(in))); got != want {
 				t.Errorf("AppendJSONString(%q):\n got %s\nwant %s", in, got, want)
 			}
