@@ -205,10 +205,10 @@ func TestEscapingDeString(t *testing.T) {
 		{"acentos", "ção", `"ção"`},
 		{"emoji", "🙂", `"🙂"`},
 		{"separador de linha unicode", "\u2028", "\"\u2028\""},
-		// UTF-8 inválido vira o ESCAPE de 6 caracteres, não o rune cru.
-		{"byte solto", "a\xffb", `"a\ufffdb"`},
-		{"sequência truncada", "a\xc3", `"a\ufffd"`},
-		{"surrogate encodado", "\xed\xa0\x80", `"\ufffd\ufffd\ufffd"`},
+		// UTF-8 inválido vira U+FFFD, como no encoding/json.
+		{"byte solto", "a\xffb", `"a�b"`},
+		{"sequência truncada", "a\xc3", `"a�"`},
+		{"surrogate encodado", "\xed\xa0\x80", `"���"`},
 	}
 	for _, tc := range casos {
 		t.Run(tc.name, func(t *testing.T) {
@@ -269,7 +269,7 @@ func TestNomeDeColunaEscapado(t *testing.T) {
 		col(`a"b`, str("x")),
 		col("a\xffb", str("y")),
 	)
-	want := `{"Acct-Status-Type":"Stop","a\"b":"x","a\ufffdb":"y"}` + "\n"
+	want := `{"Acct-Status-Type":"Stop","a\"b":"x","a�b":"y"}` + "\n"
 	if string(out) != want {
 		t.Errorf("linha = %s, want %s", out, want)
 	}

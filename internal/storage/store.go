@@ -22,6 +22,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query/spill"
+	"github.com/nishisan-dev/nishidb/internal/replication"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
@@ -178,6 +179,14 @@ type Options struct {
 	// ingerir, e uma consulta recusada com código próprio é um resultado que o
 	// cliente sabe tratar.
 	SnapshotMaxBytes int64
+	// OnReplicationChange receives a logically committed change. The callback
+	// is invoked while the writer lock is held and must return quickly; the
+	// replication feed copies its bytes before returning.
+	OnReplicationChange func(table string, op replication.Operation, rec types.Record, at time.Time)
+	// OnReplicationRetain publishes the history visibility floor after it
+	// advances. It is separate from row changes because retention has no row
+	// payload and must also be represented in a fresh snapshot.
+	OnReplicationRetain func(table string, floor types.RowID, at time.Time)
 	// WriteInstantFieldName é o NOME do campo de sistema que carrega o instante da
 	// escrita, resolvido pelo dicionário do próprio dataset durante o Open.
 	// Obrigatório quando ActiveTTL: é dele que o applyRecord tira o valor,
@@ -1775,6 +1784,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		hadPrevious: !created,
 		countsAsNew: created,
 		versiona:    true,
+		emitChange:  true,
 		sec:         sec,
 		off:         off,
 		recLen:      len(rec),
@@ -1832,7 +1842,8 @@ type recordApply struct {
 	// snapshot deve seguir a location nova. Se ele versionasse, cada passada
 	// criaria versões apontando para o segmento que ela está aposentando, e o
 	// pin bloquearia a própria compaction que o gerou.
-	versiona bool
+	versiona   bool
+	emitChange bool
 }
 
 // applyRecord executa os passos 3-8 do §10.1 (offset accounting, primary,
@@ -2017,6 +2028,18 @@ func (s *Store) applyRecord(a recordApply) error {
 		if err := c.ApplyEvent(a.rowID, a.payload, lapide, a.flags&types.FlagCounterEvent != 0); err != nil {
 			return err
 		}
+	}
+	if a.emitChange && s.opts.OnReplicationChange != nil {
+		op := replication.Update
+		if a.flags&types.FlagTombstone != 0 {
+			op = replication.Delete
+		} else if !a.hadPrevious {
+			op = replication.Insert
+		}
+		s.opts.OnReplicationChange(s.opts.Dataset, op, types.Record{
+			RowID: a.rowID, Sequence: a.seq, Flags: a.flags,
+			Key: a.key, Payload: a.payload,
+		}, s.now())
 	}
 	// NÃO HÁ passo 8. A fase de CLEAR saiu junto com os motores globais, e a
 	// ausência é o desenho (spec §5.2): a posting do valor antigo mora no índice
@@ -2866,6 +2889,18 @@ func (s *Store) purgada(id types.RowID) bool {
 // escrita. Quem chama trata a falha como degradação do histórico, e não da
 // ingestão: o produto é o dataset base.
 func (s *Store) Apenda(payload []byte) (types.RowID, error) {
+	return s.apenda(payload, 0, false)
+}
+
+// ApendaReplication preserves a history row's identity during follower
+// resync. A snapshot can overlap the feed cursor; replaying the same rowID is
+// therefore an idempotent no-op instead of a second history event.
+func (s *Store) ApendaReplication(rowID types.RowID, payload []byte) error {
+	_, err := s.apenda(payload, rowID, true)
+	return err
+}
+
+func (s *Store) apenda(payload []byte, requested types.RowID, fixed bool) (types.RowID, error) {
 	if err := s.entra(); err != nil {
 		return 0, err
 	}
@@ -2887,7 +2922,36 @@ func (s *Store) Apenda(payload []byte) (types.RowID, error) {
 	if err := s.validatePayloadAgainstDataset(payload); err != nil {
 		return 0, err
 	}
-	rowID := types.RowID(s.nextRowID.Add(1) - 1)
+	rowID := requested
+	if fixed {
+		if packed, ok := s.locs.Get(rowID); ok {
+			sec, off, flags := rowindex.Unpack(packed)
+			if flags&types.FlagTombstone == 0 {
+				existing, _, err := s.secR.ReadRecord(sec, off, nil)
+				if err != nil {
+					return 0, err
+				}
+				if existing.RowID != rowID {
+					return 0, fmt.Errorf("%w: location da row %d aponta para record da row %d", encoding.ErrCorrupt, rowID, existing.RowID)
+				}
+				if !bytes.Equal(existing.Payload, payload) {
+					return 0, fmt.Errorf("storage: history row %d already exists with different payload", rowID)
+				}
+				return rowID, nil
+			}
+		}
+		for {
+			current := s.nextRowID.Load()
+			if current > uint64(rowID) {
+				break
+			}
+			if s.nextRowID.CompareAndSwap(current, uint64(rowID)+1) {
+				break
+			}
+		}
+	} else {
+		rowID = types.RowID(s.nextRowID.Add(1) - 1)
+	}
 
 	rec, err := encoding.BuildRecord(s.buildBuf[:0], rowID, 0, 0, nil, payload)
 	s.buildBuf = rec
@@ -2906,6 +2970,7 @@ func (s *Store) Apenda(payload []byte) (types.RowID, error) {
 		payload:     payload,
 		hadPrevious: false,
 		countsAsNew: true,
+		emitChange:  !fixed,
 		sec:         sec,
 		off:         off,
 		recLen:      len(rec),

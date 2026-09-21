@@ -93,6 +93,22 @@ type DatasetSpec struct {
 	IsHistory bool
 	// Counters é o bloco `counters` validado; nil no dataset sem contador.
 	Counters []CounterSpec
+	// Replication configures the optional master-side change feed. It is
+	// intentionally per dataset because a feed is shared by that dataset's
+	// followers and has its own bounded memory budget.
+	Replication ReplicationSpec
+}
+
+type ReplicationSpec struct {
+	Enabled          bool
+	Role             string
+	MasterURL        string
+	UsernameEnv      string
+	PasswordEnv      string
+	FlushInterval    time.Duration
+	MaxMessages      int
+	MaxBatchBytes    int64
+	MaxBufferedBytes int64
 }
 
 // MaterializationSpec ...
@@ -296,7 +312,20 @@ type rawSpec struct {
 	// Counters é nó cru pela razão de history: bloco novo, sem legado, e a
 	// recusa de chave desconhecida por item é o que separa `wher:` (typo) de
 	// um contador que conta tudo sem que ninguém tenha pedido.
-	Counters yaml.Node `yaml:"counters"`
+	Counters    yaml.Node      `yaml:"counters"`
+	Replication rawReplication `yaml:"replication"`
+}
+
+type rawReplication struct {
+	Enabled          *bool  `yaml:"enabled"`
+	Role             string `yaml:"role"`
+	MasterURL        string `yaml:"masterURL"`
+	UsernameEnv      string `yaml:"usernameEnv"`
+	PasswordEnv      string `yaml:"passwordEnv"`
+	FlushInterval    string `yaml:"flushInterval"`
+	MaxMessages      *int   `yaml:"maxMessages"`
+	MaxBatchBytes    string `yaml:"maxBatchBytes"`
+	MaxBufferedBytes string `yaml:"maxBufferedBytes"`
 }
 
 type rawMat struct {
@@ -1165,6 +1194,64 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 			maxTimeout, timeout)
 	}
 	s.Query.MaxTimeout = maxTimeout
+
+	// replication is optional and disabled by default. The feed's limits are
+	// validated here so a malformed follower setup cannot silently become an
+	// unbounded master buffer.
+	r := ReplicationSpec{FlushInterval: 5 * time.Second, MaxMessages: 10000, MaxBatchBytes: 8 << 20, MaxBufferedBytes: 64 << 20}
+	if raw.Replication.Enabled != nil {
+		r.Enabled = *raw.Replication.Enabled
+	}
+	if raw.Replication.FlushInterval != "" {
+		d, e := time.ParseDuration(raw.Replication.FlushInterval)
+		if e != nil || d < 0 || d > time.Minute || d%time.Second != 0 {
+			return nil, specErrf("replication.flushInterval %q inválido (use 0s a 60s)", raw.Replication.FlushInterval)
+		}
+		r.FlushInterval = d
+	}
+	var e error
+	if r.MaxMessages, e = units.PositiveInt(raw.Replication.MaxMessages, r.MaxMessages); e != nil {
+		return nil, specErrf("replication.maxMessages: %v", e)
+	}
+	if raw.Replication.MaxBatchBytes != "" {
+		if r.MaxBatchBytes, e = units.Size(raw.Replication.MaxBatchBytes, r.MaxBatchBytes); e != nil {
+			return nil, specErrf("replication.maxBatchBytes: %v", e)
+		}
+	}
+	if raw.Replication.MaxBufferedBytes != "" {
+		if r.MaxBufferedBytes, e = units.Size(raw.Replication.MaxBufferedBytes, r.MaxBufferedBytes); e != nil {
+			return nil, specErrf("replication.maxBufferedBytes: %v", e)
+		}
+	}
+	if r.MaxBufferedBytes < r.MaxBatchBytes {
+		return nil, specErrf("replication.maxBufferedBytes (%d) é menor que maxBatchBytes (%d)", r.MaxBufferedBytes, r.MaxBatchBytes)
+	}
+	if raw.Replication.Role != "" {
+		r.Role = raw.Replication.Role
+	}
+	if r.Role == "" {
+		r.Role = "master"
+	}
+	if r.Role != "master" && r.Role != "follower" {
+		return nil, specErrf("replication.role %q inválido (use master ou follower)", r.Role)
+	}
+	if r.Role == "follower" && raw.Replication.MasterURL == "" {
+		return nil, specErrf("replication.masterURL é obrigatório para role follower")
+	}
+	r.MasterURL = raw.Replication.MasterURL
+	if (raw.Replication.UsernameEnv == "") != (raw.Replication.PasswordEnv == "") {
+		return nil, specErrf("replication.usernameEnv e replication.passwordEnv devem ser informados juntos")
+	}
+	if raw.Replication.UsernameEnv != "" {
+		if err := validateEnvName("replication.usernameEnv", raw.Replication.UsernameEnv); err != nil {
+			return nil, err
+		}
+		if err := validateEnvName("replication.passwordEnv", raw.Replication.PasswordEnv); err != nil {
+			return nil, err
+		}
+	}
+	r.UsernameEnv, r.PasswordEnv = raw.Replication.UsernameEnv, raw.Replication.PasswordEnv
+	s.Replication = r
 
 	return s, nil
 }

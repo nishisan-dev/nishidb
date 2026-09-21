@@ -142,11 +142,12 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 		// tem de continuar recebendo a linha. Sem versionar aqui, o coletor
 		// de expiração apagaria do meio do resultado a linha que o relógio
 		// congelado acabou de preservar — os dois mecanismos se anulariam.
-		versiona: true,
-		sec:      newSeg,
-		off:      newOff,
-		recLen:   len(buf),
-		mode:     applyWrite,
+		versiona:   true,
+		emitChange: true,
+		sec:        newSeg,
+		off:        newOff,
+		recLen:     len(buf),
+		mode:       applyWrite,
 	}); err != nil {
 		return false, s.failWriter(err)
 	}

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/replication"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -109,6 +110,34 @@ func TestPutCreateEGetByKeyRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(rec.Key, []byte(key)) || !bytes.Equal(rec.Payload, payload) {
 		t.Fatal("key/payload diferem do gravado")
+	}
+}
+
+func TestReplicationCallbackFollowsLogicalWrites(t *testing.T) {
+	var got []replication.Operation
+	s := openStore(t, Options{OnReplicationChange: func(_ string, op replication.Operation, _ types.Record, _ time.Time) { got = append(got, op) }})
+	mustPut(t, s, "A", 1, statusPayload(t, s, "A", "start", 1), nil)
+	prev, _, ok, err := s.GetByKey(s.OpenSnapshot(), []byte("A"), nil)
+	if err != nil || !ok {
+		t.Fatalf("lookup: %v %v", ok, err)
+	}
+	mustPut(t, s, "A", 2, statusPayload(t, s, "A", "stop", 2), &prev)
+	if len(got) != 2 || got[0] != replication.Insert || got[1] != replication.Update {
+		t.Fatalf("operations=%v", got)
+	}
+}
+
+func TestApplyReplicationUsesNormalWriteAndDeletePaths(t *testing.T) {
+	s := openStore(t, Options{})
+	p := statusPayload(t, s, "A", "start", 1)
+	if err := s.ApplyReplication(replication.Entry{Sequence: 1, Operation: replication.Insert, Record: types.Record{Key: []byte("A"), Payload: p}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyReplication(replication.Entry{Sequence: 2, Operation: replication.Delete, Record: types.Record{Key: []byte("A")}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, err := s.GetByKey(s.OpenSnapshot(), []byte("A"), nil); err != nil || ok {
+		t.Fatalf("delete did not apply: ok=%v err=%v", ok, err)
 	}
 }
 

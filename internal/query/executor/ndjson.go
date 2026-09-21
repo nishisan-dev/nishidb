@@ -220,10 +220,9 @@ func indexControle(b []byte) int {
 // o byte cru ao materializar, então uma string armazenada CONTÉM 0x0A — e sem
 // o escaping ela quebraria o framing NDJSON.
 //
-// Byte de UTF-8 inválido vira o escape \ufffd (seis caracteres ASCII, não o
-// rune cru), com a mesma paridade do encoding/json. UTF-8 inválido chega aqui
-// de verdade: o tokenizer copia a janela do evento sem validar, e a ingestão
-// grava esses bytes verbatim para string.
+// Byte de UTF-8 inválido vira U+FFFD, com a mesma paridade do encoding/json.
+// UTF-8 inválido chega aqui de verdade: o tokenizer copia a janela do evento
+// sem validar, e a ingestão grava esses bytes verbatim para string.
 func AppendJSONString(dst, s []byte) []byte {
 	dst = append(dst, '"')
 	start := 0
@@ -237,7 +236,7 @@ func AppendJSONString(dst, s []byte) []byte {
 			r, tam := utf8.DecodeRune(s[i:])
 			if r == utf8.RuneError && tam == 1 {
 				dst = append(dst, s[start:i]...)
-				dst = append(dst, escapeFFFD...)
+				dst = append(dst, replacementUTF8...)
 				i++
 				start = i
 				continue
@@ -272,7 +271,7 @@ func appendJSONStringS(dst []byte, s string) []byte {
 			r, tam := utf8.DecodeRuneInString(s[i:])
 			if r == utf8.RuneError && tam == 1 {
 				dst = append(dst, s[start:i]...)
-				dst = append(dst, escapeFFFD...)
+				dst = append(dst, replacementUTF8...)
 				i++
 				start = i
 				continue
@@ -289,11 +288,9 @@ func appendJSONStringS(dst []byte, s string) []byte {
 	return append(dst, '"')
 }
 
-// escapeFFFD é o U+FFFD ESCAPADO (6 caracteres ASCII), e não o rune cru de 3
-// bytes. Os dois decodificam para o mesmo caractere, mas a forma escapada é a
-// do encoding/json — e paridade com o encoder padrão é o que permite comparar
-// a saída com o oráculo byte a byte no teste.
-const escapeFFFD = `\ufffd`
+// replacementUTF8 é a codificação UTF-8 de U+FFFD, a forma emitida pelo
+// encoding/json para bytes inválidos.
+const replacementUTF8 = "\xef\xbf\xbd"
 
 const hexDigitos = "0123456789abcdef"
 

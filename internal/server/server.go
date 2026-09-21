@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -41,11 +42,13 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/budget"
+	"github.com/nishisan-dev/nishidb/internal/replication"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/series"
 	"github.com/nishisan-dev/nishidb/internal/seriesdelivery"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/storage/counter"
+	"github.com/nishisan-dev/nishidb/internal/types"
 	"github.com/nishisan-dev/nishidb/internal/users"
 )
 
@@ -56,9 +59,11 @@ type dataset struct {
 	// sch é a spec COMPILADA, a mesma que foi registrada no motor. Fica aqui
 	// porque /v1/metadata a descreve campo a campo, e recompilá-la a cada
 	// requisição seria trabalho repetido sobre um dado imutável.
-	sch *schema.Compiled
-	st  *storage.Store
-	mat *materializer.Materializer
+	sch         *schema.Compiled
+	st          *storage.Store
+	mat         *materializer.Materializer
+	replication *replication.Stream
+	follower    *replication.Client
 
 	// irma é a tabela histórica deste dataset, ou nil. Ela é um dataset de
 	// pleno direito para /v1/metadata, /v1/health e as métricas — o que ela
@@ -433,6 +438,37 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		if err != nil {
 			return nil, err
 		}
+		if specs[name].Replication.Enabled && specs[name].Replication.Role == "follower" {
+			var snapshotMode bool
+			seen := make(map[string]struct{})
+			replica := replication.NewReplica(func(replication.Snapshot) error {
+				snapshotMode = true
+				clear(seen)
+				return nil
+			}, func(e replication.Entry) error {
+				target := d
+				if d.irma != nil && e.Table == d.irma.nome {
+					target = d.irma
+				}
+				if snapshotMode && target == d && len(e.Record.Key) > 0 {
+					seen[string(e.Record.Key)] = struct{}{}
+				}
+				return target.st.ApplyReplication(e)
+			}, func() error {
+				snapshotMode = false
+				return pruneFollowerBase(d, seen)
+			}, nil)
+			d.follower = &replication.Client{
+				BaseURL:  specs[name].Replication.MasterURL,
+				Dataset:  d.nome,
+				Username: os.Getenv(specs[name].Replication.UsernameEnv),
+				Password: os.Getenv(specs[name].Replication.PasswordEnv),
+				Replica:  replica,
+			}
+			if d.irma != nil {
+				d.irma.follower = d.follower
+			}
+		}
 		s.datasets = append(s.datasets, d)
 		s.byNome[d.nome] = d
 		s.bySchema[d.sch.SchemaName] = d
@@ -458,6 +494,14 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*dataset, error) {
 	dir := s.cfg.DatasetRootDir(spec.Name)
 	indexados := schema.IndexedFieldNames(spec)
+	var feed *replication.Stream
+	if spec.Replication.Enabled && spec.Replication.Role == "master" {
+		var ferr error
+		feed, ferr = replication.New(replication.Options{Interval: spec.Replication.FlushInterval, MaxMessages: spec.Replication.MaxMessages, MaxBatchBytes: spec.Replication.MaxBatchBytes, MaxBufferedBytes: spec.Replication.MaxBufferedBytes})
+		if ferr != nil {
+			return nil, fmt.Errorf("dataset %q: replication: %w", spec.Name, ferr)
+		}
+	}
 	// O schema é compilado DENTRO do Open, pelo callback dos contadores: as
 	// definições precisam do schema, e o replay da recovery precisa das
 	// definições. É o mesmo Compile de sempre, no mesmo dicionário — só que
@@ -477,6 +521,11 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		TTLFieldName:                    schema.TTLFieldName,
 		SnapshotMaxBytes:                s.cfg.SnapshotMaxBytes(),
 		CompileCountersCallbackFunction: comp.Callback(),
+		OnReplicationChange: func(table string, op replication.Operation, rec types.Record, at time.Time) {
+			if feed != nil {
+				feed.Publish(table, op, rec, at)
+			}
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
@@ -573,12 +622,13 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	d = &dataset{
-		nome:    spec.Name,
-		spec:    spec,
-		sch:     compilado,
-		st:      st,
-		mat:     mat,
-		metrics: sampler,
+		nome:        spec.Name,
+		spec:        spec,
+		sch:         compilado,
+		st:          st,
+		mat:         mat,
+		metrics:     sampler,
+		replication: feed,
 	}
 	if err := openEmitters(d, spec, st, dir, sampler.MetricSource(), log, s.seriesDelivery, s.now); err != nil {
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
@@ -743,6 +793,18 @@ func (s *Server) Run(ctx context.Context, pprofAddr string) error {
 	s.turnonEmit(ctx)
 	s.turnonRetention(ctx)
 	s.turnonRebuild(ctx)
+	for _, d := range s.datasets {
+		if d.replication != nil {
+			d.replication.Start(ctx)
+		}
+		if d.follower != nil {
+			go func(d *dataset) {
+				if err := d.follower.Follow(ctx); err != nil && ctx.Err() == nil {
+					d.falha(err)
+				}
+			}(d)
+		}
+	}
 
 	var wg sync.WaitGroup
 	for _, d := range s.datasets {
@@ -766,6 +828,9 @@ func (s *Server) Run(ctx context.Context, pprofAddr string) error {
 // ingestionHabilitada aplica a decisão do D15: descrever o consumer não é
 // ligá-lo.
 func (s *Server) ingestionHabilitada(d *dataset) bool {
+	if d.follower != nil {
+		return false
+	}
 	k := d.spec.Source.Kafka
 	switch {
 	case k == nil:
@@ -959,6 +1024,9 @@ func (s *Server) turnonCompaction(ctx context.Context) {
 func (s *Server) turnonRetirementOfGroups(ctx context.Context) {
 	var withRetention []string
 	for _, d := range s.datasets {
+		if d.follower != nil {
+			continue
+		}
 		d.st.StartRetirementOfGroups(ctx)
 		if d.st.RetirementOfGroupsActive() {
 			withRetention = append(withRetention, d.nome)
@@ -984,6 +1052,9 @@ func (s *Server) turnonRetirementOfGroups(ctx context.Context) {
 func (s *Server) turnonCounterMetrics(ctx context.Context) {
 	var sampling []string
 	for _, d := range s.datasets {
+		if d.follower != nil {
+			continue
+		}
 		if d.metrics == nil {
 			continue
 		}
@@ -1008,6 +1079,9 @@ func (s *Server) turnonCounterMetrics(ctx context.Context) {
 func (s *Server) turnonAlarms(ctx context.Context) {
 	var withAlarms []string
 	for _, d := range s.datasets {
+		if d.follower != nil {
+			continue
+		}
 		if d.alarms == nil {
 			continue
 		}
@@ -1029,6 +1103,9 @@ func (s *Server) turnonAlarms(ctx context.Context) {
 func (s *Server) turnonEmit(ctx context.Context) {
 	var withEmit []string
 	for _, d := range s.datasets {
+		if d.follower != nil {
+			continue
+		}
 		for _, e := range d.emitters {
 			e.Start(ctx)
 		}
@@ -1049,6 +1126,9 @@ func (s *Server) turnonExpiration(ctx context.Context) {
 	maxByPassada, timeByPassada := s.cfg.Expiry()
 	var withExpiration []string
 	for _, d := range s.datasets {
+		if d.follower != nil {
+			continue
+		}
 		if !d.st.HasExpiration() {
 			continue
 		}
@@ -1209,6 +1289,11 @@ func (s *Server) encerra() error {
 	s.forEmitters()
 	s.seriesDelivery.Close()
 	s.forCounterMetrics()
+	for _, d := range s.datasets {
+		if d.replication != nil {
+			d.replication.Close()
+		}
+	}
 	errs = append(errs, s.closeDatasets())
 	// A tabela de usuários fecha por último: até aqui o http.Server ainda
 	// podia estar drenando requests autenticados contra ela.
