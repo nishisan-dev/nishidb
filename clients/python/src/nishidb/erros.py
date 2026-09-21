@@ -179,7 +179,9 @@ class NotSupportedError(DatabaseError):
 #: geral duram milissegundos. TOO_MANY_LONG_QUERIES sai com Retry-After: 30,
 #: porque quem ocupa as vagas de consulta LONGA pode estar lá por minutos, e
 #: repetir em um segundo é quase certo que falha de novo.
-TRANSIENTES = frozenset({TOO_MANY_QUERIES, TOO_MANY_LONG_QUERIES, COMPACTION_BUSY, FOLLOWER_NOT_READY})
+TRANSIENTES = frozenset(
+    {TOO_MANY_QUERIES, TOO_MANY_LONG_QUERIES, COMPACTION_BUSY, FOLLOWER_NOT_READY}
+)
 
 #: Código do protocolo -> classe da PEP 249.
 #:
