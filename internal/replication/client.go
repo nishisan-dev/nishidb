@@ -24,6 +24,7 @@ type Client struct {
 	Replica  *Replica
 }
 
+// HTTPError reports a non-success response from the master replication API.
 type HTTPError struct {
 	Status  int
 	Message string
@@ -64,7 +65,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
 		return &HTTPError{Status: res.StatusCode, Message: string(b)}

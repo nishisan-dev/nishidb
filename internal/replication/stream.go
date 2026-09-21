@@ -15,14 +15,21 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
+// ErrResyncRequired means the requested cursor is no longer available.
 var ErrResyncRequired = errors.New("replication: RESYNC_REQUIRED")
+
+// ErrClosed means the change feed has been shut down.
 var ErrClosed = errors.New("replication: closed")
 
+// Operation identifies the materialized change represented by an entry.
 type Operation uint8
 
 const (
+	// Insert adds the first materialized version of a key.
 	Insert Operation = iota + 1
+	// Update replaces the materialized version of an existing key.
 	Update
+	// Delete writes a tombstone for a key.
 	Delete
 	// Schema precedes records using newly discovered fields.
 	Schema
@@ -32,6 +39,7 @@ const (
 	Retain
 )
 
+// Entry is one ordered materialized change in the feed.
 type Entry struct {
 	Sequence  uint64       `json:"sequence"`
 	Table     string       `json:"table"`
@@ -48,10 +56,12 @@ type Options struct {
 	MaxBufferedBytes int64
 }
 
+// DefaultOptions returns the bounded feed defaults used by configuration.
 func DefaultOptions() Options {
 	return Options{5 * time.Second, 10000, 8 << 20, 64 << 20}
 }
 
+// Validate checks interval and memory limits before a feed is opened.
 func (o Options) Validate() error {
 	if o.Interval < 0 || o.Interval > time.Minute || o.Interval%time.Second != 0 {
 		return errors.New("replication: flushInterval must be an integer from 0s to 60s")
@@ -62,6 +72,7 @@ func (o Options) Validate() error {
 	return nil
 }
 
+// Batch is an immutable, leased group of feed entries.
 type Batch struct {
 	Epoch    string    `json:"epoch"`
 	From     uint64    `json:"from"`
@@ -84,6 +95,7 @@ type pending struct {
 	memory []byte
 }
 
+// Status describes the feed cursor, retention window and flush counters.
 type Status struct {
 	Epoch           string `json:"epoch"`
 	Produced        uint64 `json:"produced"`
@@ -96,6 +108,7 @@ type Status struct {
 	LastFlushReason string `json:"lastFlushReason"`
 }
 
+// Stream is a bounded in-memory feed shared by all followers of one dataset.
 type Stream struct {
 	mu                 sync.Mutex
 	opts               Options
@@ -113,6 +126,7 @@ type Stream struct {
 	stats              Status
 }
 
+// New creates a feed with a fresh generation identifier.
 func New(o Options) (*Stream, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
@@ -125,6 +139,7 @@ func New(o Options) (*Stream, error) {
 	return s, nil
 }
 
+// Cursor returns the current generation and produced sequence.
 func (s *Stream) Cursor() (string, uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -270,6 +285,7 @@ func (s *Stream) flushLocked(at time.Time, reason string) {
 	s.notifyLocked()
 }
 
+// Flush closes the active interval and returns the produced sequence.
 func (s *Stream) Flush(at time.Time, reason string) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -277,6 +293,7 @@ func (s *Stream) Flush(at time.Time, reason string) uint64 {
 	return s.sequence
 }
 
+// Tick closes an interval whose configured delay has elapsed.
 func (s *Stream) Tick(at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -350,6 +367,7 @@ func (s *Stream) Acquire(ctx context.Context, epoch string, after uint64) (*Batc
 	}
 }
 
+// Check validates that a cursor is still covered by the retained feed.
 func (s *Stream) Check(epoch string, after uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -359,6 +377,7 @@ func (s *Stream) Check(epoch string, after uint64) error {
 	return nil
 }
 
+// Status returns a point-in-time feed snapshot.
 func (s *Stream) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -370,6 +389,7 @@ func (s *Stream) Status() Status {
 	return out
 }
 
+// Close flushes pending entries and wakes all waiting readers.
 func (s *Stream) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -10,14 +10,21 @@ import (
 type ReplicaState string
 
 const (
-	ReplicaEmpty          ReplicaState = "empty"
-	ReplicaSyncing        ReplicaState = "syncing"
-	ReplicaCatchingUp     ReplicaState = "catching_up"
-	ReplicaFollowing      ReplicaState = "following"
+	// ReplicaEmpty is the initial state before the first snapshot.
+	ReplicaEmpty ReplicaState = "empty"
+	// ReplicaSyncing is the state while a snapshot is being applied.
+	ReplicaSyncing ReplicaState = "syncing"
+	// ReplicaCatchingUp is the state after commit and before the tail catches up.
+	ReplicaCatchingUp ReplicaState = "catching_up"
+	// ReplicaFollowing means the follower has a contiguous current cursor.
+	ReplicaFollowing ReplicaState = "following"
+	// ReplicaResyncRequired means the current cursor cannot be continued.
 	ReplicaResyncRequired ReplicaState = "resync_required"
-	ReplicaDisconnected   ReplicaState = "disconnected"
+	// ReplicaDisconnected means the master request failed and will be retried.
+	ReplicaDisconnected ReplicaState = "disconnected"
 )
 
+// ErrGenerationChanged means the follower must discard its cursor and resync.
 var ErrGenerationChanged = errors.New("replication: master generation changed")
 
 // Snapshot is the logical handoff between a snapshot exporter and a follower.
@@ -44,10 +51,12 @@ type Replica struct {
 	abort          func()
 }
 
+// NewReplica creates a cursor-enforcing follower state machine.
 func NewReplica(begin func(Snapshot) error, apply func(Entry) error, commit func() error, abort func()) *Replica {
 	return &Replica{state: ReplicaEmpty, begin: begin, apply: apply, commit: commit, abort: abort}
 }
 
+// State returns the lifecycle state, master epoch and applied cursor.
 func (r *Replica) State() (ReplicaState, string, uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -162,6 +171,7 @@ func (r *Replica) ApplyBatch(b *Batch) error {
 	return nil
 }
 
+// Disconnect marks a non-empty replica unavailable while the master is down.
 func (r *Replica) Disconnect() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -170,6 +180,7 @@ func (r *Replica) Disconnect() {
 	}
 }
 
+// RequireResync discards the staged generation and requests a new snapshot.
 func (r *Replica) RequireResync() {
 	r.mu.Lock()
 	defer r.mu.Unlock()

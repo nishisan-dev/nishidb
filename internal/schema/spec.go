@@ -99,6 +99,7 @@ type DatasetSpec struct {
 	Replication ReplicationSpec
 }
 
+// ReplicationSpec configures the optional master/follower change feed.
 type ReplicationSpec struct {
 	Enabled          bool
 	Role             string
