@@ -218,14 +218,33 @@ func TestSeriesDoWatchdogNascemComZero(t *testing.T) {
 	}
 	run(t, srv)
 
-	corpo := fetch(t, srv, "/metrics")
-	for _, serie := range []string{
+	series := []string{
 		`nishidb_kafka_watchdog_trips_total{dataset="eventos"} 0`,
 		`nishidb_kafka_watchdog_desistiu{dataset="eventos"} 0`,
-	} {
-		if !strings.Contains(corpo, serie) {
-			t.Errorf("a série não nasceu com zero: %s", serie)
+	}
+	// Run starts ingestion asynchronously. Under -race the scheduler can take
+	// longer to publish the zero-valued series, so observe the endpoint until
+	// the startup state is visible instead of asserting on one instant.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		corpo := fetch(t, srv, "/metrics")
+		ready := true
+		for _, serie := range series {
+			if !strings.Contains(corpo, serie) {
+				ready = false
+				break
+			}
 		}
+		if ready {
+			return
+		}
+		if time.Now().After(deadline) {
+			for _, serie := range series {
+				t.Errorf("a série não nasceu com zero: %s", serie)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
