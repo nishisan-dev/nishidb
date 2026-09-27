@@ -763,3 +763,53 @@ const (
 	MetAlarmDeliveryFailed                 = "nishidb_alarm_delivery_failed"
 	MetAlarmDeliveryPaused                 = "nishidb_alarm_delivery_paused"
 )
+
+// Publicação do feed de replicação em Kafka (`replication.targets`), por
+// dataset e destino. Os valores de LabelReason e LabelPublisherState vêm das
+// listas fechadas do internal/replicationkafka, e toda série nasce em zero,
+// inclusive antes da primeira entrega: o alarme sobre erro ou estado precisa
+// da série antes do primeiro evento.
+const (
+	// LabelPublisherState é o estado do publicador na série one-hot
+	// MetReplicationKafkaState. Não reaproveita LabelState, cujo nome
+	// ("estado") é contrato das séries de índice.
+	LabelPublisherState = "state"
+	// MetReplicationKafkaDeliveredTotal conta os registros Kafka confirmados
+	// pelo broker, de qualquer op.
+	MetReplicationKafkaDeliveredTotal = "nishidb_replication_kafka_delivered_total"
+	// MetReplicationKafkaLagSequences é o que o feed produziu além do cursor
+	// confirmado do publicador.
+	MetReplicationKafkaLagSequences = "nishidb_replication_kafka_lag_sequences"
+	// MetReplicationKafkaSnapshotsTotal conta os snapshots concluídos, por
+	// motivo (LabelReason).
+	MetReplicationKafkaSnapshotsTotal = "nishidb_replication_kafka_snapshots_total"
+	// MetReplicationKafkaErrorsTotal conta as tentativas de entrega que
+	// falharam, por motivo (LabelReason).
+	MetReplicationKafkaErrorsTotal = "nishidb_replication_kafka_errors_total"
+	// MetReplicationKafkaState é 1 no estado corrente do publicador e 0 nos
+	// outros (LabelPublisherState).
+	MetReplicationKafkaState = "nishidb_replication_kafka_state"
+	// MetReplicationKafkaLastSuccessTimestamp é a última entrega completa, em
+	// segundos do epoch; zero até a primeira.
+	MetReplicationKafkaLastSuccessTimestamp = "nishidb_replication_kafka_last_success_timestamp"
+)
+
+// Feed de replicação do dataset master, por dataset. Saem para todo dataset
+// com `replication.enabled` no papel master, com ou sem destino Kafka.
+const (
+	// MetReplicationFeedInputEntriesTotal conta as entradas publicadas no
+	// feed pelo writer, antes da coalescência.
+	MetReplicationFeedInputEntriesTotal = "nishidb_replication_feed_input_entries_total"
+	// MetReplicationFeedOutputEntriesTotal conta as entradas que saíram nos
+	// lotes fechados, depois da coalescência.
+	MetReplicationFeedOutputEntriesTotal = "nishidb_replication_feed_output_entries_total"
+	// MetReplicationFeedBufferedBytes são os bytes retidos pelos lotes do
+	// feed.
+	MetReplicationFeedBufferedBytes = "nishidb_replication_feed_buffered_bytes"
+	// MetReplicationFeedEvictedBatchesTotal conta os lotes descartados pelo
+	// teto de memória do feed.
+	MetReplicationFeedEvictedBatchesTotal = "nishidb_replication_feed_evicted_batches_total"
+	// MetReplicationFeedInvalidationsTotal conta as vezes em que o feed
+	// descartou o intervalo retido e forçou a ressincronização.
+	MetReplicationFeedInvalidationsTotal = "nishidb_replication_feed_invalidations_total"
+)

@@ -1,6 +1,6 @@
 # Métricas expostas
 
-As **115 séries** declaradas em [`internal/metrics/names.go`](../internal/metrics/names.go),
+As **144 séries** declaradas em [`internal/metrics/names.go`](../internal/metrics/names.go),
 que é a fonte ÚNICA dos nomes — nenhum literal de nome de série existe fora
 dali, e `TestTodaMetricaDeclaradaEstaDocumentada` confere que esta página
 descreve todas elas.
@@ -23,7 +23,7 @@ naquela raspagem — ausência é ausência de medida, e nunca zero.
   `_count`.
 - **labels** são os do produto, conjunto fechado: `dataset`, `partition`,
   `categoria`, `motivo`, `counter`, `alarm`, `metric`, `reason`, `estado`,
-  `modo`. **Nenhum valor
+  `modo`, `destination`, `state`. **Nenhum valor
   de label vem de entrada do cliente** — todos saem do YAML ou de enums do
   código, porque label livre é cardinalidade sem teto.
 - **⚠️** marca a série que **não estava exposta** no processo de referência
@@ -299,6 +299,40 @@ primeira entrega; `destination` é o `name` do destino. A origem é a mesma de
 Timeout pode ocorrer após o broker armazenar a mensagem. Os descartes medem
 resultados locais, sem afirmar perda exata no tópico. Limites e garantias estão
 na [operação da emissão Kafka](operacao-series-kafka.md).
+
+### Replicação
+
+O feed de replicação sai em todo dataset com `replication.enabled` no papel
+`master`, com ou sem destino Kafka, pelo label `dataset`. A origem é a mesma
+de `datasets[].replication.feed` no `/v1/stats`.
+
+| série | tipo | labels | o que responde |
+|---|---|---|---|
+| `nishidb_replication_feed_input_entries_total` | counter | `dataset` | entries published to the replication feed by the writer |
+| `nishidb_replication_feed_output_entries_total` | counter | `dataset` | entries emitted in closed replication feed batches, after coalescing |
+| `nishidb_replication_feed_buffered_bytes` | gauge | `dataset` | bytes retained by the replication feed |
+| `nishidb_replication_feed_evicted_batches_total` | counter | `dataset` | replication feed batches evicted by the memory ceiling |
+| `nishidb_replication_feed_invalidations_total` | counter | `dataset` | times the replication feed dropped its retained range and forced a resync |
+
+Cada destino de `replication.targets` publica as séries abaixo por `dataset`
+e `destination` (o `name` do destino em `kafkaTargets:`), todas desde a
+subida, em zero antes da primeira entrega. A origem é a mesma de
+`datasets[].replication.delivery` no `/v1/stats`.
+
+| série | tipo | o que responde |
+|---|---|---|
+| `nishidb_replication_kafka_delivered_total` | counter | replication records acknowledged by Kafka |
+| `nishidb_replication_kafka_lag_sequences` | gauge | feed sequences produced beyond the publisher's acknowledged cursor |
+| `nishidb_replication_kafka_snapshots_total` | counter | replication snapshots completed on Kafka, by reason; label adicional `reason`: `startup`, `gap`, `snapshot_failed`, `partitions_changed` |
+| `nishidb_replication_kafka_errors_total` | counter | failed replication delivery attempts, by reason; label adicional `reason`: `timeout`, `unavailable`, `message_too_large`, `publish_error`, `render_error`, `snapshot_gap` |
+| `nishidb_replication_kafka_state` | gauge | 1 on the current state of the replication publisher, 0 on the others; label adicional `state`: `snapshotting`, `following`, `retrying`, `blocked`, `failed`, `stopped` |
+| `nishidb_replication_kafka_last_success_timestamp` | gauge | last complete replication delivery in epoch seconds; zero until the first |
+
+`nishidb_replication_kafka_state{state="blocked"}` ou `{state="failed"}` em 1
+é o publicador parado: `blocked` é registro maior que `maxMessageBytes` (nada é
+pulado; corrija o limite e reinicie), `failed` é erro de renderização (bug; a
+ingestão segue). `lag_sequences` crescendo com `state="retrying"` é o broker
+recusando ou fora do ar.
 
 ### Autenticação e TLS
 

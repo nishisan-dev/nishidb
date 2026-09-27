@@ -42,7 +42,12 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 	// Os laços que têm de parar antes, e o que os para. Um laço novo que more
 	// no servidor entra nesta lista — e o gate falha enquanto ele não estiver
 	// no encerra(), que é o ponto.
-	paradas := []string{"forAlarms", "forEmitters", "forCounterMetrics", "closeAlarmDelivery", "seriesDelivery.Close"}
+	//
+	// closePublishers é o laço do publicador da replicação em Kafka: o
+	// snapshot em curso lê os Stores. closeFeeds não é laço sobre o Store,
+	// mas é o que deixa o publicador sair (ele drena a cauda até o fim do
+	// feed), e entra na lista pela ordem asseverada abaixo.
+	paradas := []string{"forAlarms", "forEmitters", "forCounterMetrics", "closeAlarmDelivery", "seriesDelivery.Close", "closeFeeds", "closePublishers"}
 	const quiesce = "closeDatasets"
 
 	pos := map[string]int{}
@@ -56,9 +61,12 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 		if !ok {
 			return true
 		}
+		// A chamada sobre um campo (s.http.Shutdown, s.seriesDelivery.Close)
+		// leva o nome do campo: "Close" e "Shutdown" sozinhos seriam de
+		// qualquer um.
 		name := sel.Sel.Name
-		if receiver, ok := sel.X.(*ast.SelectorExpr); ok && receiver.Sel.Name == "seriesDelivery" {
-			name = "seriesDelivery." + name
+		if receiver, ok := sel.X.(*ast.SelectorExpr); ok {
+			name = receiver.Sel.Name + "." + name
 		}
 		if _, visto := pos[name]; !visto {
 			pos[name] = i
@@ -78,6 +86,22 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 	}
 	if pos["forEmitters"] >= pos["seriesDelivery.Close"] {
 		t.Error("Kafka producers must close after all counter emitters have stopped")
+	}
+	// A ordem do encerramento da replicação: o feed fecha antes do
+	// http.Shutdown, para o long-poll dos seguidores sair na hora em vez de
+	// gastar o prazo do Shutdown; e antes dos publicadores, que só saem
+	// depois de drenar a cauda até o fim do feed.
+	posShutdown, ok := pos["http.Shutdown"]
+	if !ok {
+		t.Fatal("encerra() não chama s.http.Shutdown: este gate precisa dele para comparar")
+	}
+	if pos["closeFeeds"] >= posShutdown {
+		t.Error("encerra() tem de fechar os feeds de replicação ANTES do http.Shutdown: " +
+			"o long-poll dos seguidores seguraria o Shutdown até o prazo")
+	}
+	if pos["closeFeeds"] >= pos["closePublishers"] {
+		t.Error("encerra() tem de fechar os feeds de replicação ANTES dos publicadores: " +
+			"cada publicador esperaria o orçamento inteiro por um fim de feed que não vem")
 	}
 	for _, parada := range paradas {
 		p, ok := pos[parada]
