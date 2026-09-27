@@ -1,7 +1,10 @@
 # NishiDB
 
 O fluxo master/follower com lotes configuráveis e resync automático está
-documentado em [`docs/replication.md`](docs/replication.md).
+documentado em [`docs/replication.md`](docs/replication.md). O master também
+pode publicar o mesmo feed num tópico Kafka, em JSON, por um destino de
+`kafkaTargets:` nomeado em `replication.targets`: ver
+[Publicação em Kafka](docs/replication.md#publicação-em-kafka).
 
 Engine de materialização e consulta para fluxos de eventos JSON parciais.
 

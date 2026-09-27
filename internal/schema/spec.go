@@ -1290,9 +1290,12 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 // `kafkaTargets:` (ValidDeliveryName), e `file` é recusado porque a
 // replicação não tem saída em arquivo: aceitá-lo seria publicar em lugar
 // nenhum sem avisar. O piso `maxBufferedBytes >= 2*maxBatchBytes` existe
-// porque o publicador Kafka segura um lote arrendado enquanto retenta, e os
-// seguidores dividem o mesmo buffer: sem a folga de um lote inteiro além do
-// arrendado, um broker fora do ar pararia os seguidores junto.
+// porque um lote arrendado — pelo publicador Kafka enquanto o copia para o
+// próprio buffer, ou por um seguidor enquanto o envia — continua contando no
+// buffer do feed até ser solto, mesmo depois de despejado
+// (internal/replication, makeRoomLocked). Sem a folga de um lote inteiro além
+// do arrendado, a próxima escrita não acharia espaço e invalidaria o
+// intervalo retido.
 func validateReplicationTargets(n *yaml.Node, r ReplicationSpec) ([]string, error) {
 	if n.Kind == 0 {
 		return nil, nil
@@ -1339,7 +1342,7 @@ func validateReplicationTargets(n *yaml.Node, r ReplicationSpec) ([]string, erro
 	// maxBatchBytes gigante e aprovaria o par por engano.
 	if r.MaxBufferedBytes/2 < r.MaxBatchBytes {
 		return nil, specErrf("replication.maxBufferedBytes (%d) must be at least twice replication.maxBatchBytes (%d) "+
-			"when replication.targets is set: the Kafka publisher holds a batch while retrying and followers share the same buffer",
+			"when replication.targets is set: a leased batch keeps counting against the buffer until it is released",
 			r.MaxBufferedBytes, r.MaxBatchBytes)
 	}
 	return targets, nil

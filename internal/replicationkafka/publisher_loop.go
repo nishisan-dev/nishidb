@@ -293,9 +293,11 @@ func (p *Publisher) tailOnce(ctx context.Context) error {
 	}
 	// O render já copiou tudo para o buffer do publicador: o lease é solto
 	// AGORA, e não depois dos acks. Um broker travado não segura memória do
-	// feed, que os followers HTTP compartilham. Se o feed despejar o lote
-	// enquanto a entrega retenta, o próximo Acquire dá ErrResyncRequired, e
-	// o snapshot gap que segue é a resposta certa.
+	// feed, que os followers HTTP compartilham. Despejar SÓ este lote enquanto
+	// a entrega retenta não cria lacuna: o piso do feed vira b.To, que é o
+	// cursor novo. A lacuna — ErrResyncRequired no próximo Acquire, e o
+	// snapshot gap que segue — só aparece se o feed despejar lotes que o
+	// publicador ainda não leu, ou invalidar o intervalo retido.
 	release()
 	if err := p.checkSizes(out); err != nil {
 		return err

@@ -1,0 +1,76 @@
+@startuml replication_kafka_flow
+title Publicação da replicação em Kafka: reset, snapshot, snapshot_end e tail
+
+participant "Writer do Store\n(applyRecord)" as st
+participant "Feed de replicação\ninternal/replication.Stream" as feed
+participant "Exportador de snapshot\nreplication.ExportSnapshot" as exp
+participant "Publicador\ninternal/replicationkafka.Publisher" as pub
+queue "Tópico Kafka\n(kafkaTargets[].topic)" as topic
+
+st -> feed : Publish(entry) depois do commit\n(insert, update, delete com o último estado, retain)
+note over feed
+  Buffer limitado (maxBufferedBytes).
+  Nunca espera o publicador: sem espaço,
+  descarta lotes antigos, e quem ficou
+  para trás recebe ErrResyncRequired.
+end note
+
+== Reconstrução (reason: startup, gap, snapshot_failed ou partitions_changed) ==
+
+pub -> topic : consulta o número de partições (kadm)\ne fixa N
+pub -> exp : ExportSnapshot(feed, tabelas)
+exp -> feed : Cursor() ANTES da varredura\n(epoch, cursor)
+exp -> st : PRIMEIRO bloco: snapshot de leitura próprio,\ncopia o bloco e FECHA o snapshot
+exp -> pub : begin(epoch, cursor, at)
+pub -> topic : reset {epoch, reason, cursor}\nem CADA uma das N partições
+topic --> pub : ack de todas (barreira)
+loop bloco curto (até 4.096 linhas, com teto em bytes)
+  exp -> pub : emit(linha do bloco já copiado)
+  pub -> topic : op snapshot, sequence = cursor,\npartição = murmur2(key) mod N
+  pub -> feed : Check(epoch, cursor) a cada bloco entregue
+  alt o feed perdeu o cursor
+    pub -> pub : errors{snapshot_gap}++,\nERROR replication.kafka.livelock,\nespera 200 ms e novo reset (reason gap)
+  end
+  exp -> st : próximo bloco: snapshot próprio,\ncopia e FECHA antes do emit
+end
+pub -> topic : snapshot_end {cursor, count da partição}\nem CADA partição
+topic --> pub : ack de todas
+pub -> pub : estado following; cursor = cursor do reset
+
+== Tail ==
+
+loop enquanto o feed não fecha
+  pub -> feed : Acquire(epoch, cursor)
+  feed --> pub : lote (pode trazer entradas com sequence ≤ cursor)
+  pub -> pub : descarta sequence ≤ cursor, renderiza o resto\nno buffer próprio e devolve o lote ao feed (release)
+  pub -> pub : confere cada registro contra maxMessageBytes
+  alt registro maior que o limite
+    pub -> pub : estado blocked: nada do lote é produzido;\nparado até o reinício
+  else cabe
+    pub -> topic : insert / update / delete\n(retain em todas as partições)
+    alt todos confirmados
+      topic --> pub : acks
+      pub -> pub : cursor = fim do lote
+    else alguma falha de entrega
+      pub -> pub : estado retrying, espera de 200 ms a 5 s
+      pub -> topic : reproduz, em cada partição com falha,\ndo PRIMEIRO registro falho até o fim do lote
+    end
+  end
+  alt Acquire devolve ErrResyncRequired (lacuna)
+    pub -> pub : novo reset, reason gap, MESMA epoch
+  else a conferência periódica acha outro N
+    pub -> pub : novo reset, reason partitions_changed
+  end
+end
+
+== Encerramento ==
+
+feed -> pub : Close: entrega os lotes retidos, depois ErrClosed
+pub -> topic : drena a cauda (orçamento próprio de 10 s)
+note right of pub
+  Prazo vencido vira WARN
+  replication.publisher.close_failed.
+  A próxima subida publica reset
+  (startup) e um snapshot completo.
+end note
+@enduml

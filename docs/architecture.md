@@ -19,7 +19,7 @@ abaixo.
 
 ## Visão geral
 
-![Containers do M1: CLI, materializer, engine SQL e storage, e os arquivos do dataset em disco](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/c4_container.puml)
+![Containers do M1: CLI, materializer, engine SQL e storage, os arquivos do dataset em disco, e o feed de replicação com o publicador em Kafka](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/c4_container.puml)
 
 > **Sobre as URLs dos diagramas.** O repositório é **privado**, então
 > `raw.githubusercontent.com` responde 404 a quem não está autenticado — e o

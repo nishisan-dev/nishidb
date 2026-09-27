@@ -1,6 +1,6 @@
 @startuml c4_container
 !define RECTANGLE class
-title NishiDB — containers (M1, com os dois listeners HTTP da Fase 11)
+title NishiDB — containers (M1, com os dois listeners HTTP da Fase 11 e a saída da replicação)
 
 skinparam componentStyle rectangle
 skinparam defaultTextAlignment center
@@ -15,7 +15,12 @@ package "nishidb (binário único)" {
   component "Materializer\ninternal/materializer" as mat
   component "Engine SQL\ninternal/query" as eng
   component "Storage\ninternal/storage\n+ internal/index" as sto
+  component "Feed de replicação\ninternal/replication" as feed
+  component "Publicador da replicação\ninternal/replicationkafka" as pub
 }
+
+actor "Follower\n(outro nishidb, role: follower)" as follower #lightgray
+queue "Tópico Kafka da replicação\n(replication.targets → kafkaTargets:)" as kafkaout #lightgray
 
 database "Dataset em disco" as ds {
   file "data/segment-00000001.dat\n(append-only)" as seg
@@ -45,6 +50,12 @@ sto --> bmp
 sto --> fdic
 sto --> man
 sto --> lock
+sto --> feed : alterações depois do commit\n(master com replication.enabled)
+follower --> srv : /v1/replication/*\n(ADMIN)
+srv --> feed : cursor, lotes, snapshot
+feed --> pub : lotes (Acquire)
+pub --> sto : snapshot em blocos curtos
+pub --> kafkaout : envelope JSON\n(reset, snapshot, snapshot_end, tail)
 
 note right of eng
   lexer → parser → binder

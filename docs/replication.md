@@ -26,9 +26,11 @@ caracteres). `file` não vale aqui: a replicação não tem saída em arquivo. A
 chave só é aceita com `enabled: true` e `role: master`; lista vazia, item
 repetido ou item que não seja texto são recusados na carga do dataset. Com
 `targets` declarado, `maxBufferedBytes` precisa ser pelo menos o dobro de
-`maxBatchBytes`, porque o publicador segura um lote enquanto tenta de novo e os
-followers dividem o mesmo buffer. O comportamento da publicação é descrito na
-seção sobre Kafka.
+`maxBatchBytes`: um lote arrendado (pelo publicador enquanto o copia para o
+próprio buffer, ou por um follower enquanto o envia) continua contando no
+buffer até ser solto, mesmo depois de descartado; sem a folga de um lote
+inteiro, a próxima escrita invalidaria o intervalo retido. O comportamento da publicação é descrito em
+[Publicação em Kafka](#publicação-em-kafka).
 
 Updates consecutivos da mesma entidade são consolidados no estado completo já
 materializado. A consolidação nunca cruza outra operação: `insert, update,
@@ -85,15 +87,375 @@ começar, o master derruba a conexão em vez de fechar o JSON: a conexão cai
 pede o snapshot de novo.
 
 O estado da réplica passa por `empty`, `syncing`, `catching_up`, `following`,
-`disconnected` e `resync_required`. O instante lógico usado por TTL e janelas é
-o instante recebido do master, de modo que uma desconexão não envelhece dados
-por conta própria.
+`disconnected` e `resync_required`. O instante de escrita de cada linha vem no
+payload do master, mas o instante com que o follower o compara é o do relógio
+LOCAL: a visibilidade pelo TTL nas consultas e a expiração oportunista da
+compaction do follower andam pelo relógio dele, e não pelo `at` recebido do
+master. Uma desconexão longa, ou relógios desalinhados, fazem o follower
+esconder ou expirar linhas que o master ainda mantém (débito 131).
 
 As rotas de replicação exigem ADMIN, usam o TLS/autenticação do servidor e
 retornam conflito em vez de pular uma lacuna silenciosamente. O cliente
 reconecta com backoff quando o master fica offline. Promoção a master, failover
 e log durável de replicação permanecem fora desta versão.
 
-No modo `follower`, o servidor não consome Kafka nem executa TTL, alarmes,
-emissões ou reconstruções dependentes do relógio local; ele aplica os lotes pelo
-writer do Store. Compaction local continua permitida para recuperar espaço.
+No modo `follower`, o servidor não consome Kafka nem executa o coletor de TTL,
+alarmes, emissões ou reconstruções dependentes do relógio local; ele aplica os
+lotes pelo writer do Store. Compaction local continua permitida para recuperar
+espaço, e é ela que pode expirar uma linha pelo relógio local (ver acima).
+O follower também não publica nada em Kafka: `targets` só vale no master.
+
+## Publicação em Kafka
+
+O master pode publicar o mesmo feed num tópico Kafka, em JSON, além de servi-lo
+aos followers por HTTP. O publicador funciona como um follower interno: lê os
+mesmos lotes, na mesma ordem, e escreve um registro Kafka por entrada (o
+`retain` vira um registro em cada partição). Ele nunca
+segura a ingestão. Se o Kafka ficar lento ou fora do ar, o feed segue o limite
+de memória de sempre, e o publicador se recupera republicando o estado inteiro
+no próprio tópico. O consumidor do tópico nunca precisa das rotas HTTP nem de
+credencial ADMIN.
+
+![Publicação da replicação em Kafka: reset, snapshot, snapshot_end e tail, com os caminhos de lacuna, falha de entrega e mudança de partições](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/replication_kafka_flow.puml)
+
+### Configuração
+
+Os destinos são declarados uma vez, na lista global `kafkaTargets:` do
+`nishidb.yaml`. É a mesma lista que o `emit.target` dos contadores usa
+([operacao-series-kafka.md](operacao-series-kafka.md)):
+
+```yaml
+kafkaTargets:
+  - name: alarms_cdc
+    bootstrapServers: ["broker:9092"]
+    topic: fault.alarms.cdc
+    timeout: 5s               # opcional; acima de 0 e até 5m, default 5s
+    maxMessageBytes: 1MiB     # opcional; de 1KiB a 64MiB, default 1.000.012 bytes
+    security:                 # opcional; TLS/SASL, igual ao consumidor
+      protocol: PLAINTEXT
+```
+
+O dataset aponta para o destino pelo nome:
+
+```yaml
+replication:
+  enabled: true
+  role: master
+  maxBatchBytes: 8MiB
+  maxBufferedBytes: 64MiB   # com targets, pelo menos 2 × maxBatchBytes
+  targets: [alarms_cdc]
+```
+
+Cada nome da lista vira um publicador próprio, com um produtor próprio. A
+subida recusa, com exit 1 e uma mensagem que nomeia o problema:
+
+- `targets` num dataset sem `enabled: true` ou com `role: follower`;
+- lista vazia, nome repetido, nome inválido ou `file`;
+- `maxBufferedBytes` menor que o dobro de `maxBatchBytes`;
+- destino que não existe em `kafkaTargets:`;
+- destino que também é `emit.target` de algum contador. Um tópico carrega um
+  formato de envelope só;
+- destino usado pela replicação de dois datasets. Os marcadores de um dataset
+  fariam o consumidor apagar as linhas do outro, então cada dataset precisa do
+  seu tópico;
+- destino da replicação que, com OUTRO nome, aponta para o mesmo tópico e o
+  mesmo cluster de outro destino em uso, pela replicação ou por um contador
+  (a regra vale quando ao menos um dos dois lados é destino da replicação);
+- destino cujo tópico é o tópico de ingestão (`source.kafka.topic`) de algum
+  dataset no mesmo cluster. O NishiDB reingeriria o próprio envelope como
+  evento.
+
+"Mesmo cluster" quer dizer ao menos um `host:porta` em comum entre os
+`bootstrapServers`, comparados como texto. Dois nomes de DNS para o mesmo
+broker, ou IP de um lado e nome do outro, não são detectados (débito 133).
+
+O NishiDB não cria o tópico. Com o tópico ausente, o publicador fica em
+`retrying` até ele aparecer. O tópico deve usar retenção por tempo
+(`cleanup.policy=delete`): o publicador não escreve tombstone Kafka, e um
+tópico compactado nunca apagaria as keys removidas. Fixe o número de
+partições na criação. Aumentar esse número mais tarde força um novo snapshot
+completo, porque a partição de cada key muda.
+
+Um broker fora do ar não impede a subida: montar o publicador não fala com o
+broker.
+
+### O envelope
+
+Um registro de dado tem sempre estes campos, nesta ordem:
+
+```json
+{"epoch":"0123456789abcdef0123456789abcdef","sequence":42,"dataset":"events","table":"events","op":"update","key":"ALM-1","at":"2026-09-21T14:13:22.456Z","record":{"identifier":"ALM-1","persistent":{"probe":"10.0.0.1","state":"open","tags":["a","b"]},"raisedAt":"2026-09-21T14:13:20.123Z","sev":5}}
+{"epoch":"0123456789abcdef0123456789abcdef","sequence":43,"dataset":"events","table":"events","op":"delete","key":"ALM-1","at":"2026-09-21T14:13:22.456Z","record":{"identifier":"ALM-1","persistent":{"probe":"10.0.0.1","state":"open","tags":["a","b"]},"raisedAt":"2026-09-21T14:13:20.123Z","sev":3}}
+```
+
+As duas linhas são bytes do teste de referência do envelope
+(`internal/replicationkafka/envelope_test.go`). No schema desse teste,
+`severity` tem o alias `sev`, `persistent` é uma coluna `json` e `probe_ip`,
+extraída de `persistent`, é uma coluna derivada, que não entra no `record`.
+
+- `epoch`: a geração do feed, 32 caracteres hexadecimais aleatórios. Muda a
+  cada reinício do master, e só nele. O valor não tem ordem: a geração corrente
+  é a do último `reset` visto na partição.
+- `sequence`: a posição da entrada no feed. Cresce dentro de uma geração, mas
+  tem buracos. Updates seguidos da mesma entidade são consolidados no último
+  estado, e a posição dos intermediários some. Não use a contiguidade para
+  detectar perda.
+- `dataset`: o nome do dataset base, inclusive nas linhas da tabela histórica.
+- `table`: o dataset base ou a tabela histórica dele.
+- `op`: `insert`, `update`, `delete` ou `snapshot` nos registros de dado;
+  `reset`, `snapshot_end` e `retain` nos marcadores de controle.
+- `key`: na tabela base, a key da entidade; na histórica, o `rowID` em
+  decimal. A key do registro Kafka é a autoritativa: ela leva os bytes crus
+  da key, e o `key` do JSON troca byte de UTF-8 inválido por U+FFFD, de modo
+  que duas keys binárias diferentes podem sair com o mesmo `key` no JSON.
+- `at`: o instante da publicação no feed, em UTC com milissegundos, na mesma
+  grafia dos timestamps das consultas. Na consolidação vale o da última
+  alteração. No snapshot, todos os registros levam o mesmo `at`, o instante em
+  que a exportação começou.
+- `record`: a linha como o `SELECT *` da tabela a devolve. O nome é o alias
+  quando existe, os valores saem com os mesmos formatos da saída NDJSON, e as
+  colunas de sistema e as derivadas ficam de fora. Coluna ausente é omitida,
+  e não sai como `null`: no NishiDB, NULL é ausência. Um campo `datetime`
+  sai como instante ISO em UTC; um campo `string` sai como veio no evento.
+
+O `record` difere do `SELECT *` em mais um caso. Uma coluna `json` sai inline
+apenas quando o valor é JSON válido e UTF-8 válido; senão sai como string JSON,
+com o byte de UTF-8 inválido trocado por U+FFFD. O caso
+real é o `_raw` da tabela histórica para um evento que não pôde ser lido: ele
+guarda os bytes do evento como chegaram, e inline tornaria o registro inteiro
+um JSON inválido, que quebraria todo consumidor do tópico. O consumidor
+distingue os casos pelo tipo do valor: objeto ou array é o documento; string é
+o texto cru de um documento inválido.
+
+O `delete` leva o último estado vivo da linha, tanto na expiração pelo coletor
+de TTL quanto na expiração oportunista da compaction. Quando não há estado vivo
+anterior (o delete de uma key que nunca existiu, ou de uma key já apagada), o
+feed só tem a lápide, e o `record` sai vazio: `{}`.
+
+Os marcadores de controle não têm `record`:
+
+```json
+{"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"reset","reason":"gap","cursor":100,"at":"2026-09-21T14:13:29.000Z"}
+{"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"snapshot_end","cursor":100,"count":17,"at":"2026-09-21T14:13:29.000Z"}
+{"epoch":"0123456789abcdef0123456789abcdef","sequence":46,"dataset":"events","table":"events_history","op":"retain","floor":8000,"at":"2026-09-21T14:13:22.456Z"}
+```
+
+- `reset` abre uma reconstrução. `reason` é `startup`, `gap`,
+  `snapshot_failed` ou `partitions_changed`; `cursor` é o ponto do feed de onde
+  o tail recomeça.
+- `snapshot_end` fecha a reconstrução, com o mesmo `cursor` do `reset` e o
+  `count` de registros `snapshot` que foram para AQUELA partição.
+- `retain` avisa que a tabela histórica apagou as linhas com `rowID` menor que
+  `floor`.
+
+Os três usam a key fixa `__nishidb_control__` e são publicados uma vez em
+CADA partição do tópico. Todo registro, de dado ou de controle, leva o header
+`nishidb-op` com o `op`, para o consumidor rotear sem abrir o JSON.
+
+### Ciclo de vida: reset, snapshot e tail
+
+1. O publicador consulta quantas partições o tópico tem e fixa esse número.
+2. Lê o cursor do feed e copia o primeiro bloco do snapshot; só então publica
+   `reset` em todas as partições, e espera a confirmação de todas antes de
+   publicar qualquer linha.
+3. Publica o estado vivo inteiro como `op: snapshot`, um registro por linha: a
+   tabela base primeiro e depois a histórica, precedida de um `retain` com o
+   piso dela. Todo registro do snapshot sai com `sequence` igual ao `cursor`
+   do `reset`.
+4. Publica `snapshot_end` em todas as partições.
+5. Segue o tail, lote a lote, com `insert`, `update`, `delete` e `retain`. O
+   que o snapshot já cobriu (`sequence` até o cursor) não se repete.
+
+O snapshot anda em blocos curtos, de até 4.096 linhas e com teto em bytes. Cada
+bloco lê o dataset por um snapshot de leitura próprio, fechado antes de o bloco
+ir para o Kafka, e no máximo dois blocos ficam em voo. Uma linha alterada
+durante a exportação pode sair num estado mais novo que o cursor; o tail
+reaplica as alterações seguintes por cima, e o estado converge.
+
+Uma nova reconstrução começa por quatro motivos, que são o `reason` do `reset`:
+
+- `startup`: a subida do master. **Todo reinício do master republica o dataset
+  inteiro no tópico**, com geração nova. Não há checkpoint do publicador, e o
+  tópico e o consumidor devem ser dimensionados para isso;
+- `gap`: o feed descartou alterações que o publicador ainda não tinha lido,
+  ou invalidou o intervalo retido, porque o Kafka ficou lento ou fora e o
+  buffer do feed encheu. A geração
+  continua a MESMA, e o `cursor` salta;
+- `snapshot_failed`: um snapshot anterior falhou no meio, depois de já ter
+  publicado alguma coisa;
+- `partitions_changed`: a conferência periódica (uma vez por minuto) achou um
+  número de partições diferente do fixado.
+
+Um snapshot interrompido deixa no tópico um `reset` sem o `snapshot_end`
+correspondente. O próximo `reset` recomeça a reconstrução do zero.
+
+### Regras para o consumidor
+
+Guarde UM estado por `(table, key)`, e não por key: a key da histórica é o
+`rowID` e pode coincidir com a key de uma entidade da tabela base. Junto do
+estado, guarde o `(epoch, sequence)` e a PARTIÇÃO do último registro aplicado.
+
+- `insert`, `update` e `snapshot` são upsert. Um `update` de key desconhecida é
+  válido: a ressurreição de uma key apagada chega como `update`, e não como
+  `insert`, porque a linha mantém o mesmo `rowID`.
+- Um `delete` de key desconhecida também é válido. Uma linha com TTL vencido e
+  ainda não recolhida já some das consultas e do snapshot, e o `delete` dela
+  chega depois.
+- As gerações não têm ordem no valor, mas aparecem na MESMA ordem em todas as
+  partições, porque cada `reset` sai em todas elas. Guarde a ordem em que os
+  `reset` de cada geração foram vistos (em qualquer partição) e trate como mais
+  antigo o registro cuja geração já foi superada por um `reset` visto. Descarte
+  o registro de geração mais antiga que a do último aplicado àquele
+  `(table, key)`, e o de mesma geração com `sequence` menor ou igual. Sem isso,
+  uma key que muda de partição junto com uma troca de geração (partições
+  aumentadas com o master parado) pode ser sobrescrita por um registro velho
+  da partição antiga e depois podada. O mesmo critério de ordem vale para o
+  "menor que `(epoch, cursor)`" da poda abaixo. Lembre também o `(epoch, sequence)` dos
+  `(table, key)` apagados, até o próximo `reset`: uma nova tentativa do
+  produtor pode reentregar um `update` antigo depois do `delete`, e sem essa
+  memória a entidade volta a existir.
+- Ao ver `reset` na partição P, entre em reconstrução nela. Ao ver o
+  `snapshot_end` de P com o mesmo `cursor`, remova os `(table, key)` cujo
+  último registro aplicado veio de P e cujo `(epoch, sequence)` seja menor que
+  o `(epoch, cursor)` do `reset`. Todo `(table, key)` que apareceu no snapshot
+  tem `sequence` igual ao cursor e fica. Não use "não apareceu nesta geração"
+  como regra: num `reset` por lacuna a geração é a mesma, e os deletes
+  perdidos na lacuna nunca seriam podados.
+- A condição "veio de P" é o que protege a key que mudou de partição. Depois
+  de `partitions_changed`, uma key pode sair do snapshot da partição antiga e
+  entrar no da nova; se a nova terminar primeiro, o `snapshot_end` da antiga,
+  sem essa condição, apagaria uma key viva.
+- `count` permite conferir se a partição recebeu o snapshot inteiro: compare-o
+  com os `(table, key)` distintos que chegaram como `snapshot` entre o `reset`
+  e o `snapshot_end` daquela partição.
+- Logo depois de uma reconstrução, uma key pode voltar por um instante a um
+  estado anterior, quando o tail reaplica uma alteração que o snapshot já
+  tinha alcançado. O estado final converge.
+- A tabela histórica não tem ordem por entidade: linhas da mesma entidade caem
+  em partições diferentes. Quem não precisa dela filtra por `table`.
+
+### Entrega e ordem
+
+A entrega é **at-least-once**. O produtor é idempotente e espera a confirmação
+de todas as réplicas em sincronia (`acks=all`), mas uma nova tentativa depois de
+timeout ou de cancelamento pode duplicar um registro. A ordem é garantida por
+key dentro da partição; não há ordem entre keys diferentes.
+
+A partição de um registro de dado é o murmur2 da key sobre o número de
+partições fixado no último `reset`. O publicador a escolhe antes de produzir,
+e é essa mesma escolha que o `count` do `snapshot_end` conta.
+
+O cursor do publicador só avança depois de TODOS os registros do lote
+confirmados. Se parte do lote falha, o publicador espera (de 200 ms a 5 s, em
+progressão) e reproduz, em cada partição com falha, tudo a partir do PRIMEIRO
+registro que falhou, inclusive os já confirmados. Reproduzir só os que falharam
+poderia pôr um `update` antigo depois do `delete` da mesma key.
+
+O publicador copia o lote para o próprio buffer e devolve o lote ao feed antes
+de esperar o Kafka. Um broker travado não prende memória do feed, que os
+followers compartilham. Descartar só esse lote enquanto a entrega tenta de novo
+não cria lacuna, porque o piso do feed passa a ser o fim dele, que é o cursor
+novo do publicador. A continuidade se perde, com `reset` por lacuna, só quando
+o feed descarta lotes que o publicador ainda não leu, ou invalida o intervalo
+retido.
+
+### Estados e falhas
+
+O publicador está sempre num destes estados:
+
+| Estado | Significado |
+|---|---|
+| `snapshotting` | reset, snapshot e snapshot_end em curso |
+| `following` | tail acompanhando o feed |
+| `retrying` | a entrega falhou por infraestrutura (broker fora, timeout, tópico ausente, mensagem recusada pelo broker); tenta de novo para sempre |
+| `blocked` | um registro passou de `maxMessageBytes`; parado até o reinício |
+| `failed` | uma entrada do feed não pôde ser convertida em JSON (bug); parado até o reinício |
+| `stopped` | parado pelo encerramento do servidor |
+
+Nenhum estado de falha afeta a ingestão nem os followers HTTP.
+
+**`blocked`.** Antes de produzir um lote, o publicador mede cada registro (key,
+valor, header e uma folga de 128 bytes para o enquadramento do Kafka) contra
+`maxMessageBytes`. Se um passar do limite, nada do lote é produzido: pular o
+registro deixaria no tópico um buraco que o consumidor não enxerga. O log
+`replication.kafka.blocked` nomeia a key, o tamanho e o limite. Para sair,
+suba `kafkaTargets[].maxMessageBytes` e o `max.message.bytes` do tópico, e
+reinicie o servidor. A subida faz um snapshot novo.
+
+**Recusa pelo broker.** Se o registro cabe em `maxMessageBytes` mas o broker o
+recusa por tamanho (o `max.message.bytes` do tópico é menor), o erro é de
+infraestrutura: o publicador fica em `retrying`, conta
+`errors{reason="message_too_large"}` e volta sozinho quando o limite do tópico
+for aumentado, sem reinício.
+
+**`failed`.** O log `replication.kafka.failed` nomeia a `sequence` e a tabela
+da entrada. É bug: pular a entrada faria o tópico divergir do dataset em
+silêncio.
+
+### Dimensionamento
+
+Enquanto o snapshot anda, o feed tem de reter todas as alterações feitas desde
+o cursor do `reset`: são elas que o tail entrega depois. Se o buffer do feed
+não comportar o que a ingestão produz durante um snapshot inteiro, o cursor se
+perde, o publicador recomeça com `reset` por lacuna, e o próximo snapshot tende
+a acabar do mesmo jeito. O publicador então republica o dataset em laço e nunca
+alcança o tail.
+
+A conta a fazer:
+
+    maxBufferedBytes > duração do snapshot × alterações por segundo × custo por entrada
+
+O custo de uma entrada retida é de cerca de 192 bytes, mais o nome da tabela,
+a key e o payload dela. A consolidação de updates seguidos da mesma entidade reduz a conta. A
+duração e o número de linhas de cada snapshot saem no log
+`replication.kafka.snapshot.completed`. Com `targets` declarado,
+`maxBufferedBytes` também precisa ser pelo menos o dobro de `maxBatchBytes`.
+
+Quando o laço acontece, ele aparece de duas formas:
+
+- o contador `errors{reason="snapshot_gap"}` sobe a cada snapshot abortado no
+  meio porque o cursor se perdeu;
+- o log de ERROR `replication.kafka.livelock` sai no máximo a cada 5 s, com
+  `stage=snapshot` (perdeu no meio) ou `stage=tail_start` (perdeu entre o
+  `snapshot_end` e o primeiro lote do tail), e com a duração do snapshot.
+
+O remédio é subir `maxBufferedBytes`. A proteção atual só detecta o laço.
+Com `stage=snapshot`, o publicador espera 200 ms antes do próximo snapshot;
+com `stage=tail_start`, recomeça na hora (débito 132).
+
+### Observação
+
+O `/v1/stats` traz, no dataset master com replicação ligada, o bloco
+`replication`: `feed` (geração, sequência produzida, piso, bytes retidos,
+entradas antes e depois da consolidação, lotes descartados, invalidações) e
+`delivery`, um item por destino (estado, geração e cursor confirmados, atraso
+em sequências, registros entregues, snapshots por motivo, erros por motivo,
+última entrega e último erro). As métricas leem a mesma estrutura:
+
+- por destino (`dataset`, `destination`):
+  `nishidb_replication_kafka_delivered_total`,
+  `nishidb_replication_kafka_lag_sequences`,
+  `nishidb_replication_kafka_snapshots_total` (`reason`),
+  `nishidb_replication_kafka_errors_total` (`reason`),
+  `nishidb_replication_kafka_state` (`state`: uma série por estado, com 1 no
+  corrente) e `nishidb_replication_kafka_last_success_timestamp`;
+- do feed: `nishidb_replication_feed_input_entries_total`,
+  `nishidb_replication_feed_output_entries_total`,
+  `nishidb_replication_feed_buffered_bytes`,
+  `nishidb_replication_feed_evicted_batches_total` e
+  `nishidb_replication_feed_invalidations_total`.
+
+Os motivos de snapshot e de erro e os estados existem desde a subida, em
+zero, para que um alerta sobre eles funcione antes da primeira ocorrência. Os
+detalhes de cada série estão em [metricas.md](metricas.md).
+
+### Encerramento
+
+No encerramento, os feeds fecham primeiro: o fechamento entrega o lote que
+estava aberto, e os publicadores drenam o que resta e param. A drenagem tem
+orçamento próprio de 10 s para todos os publicadores juntos, separado do prazo
+do servidor HTTP. Se o prazo vence (broker fora, tópico lento), sai um WARN
+`replication.publisher.close_failed` e o encerramento continua. Nada se perde:
+o estado está no disco, e a próxima subida publica `reset` e um snapshot
+completo. Um snapshot em curso no encerramento continua dentro do orçamento;
+se o prazo vence antes do fim, ele é abandonado sem `snapshot_end`.

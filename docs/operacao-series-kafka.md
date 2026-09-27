@@ -23,6 +23,11 @@ kafkaTargets:
     topic: nishidb.contadores.backup
 ```
 
+A mesma lista serve à publicação da replicação em Kafka (`replication.targets`,
+descrita em [replication.md](replication.md#publicação-em-kafka)). O destino
+que é `emit.target` de algum contador não pode ser também destino da
+replicação: o tópico levaria dois formatos de mensagem, e a subida recusa.
+
 ### Migração de `seriesDelivery`
 
 Até a v0.12, os destinos ficavam em `seriesDelivery.kafka`. A chave foi
