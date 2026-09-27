@@ -27,9 +27,12 @@ const (
 // ErrGenerationChanged means the follower must discard its cursor and resync.
 var ErrGenerationChanged = errors.New("replication: master generation changed")
 
-// Snapshot is the logical handoff between a snapshot exporter and a follower.
-// Cursor is captured at the same point as the records; batches after Cursor
-// are the catch-up tail. The records are materialized entries, not raw events.
+// Snapshot é a passagem lógica entre o exportador de snapshot e um follower.
+// O Cursor é lido ANTES da varredura (ver ExportSnapshot), e as entradas são
+// estados materializados, não eventos crus. Como a exportação anda em blocos,
+// cada um com um snapshot próprio, uma entrada pode estar num estado MAIS
+// NOVO que o Cursor; os lotes depois do Cursor são o tail, que reaplica essas
+// mudanças por cima, e o resultado converge.
 type Snapshot struct {
 	Epoch   string  `json:"epoch"`
 	Cursor  uint64  `json:"cursor"`

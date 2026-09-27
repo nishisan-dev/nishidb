@@ -70,6 +70,20 @@ durante o resync o estado anterior não é exposto. Linhas históricas preservam
 seu `rowID`, portanto uma sobreposição entre snapshot e tail é idempotente. Um
 follower novo fica indisponível até concluir o primeiro snapshot.
 
+O snapshot sai em streaming, sem ser montado inteiro na memória do master. O
+cursor é lido uma vez, antes da varredura, e a exportação anda em blocos
+curtos, limitados em linhas e em bytes, cada um com um snapshot próprio,
+fechado antes de o bloco ser enviado. Assim a exportação não segura versões
+antigas nem a retenção enquanto a rede anda, e a memória dela fica limitada a
+um bloco. As linhas criadas depois do início ficam para o tail, e uma linha
+alterada no meio da exportação pode sair num estado mais novo que o cursor: o
+tail reaplica as mudanças seguintes por cima, e o resultado converge. Toda
+entrada do snapshot leva `sequence` igual ao cursor e o mesmo `at`, o instante
+em que a exportação começou. Se a exportação falhar depois de a resposta
+começar, o master derruba a conexão em vez de fechar o JSON: a conexão cai
+(sem resposta ou com corpo truncado), o follower não aplica nem poda nada, e
+pede o snapshot de novo.
+
 O estado da réplica passa por `empty`, `syncing`, `catching_up`, `following`,
 `disconnected` e `resync_required`. O instante lógico usado por TTL e janelas é
 o instante recebido do master, de modo que uma desconexão não envelhece dados

@@ -2474,14 +2474,27 @@ func (it *hashIterator) Close() error { return it.it.Close() }
 // location válida — overlay incluso — e sem tombstone). Rows criadas após a
 // chamada não aparecem (snapshot do limite superior).
 func (s *Store) ScanLive(snap types.Snapshot) types.RowIDIterator {
+	// A varredura começa na marca-d'água, e não em zero: no histórico o
+	// prefixo purgado pode ser de dezenas de milhões de rowIds, e percorrê-los
+	// para descartar cada um seria pagar pela retenção em toda consulta.
+	return s.ScanLiveFrom(snap, snap.BaseRowID, snap.LimitRowID)
+}
+
+// ScanLiveFrom é o ScanLive restrito à faixa [from, limit) de rowIds, já
+// recortada pelo universo do snapshot: começa em max(from, snap.BaseRowID) e
+// para antes de min(limit, snap.LimitRowID). Nunca enxerga além do que o
+// ScanLive do mesmo snapshot enxergaria.
+//
+// Existe para o exportador de snapshot da replicação, que varre a tabela em
+// blocos curtos — um snapshot por bloco — e precisa retomar do rowId seguinte
+// ao último varrido sem reler o prefixo, e parar no teto fixado pelo PRIMEIRO
+// snapshot da exportação, e não no de cada bloco.
+func (s *Store) ScanLiveFrom(snap types.Snapshot, from, limit types.RowID) types.RowIDIterator {
 	if err := s.entra(); err != nil {
 		return &liveIterator{err: err}
 	}
 	defer s.sai()
-	// A varredura começa na marca-d'água, e não em zero: no histórico o
-	// prefixo purgado pode ser de dezenas de milhões de rowIds, e percorrê-los
-	// para descartar cada um seria pagar pela retenção em toda consulta.
-	return &liveIterator{s: s, snap: snap, next: snap.BaseRowID, limit: snap.LimitRowID}
+	return &liveIterator{s: s, snap: snap, next: max(from, snap.BaseRowID), limit: min(limit, snap.LimitRowID)}
 }
 
 // DiretorioOfSpill é onde o motor de consulta pode transbordar o que não cabe
