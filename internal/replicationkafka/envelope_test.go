@@ -465,9 +465,13 @@ func TestEpochChangeIsRendered(t *testing.T) {
 
 // O encoder não pode importar fmt, encoding/json nem reflect: o gate de zero
 // alocação depende disso. Os imports são lidos pelo parser de Go (código como
-// DADO), em todos os arquivos não-teste do pacote, e não por busca em texto.
+// DADO), nos arquivos do ENVELOPE (envelope*.go não-teste), e não por busca
+// em texto. O laço do publicador (publisher*.go) fica fora: ele embrulha erro
+// com fmt, e não está no caminho de zero alocação — o mesmo recorte do
+// executor, cujo gate olha só os arquivos do encoder NDJSON (ndjson.go e
+// ndjson_writer.go).
 func TestEnvelopeImportsNoFmtNorEncodingJSON(t *testing.T) {
-	files, err := filepath.Glob("*.go")
+	files, err := filepath.Glob("envelope*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,6 +502,6 @@ func TestEnvelopeImportsNoFmtNorEncodingJSON(t *testing.T) {
 		}
 	}
 	if checked == 0 {
-		t.Fatal("nenhum arquivo de produção examinado: o gate não estaria olhando nada")
+		t.Fatal("nenhum arquivo do envelope examinado: o gate não estaria olhando nada")
 	}
 }

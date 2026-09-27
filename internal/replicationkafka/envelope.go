@@ -84,10 +84,11 @@
 // conhece e payload corrompido. O publicador tem de parar — pular o registro
 // faria o tópico divergir do dataset em silêncio.
 //
-// O pacote NÃO importa fmt nem encoding/json (há teste de AST que cobra, em
-// todo arquivo que não é de teste): os dois trazem reflexão e formatação
-// genérica, e o gate de zero alocação por registro depende de não haver
-// nenhum dos dois.
+// Os arquivos do envelope NÃO importam fmt nem encoding/json (há teste de
+// AST que cobra, em todo envelope*.go que não é de teste): os dois trazem
+// reflexão e formatação genérica, e o gate de zero alocação por registro
+// depende de não haver nenhum dos dois. O laço do publicador (publisher*.go)
+// não está nesse caminho e pode usar fmt.
 package replicationkafka
 
 import (
