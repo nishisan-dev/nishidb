@@ -65,7 +65,9 @@ LogsDirectoryMode=0750
 # da unit do piloto: o acompanhamento é por tail de arquivo, e o journald não
 # dá o caminho estável que um `tail -F` e um coletor esperam. StandardOutput
 # aceita UM valor: com `append:`, `journalctl -u nishidb` mostra só
-# Started/Stopped, nunca as linhas do processo.
+# Started/Stopped, nunca as linhas do processo. A rotação do arquivo (diária,
+# retendo até 3 arquivos) é feita por logrotate via copytruncate
+# (/etc/logrotate.d/nishidb).
 StandardOutput=append:/var/log/nishidb/service.log
 StandardError=append:/var/log/nishidb/service.log
 
