@@ -24,7 +24,7 @@ Type=simple
 User=nishidb
 Group=nishidb
 WorkingDirectory=/var/lib/nishidb
-ExecStart=/usr/bin/nishidb server --config /etc/nishidb/nishidb.yaml --log-format json --pprof 127.0.0.1:9144
+ExecStart=/usr/bin/nishidb server --config /etc/nishidb/nishidb.yaml --log-level warn --log-format json --pprof 127.0.0.1:9144
 
 # pprof em LOOPBACK, e o endereço é obrigatoriamente explícito: o código
 # binda onde mandarem, sem forçar 127.0.0.1. Exposto, ele entrega despejo de
