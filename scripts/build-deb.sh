@@ -143,6 +143,7 @@ trap 'rm -rf "$staging"' EXIT
 mkdir -p \
   "$staging/usr/bin" \
   "$staging/usr/lib/systemd/system" \
+  "$staging/etc/logrotate.d" \
   "$staging/etc/nishidb/datasets" \
   "$staging/DEBIAN"
 
@@ -156,11 +157,15 @@ find "$staging" -type d -exec chmod 0755 {} +
 install -m 0755 "$binario" "$staging/usr/bin/nishidb"
 install -m 0644 "$pacote_deb_dir/nishidb.service" "$staging/usr/lib/systemd/system/nishidb.service"
 install -m 0644 "$pacote_deb_dir/nishidb.yaml" "$staging/etc/nishidb/nishidb.yaml"
+install -m 0644 "$raiz_do_repo/packaging/logrotate/nishidb" "$staging/etc/logrotate.d/nishidb"
 install -m 0755 "$pacote_deb_dir/postinst" "$staging/DEBIAN/postinst"
 install -m 0755 "$pacote_deb_dir/prerm" "$staging/DEBIAN/prerm"
 install -m 0755 "$pacote_deb_dir/postrm" "$staging/DEBIAN/postrm"
 
-echo "/etc/nishidb/nishidb.yaml" > "$staging/DEBIAN/conffiles"
+cat > "$staging/DEBIAN/conffiles" <<EOF
+/etc/nishidb/nishidb.yaml
+/etc/logrotate.d/nishidb
+EOF
 
 # Installed-Size é o staging INTEIRO exceto DEBIAN/ (control.tar não conta
 # como "instalado" — é metadado do próprio dpkg), em KiB — a unidade que a

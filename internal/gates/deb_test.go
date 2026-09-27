@@ -195,6 +195,9 @@ func TestBuildDebProducesInstallablePackage(t *testing.T) {
 			if !regexp.MustCompile(`(?m)\./etc/nishidb/nishidb\.yaml$`).MatchString(contents) {
 				t.Errorf("/etc/nishidb/nishidb.yaml ausente\ncontents:\n%s", contents)
 			}
+			if !regexp.MustCompile(`(?m)\./etc/logrotate\.d/nishidb$`).MatchString(contents) {
+				t.Errorf("/etc/logrotate.d/nishidb ausente\ncontents:\n%s", contents)
+			}
 			if !regexp.MustCompile(`(?m)^drwxr-xr-x root/root\s+0.*\./etc/nishidb/datasets/$`).MatchString(contents) {
 				t.Errorf("diretório vazio /etc/nishidb/datasets/ ausente\ncontents:\n%s", contents)
 			}
@@ -205,17 +208,18 @@ func TestBuildDebProducesInstallablePackage(t *testing.T) {
 			}
 
 			conffiles := strings.TrimSpace(string(mustDpkgInfoMember(t, wantDeb, "conffiles")))
-			if conffiles != "/etc/nishidb/nishidb.yaml" {
-				t.Errorf("conffiles = %q, queria \"/etc/nishidb/nishidb.yaml\"", conffiles)
+			wantConffiles := "/etc/nishidb/nishidb.yaml\n/etc/logrotate.d/nishidb"
+			if conffiles != wantConffiles {
+				t.Errorf("conffiles = %q, queria %q", conffiles, wantConffiles)
 			}
 
-			// md5sums cobre os arquivos de DADO, exceto o CONFFILE
-			// (etc/nishidb/nishidb.yaml): integridade de conffile é
-			// rastreada pelo dpkg via DEBIAN/conffiles, não por md5sums —
-			// listá-lo aqui faria `dpkg -V` acusar "alterado" em todo host
-			// que já editou a própria config, um falso positivo
-			// permanente (é o caso NORMAL de um conffile, não uma
-			// exceção).
+			// md5sums cobre os arquivos de DADO, exceto os CONFFILES
+			// (etc/nishidb/nishidb.yaml e etc/logrotate.d/nishidb):
+			// integridade de conffile é rastreada pelo dpkg via
+			// DEBIAN/conffiles, não por md5sums — listá-lo aqui faria
+			// `dpkg -V` acusar "alterado" em todo host que já editou a
+			// própria config, um falso positivo permanente (é o caso
+			// NORMAL de um conffile, não uma exceção).
 			md5sums := string(mustDpkgInfoMember(t, wantDeb, "md5sums"))
 			for _, want := range []string{"usr/bin/nishidb", "usr/lib/systemd/system/nishidb.service"} {
 				if strings.Contains(md5sums, "./"+want) {
@@ -225,8 +229,10 @@ func TestBuildDebProducesInstallablePackage(t *testing.T) {
 					t.Errorf("md5sums não cobre %q (ou está num formato inesperado)\nmd5sums:\n%s", want, md5sums)
 				}
 			}
-			if strings.Contains(md5sums, "etc/nishidb/nishidb.yaml") {
-				t.Errorf("md5sums cita o conffile etc/nishidb/nishidb.yaml — ele tem de ficar de FORA (a integridade dele é rastreada por DEBIAN/conffiles, não por md5sums)\nmd5sums:\n%s", md5sums)
+			for _, conffile := range []string{"etc/nishidb/nishidb.yaml", "etc/logrotate.d/nishidb"} {
+				if strings.Contains(md5sums, conffile) {
+					t.Errorf("md5sums cita o conffile %s — ele tem de ficar de FORA (a integridade dele é rastreada por DEBIAN/conffiles, não por md5sums)\nmd5sums:\n%s", conffile, md5sums)
+				}
 			}
 
 			info := dpkgInfo(t, wantDeb)
@@ -371,6 +377,35 @@ func TestPackagedConfigLoadsWithTheRealLoader(t *testing.T) {
 	}
 	if c.Server.Bind != "127.0.0.1" {
 		t.Errorf("server.bind = %q, queria 127.0.0.1", c.Server.Bind)
+	}
+}
+
+// TestPackagedLogrotateRotatesDailyWithThreeRetentions fixa o contrato do
+// arquivo de rotação de log: o serviço NishiDB escreve o log em
+// /var/log/nishidb/service.log via append:, exigindo rotação diária, retenção
+// de no máximo 3 arquivos rotacionados e copytruncate para não perder o
+// descritor aberto pelo systemd.
+func TestPackagedLogrotateRotatesDailyWithThreeRetentions(t *testing.T) {
+	path := filepath.Join(repoRoot, "packaging", "logrotate", "nishidb")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("lendo %s: %v", path, err)
+	}
+	content := string(raw)
+
+	for _, want := range []string{
+		"/var/log/nishidb/service.log",
+		"daily",
+		"rotate 3",
+		"copytruncate",
+		"missingok",
+		"notifempty",
+		"compress",
+		"delaycompress",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("packaging/logrotate/nishidb não contém a diretiva %q\nconteúdo:\n%s", want, content)
+		}
 	}
 }
 

@@ -215,6 +215,7 @@ O que o pacote entrega:
 | Datasets | `/etc/nishidb/datasets/` (vazio na instalação) |
 | Dado materializado | `/var/lib/nishidb` |
 | Log estruturado | `/var/log/nishidb/service.log` |
+| Rotação de logs (conffile) | `/etc/logrotate.d/nishidb` |
 | Unit systemd | `/usr/lib/systemd/system/nishidb.service` |
 
 O `postinst` cria o usuário de sistema `nishidb`. Na **instalação NOVA**
@@ -251,10 +252,13 @@ layout de releases com symlink, operado por
 ### Rodar como serviço (systemd) — layout do piloto
 
 A unit do PILOTO está versionada em
-[`packaging/systemd/nishidb.service`](packaging/systemd/nishidb.service):
+[`packaging/systemd/nishidb.service`](packaging/systemd/nishidb.service), e
+a rotação de log (diária, retendo até 3 arquivos) em
+[`packaging/logrotate/nishidb`](packaging/logrotate/nishidb):
 
 ```bash
 sudo cp packaging/systemd/nishidb.service /lib/systemd/system/
+sudo cp packaging/logrotate/nishidb /etc/logrotate.d/
 sudo systemctl daemon-reload
 sudo systemctl enable --now nishidb
 ```

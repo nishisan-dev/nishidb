@@ -71,6 +71,9 @@ SyslogIdentifier=nishidb
 # ou de ingestão procura no arquivo.
 #
 # LogsDirectory cria /var/log/nishidb com o dono certo antes do ExecStart.
+# A rotação do arquivo (diária, retendo até 3 arquivos) é feita por logrotate
+# via copytruncate (packaging/logrotate/nishidb), já que o systemd mantém o
+# descritor do log aberto com append:.
 LogsDirectory=nishidb
 StandardOutput=append:/var/log/nishidb/service.log
 StandardError=append:/var/log/nishidb/service.log
