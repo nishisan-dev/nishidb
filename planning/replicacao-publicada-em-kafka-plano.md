@@ -149,3 +149,72 @@ publicador da replicação, marcador de reset, fim do snapshot; corrigir
   todas as partições, tail contínuo, delete por TTL com último estado, restart
   → nova epoch + novo snapshot, lag e métricas; comparar a contagem do snapshot
   com um `SELECT count` no NishiDB.
+
+## Correções da refutação (prevalecem sobre o texto acima)
+
+1. **Tamanho de mensagem.** O publicador mede key+value+headers (com margem) contra
+   `maxMessageBytes` ANTES do Produce. Se estourar, entra em `blocked`, sem produzir
+   aquele registro nem nada depois dele na partição. O kgo falha só o registro
+   grande e deixa os seguintes passarem (`producer.go:602-613`).
+2. **Reprodução.** Numa partição com falha, reproduz a partir do PRIMEIRO registro
+   falho até o fim do lote, inclusive os que já tiveram ack (at-least-once,
+   last-write-wins). "Só os falhos" reordena delete e update da mesma chave.
+3. **Particionador.**
+   - `BasicConsistentPartitioner` com fn própria: para registros de controle, a fn
+     devolve `int(r.Partition)` (o kgo não honra `r.Partition` sozinho).
+   - Dados usam murmur2 com o `n` FIXADO no número de partições do último reset.
+     Se o kadm vir outro número, dispara reset `partitions_changed`.
+4. **ExportSnapshot.**
+   - Teto fixo `limit₀` (LimitRowID do primeiro snapshot); cada fatia começa em
+     `max(from, snap.BaseRowID)`.
+   - A fatia é COPIADA e o snapshot FECHADO antes do `emit`.
+   - Erro de `it.Err()` ou de `GetByRowID` (inclusive `ErrExpiredSnapshot`) aborta.
+   - O Retain da history usa o `BaseRowID` do primeiro snapshot.
+5. **Envelope.**
+   - `sequence` de `snapshot` = `cursor₀` (nunca `Record.Sequence` nem 0).
+   - O tail descarta `Entry.Sequence <= cursor` (como `resync.go:170`).
+   - `snapshot_end.count` é por partição.
+   - Reset por lacuna MANTÉM a epoch; a regra de poda do consumidor é
+     `(epoch, sequence) < (epoch, cursor do reset)`. O contrato já foi corrigido
+     no chat do TEMS.
+6. **Shutdown.**
+   - Ordem: fechar os feeds (a drenagem nova do Acquire) ANTES de
+     `s.http.Shutdown`, para o long-poll não consumir os 15 s.
+   - O `publisher.Close` tem orçamento próprio.
+   - `feed.Close` e `publisher.Close` entram na lista `paradas` do gate
+     `internal/gates/alarm_shutdown_test.go`, com a ordem asseverada.
+7. **Acquire com `closed`.** Sem lote > after devolve `ErrClosed` imediato, nunca
+   espera em `s.changed`.
+8. **Record.** Percorre o payload com `encoding.FieldReader` + `FieldByID` (sem
+   `FieldsByID` por registro); `replicationkafka` importa `internal/storage/encoding`.
+   A key do registro Kafka (bytes crus) é autoritativa.
+9. **Config.**
+   - O campo `seriesDelivery` do wire do `/v1/stats` FICA (contrato lançado),
+     registrado no changelog.
+   - `maxMessageBytes` ganha motor também no `seriesdelivery` (substitui o
+     `maxRecordBytes` fixo quando declarado).
+   - A recusa de `replication.targets` (alvo desconhecido ou compartilhado)
+     segue o sentinela/exit code do precedente de `emit.target` desconhecido.
+   - Com `targets` declarados, `maxBufferedBytes >= 2*maxBatchBytes` é exigido
+     (recusa na subida): o lease do publicador segura até um lote.
+10. **Documentar:**
+    - `op=update` na ressurreição;
+    - delete de chave nunca vista;
+    - linha vencida e não coletada some do snapshot antes do delete;
+    - consumidor lembra `(epoch, sequence)` de chaves deletadas;
+    - dimensionamento do lease;
+    - débito do follower: relógio local na visibilidade e na compaction.
+
+## Ondas de execução
+
+- A (paralela): B1 correções do feed (replication/stream.go, storage/store.go,
+  storage/compaction.go) ‖ B3 rename `kafkaTargets` (internal/config,
+  internal/seriesdelivery, server/metrics_series_delivery*, cli.go, README, docs de séries).
+- B (paralela): B2 exportador (replication/snapshot.go, storage ScanLiveFrom,
+  server/replication_http.go) ‖ B4 `replication.targets` no schema ‖ B5 envelope
+  (internal/replicationkafka/envelope*.go + gates).
+- C: B6 publicador + testes kfake.
+- D: B7 wiring no server (subida, shutdown, stats, métricas, gate de paradas).
+- E: B8 glossário, diagrama, docs restantes, débitos.
+- Cada onda: Refuter (Opus) reexecuta os testes e as mutações; commit por bloco
+  com `git add` explícito, feito pelo orquestrador.
