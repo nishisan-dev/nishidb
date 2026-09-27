@@ -110,6 +110,12 @@ type ReplicationSpec struct {
 	MaxMessages      int
 	MaxBatchBytes    int64
 	MaxBufferedBytes int64
+	// Targets são os nomes dos destinos Kafka globais (`kafkaTargets:` do
+	// nishidb.yaml) que também recebem o feed deste dataset, na ordem do
+	// arquivo. Vazio (nil) significa feed servido só aos seguidores. Aqui só
+	// se valida a forma de cada nome: a spec do dataset não enxerga o
+	// nishidb.yaml, e por isso a existência do destino NÃO é conferida aqui.
+	Targets []string
 }
 
 // MaterializationSpec ...
@@ -327,6 +333,17 @@ type rawReplication struct {
 	MaxMessages      *int   `yaml:"maxMessages"`
 	MaxBatchBytes    string `yaml:"maxBatchBytes"`
 	MaxBufferedBytes string `yaml:"maxBufferedBytes"`
+	// Targets é nó cru, e não []string, pela razão de `emit.target`: o
+	// yaml.v3 descarta em silêncio o item nulo de um []string (`[a, ~]` vira
+	// `[a]`, `[~]` vira lista vazia) e coage `1`/`true` para string. Com o nó,
+	// ausente (Kind zero) se distingue de `targets: []` e de `targets:` nulo,
+	// e todo item que não seja string explícita é recusado pelo nome.
+	Targets yaml.Node `yaml:"targets"`
+	// Target existe aqui para ser RECUSADO, pela razão do Index de topo: a
+	// chave irmã em `emit` é `target`, no singular, e o rawReplication não usa
+	// yaml.KnownFields — `replication.target: [x]` passaria em silêncio e o
+	// feed não seria publicado em lugar nenhum, sem uma linha de log.
+	Target yaml.Node `yaml:"target"`
 }
 
 type rawMat struct {
@@ -1252,7 +1269,78 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 		}
 	}
 	r.UsernameEnv, r.PasswordEnv = raw.Replication.UsernameEnv, raw.Replication.PasswordEnv
+	if !absent(&raw.Replication.Target) {
+		return nil, specErrf("replication.target is not a key; use replication.targets (a list of Kafka target names)")
+	}
+	if r.Targets, e = validateReplicationTargets(&raw.Replication.Targets, r); e != nil {
+		return nil, e
+	}
 	s.Replication = r
 
 	return s, nil
+}
+
+// validateReplicationTargets decodifica `replication.targets` e o confere
+// contra o restante do bloco já validado em r (enabled, role e os dois tetos
+// do buffer), devolvendo a lista a publicar — nil quando a chave não veio.
+// Só lista de strings explícitas é aceita: nulo, escalar e lista vazia são
+// recusados, como em `emit.target`, em vez de lidos como "sem destino".
+//
+// O nome segue a MESMA regra dos destinos nomeados de `emit.target` e de
+// `kafkaTargets:` (ValidDeliveryName), e `file` é recusado porque a
+// replicação não tem saída em arquivo: aceitá-lo seria publicar em lugar
+// nenhum sem avisar. O piso `maxBufferedBytes >= 2*maxBatchBytes` existe
+// porque o publicador Kafka segura um lote arrendado enquanto retenta, e os
+// seguidores dividem o mesmo buffer: sem a folga de um lote inteiro além do
+// arrendado, um broker fora do ar pararia os seguidores junto.
+func validateReplicationTargets(n *yaml.Node, r ReplicationSpec) ([]string, error) {
+	if n.Kind == 0 {
+		return nil, nil
+	}
+	for n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	if n.Kind != yaml.SequenceNode {
+		return nil, specErrf("replication.targets must be a list of Kafka target names")
+	}
+	targets := make([]string, 0, len(n.Content))
+	for i, item := range n.Content {
+		for item.Kind == yaml.AliasNode {
+			item = item.Alias
+		}
+		if item.Kind != yaml.ScalarNode || item.Tag != "!!str" {
+			return nil, specErrf("replication.targets[%d] must be a Kafka target name string, got %s", i, item.ShortTag())
+		}
+		targets = append(targets, item.Value)
+	}
+	if len(targets) == 0 {
+		return nil, specErrf("replication.targets must not be empty; omit the key to publish to no Kafka target")
+	}
+	if !r.Enabled {
+		return nil, specErrf("replication.targets requires replication.enabled: true")
+	}
+	if r.Role != "master" {
+		return nil, specErrf("replication.targets is only valid for role master (role is %q)", r.Role)
+	}
+	seen := make(map[string]bool, len(targets))
+	for _, name := range targets {
+		if name == "file" {
+			return nil, specErrf("replication.targets: %q is not a Kafka target (replication has no file output)", name)
+		}
+		if !ValidDeliveryName(name) {
+			return nil, specErrf("replication.targets: invalid Kafka target name %q (use a-z, 0-9 and _, 1 to 64 characters)", name)
+		}
+		if seen[name] {
+			return nil, specErrf("replication.targets: duplicate Kafka target %q", name)
+		}
+		seen[name] = true
+	}
+	// Dividir em vez de dobrar: 2*MaxBatchBytes transbordaria int64 num
+	// maxBatchBytes gigante e aprovaria o par por engano.
+	if r.MaxBufferedBytes/2 < r.MaxBatchBytes {
+		return nil, specErrf("replication.maxBufferedBytes (%d) must be at least twice replication.maxBatchBytes (%d) "+
+			"when replication.targets is set: the Kafka publisher holds a batch while retrying and followers share the same buffer",
+			r.MaxBufferedBytes, r.MaxBatchBytes)
+	}
+	return targets, nil
 }

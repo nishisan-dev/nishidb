@@ -16,7 +16,19 @@ replication:
   maxMessages: 10000      # conta antes da deduplicação
   maxBatchBytes: 8MiB
   maxBufferedBytes: 64MiB
+  targets: [replica_kafka] # opcional, só no master; nomes de kafkaTargets:
 ```
+
+`targets` lista destinos Kafka que também recebem o feed, além dos followers.
+Cada item é o nome de um destino declarado na lista global `kafkaTargets:` do
+`nishidb.yaml`, com a mesma regra de nome (`a-z`, `0-9` e `_`, até 64
+caracteres). `file` não vale aqui: a replicação não tem saída em arquivo. A
+chave só é aceita com `enabled: true` e `role: master`; lista vazia, item
+repetido ou item que não seja texto são recusados na carga do dataset. Com
+`targets` declarado, `maxBufferedBytes` precisa ser pelo menos o dobro de
+`maxBatchBytes`, porque o publicador segura um lote enquanto tenta de novo e os
+followers dividem o mesmo buffer. O comportamento da publicação é descrito na
+seção sobre Kafka.
 
 Updates consecutivos da mesma entidade são consolidados no estado completo já
 materializado. A consolidação nunca cruza outra operação: `insert, update,
