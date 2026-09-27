@@ -6,22 +6,34 @@ em cada tópico selecionado. Grupos aposentados deixam de ser emitidos.
 
 ## Configuração
 
-Declare os destinos no `nishidb.yaml`:
+Declare os destinos na lista global `kafkaTargets:` do `nishidb.yaml`:
 
 ```yaml
-seriesDelivery:
-  kafka:
-    - name: metricas_olt
-      bootstrapServers: ["kafka01:9092"]
-      topic: nishidb.contadores.olt
-      timeout: 5s
-      security:
-        protocol: PLAINTEXT
+kafkaTargets:
+  - name: metricas_olt
+    bootstrapServers: ["kafka01:9092"]
+    topic: nishidb.contadores.olt
+    timeout: 5s
+    maxMessageBytes: 1MiB
+    security:
+      protocol: PLAINTEXT
 
-    - name: metricas_backup
-      bootstrapServers: ["kafka02:9092"]
-      topic: nishidb.contadores.backup
+  - name: metricas_backup
+    bootstrapServers: ["kafka02:9092"]
+    topic: nishidb.contadores.backup
 ```
+
+### Migração de `seriesDelivery`
+
+Até a v0.12, os destinos ficavam em `seriesDelivery.kafka`. A chave foi
+renomeada para a lista global `kafkaTargets:`, porque os mesmos destinos
+nomeados servem a mais de um recurso. Não há período de convivência: um
+`nishidb.yaml` que ainda traga `seriesDelivery:` é **recusado na subida**, com
+exit 1 e a mensagem `seriesDelivery was renamed to kafkaTargets`. Para migrar,
+mova os itens de `seriesDelivery.kafka` para `kafkaTargets:` sem alterar os
+campos; os nomes usados em `emit.target` continuam os mesmos. A migração também
+traz a chave opcional `maxMessageBytes`, descrita em
+[Entrega e limites](#entrega-e-limites).
 
 Selecione os destinos no contador do YAML do dataset:
 
@@ -124,9 +136,22 @@ Por destino global, o buffer de transporte admite até **10.000 registros** e
 **16 MiB de chaves e corpos**, incluindo registros em voo. Estruturas do cliente
 e buffers de rede têm custo adicional. A capacidade é reservada antes de copiar
 a mensagem; buffer cheio descarta o novo registro apenas naquele destino.
-Chave mais corpo acima de 999.884 bytes são recusados para reservar espaço no
-lote Kafka de 1.000.012 bytes. Limites menores do broker também podem recusar
-mensagens. Não há truncamento.
+`maxMessageBytes` define, por destino, o tamanho máximo do lote do produtor e,
+por consequência, da mensagem. Aceita bytes puros ou unidade binária (`1MiB`,
+`512KiB`), na faixa de 1 KiB a 64 MiB; valor fora da faixa, com unidade
+decimal (`1MB`), zero ou vazio é recusado na subida, nunca arredondado. Ausente,
+vale 1.000.012 bytes, o teto de lote padrão do cliente Kafka (franz-go) usado
+antes de a chave existir; não confundir com o `message.max.bytes` do broker,
+cujo default é 1.048.588. Chave mais corpo acima de `maxMessageBytes − 128`
+bytes são descartados como `message_too_large` antes do envio, para reservar
+espaço ao enquadramento do lote; com o default, o limite é 999.884 bytes. Como
+uma amostra nunca cabe num buffer de 16 MiB se for maior que ele, o limite de
+admissão também não passa de 16 MiB: com `maxMessageBytes` acima de 16 MiB, a
+amostra maior que 16 MiB também é descartada como `message_too_large`, e não
+como `buffer_full`. Subir o valor só adianta se o
+broker e o tópico aceitarem mensagens desse tamanho (`message.max.bytes`,
+`max.message.bytes`): limites menores do broker também recusam mensagens. Não
+há truncamento.
 
 `timeout` tem default de 5 segundos e aceita valores positivos até 5 minutos.
 O prazo cobre a espera da mensagem, além de haver limites no dial e nas
@@ -150,7 +175,9 @@ pendências Kafka são canceladas sem esperar pela recuperação do broker.
 
 `/v1/stats` inclui `datasets[].seriesDelivery`, com uma entrada por contador e
 destino: `counter`, `destination`, `delivered`, `dropped`, `pendingRecords`,
-`pendingBytes` e `lastSuccessTimestamp` (segundos do epoch).
+`pendingBytes` e `lastSuccessTimestamp` (segundos do epoch). O campo do wire
+manteve o nome `seriesDelivery` na renomeação da configuração para
+`kafkaTargets:`, porque é contrato já lançado.
 Os números nascem em zero e os contadores reiniciam com o processo.
 
 Motivos de descarte: `buffer_full`, `message_too_large`, `timeout`,

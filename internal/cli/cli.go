@@ -265,7 +265,12 @@ func errorCode(err error) int {
 		return ExitWriter
 	case errors.Is(err, alarmdelivery.ErrQueue):
 		return ExitDataset
-	case errors.Is(err, nishiconfig.ErrAlarmDelivery):
+	case errors.Is(err, nishiconfig.ErrAlarmDelivery), errors.Is(err, nishiconfig.ErrKafkaTarget):
+		// Destino de alarme ou `kafkaTargets:` inválido — inclusive a chave
+		// antiga `seriesDelivery:`, recusada com a mensagem de rename — é erro
+		// do nishidb.yaml, e o código é o mesmo que o default daria: o caso
+		// explícito registra a categoria, e por isso nenhum teste de exit code
+		// distingue a presença dele — o que os testes travam é o 1 e a mensagem.
 		return ExitUsageError
 	case errors.Is(err, users.ErrUsersLocked), errors.Is(err, users.ErrCorruptUsers):
 		// A tabela de usuários travada pelo servidor no ar, ou ilegível, é a

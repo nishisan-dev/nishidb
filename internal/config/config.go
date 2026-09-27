@@ -34,8 +34,11 @@ import (
 // 11: continuam opcionais, mas quando presentes têm forma validada — ver
 // TLSSpec/AuthenticationSpec/LoopbackSpec, em config_security.go.
 type Config struct {
-	SeriesDelivery SeriesDeliverySpec `yaml:"seriesDelivery"`
-	AlarmDelivery  AlarmDeliverySpec  `yaml:"alarmDelivery"`
+	// KafkaTargets são os destinos Kafka nomeados, compartilhados pelos
+	// datasets (`emit.target` dos contadores). A chave antiga
+	// `seriesDelivery:` é recusada na subida — ver validateKafkaTargets.
+	KafkaTargets  []KafkaTargetSpec `yaml:"kafkaTargets"`
+	AlarmDelivery AlarmDeliverySpec `yaml:"alarmDelivery"`
 	// Version é a versão do PRÓPRIO arquivo (§78). Era aceita e nunca lida:
 	// no dia em que existisse um `version: 2` global, este binário leria o
 	// arquivo novo como se fosse v1, silenciosamente.
@@ -437,7 +440,7 @@ func Load(path string) (*Config, error) {
 	if err := c.validateAlarmDelivery(&root); err != nil {
 		return nil, err
 	}
-	if err := c.validateSeriesDelivery(&root); err != nil {
+	if err := c.validateKafkaTargets(&root); err != nil {
 		return nil, err
 	}
 	return &c, nil

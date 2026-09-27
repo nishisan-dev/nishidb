@@ -35,9 +35,13 @@ func (p *heldProducer) Close() {
 	p.records = nil
 }
 
+// defaultMaxRecordBytes é o teto de admissão de um destino que não declara
+// maxMessageBytes — o mesmo número fixo de antes de a chave existir.
+const defaultMaxRecordBytes = config.DefaultKafkaMessageBytes - recordFramingBytes
+
 func testOutput(p producer) *output {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &output{d: &destination{client: p, ctx: ctx, cancel: cancel, timeout: time.Minute}, stats: protocol.SeriesDeliveryStats{Dropped: make(map[string]uint64)}}
+	return &output{d: &destination{client: p, ctx: ctx, cancel: cancel, timeout: time.Minute, maxRecordBytes: defaultMaxRecordBytes}, stats: protocol.SeriesDeliveryStats{Dropped: make(map[string]uint64)}}
 }
 
 func TestCapacityIncludesInflightRecordsAndCopiesOnlyAdmittedSamples(t *testing.T) {
@@ -76,7 +80,7 @@ func TestOversizedAndCompletedRecordsHaveSingleOutcome(t *testing.T) {
 	p := &heldProducer{}
 	o := testOutput(p)
 	defer o.d.cancel()
-	o.Publish(nil, make([]byte, maxRecordBytes+1), time.Now())
+	o.Publish(nil, make([]byte, defaultMaxRecordBytes+1), time.Now())
 	if len(p.records) != 0 || o.snapshot().Dropped["message_too_large"] != 1 {
 		t.Fatal("oversized record admitted")
 	}
@@ -94,7 +98,7 @@ func TestOversizedAndCompletedRecordsHaveSingleOutcome(t *testing.T) {
 func deliveryConfig(brokers []string, targets ...string) (*config.Config, map[string]*schema.DatasetSpec) {
 	cfg := &config.Config{}
 	for _, target := range targets {
-		cfg.SeriesDelivery.Kafka = append(cfg.SeriesDelivery.Kafka, config.SeriesKafkaSpec{Name: target, BootstrapServers: brokers, Topic: target, Timeout: "500ms"})
+		cfg.KafkaTargets = append(cfg.KafkaTargets, config.KafkaTargetSpec{Name: target, BootstrapServers: brokers, Topic: target, Timeout: "500ms"})
 	}
 	specs := map[string]*schema.DatasetSpec{"d": {Name: "d", Counters: []schema.CounterSpec{{Name: "c", Emit: &schema.EmitSpec{Targets: targets}}}}}
 	return cfg, specs
@@ -298,14 +302,125 @@ func TestStartupRejectsUnknownReferencesAndInvalidLocalCredentials(t *testing.T)
 	specs["d"].Counters[0].Emit.Targets = []string{"samples"}
 	t.Setenv("SERIES_TEST_USER", "user")
 	t.Setenv("SERIES_TEST_PASS", "")
-	cfg.SeriesDelivery.Kafka[0].Security = schema.SecuritySpec{Protocol: schema.ProtocolSASLSSL, SASLMechanism: schema.SASLPlain, UsernameEnv: "SERIES_TEST_USER", PasswordEnv: "SERIES_TEST_PASS"}
+	cfg.KafkaTargets[0].Security = schema.SecuritySpec{Protocol: schema.ProtocolSASLSSL, SASLMechanism: schema.SASLPlain, UsernameEnv: "SERIES_TEST_USER", PasswordEnv: "SERIES_TEST_PASS"}
 	if m, err := Open(cfg, specs, nil); err == nil {
 		m.Close()
 		t.Fatal("missing credential accepted")
 	}
-	cfg.SeriesDelivery.Kafka[0].Security = schema.SecuritySpec{Protocol: schema.ProtocolSSL, CAFile: "/nonexistent/ca.pem"}
+	cfg.KafkaTargets[0].Security = schema.SecuritySpec{Protocol: schema.ProtocolSSL, CAFile: "/nonexistent/ca.pem"}
 	if m, err := Open(cfg, specs, nil); err == nil {
 		m.Close()
 		t.Fatal("invalid CA accepted")
+	}
+}
+
+// TestConfiguredMaxMessageBytesDropsRecordAboveTheTargetLimit prova que o teto
+// de admissão sai de `kafkaTargets[].maxMessageBytes`, e não do número fixo de
+// antes: uma amostra entre o teto configurado e o default é descartada como
+// message_too_large na admissão, e uma abaixo do teto é admitida.
+func TestConfiguredMaxMessageBytesDropsRecordAboveTheTargetLimit(t *testing.T) {
+	cfg, specs := deliveryConfig([]string{"127.0.0.1:1"}, "samples")
+	cfg.KafkaTargets[0].MaxMessageBytes = 4 << 10
+	m, err := Open(cfg, specs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	out := m.Outputs("d", "c")[0]
+	out.Publish(nil, make([]byte, 8<<10), time.Now())
+	s := m.Stats("d")[0]
+	if s.Dropped["message_too_large"] != 1 || s.PendingRecords != 0 {
+		t.Fatalf("amostra de 8KiB num destino de 4KiB deveria cair como message_too_large na admissão: %+v", s)
+	}
+	// A admissão só descarta por tamanho, buffer ou shutdown; o que acontece
+	// depois (broker inalcançável) não interessa aqui.
+	out.Publish(nil, make([]byte, 1<<10), time.Now())
+	s = m.Stats("d")[0]
+	if s.Dropped["message_too_large"] != 1 || s.Dropped["buffer_full"] != 0 || s.Dropped["shutdown"] != 0 {
+		t.Fatalf("amostra de 1KiB deveria ser admitida: %+v", s)
+	}
+}
+
+// TestDefaultMaxMessageBytesMatchesFranzGoBatchDefault trava o default de
+// maxMessageBytes contra a FONTE dele, o default de ProducerBatchMaxBytes do
+// franz-go: é essa igualdade que faz o destino sem a chave se comportar como
+// antes de ela existir.
+func TestDefaultMaxMessageBytesMatchesFranzGoBatchDefault(t *testing.T) {
+	cl, err := kgo.NewClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	got, ok := cl.OptValue(kgo.ProducerBatchMaxBytes).(int32)
+	if !ok || int64(got) != config.DefaultKafkaMessageBytes || config.DefaultKafkaMessageBytes != 1_000_012 {
+		t.Fatalf("default do franz-go = %v, config.DefaultKafkaMessageBytes = %d: os dois têm de ser 1.000.012", got, config.DefaultKafkaMessageBytes)
+	}
+}
+
+// TestAdmissionBoundaryReservesFramingBytes fixa a fronteira da admissão com
+// números literais: com maxMessageBytes=4096, chave+corpo de 3968 bytes
+// (4096−128) entra e 3969 cai como message_too_large.
+func TestAdmissionBoundaryReservesFramingBytes(t *testing.T) {
+	cfg, specs := deliveryConfig([]string{"127.0.0.1:1"}, "samples")
+	cfg.KafkaTargets[0].MaxMessageBytes = 4096
+	m, err := Open(cfg, specs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	out := m.Outputs("d", "c")[0]
+	out.Publish([]byte("k"), make([]byte, 3967), time.Now())
+	if s := m.Stats("d")[0]; s.Dropped["message_too_large"] != 0 {
+		t.Fatalf("3968 bytes deveriam ser admitidos com maxMessageBytes=4096: %+v", s)
+	}
+	out.Publish([]byte("k"), make([]byte, 3968), time.Now())
+	if s := m.Stats("d")[0]; s.Dropped["message_too_large"] != 1 {
+		t.Fatalf("3969 bytes deveriam cair como message_too_large com maxMessageBytes=4096: %+v", s)
+	}
+}
+
+// TestSampleLargerThanTransportBufferIsMessageTooLarge prova que a admissão
+// não passa de MaxBytes: com maxMessageBytes=64MiB, a amostra de 16MiB+1 nunca
+// caberia no buffer do destino, e o motivo certo é message_too_large, não
+// buffer_full (que diria ao operador que o buffer está cheio, e ele está vazio).
+func TestSampleLargerThanTransportBufferIsMessageTooLarge(t *testing.T) {
+	cfg, specs := deliveryConfig([]string{"127.0.0.1:1"}, "samples")
+	cfg.KafkaTargets[0].MaxMessageBytes = 64 << 20
+	m, err := Open(cfg, specs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	m.Outputs("d", "c")[0].Publish(nil, make([]byte, MaxBytes+1), time.Now())
+	if s := m.Stats("d")[0]; s.Dropped["message_too_large"] != 1 || s.Dropped["buffer_full"] != 0 {
+		t.Fatalf("amostra maior que o buffer de transporte deveria cair como message_too_large: %+v", s)
+	}
+}
+
+// TestConfiguredMaxMessageBytesRaisesProducerBatchLimit prova a outra metade
+// do motor: o mesmo maxMessageBytes vira o ProducerBatchMaxBytes do cliente.
+// Com 2MiB configurados e um broker que aceita 4MiB, a amostra de 1,5MiB é
+// entregue; sem a opção, o franz-go a recusaria pelo teto default (1.000.012)
+// e ela cairia como message_too_large.
+func TestConfiguredMaxMessageBytesRaisesProducerBatchLimit(t *testing.T) {
+	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "samples"), kfake.BrokerConfigs(map[string]string{"message.max.bytes": "4194304"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	cfg, specs := deliveryConfig(c.ListenAddrs(), "samples")
+	cfg.KafkaTargets[0].MaxMessageBytes = 2 << 20
+	cfg.KafkaTargets[0].Timeout = "5s"
+	m, err := Open(cfg, specs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	m.Outputs("d", "c")[0].Publish([]byte("k"), make([]byte, 1536<<10), time.Now())
+	s := waitStats(t, m, func(s []protocol.SeriesDeliveryStats) bool {
+		return s[0].Delivered == 1 || s[0].PendingRecords == 0
+	})
+	if s[0].Delivered != 1 {
+		t.Fatalf("amostra de 1,5MiB não entregue num destino de 2MiB: %+v", s[0])
 	}
 }

@@ -283,9 +283,10 @@ primeiras saem por contador com destino `file`, com o rótulo `counter`.
 | `nishidb_series_last_success_timestamp` | gauge | `counter`, `dataset` | epoch segundos da última passada que escreveu sem erro; 0 até a primeira. É a série que um alerta de "a emissão parou" observa |
 | `nishidb_series_emitting` | gauge | `dataset` | 1 enquanto algum laço de emissão do dataset está de pé |
 
-Destinos Kafka publicam as séries abaixo por `dataset`, `counter` e
-`destination`, inclusive antes da primeira entrega. A origem é a mesma de
-`datasets[].seriesDelivery` no `/v1/stats`.
+Destinos Kafka (declarados em `kafkaTargets:` no `nishidb.yaml`) publicam as
+séries abaixo por `dataset`, `counter` e `destination`, inclusive antes da
+primeira entrega; `destination` é o `name` do destino. A origem é a mesma de
+`datasets[].seriesDelivery` no `/v1/stats` — o campo do wire manteve o nome.
 
 | série | tipo | o que responde |
 |---|---|---|

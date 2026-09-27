@@ -74,7 +74,7 @@ func TestMeasuresReachSQLFileKafkaAndDecayWithoutNewEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config = append(config, []byte(fmt.Sprintf("\nseriesDelivery:\n  kafka:\n    - name: rates\n      bootstrapServers: [%q]\n      topic: rates\n", cluster.ListenAddrs()[0]))...)
+	config = append(config, []byte(fmt.Sprintf("\nkafkaTargets:\n  - name: rates\n    bootstrapServers: [%q]\n    topic: rates\n", cluster.ListenAddrs()[0]))...)
 	if err := os.WriteFile(a.cfgPath, config, 0600); err != nil {
 		t.Fatal(err)
 	}

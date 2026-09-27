@@ -1,5 +1,6 @@
-// Package seriesdelivery publishes best-effort counter samples to named Kafka
-// destinations. Capacity includes records in flight and their callbacks.
+// Package seriesdelivery publishes best-effort counter samples to the named
+// Kafka targets declared in `kafkaTargets:` (nishidb.yaml). Capacity includes
+// records in flight and their callbacks.
 package seriesdelivery
 
 import (
@@ -25,8 +26,12 @@ import (
 const (
 	MaxRecords = 10_000
 	MaxBytes   = 16 << 20
-	// Match franz-go's batch limit, including space for Kafka framing.
-	maxRecordBytes = 1_000_012 - 128
+	// recordFramingBytes é a folga para o enquadramento do Kafka: a admissão
+	// recusa a amostra maior que `kafkaTargets[].maxMessageBytes` menos esta
+	// folga (nunca acima de MaxBytes, o buffer do transporte), e o mesmo
+	// maxMessageBytes vira o ProducerBatchMaxBytes do cliente. Com o default
+	// (1.000.012) o teto é o mesmo de antes de a chave existir.
+	recordFramingBytes = 128
 )
 
 var dropReasons = [...]string{"buffer_full", "message_too_large", "timeout", "publish_error", "shutdown"}
@@ -45,6 +50,7 @@ type destination struct {
 	client         producer
 	topic          string
 	timeout        time.Duration
+	maxRecordBytes int64
 	ctx            context.Context
 	cancel         context.CancelFunc
 	mu             sync.Mutex
@@ -75,11 +81,11 @@ type Manager struct {
 
 // Open validates references and local credentials without requiring a broker.
 func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging.Logger) (*Manager, error) {
-	if err := cfg.ValidateSeriesDelivery(); err != nil {
+	if err := cfg.ValidateKafkaTargets(); err != nil {
 		return nil, err
 	}
 	known := make(map[string]bool)
-	for _, k := range cfg.SeriesDelivery.Kafka {
+	for _, k := range cfg.KafkaTargets {
 		known[k.Name] = true
 	}
 	names := make([]string, 0, len(specs))
@@ -96,7 +102,7 @@ func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging
 			seen := make(map[string]bool)
 			for _, target := range c.Emit.Targets {
 				if seen[target] || target != "file" && !known[target] {
-					return nil, fmt.Errorf("%w: dataset %q counter %q unknown or duplicate target %q", config.ErrSeriesDelivery, name, c.Name, target)
+					return nil, fmt.Errorf("%w: dataset %q counter %q unknown or duplicate target %q", config.ErrKafkaTarget, name, c.Name, target)
 				}
 				seen[target] = true
 				if target != "file" {
@@ -118,10 +124,10 @@ func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging
 		}
 		return nil, err
 	}
-	for _, k := range cfg.SeriesDelivery.Kafka {
+	for _, k := range cfg.KafkaTargets {
 		tlsConfig, mechanism, err := kafka.ResolveSecurity(k.Security)
 		if err != nil {
-			return fail(fmt.Errorf("%w: destination %q: %v", config.ErrSeriesDelivery, k.Name, err))
+			return fail(fmt.Errorf("%w: destination %q: %v", config.ErrKafkaTarget, k.Name, err))
 		}
 		if !used[k.Name] {
 			continue
@@ -130,10 +136,15 @@ func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging
 		if err != nil {
 			return fail(err)
 		}
+		messageBytes, err := k.MessageBytes()
+		if err != nil {
+			return fail(err)
+		}
 		opts := []kgo.Opt{
 			kgo.SeedBrokers(k.BootstrapServers...), kgo.DefaultProduceTopic(k.Topic),
 			kgo.RequiredAcks(kgo.AllISRAcks()), kgo.DisableIdempotentWrite(),
 			kgo.RecordRetries(0), kgo.UnknownTopicRetries(0),
+			kgo.ProducerBatchMaxBytes(int32(messageBytes)),
 			kgo.MaxBufferedRecords(MaxRecords), kgo.MaxBufferedBytes(MaxBytes),
 			kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
 			kgo.RecordDeliveryTimeout(max(timeout, time.Second)),
@@ -148,10 +159,13 @@ func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging
 		}
 		client, err := kgo.NewClient(opts...)
 		if err != nil {
-			return fail(fmt.Errorf("%w: destination %q: %v", config.ErrSeriesDelivery, k.Name, err))
+			return fail(fmt.Errorf("%w: destination %q: %v", config.ErrKafkaTarget, k.Name, err))
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		d := &destination{client: client, topic: k.Topic, timeout: timeout, ctx: ctx, cancel: cancel}
+		// A admissão também não passa de MaxBytes: amostra maior que o buffer
+		// inteiro nunca caberia nele, e contá-la como buffer_full mentiria sobre
+		// o motivo.
+		d := &destination{client: client, topic: k.Topic, timeout: timeout, maxRecordBytes: min(messageBytes-recordFramingBytes, MaxBytes), ctx: ctx, cancel: cancel}
 		m.destinations = append(m.destinations, d)
 		byName[k.Name] = d
 	}
@@ -198,7 +212,7 @@ func (o *output) Publish(key, body []byte, at time.Time) {
 	switch {
 	case d.closed:
 		reason = "shutdown"
-	case n > maxRecordBytes:
+	case n > d.maxRecordBytes:
 		reason = "message_too_large"
 	case d.records >= MaxRecords || n > MaxBytes-d.bytes:
 		reason = "buffer_full"
