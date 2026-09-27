@@ -45,6 +45,10 @@ type Entry struct {
 	Table     string       `json:"table"`
 	Operation Operation    `json:"operation"`
 	Record    types.Record `json:"record"`
+	// At é o instante em que a mudança foi publicada no feed. Quando a
+	// coalescência substitui uma entrada pendente, vale o instante da ÚLTIMA
+	// publicação, junto com o último estado.
+	At time.Time `json:"at"`
 }
 
 // Options govern one dataset's feed. The memory ceiling includes batches that
@@ -106,6 +110,10 @@ type Status struct {
 	EvictedBatches  uint64 `json:"evictedBatches"`
 	Flushes         uint64 `json:"flushes"`
 	LastFlushReason string `json:"lastFlushReason"`
+	// Invalidations conta as vezes em que o feed descartou o intervalo
+	// retido e forçou os seguidores a ressincronizar — por Invalidate ou por
+	// estouro do teto de memória no Publish.
+	Invalidations uint64 `json:"invalidations"`
 }
 
 // Stream is a bounded in-memory feed shared by all followers of one dataset.
@@ -161,7 +169,7 @@ func (s *Stream) Publish(table string, op Operation, r types.Record, at time.Tim
 	}
 	s.sequence++
 	s.stats.InputMessages++
-	e := Entry{Sequence: s.sequence, Table: table, Operation: op, Record: r}
+	e := Entry{Sequence: s.sequence, Table: table, Operation: op, Record: r, At: at}
 	id := identity{table, r.RowID}
 	n := s.last[id]
 	if op >= Schema || (n != nil && n.Value.(*pending).entry.Operation != op) {
@@ -260,6 +268,7 @@ func (s *Stream) invalidateLocked() {
 	}
 	s.batches = nil
 	s.floor = s.sequence
+	s.stats.Invalidations++
 	s.notifyLocked()
 }
 
@@ -324,16 +333,17 @@ func (s *Stream) Start(ctx context.Context) {
 
 // Acquire returns a leased immutable batch. Release must be called even when
 // the network disconnects. No per-follower copy of the batch is allocated.
+//
+// Depois do Close, a cauda retida continua sendo servida: o Close faz o flush
+// do intervalo ativo justamente para que ele seja entregue. Esgotada a cauda,
+// devolve ErrClosed na hora — nunca espera em s.changed, porque o canal criado
+// pelo notifyLocked do Close não será fechado por ninguém.
 func (s *Stream) Acquire(ctx context.Context, epoch string, after uint64) (*Batch, func(), error) {
 	for {
 		s.mu.Lock()
 		if epoch != s.epoch || after < s.floor || after > s.sequence {
 			s.mu.Unlock()
 			return nil, nil, ErrResyncRequired
-		}
-		if s.closed {
-			s.mu.Unlock()
-			return nil, nil, ErrClosed
 		}
 		for _, b := range s.batches {
 			if b.To <= after {
@@ -356,6 +366,10 @@ func (s *Stream) Acquire(ctx context.Context, epoch string, after uint64) (*Batc
 					}
 				})
 			}, nil
+		}
+		if s.closed {
+			s.mu.Unlock()
+			return nil, nil, ErrClosed
 		}
 		ch := s.changed
 		s.mu.Unlock()

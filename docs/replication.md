@@ -26,10 +26,30 @@ distintos e não são fundidas.
 O avanço da retenção histórica viaja como `retain`, inclusive no snapshot, para
 que o follower mantenha a mesma marca de visibilidade do master.
 
+Cada entrada leva o instante da publicação em `at`; na consolidação vale o da
+última alteração. O `delete` carrega o último estado vivo da linha, e não a
+lápide, tanto na expiração pelo coletor quanto na expiração oportunista da
+compaction; a cópia da compaction e o replay da recuperação não publicam nada.
+Voltar a escrever uma chave apagada publica `update`, não `insert`: a linha
+mantém o mesmo `rowID`. Uma linha cujo TTL já passou, mas que o coletor ainda
+não recolheu, já some das consultas e do snapshot. Por isso um consumidor pode
+receber o `delete` de uma chave que nunca viu.
+
 O follower começa pelo `GET /v1/replication/cursor`. Se a geração e o cursor
 ainda estiverem cobertos, ele lê `GET /v1/replication/batch` e confirma cada
 lote depois de aplicá-lo. Se a geração mudou ou a retenção criou uma lacuna,
 recebe conflito e deve chamar `GET /v1/replication/snapshot`.
+
+Depois que a fila é fechada, os lotes ainda retidos continuam sendo entregues,
+inclusive o último, fechado pelo próprio encerramento. Quando não resta nenhum
+lote depois do cursor, a leitura responde na hora que a fila foi fechada, sem
+esperar.
+
+O campo `invalidations` do status conta as perdas do intervalo inteiro, o
+ativo e o retido. Isso acontece por invalidação explícita, ou quando um
+registro não cabe na memória nem depois de liberar todos os lotes retidos. A
+remoção de lotes antigos por memória conta em `evictedBatches`, não aqui. Nos
+dois casos, followers que ficaram atrás do novo piso precisam ressincronizar.
 
 O snapshot carrega as versões visíveis do dataset e da tabela histórica junto
 com um cursor. O follower aplica esse estado pelo writer normal, reaplica o

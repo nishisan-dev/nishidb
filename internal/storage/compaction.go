@@ -223,9 +223,13 @@ func (s *Store) reapendaSeVivo(sec, off uint32, rec types.Record) (copiado bool,
 		prevPayload: rec.Payload,
 		hadPrevious: true,
 		countsAsNew: false,
-		sec:         newSeg,
-		off:         newOff,
-		recLen:      len(buf),
+		// Só a lápide oportunista vai ao feed de replicação: ela muda o
+		// estado lógico da linha, como a do coletor. A cópia pura só move
+		// bytes e não publica nada.
+		emitChange: expirou,
+		sec:        newSeg,
+		off:        newOff,
+		recLen:     len(buf),
 	}); err != nil {
 		return false, 0, s.failWriter(err)
 	}
