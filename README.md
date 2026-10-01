@@ -813,15 +813,19 @@ do equipamento não mantém vivo um serviço que parou de autenticar.
 - **A âncora precisa ser `timestamp` ou `datetime` declarado** — inclusive uma
   congelada (`frozenFrom: "@writeTime"` é timestamp) ou uma coluna derivada de
   `extract:` com esse tipo. `auto`, campo de sistema, campo excluído e campo
-  inexistente são recusados na subida, cada um com a sua mensagem.
+  inexistente são recusados na subida, cada um com a sua mensagem. Uma âncora
+  `datetime` cujo `format` não traz fuso é lida no fuso local do processo:
+  um host com o fuso mal configurado desloca o prazo de todas as linhas.
 - **`expireAfter` e `expireAfterWrite` são exclusivos**, e `expireAfter` exige
   `anchor`. `anchor` com `never` é recusado: imortal não tem prazo a contar da
   âncora. O piso de 1 minuto vale igual.
 - **Âncora no futuro é limitada ao instante da escrita** (prazo =
   `expireAfter` contado da escrita), e
   `nishidb_ttl_anchor_in_future_total` conta. Consequência: enquanto a âncora
-  estiver no futuro, uma reentrega do mesmo evento pelo Kafka empurra o prazo
-  para frente, porque a escrita é nova.
+  estiver no futuro, TODA escrita conta o prazo a partir de si mesma —
+  inclusive um patch que nem traz o campo âncora —, e a regra se comporta como
+  `expireAfterWrite` até o relógio alcançar a âncora. A reentrega do mesmo
+  evento pelo Kafka é o caso típico: ela empurra o prazo para frente.
 - **Âncora já vencida faz a entidade nascer vencida.** Um backlog relido grava
   a linha, ela some da consulta logo após a escrita
   (`nishidb_ttl_expired_on_write_total` sobe) e o coletor lhe dá a lápide na
