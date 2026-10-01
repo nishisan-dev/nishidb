@@ -44,9 +44,10 @@ public final class ConnectionConfig {
         {"tls", "true para falar HTTPS. Default false."},
         {"tlsCaFile", "arquivo PEM com a CA que assina o certificado do servidor. Exige tls=true."},
         {"connectTimeoutMs", "prazo do handshake, em ms. Default 10000. NÃO limita a duração da consulta."},
-        {"socketTimeoutMs", "prazo de espera pelo servidor em cada requisição, em ms: cabeçalhos e cada leitura"
-                + " do corpo, não a duração do stream. Default 0, sem prazo. Estourado, fecha a conexão."
-                + " É o valor inicial de getNetworkTimeout."},
+        {"socketTimeoutMs", "prazo de rede, em ms, para a requisição sem prazo próprio. Na consulta, limita a"
+                + " espera pelos cabeçalhos e cada espera por bytes do stream, não a duração dele; em metadata,"
+                + " catálogo e stats, limita a requisição inteira. Default 0, sem prazo. Estourado, fecha a"
+                + " conexão. É o valor inicial de getNetworkTimeout."},
     };
 
     private final String url;

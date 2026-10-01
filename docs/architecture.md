@@ -1131,8 +1131,10 @@ argumento de processo.
 `queryTimeout` vai ao servidor, que cancela a varredura do lado dela; mas um
 servidor que aceita a requisição e não responde prendia a thread do cliente
 sem limite, e o pool que valida com `isValid` esgotava. O driver passou a
-limitar o SILÊNCIO do servidor — a espera pelos cabeçalhos e cada espera por
-bytes do corpo, nunca a duração do stream — com três prazos, do mais
+limitar a espera: na consulta, o SILÊNCIO do servidor — a espera pelos
+cabeçalhos e cada espera por bytes do stream, nunca a duração dele —; nos
+documentos pequenos (health, metadata, catálogo, stats), a requisição
+inteira. São três prazos, do mais
 específico ao mais geral: `isValid(s)`, o `queryTimeout` mais 5 s de folga, e
 o prazo de rede (`socketTimeoutMs` / `setNetworkTimeout`, default zero = sem
 prazo), cujo estouro fecha a conexão como o contrato do JDBC pede. O detalhe
