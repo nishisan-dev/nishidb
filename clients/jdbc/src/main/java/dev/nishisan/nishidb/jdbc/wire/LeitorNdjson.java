@@ -275,6 +275,14 @@ public final class LeitorNdjson implements AutoCloseable {
             entradaIni = 0;
             entradaFim = Math.max(n, 0);
             return n > 0;
+        } catch (ResponseFailureException e) {
+            // A falha já vem montada: o prazo estourou no meio do corpo (a
+            // exceção da política do prazo — SQLTimeoutException do
+            // queryTimeout, ou a conexão fechada do prazo de rede) ou a
+            // conexão foi abortada com a leitura em curso (08003). Nenhuma
+            // das duas é a queda de conexão genérica abaixo.
+            acabou = true;
+            throw e.failure();
         } catch (IOException e) {
             acabou = true;
             throw transporte("lendo a resposta: " + e.getMessage());
