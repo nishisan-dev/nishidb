@@ -179,6 +179,9 @@ TTL: o que venceu, o que foi preservado pela carência e o coletor.
 | `nishidb_expired_total` | counter | `dataset` | entidades que ganharam lápide por inatividade, pelas duas rotas: o coletor e a descoberta oportunista da compaction |
 | `nishidb_ttl_rule_matched_total` | counter | `dataset`, `rule` | escritas decididas por cada regra de ttl; o rótulo é o ÍNDICE no YAML, porque é a ordem que decide qual vence |
 | `nishidb_ttl_unmatched_total` | counter | `dataset` | escritas que não casaram com regra de ttl nenhuma; só acontece em dataset sem regra de fundo |
+| `nishidb_ttl_anchor_absent_total` | counter | `dataset`, `rule` | só para regras com `anchor`: escritas em que a regra teria decidido (o `when` casou, ou não existe) e o campo âncora faltava no documento, e a próxima regra foi tentada |
+| `nishidb_ttl_anchor_in_future_total` | counter | `dataset` | âncoras posteriores ao instante da escrita, limitadas a ele (o prazo vira `expireAfter` contado da escrita); sobe com origem de relógio adiantado |
+| `nishidb_ttl_expired_on_write_total` | counter | `dataset` | documentos gravados já vencidos (âncora + `expireAfter` no passado); somem da consulta logo após a escrita e o coletor dá a lápide. Backlog relido é a causa típica |
 | `nishidb_expiry_grace_total` | counter | `dataset` | carências dadas a entidades sem instante de escrita; é o que sobe nos primeiros minutos depois de ligar a expiração num dataset já materializado, quando ainda não há nada a expirar |
 | `nishidb_expiry_scanned_total` | counter | `dataset` | entradas do índice de escritas examinadas pelo coletor; comparada com o total de rows, diz se o cursor dá a volta ou empaca |
 
@@ -367,7 +370,10 @@ conjunto fechado. As séries existem desde a abertura da fila e vêm da mesma
 estrutura de `datasets[].alarmDelivery` em `/v1/stats`. Contadores reiniciam
 com o processo; gauges de disco são recuperadas dos arquivos. Motivos de
 descarte: `memory_full`, `disk_full` (bytes ou quantidade), `event_too_large`,
-`encoding_error`, `destination_failed`, `closed`. Perdas numa queda antes da
+`encoding_error`, `destination_failed`, `closed`. `memory_full` não é mais
+emitido: com o buffer de memória cheio a admissão espera o gravador (o tempo
+aparece em `admission_wait_seconds_total`). A série é mantida, sempre em zero,
+para não quebrar painéis e alertas. Perdas numa queda antes da
 persistência não têm contagem exata recuperável.
 
 | Métrica | Tipo | Significado |
@@ -385,3 +391,4 @@ persistência não têm contagem exata recuperável.
 | `nishidb_alarm_delivery_active` | gauge | 1 enquanto o remetente está ligado, inclusive durante retentativa |
 | `nishidb_alarm_delivery_failed` | gauge | 1 após falha local que exige intervenção e reinício |
 | `nishidb_alarm_delivery_paused` | gauge | 1 quando o destino foi removido e a fila foi preservada |
+| `nishidb_alarm_delivery_admission_wait_seconds_total` | counter | segundos que a varredura esperou vaga no buffer de memória porque a gravação em disco não acompanhou a rajada; acumulado ao fim de cada espera |

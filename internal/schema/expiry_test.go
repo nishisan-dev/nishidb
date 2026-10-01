@@ -30,7 +30,7 @@ func TestBlocoTTLAntigoEhRecusadoNomeandoALista(t *testing.T) {
 			t.Errorf("a forma antiga foi aceita: %s", ttlBlock)
 			continue
 		}
-		if !strings.Contains(err.Error(), "lista") {
+		if !strings.Contains(err.Error(), "list of rules") {
 			t.Errorf("a mensagem precisa apontar a forma nova: %v", err)
 		}
 	}
@@ -47,7 +47,7 @@ func TestExpireAfterWriteAbaixoDaResolucaoEhRecusadoEmVezDeArredondado(t *testin
 			t.Errorf("%s: aceito", d)
 			continue
 		}
-		if !strings.Contains(err.Error(), "resolução") {
+		if !strings.Contains(err.Error(), "collector resolution") {
 			t.Errorf("%s: a mensagem não explica o motivo: %v", d, err)
 		}
 	}

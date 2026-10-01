@@ -1094,7 +1094,7 @@ dezenas de milhares de termos, e o parser a aceita: `parseAnd`/`parseOr` são it
 isso. A consequência vale para **todo consumidor da árvore**:
 
 - o **parser** é iterativo na espinha (já era);
-- o **binder** era recursivo nas DUAS passadas (`expr` e `preencheSlots`) e estourava 4 MiB de pilha
+- o **binder** era recursivo nas DUAS passadas (`expr` e `fillSlots`) e estourava 4 MiB de pilha
   com 50 mil termos. Agora percorre a espinha esquerda iterativamente e usa pilha explícita na
   segunda passada; o lado direito segue recursivo, limitado por `binder.MaxBindDepth` (teto de
   RECURSO, alcançável só com AST montada à mão, já que aprofundar à direita exige parênteses);
@@ -1104,7 +1104,7 @@ isso. A consequência vale para **todo consumidor da árvore**:
 
 O teste que prova o custo (e não só o comportamento) roda o bind num **processo filho com
 `debug.SetMaxStack(4 MiB)`**: com a espinha iterativa sobra folga; com um frame por termo o runtime
-mata o processo com `goroutine stack exceeds`. Foi ele que revelou o segundo caso (`preencheSlots`),
+mata o processo com `goroutine stack exceeds`. Foi ele que revelou o segundo caso (`fillSlots`),
 que passava despercebido sem `-race` porque os frames eram menores.
 
 ### R11 — quando o conflito de tipo aparece de verdade (nota da QP)

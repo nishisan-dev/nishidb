@@ -198,9 +198,12 @@ type Options struct {
 	// dentro do Store. Exigir o id aqui obrigaria a abrir o dataset sem
 	// expiração, compilar, fechar e reabrir.
 	WriteInstantFieldName string
-	// TTLFieldName é o NOME do campo de sistema que carrega a DURAÇÃO de
-	// ociosidade da entidade, em millis. Obrigatório quando ActiveTTL, e pela
-	// mesma razão do WriteInstantFieldName: os dois são lidos do payload.
+	// TTLFieldName é o NOME do campo de sistema que carrega o PRAZO da
+	// entidade contado a partir do instante de escrita, em millis: ela vence
+	// em `instante + prazo`. Obrigatório quando ActiveTTL, e pela mesma razão
+	// do WriteInstantFieldName: os dois são lidos do payload. O storage não
+	// sabe se o prazo veio de um idle timeout ou de uma âncora — o
+	// materializer o resolve sobre o record, e aqui ele é só um número.
 	TTLFieldName string
 	// CompileCountersCallbackFunction devolve as definições dos contadores mantidos na
 	// escrita (o bloco `counters:` do YAML) compiladas contra o dicionário.
@@ -1961,7 +1964,7 @@ func (s *Store) applyRecord(a recordApply) error {
 			}
 		}
 	}
-	// 6c. duração de ociosidade da linha, LIDA DO PAYLOAD pela mesma razão do
+	// 6c. prazo da linha (contado da escrita), LIDO DO PAYLOAD pela mesma razão do
 	// instante: o replay do tail repõe as MESMAS durações depois de um crash.
 	if s.ttlMapping != nil {
 		if ms, ok := fieldOfPayload(a.payload, s.writeFieldTTL, types.TypeInt64); ok {
@@ -2127,9 +2130,10 @@ func (s *Store) venceuNaVersao(rec types.Record, in time.Time) bool {
 	return in.UnixMilli()-ms >= d.Milliseconds()
 }
 
-// durationOfPayload devolve a duração de ociosidade que ESTE payload declara,
-// caindo na duração de fundo quando ele não declara nenhuma — a mesma
-// precedência de durationEfetiva, sobre o payload em vez do índice.
+// durationOfPayload devolve o prazo, contado a partir do instante de escrita,
+// que ESTE payload declara, caindo na duração de fundo quando ele não declara
+// nenhum — a mesma precedência de durationEfetiva, sobre o payload em vez do
+// índice.
 func (s *Store) durationOfPayload(payload []byte) time.Duration {
 	if ms, ok := fieldOfPayload(payload, s.writeFieldTTL, types.TypeInt64); ok {
 		if ms <= 0 {

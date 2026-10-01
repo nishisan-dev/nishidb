@@ -698,7 +698,7 @@ A palavra mais barata primeiro: prova a máquina de reconhecimento contextual em
 **uma** posição antes de o `ORDER BY` precisar dela em seis.
 
 `Ordem interna:`
-1. **`default` que falha alto em `preencheSlots`**
+1. **`default` que falha alto em `fillSlots`**
    ([binder.go:648-660](internal/query/binder/binder.go:648)) — **antes** de
    existir nó novo. É um `switch` sem `default`: um `BoundLike` sem `case`
    deixaria `Slot = 0` e o LIKE testaria **o campo de menor FieldID da query**,

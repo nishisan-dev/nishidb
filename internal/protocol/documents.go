@@ -516,17 +516,31 @@ type MaterializationStats struct {
 	// TTLUnmatched são as escritas que não casaram com regra nenhuma — só
 	// possível num dataset sem regra de fundo.
 	TTLUnmatched int64 `json:"ttlUnmatched"`
+	// TTLAnchorInFuture conta as âncoras posteriores ao instante da escrita,
+	// limitadas a ele, e TTLExpiredOnWrite os records gravados já vencidos
+	// (âncora + expireAfter no passado). Zero num dataset sem regra ancorada.
+	TTLAnchorInFuture int64 `json:"ttlAnchorInFuture"`
+	TTLExpiredOnWrite int64 `json:"ttlExpiredOnWrite"`
 }
 
 // TTLRuleStats é uma regra de expiração e quantas escritas ela decidiu.
 //
 // O `when` viaja junto da contagem porque o índice sozinho obrigaria quem lê o
 // painel a abrir o YAML para saber o que casou.
+//
+// Numa regra ancorada, ExpireAfterWrite sai VAZIO e a duração vem em
+// ExpireAfter, ao lado de Anchor: publicar 48h sob `expireAfterWrite` diria
+// que a escrita renova o prazo, que é exatamente o que a âncora impede.
+// AnchorAbsent só existe na regra ancorada — ponteiro para sair inclusive com
+// zero nela e sumir nas outras, que assim saem idênticas ao que eram.
 type TTLRuleStats struct {
 	Index            int    `json:"index"`
 	When             string `json:"when,omitempty"`
 	ExpireAfterWrite string `json:"expireAfterWrite"`
 	Matched          int64  `json:"matched"`
+	Anchor           string `json:"anchor,omitempty"`
+	ExpireAfter      string `json:"expireAfter,omitempty"`
+	AnchorAbsent     *int64 `json:"anchorAbsent,omitempty"`
 }
 
 // SchemaStats é o crescimento do dicionário de campos contra o teto.
@@ -653,4 +667,7 @@ type AlarmDeliveryStats struct {
 	PersistenceErrors    uint64            `json:"persistenceErrors"`
 	Dropped              map[string]uint64 `json:"dropped"`
 	LastSuccessTimestamp float64           `json:"lastSuccessTimestamp"`
+	// AdmissionWaitSeconds acumula, desde a subida, o tempo que a varredura
+	// esperou vaga em memória porque o gravador não acompanhou a rajada.
+	AdmissionWaitSeconds float64 `json:"admissionWaitSeconds"`
 }

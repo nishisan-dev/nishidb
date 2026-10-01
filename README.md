@@ -774,8 +774,7 @@ esta e a congelada são políticas de escrita opostas do mesmo campo.
 #### Expiração: regras de TTL condicionais
 
 O bloco `ttl:` é uma **lista de regras**. Cada evento é avaliado contra elas na
-ordem do arquivo, e a **primeira que casa** decide por quanto tempo a entidade
-pode ficar sem receber escrita:
+ordem do arquivo, e a **primeira que casa** decide quando a entidade vence:
 
 ```yaml
 materialization:
@@ -786,23 +785,74 @@ materialization:
       expireAfterWrite: 3m
     - when: "kind = 'audit'"
       expireAfterWrite: never     # casou e decidiu que não expira
-    # Regra sem `when` é a de FUNDO: casa com tudo, e só pode ser a última.
+    # Regra sem `when` e sem `anchor` é a de FUNDO: casa com tudo, e só pode
+    # ser a última.
     - expireAfterWrite: 7d
 ```
+
+`expireAfterWrite` conta o prazo a partir da **escrita**: toda escrita que
+casa com a regra o renova. Para contar a partir de um **campo do documento**,
+a regra declara `anchor` e `expireAfter`:
+
+```yaml
+materialization:
+  ttl:
+    - when: "lastAuthAt IS NULL"
+      expireAfterWrite: 1h        # sem autenticação: 1h, renovada a cada escrita
+    - anchor: lastAuthAt
+      expireAfter: 48h            # autenticado: vence 48h depois da última autenticação
+```
+
+A entidade vence em `min(âncora, escrita) + expireAfter`, e uma escrita que
+**não muda** a âncora **não renova** o prazo — um evento que só traz o estado
+do equipamento não mantém vivo um serviço que parou de autenticar.
+
+- **A regra ancorada só casa com a âncora PRESENTE** no documento pós-merge.
+  Ausente, a próxima regra é tentada, e `nishidb_ttl_anchor_absent_total{rule}`
+  conta. `anchor` combina com `when`: valem as duas condições.
+- **A âncora precisa ser `timestamp` ou `datetime` declarado** — inclusive uma
+  congelada (`frozenFrom: "@writeTime"` é timestamp) ou uma coluna derivada de
+  `extract:` com esse tipo. `auto`, campo de sistema, campo excluído e campo
+  inexistente são recusados na subida, cada um com a sua mensagem. Uma âncora
+  `datetime` cujo `format` não traz fuso é lida no fuso local do processo:
+  um host com o fuso mal configurado desloca o prazo de todas as linhas.
+- **`expireAfter` e `expireAfterWrite` são exclusivos**, e `expireAfter` exige
+  `anchor`. `anchor` com `never` é recusado: imortal não tem prazo a contar da
+  âncora. O piso de 1 minuto vale igual.
+- **Âncora no futuro é limitada ao instante da escrita** (prazo =
+  `expireAfter` contado da escrita), e
+  `nishidb_ttl_anchor_in_future_total` conta. Consequência: enquanto a âncora
+  estiver no futuro, TODA escrita conta o prazo a partir de si mesma —
+  inclusive um patch que nem traz o campo âncora —, e a regra se comporta como
+  `expireAfterWrite` até o relógio alcançar a âncora. A reentrega do mesmo
+  evento pelo Kafka é o caso típico: ela empurra o prazo para frente.
+- **Âncora já vencida faz a entidade nascer vencida.** Um backlog relido grava
+  a linha, ela some da consulta logo após a escrita
+  (`nishidb_ttl_expired_on_write_total` sobe) e o coletor lhe dá a lápide na
+  passada seguinte. Até a lápide, o contador mantido na escrita ainda a conta
+  — para ele, viva é linha sem lápide. A escrita seguinte da mesma chave a
+  encontra expirada e parte do vazio, como em toda expiração.
+- **Com `anchor` sobre `frozenFrom: "@writeTime"` há teto de idade absoluta**,
+  contado do nascimento da entidade: nenhuma escrita o move.
 
 O que precisa estar claro antes de escrever a lista:
 
 - **A ordem é semântica.** Primeira que casa vence, então reordenar as regras
   muda o comportamento. Uma regra de fundo antes de uma condicional tornaria a
   condicional inalcançável, e por isso é recusada no load.
-- **A condição vê o estado PÓS-MERGE.** O valor de cada campo é o que o evento
+- **A condição vê o estado PÓS-MERGE.** Ela é avaliada sobre o próprio
+  documento que a escrita grava: o valor de cada campo é o que o evento
   trouxe; se ele não mencionar o campo, vale o que já estava no estado; `null`
   explícito apaga. É por isso que um evento parcial não muda o prazo por
-  acidente.
+  acidente. Pelo mesmo motivo, uma coluna congelada é vista pelo valor
+  congelado, uma `merge: sum` pela soma, e em `mode: replace` — ou sobre uma
+  entidade já vencida, que renasce do vazio — só existe o que o evento trouxe.
 - **O prazo é reavaliado a cada escrita, e isso é o cancelamento.** Um alarme
   que fecha ganha 3 minutos; se reabrir em 90 segundos, a escrita nova o
   devolve para os 7 dias. O prazo escolhido é gravado no documento como o campo
-  de sistema `_expiresIn` (uma duração em millis, fora do `SELECT *`).
+  de sistema `_expiresIn`: os millis, contados a partir de `_writtenAt`, até o
+  vencimento (fora do `SELECT *`). Numa regra sem `anchor` ele é a própria
+  duração; numa com `anchor`, o que resta até `âncora + expireAfter`.
 - **`never` não é `0`.** `never` declara imortalidade e vence a regra de fundo;
   `0` é recusado, porque parece esquecimento.
 - **A duração mínima é 1 minuto** — a resolução do coletor. Abaixo dela o
@@ -811,11 +861,15 @@ O que precisa estar claro antes de escrever a lista:
 - **Adotar as regras num dataset já populado não exige reprocessar.** As
   entidades materializadas antes não têm `_expiresIn`, e caem no prazo da regra
   de fundo até a primeira escrita seguinte. Sem regra de fundo, elas não
-  expiram.
-- **Renovar empurra o prazo indefinidamente.** Uma entidade que casa com uma
-  regra de 3 minutos mas recebe evento a cada 60 segundos nunca expira. É o
-  comportamento escolhido (não há teto de idade absoluta), e ele está fixado em
-  teste.
+  expiram — e uma regra com `anchor` na última posição **não** é fundo.
+- **Trocar um YAML que tinha regra de fundo por um sem fundo** zera a duração
+  de fundo: a agenda de vencimentos é reconstruída na subida, e as entidades
+  sem `_expiresIn` passam a não expirar até a primeira escrita seguinte. Um
+  dataset novo não tem linha nessa situação.
+- **Com `expireAfterWrite`, renovar empurra o prazo indefinidamente.** Uma
+  entidade que casa com uma regra de 3 minutos mas recebe evento a cada 60
+  segundos nunca expira. É o comportamento escolhido para o idle timeout, e ele
+  está fixado em teste; quem quer teto declara a regra com `anchor`.
 
 A forma antiga — `ttl:` como bloco único com `expireAfterWrite`, ou com
 `field`/`type` — é **recusada na subida**, com a mensagem apontando a lista.
@@ -1993,8 +2047,9 @@ HTTP. Para receber os eventos por webhook, declare um destino em
 `alarmDelivery.webhooks` no arquivo global e `notify: [nome_do_destino]` no
 alarme. A entrega usa fila durável por dataset/destino, retenta até HTTP 2xx e
 preserva o corpo e o identificador nas retentativas. O receptor deduplica pelo
-`eventId`. Eventos ainda em memória podem ser perdidos em uma queda, e fila
-cheia descarta novos eventos com métrica. Veja [configuração, limites e
+`eventId`. Eventos ainda em memória podem ser perdidos em uma queda. Com o
+buffer de memória cheio, a varredura espera a gravação em disco; com o limite
+de disco atingido, novos eventos são descartados com métrica. Veja [configuração, limites e
 recuperação dos webhooks](docs/operacao-webhook.md).
 
 O cronômetro **sobrevive ao reinício**: o "desde quando" é gravado em
@@ -2568,6 +2623,58 @@ IntelliJ funcionarem:
 ```
 jdbc:nishidb://db01:9142/telecom?tls=true&tlsCaFile=/etc/nishidb/ca.pem
 ```
+
+As propriedades vão na query string da URL ou nas `Properties` da conexão, e
+as `Properties` vencem. Valor inválido numa propriedade do driver é recusado
+na abertura, nunca lido como default:
+
+| Propriedade | Default | O que é |
+|---|---|---|
+| `user` | — | usuário do Basic; sem ele, a conexão vai sem credencial |
+| `password` | — | senha do Basic; **só nas `Properties`**, nunca na URL |
+| `tls` | `false` | `true` para falar HTTPS |
+| `tlsCaFile` | — | PEM com a CA do servidor; exige `tls=true` |
+| `connectTimeoutMs` | `10000` | prazo do **handshake**; não limita a consulta |
+| `socketTimeoutMs` | `0` (sem prazo) | **prazo de rede** da requisição sem prazo próprio (ver abaixo); estourado, fecha a conexão |
+
+**Prazos de espera do cliente (issue #91).** Um servidor que aceita a
+requisição e não responde — processo parado, conexão meio-aberta, firewall
+que descarta pacote em silêncio — não prende mais a thread do cliente sem
+limite. Na **consulta**, o prazo mede o **silêncio** do servidor: a espera
+pelos cabeçalhos e cada espera por bytes do stream. Ali ele não mede a
+duração: uma consulta que continua mandando linhas nunca estoura, e o tempo
+que a aplicação gasta processando linhas não conta. Nos **documentos
+pequenos** — o `/v1/health` do `isValid`, a metadata, o catálogo e o
+`/v1/stats` —, o prazo é da **requisição inteira**, cabeçalhos e corpo
+somados: um servidor que pinga um byte por vez estoura do mesmo jeito. Do
+mais específico para o mais geral — o específico substitui o geral naquela
+requisição, seja maior ou menor:
+
+- **`isValid(s)`** volta em `s` segundos (o prazo é da requisição inteira ao
+  `/v1/health`) e o estouro é `false`, nunca exceção — é o que o HikariCP usa
+  para validar a conexão. `isValid(0)` usa o prazo de rede.
+- **`Statement.setQueryTimeout(s)`** continua indo ao servidor como
+  `timeoutMs`, que cancela a consulta e responde `TIMEOUT`. O cliente espera
+  esse prazo **mais 5 s de folga**, para a resposta do servidor chegar
+  primeiro; esgotada a folga, lança `SQLTimeoutException` com o mesmo SQLSTATE
+  `57014` do timeout do servidor, e a conexão **continua utilizável**.
+- **O prazo de rede** — `socketTimeoutMs`, ajustável depois por
+  `Connection.setNetworkTimeout` — vale para toda requisição sem prazo
+  próprio: metadata, catálogo e `/v1/stats` (requisição inteira) e consulta
+  sem `queryTimeout` (cada espera do stream). Estourado, a
+  conexão é **fechada**, como manda o contrato do `setNetworkTimeout`, com
+  `SQLRecoverableException` `08006`: abra outra e repita.
+
+`Connection.abort(executor)` derruba a conexão sem esperar o servidor: a
+requisição presa em outra thread — esperando os cabeçalhos ou lendo o corpo —
+sai com `SQLException` `08003` de conexão fechada, e os `Statement` da conexão
+passam a recusar execução com o mesmo `08003`. É o código de conexão fechada
+em todo o driver: operação numa conexão fechada por `close`, `abort` ou
+estouro do prazo de rede responde `08003`, e o `08001` fica só para a falha
+ao conectar (URL, CA, handshake, servidor inalcançável). O
+default de `socketTimeoutMs` é zero de propósito — quem não pediu prazo não
+ganha um —, então ligá-lo é decisão de quem conhece a consulta mais longa que
+a aplicação faz sem `queryTimeout`.
 
 **A URL nomeia o schema da conexão** — o `schemaName` que um dataset declara —,
 e não o dataset. A árvore mostra só esse schema e o `_meta`, e o servidor

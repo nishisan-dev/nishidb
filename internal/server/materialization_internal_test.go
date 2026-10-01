@@ -35,8 +35,8 @@ func TestMaterializacaoStatsTraduzOSnapshot(t *testing.T) {
 		CongeladasPreservadas: 5,
 		Acumuladas:            9,
 		Saturadas:             1,
-		RegrasCasadas:         []int64{4, 2},
-		WithoutRegra:          3,
+		TTLRuleMatches:        []int64{4, 2},
+		TTLUnmatched:          3,
 	}
 	got := materializationStats(specWithPoliticas(), snap)
 
@@ -47,7 +47,7 @@ func TestMaterializacaoStatsTraduzOSnapshot(t *testing.T) {
 		t.Errorf("soma = %+v", got)
 	}
 	if got.TTLUnmatched != 3 {
-		t.Errorf("withoutRegra = %d", got.TTLUnmatched)
+		t.Errorf("ttlUnmatched = %d", got.TTLUnmatched)
 	}
 	if len(got.TTLRules) != 2 {
 		t.Fatalf("%d regras publicadas, quero 2", len(got.TTLRules))
@@ -71,7 +71,7 @@ func TestMaterializacaoStatsPublicaNeverComoLiteral(t *testing.T) {
 	spec := &schema.DatasetSpec{Name: "d", Materialization: schema.MaterializationSpec{
 		TTLRules: []schema.TTLRule{{When: "type = 9", Duration: 0}},
 	}}
-	got := materializationStats(spec, materializer.MetricsSnapshot{RegrasCasadas: []int64{1}})
+	got := materializationStats(spec, materializer.MetricsSnapshot{TTLRuleMatches: []int64{1}})
 	if got.TTLRules[0].ExpireAfterWrite != schema.DurationNever {
 		t.Errorf("duração = %q, quero %q", got.TTLRules[0].ExpireAfterWrite, schema.DurationNever)
 	}
@@ -95,10 +95,10 @@ func TestAmostrasDeMaterializacaoPublicamAsSeries(t *testing.T) {
 		CongeladasPreservadas: 5,
 		Acumuladas:            9,
 		Saturadas:             1,
-		RegrasCasadas:         []int64{4, 2},
-		WithoutRegra:          3,
+		TTLRuleMatches:        []int64{4, 2},
+		TTLUnmatched:          3,
 	}
-	samples := samplesOfMaterializacao("d", specWithPoliticas(), snap)
+	samples := samplesOfMaterialization("d", specWithPoliticas(), snap)
 
 	values := map[string]float64{}
 	for _, a := range samples {

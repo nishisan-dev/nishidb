@@ -366,17 +366,18 @@ type Compiled struct {
 	// pacote. Quem compila é internal/predicate, o único ponto da árvore que
 	// pode importar os dois.
 	TTLRules []TTLRule
-	// FallbackDuration é a duração da regra sem `when`, ou zero quando não há.
+	// FallbackDuration é a duração da regra de FUNDO (sem `when` e sem
+	// `anchor`, ver TTLRule.IsFallback), ou zero quando não há.
 	FallbackDuration time.Duration
 
 	// WriteInstantField é o campo de sistema que registra o instante da escrita.
 	// Não-nil exatamente quando há regras de TTL — sem expiração não há para
 	// que pagar 11 bytes por record.
 	WriteInstantField *CompiledField
-	// TTLField é o campo de sistema que carrega a DURAÇÃO de ociosidade que
-	// vale para a entidade, em millis. Não-nil junto com o WriteInstantField:
-	// os dois só fazem sentido em par — um diz quando foi a última escrita, o
-	// outro por quanto tempo ela vale.
+	// TTLField é o campo de sistema que carrega o PRAZO da entidade contado a
+	// partir do WriteInstantField, em millis (ver TTLFieldName). Não-nil junto
+	// com o WriteInstantField: os dois só fazem sentido em par — um diz quando
+	// foi a última escrita, o outro quanto tempo depois dela a entidade vence.
 	TTLField *CompiledField
 
 	mu      sync.RWMutex
@@ -775,6 +776,11 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	}
 	if seqField != "" && c.Seq == nil {
 		return nil, specErrf("materialization.sequence.field %q fora do conjunto incluído", seqField)
+	}
+	// Por último: a âncora pode ser congelada (tipo religado acima) ou
+	// derivada (registrada acima), e só aqui as duas existem.
+	if err := validateTTLAnchors(c); err != nil {
+		return nil, err
 	}
 	return c, nil
 }

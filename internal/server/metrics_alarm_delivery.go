@@ -20,6 +20,7 @@ func samplesOfAlarmDelivery(dataset string, s alarmdelivery.Stats) []metrics.Sam
 	add(metrics.MetAlarmDeliveryFailedAttemptsTotal, "tentativas HTTP malsucedidas desde a subida", metrics.TypeCounter, float64(s.FailedAttempts))
 	add(metrics.MetAlarmDeliveryPersistenceErrorsTotal, "falhas de persistência desde a subida", metrics.TypeCounter, float64(s.PersistenceErrors))
 	add(metrics.MetAlarmDeliveryLastSuccessTimestamp, "última entrega confirmada, em segundos do epoch", metrics.TypeGauge, s.LastSuccessTimestamp)
+	add(metrics.MetAlarmDeliveryAdmissionWaitSecondsTotal, "tempo acumulado de espera da varredura por vaga em memória desde a subida, em segundos", metrics.TypeCounter, s.AdmissionWaitSeconds)
 	for _, state := range []struct{ name, value string }{
 		{metrics.MetAlarmDeliveryActive, "running"}, {metrics.MetAlarmDeliveryFailed, "failed"}, {metrics.MetAlarmDeliveryPaused, "paused"},
 	} {

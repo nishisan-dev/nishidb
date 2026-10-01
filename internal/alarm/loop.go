@@ -84,7 +84,9 @@ func (r *Runner) Start(ctx context.Context) {
 // Stop cancela o laço, AGUARDA a passada em voo e grava o estado.
 //
 // Cancelar sozinho devolveria o controle com uma varredura ainda lendo grupos e
-// ainda gravando o arquivo de estado. É idempotente e pode ser chamado sem
+// ainda gravando o arquivo de estado. A passada em voo não vai até o fim: o
+// cancelamento a interrompe antes do próximo grupo (ver evaluate), então a
+// espera é a do grupo corrente, e não a de uma rajada inteira. É idempotente e pode ser chamado sem
 // nunca ter havido laço — é o que permite a quem nos usa chamá-lo sem perguntar
 // se a configuração o ligou.
 //
@@ -138,7 +140,8 @@ func (r *Runner) run(ctx context.Context, interval time.Duration) {
 			return
 		case <-t.C:
 		}
-		if err := r.EvaluateOnce(); err != nil {
+		// O cancelamento do Stop interrompe a passada entre grupos.
+		if err := r.evaluate(ctx.Done()); err != nil {
 			// Cancelamento não é falha.
 			if ctx.Err() != nil {
 				return

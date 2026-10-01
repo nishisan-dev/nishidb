@@ -194,7 +194,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | `internal/storage/rowindex/rowindex.go` | `denseFile` com tamanho de entrada parametrizado; `Dense32` exportado |
 | `internal/index/valuekey/valuekey.go` | `AppendComposite`/`DecodeComposite` + golden |
 | `internal/predicate/evaluator.go` (novo) | `AvaliadorOfPayload`: programa + slots + reader, `Evaluate(payload)` |
-| `internal/predicate/rule.go` | `CompileCondition` extraída de `CompileRegras` |
+| `internal/predicate/rule.go` | `CompileCondition` extraída de `CompileRules` |
 | `internal/storage/counter/` (novo) | `dict.go`, `counter.go`, `textkey.go`, `audit.go`, `retirement.go` + testes |
 | `internal/storage/checkpoint/manifest.go` | tag 0x8005, `CounterInfo`, `Manifest.Counters` |
 | `internal/storage/store.go` | `Options.CompilaContadores`, abertura, passo 7c do `applyRecord`, Close |
@@ -351,9 +351,9 @@ func NewAvaliadorOfPayload(prog *Programa, ids []types.FieldID) *AvaliadorOfPayl
 func (a *AvaliadorOfPayload) Evaluate(payload []byte) (bool, error)
 ```
 
-- [ ] **Passo 1: teste** — compila `authenticated = true AND slot > 0` contra um `schema.Compiled` de teste (o pacote já tem helper para regras; reusar), monta payload com `encoding.AppendField`, afirma true/false, e afirma que campo ausente compara false. `TestCompilaCondicaoRecusaCampoDeSistema` (`_writtenAt`), reaproveitando o caso que `CompileRegras` já cobre.
+- [ ] **Passo 1: teste** — compila `authenticated = true AND slot > 0` contra um `schema.Compiled` de teste (o pacote já tem helper para regras; reusar), monta payload com `encoding.AppendField`, afirma true/false, e afirma que campo ausente compara false. `TestCompilaCondicaoRecusaCampoDeSistema` (`_writtenAt`), reaproveitando o caso que `CompileRules` já cobre.
 
-- [ ] **Passo 2: vermelho → implementar → verde.** `CompileRegras` passa a chamar `CompileCondition(fmt.Sprintf("ttl[%d]", i), r.When, sc)` — os testes de regra continuam verdes sem edição.
+- [ ] **Passo 2: vermelho → implementar → verde.** `CompileRules` passa a chamar `CompileCondition(fmt.Sprintf("ttl[%d]", i), r.When, sc)` — os testes de regra continuam verdes sem edição.
 
 - [ ] **Passo 3: gate** — `TestAvaliadorDePayloadNaoAloca` (`AllocsPerRun`, teto 0, `!race`).
 

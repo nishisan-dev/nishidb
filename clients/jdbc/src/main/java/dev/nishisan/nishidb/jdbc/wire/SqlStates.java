@@ -33,10 +33,22 @@ import java.util.Map;
 public final class SqlStates {
 
     // ---- classe 08: conexão
-    /** 08001 — o cliente não conseguiu estabelecer a conexão. */
+    /**
+     * 08001 — o cliente não conseguiu estabelecer a conexão: URL ou
+     * configuração inválida, CA, handshake, servidor inalcançável. NÃO é o
+     * código de conexão já fechada — esse é o 08003.
+     */
     public static final String CONEXAO_NAO_ESTABELECIDA = "08001";
     /** 08006 — a conexão terminou no meio. */
     public static final String CONEXAO_INTERROMPIDA = "08006";
+    /**
+     * 08003 — a conexão não existe mais: foi fechada por {@code close},
+     * {@code abort} ou pelo estouro do prazo de rede, e a operação pedida nela
+     * (ou em voo nela) não tem mais por onde ir. É o código de conexão fechada
+     * em TODO o driver — na Connection, no Statement e na requisição em voo —,
+     * porque o fato é um só. Distinto do 08001, que é "não consegui conectar".
+     */
+    public static final String CONNECTION_DOES_NOT_EXIST = "08003";
     /** 08P01 — violação de protocolo: o driver falou errado, ou não é o servidor esperado. */
     public static final String PROTOCOLO_VIOLADO = "08P01";
 
@@ -79,7 +91,14 @@ public final class SqlStates {
     private static final String RECURSO_EXCEDIDO = "53400";
     private static final String RECURSO_INSUFICIENTE = "53000";
     private static final String LIMITE_DE_PROGRAMA = "54000";
-    private static final String CANCELADO = "57014";
+    /**
+     * 57014 — a consulta passou do prazo e foi cancelada.
+     *
+     * <p>PÚBLICO porque nasce também no cliente: quando o servidor não
+     * responde até o {@code queryTimeout} mais a folga, o driver desiste com
+     * este MESMO estado, e a aplicação trata os dois estouros da mesma forma.
+     */
+    public static final String CANCELADO = "57014";
     private static final String OBJETO_EM_USO = "55006";
     private static final String AUTENTICACAO = "28000";
     private static final String IO_DO_SISTEMA = "58030";
