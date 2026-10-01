@@ -203,7 +203,7 @@ desenho diferente do que ele descrevia, registrado no próprio item.
 
 ## O que NÃO foi verificado
 
-- Ressalvas da refutação deixadas para depois: o fsync do diretório do marcador `building` não tem seam de teste (O2); o `.old` que a reconstrução pelo piso põe de lado é apagado no fim da construção, sem preservar a evidência (O3); e as ressalvas O4 e O5 do relatório da refutação.
+- Ressalvas da refutação deixadas para depois: o fsync do diretório do marcador `building` não tem seam de teste (O2); o `.old` que a reconstrução pelo piso põe de lado é apagado no fim da construção, sem preservar a evidência (O3); um `grupos.dict` com header incompleto e piso maior que zero dá "header inválido" (erro duro na abertura) em vez de `ErrDictBelowFloor`, que reconstruiria — improvável em ext4 (O4); e a histerese pode não trocar o mapa do overlay num `RebuildCounters` poucos checkpoints depois de uma construção grande (dreno ≈ 4× a média), e a memória só volta na troca seguinte (O5).
 
 - A medida no piloto: os números acima são da bancada na `.217`, e a projeção
   para a carga do `service_view` é aritmética, não rodada.

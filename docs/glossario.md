@@ -1063,3 +1063,17 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | falha de leitura já montada | ResponseFailureException | clients/jdbc |
 | abandonar a conexão (derrubar sem esperar o servidor) | abandon / `abort` | clients/jdbc |
 | conexão inexistente (o SQLSTATE de toda operação em conexão fechada) | CONNECTION_DOES_NOT_EXIST / 08003 | clients/jdbc |
+
+## Fsync do dicionário de grupos no checkpoint (débito 108, issue #88)
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| piso de durabilidade (o tamanho do `grupos.dict` já sincronizado, gravado no manifest; dicionário menor que ele reconstrói o contador) | DictValidBytes / SyncedBytes / validBytes | internal/storage/counter, internal/storage/checkpoint |
+| dicionário abaixo do piso | ErrDictBelowFloor / `counter.dict_below_durable_floor` | internal/storage/counter, internal/storage |
+| abertura sincronizada (o fsync da cauda herdada do page cache ao abrir o dicionário) | synced open | internal/storage/counter |
+| marcador de construção (arquivo que impede a reabertura de adotar um vetor de construção interrompida) | `building` / MarkBuilding / BuildingMarked | internal/storage/counter, internal/storage |
+| fila de adoção (os contadores construídos que esperam o checkpoint que os adota) | countersAwaitingAdoption | internal/storage |
+| passo de fsync (o fsync do dicionário dentro do `ApplyOverlay`, antes do primeiro `Set`) | SyncStep / `syncDictContadores` | internal/storage/counter, internal/storage |
+| falha de fsync do dicionário (deixa o writer falho) | ErrDictSync | internal/storage/counter |
+| dreno do overlay | drained / drainAvg | internal/storage/counter |
+| limiar de troca do overlay (com histerese contra a média dos drenos) | OverlayShrinkThreshold | internal/storage/counter |
