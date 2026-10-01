@@ -1,7 +1,9 @@
 package counter
 
 import (
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"slices"
@@ -235,3 +237,69 @@ func (r *orderRecorder) Sync() error {
 
 func (r *orderRecorder) Truncate(n int64) error { return r.inner.Truncate(n) }
 func (r *orderRecorder) Close() error           { return r.inner.Close() }
+
+// appendRawEntryForTest escreve uma entrada de grupo direto no arquivo, sem
+// fsync — o que um processo anterior deixou no page cache antes de morrer.
+func appendRawEntryForTest(t *testing.T, path string, key []byte) {
+	t.Helper()
+	entry := binary.LittleEndian.AppendUint16(nil, uint16(len(key)))
+	entry = append(entry, key...)
+	entry = binary.LittleEndian.AppendUint32(entry, crc32.Checksum(entry, castagnoli))
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestOpenDictSyncsTheTailItInherits prova a abertura sincronizada: a cauda
+// que o processo anterior escreveu e não sincronizou continua no page cache
+// depois de um kill -9, e a abertura a lê como se estivesse em disco. O fsync
+// UMA vez por abertura é o que torna verdade o que ela leu.
+//
+// A segunda metade é a guarda contra o fsync gratuito: o arquivo só com o
+// header não tem o que tornar durável, e a abertura dele não sincroniza.
+func TestOpenDictSyncsTheTailItInherits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "grupos.dict")
+	d := openDict(t, path, 10)
+	if _, err := d.Intern([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	appendRawEntryForTest(t, path, []byte("b"))
+
+	var rec *orderRecorder
+	restore := wrapDictOpenForTest(func(f dictFile) dictFile {
+		rec = &orderRecorder{inner: f}
+		return rec
+	})
+	d2 := openDict(t, path, 10)
+	restore()
+	if d2.Limit() != 3 {
+		t.Fatalf("a cauda herdada tinha de ser lida: limite %d, quer 3", d2.Limit())
+	}
+	if want := []string{"Sync"}; !slices.Equal(rec.calls, want) {
+		t.Fatalf("chamadas de durabilidade da abertura = %v, quer %v", rec.calls, want)
+	}
+
+	empty := filepath.Join(t.TempDir(), "grupos.dict")
+	if err := openDict(t, empty, 10).Close(); err != nil {
+		t.Fatal(err)
+	}
+	restore = wrapDictOpenForTest(func(f dictFile) dictFile {
+		rec = &orderRecorder{inner: f}
+		return rec
+	})
+	defer restore()
+	openDict(t, empty, 10)
+	if len(rec.calls) != 0 {
+		t.Fatalf("o arquivo só com o header não tem o que sincronizar na abertura; chamadas = %v", rec.calls)
+	}
+}

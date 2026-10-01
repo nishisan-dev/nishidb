@@ -65,6 +65,14 @@ type dictFile interface {
 	Close() error
 }
 
+// openDictFile abre o arquivo do dicionário. É variável, e não chamada direta,
+// para que os testes do pacote ponham o gravador de chamadas de durabilidade
+// ANTES da abertura — o fsync da abertura sincronizada (OpenDict) acontece
+// antes de qualquer outro ponto em que o handle pudesse ser trocado.
+var openDictFile = func(path string) (dictFile, error) {
+	return os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+}
+
 // Dict é o interning dos grupos de um contador: chave composta → id.
 //
 // Intern e Retire são exclusivos do writer; Key, ByKey e os contadores
@@ -77,10 +85,13 @@ type dictFile interface {
 // entrada do vetor ainda aponta para o id, e essa prova é do tipo que falha em
 // produção e não em teste (planning §6.5).
 type Dict struct {
-	mu      sync.RWMutex
-	f       dictFile
-	size    int64
-	ceiling uint32
+	mu   sync.RWMutex
+	f    dictFile
+	size int64
+	// syncedSize é até onde o arquivo foi fsyncado: o prefixo que sobrevive a
+	// uma queda de energia. Menor que size quando há append pendente.
+	syncedSize int64
+	ceiling    uint32
 	// keys e live são paralelos, índice 0 = id 1. A chave de um grupo
 	// aposentado continua guardada: a tabela virtual e a auditoria precisam
 	// nomear o grupo que uma entrada órfã do vetor ainda aponta.
@@ -94,8 +105,20 @@ type Dict struct {
 // OpenDict cria ou reabre o dicionário, validando o prefixo por CRC e
 // truncando qualquer cauda rasgada por crash. ceiling é o número máximo de
 // grupos VIVOS.
+//
+// # A abertura sincronizada
+//
+// Um arquivo com mais que o header é fsyncado DEPOIS da varredura (e da
+// truncagem), uma vez por abertura. O motivo é o page cache, que sobrevive à
+// morte do PROCESSO: num kill -9, OOM ou panic, a cauda que o processo anterior
+// escreveu sem fsync continua no cache, e esta abertura a lê como se estivesse
+// em disco. O replay resolve as chaves aos MESMOS ids, o dicionário não tem
+// append pendente, e o checkpoint não teria o que sincronizar — mas o vetor
+// passaria a referenciar ids que só existem no cache, e uma queda de energia
+// depois os apagaria: entradas órfãs, zeradas em silêncio pela dobra. Depois do
+// fsync, o que esta abertura leu é exatamente o que está em disco.
 func OpenDict(path string, ceiling uint32) (*Dict, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	f, err := openDictFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("contador: abrir %s: %w", path, err)
 	}
@@ -117,7 +140,7 @@ func OpenDict(path string, ceiling uint32) (*Dict, error) {
 			_ = f.Close()
 			return nil, err
 		}
-		d.size = headerSize
+		d.size, d.syncedSize = headerSize, headerSize
 		return d, nil
 	}
 	if len(raw) < headerSize || [4]byte(raw[0:4]) != dictMagic {
@@ -137,6 +160,13 @@ func OpenDict(path string, ceiling uint32) (*Dict, error) {
 		}
 	}
 	d.size = int64(pos)
+	if d.size > headerSize {
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("contador: fsync da abertura de %s: %w", path, err)
+		}
+	}
+	d.syncedSize = d.size
 	return d, nil
 }
 
@@ -241,6 +271,7 @@ func (d *Dict) Intern(key []byte) (uint32, error) {
 	copy(keyClone, key)
 	d.mu.Lock()
 	d.size += int64(len(entry))
+	d.syncedSize = d.size
 	id := d.internInMemory(keyClone)
 	d.mu.Unlock()
 	return id, nil
@@ -271,6 +302,7 @@ func (d *Dict) Retire(id uint32) error {
 	}
 	d.mu.Lock()
 	d.size += retirementRecordSize
+	d.syncedSize = d.size
 	d.retireInMemory(id)
 	d.mu.Unlock()
 	return nil
@@ -329,5 +361,22 @@ func (d *Dict) SizeBytes() int64 {
 	return d.size
 }
 
-// Close fecha o arquivo do dicionário.
-func (d *Dict) Close() error { return d.f.Close() }
+// Close fecha o arquivo do dicionário, sincronizando antes o append pendente.
+//
+// O fsync aqui não é o que dá durabilidade ao contador — quem a dá é o
+// checkpoint, e um Close sem checkpoint deixa o vetor atrás e o replay o
+// repõe. Ele existe pelo ROLLBACK com parada limpa: o binário anterior
+// confia no prefixo do arquivo como durável (ele sincronizava cada entrada) e
+// nunca sincroniza uma cauda herdada. Sem este fsync, a cauda escrita por este
+// binário e não sincronizada seria adotada como durável por ele.
+func (d *Dict) Close() error {
+	var syncErr error
+	if d.size > d.syncedSize {
+		if err := d.f.Sync(); err != nil {
+			syncErr = fmt.Errorf("contador: fsync do dicionário no fechamento: %w", err)
+		} else {
+			d.syncedSize = d.size
+		}
+	}
+	return errors.Join(syncErr, d.f.Close())
+}
