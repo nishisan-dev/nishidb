@@ -65,6 +65,15 @@ var ErrGroupCeilingReached = errors.New("contador: teto de grupos atingido")
 // posteriores — já referenciados pelo vetor — sumiriam (fsyncgate).
 var ErrDictSync = errors.New("counter: group dictionary fsync failed")
 
+// ErrDictBelowFloor marca o dicionário cujo prefixo válido é MENOR que o piso
+// de durabilidade gravado pelo último checkpoint (manifest, seção 0x0002): o
+// arquivo perdeu dado que um fsync declarou durável — mídia, cópia parcial, ou
+// a página que um EIO derrubou e que o processo seguinte ainda viu no page
+// cache. Adotar o dicionário assim deixaria o vetor apontando para ids que ele
+// não tem, e a dobra os zeraria em silêncio como órfãos: o contador passaria a
+// contar menos sem erro. Quem recebe reconstrói o contador.
+var ErrDictBelowFloor = errors.New("counter: group dictionary is shorter than its durable floor")
+
 // SyncStep é por onde o fsync do dicionário passa quando quem o pede quer
 // observá-lo: o Store embrulha o passo no trace de ordem do checkpoint e no
 // seam de falha injetada dos testes. A função recebida é o fsync de fato;
@@ -156,7 +165,15 @@ type Dict struct {
 // passaria a referenciar ids que só existem no cache, e uma queda de energia
 // depois os apagaria: entradas órfãs, zeradas em silêncio pela dobra. Depois do
 // fsync, o que esta abertura leu é exatamente o que está em disco.
-func OpenDict(path string, ceiling uint32) (*Dict, error) {
+//
+// # O piso de durabilidade
+//
+// floor é o tamanho que o último checkpoint sabia fsyncado (zero: sem piso,
+// o manifest de um binário anterior). Prefixo válido MENOR que o piso é dado
+// durável perdido, e a abertura devolve ErrDictBelowFloor SEM truncar nada —
+// o arquivo fica como estava, para quem reconstrói o pôr de lado. Prefixo
+// maior que o piso é o normal: appends depois do último checkpoint.
+func OpenDict(path string, ceiling uint32, floor int64) (*Dict, error) {
 	f, err := openDictFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("contador: abrir %s: %w", path, err)
@@ -166,6 +183,10 @@ func OpenDict(path string, ceiling uint32) (*Dict, error) {
 	if err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("contador: ler %s: %w", path, err)
+	}
+	if len(raw) == 0 && floor > 0 {
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: %s is empty and the last checkpoint recorded %d durable bytes", ErrDictBelowFloor, path, floor)
 	}
 	if len(raw) == 0 {
 		var h [headerSize]byte
@@ -192,6 +213,11 @@ func OpenDict(path string, ceiling uint32) (*Dict, error) {
 			path, raw[4], dictVersion)
 	}
 	pos := d.readRecords(raw)
+	if int64(pos) < floor {
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: %s has a valid prefix of %d bytes and the last checkpoint recorded %d durable bytes",
+			ErrDictBelowFloor, path, pos, floor)
+	}
 	if int64(pos) != int64(len(raw)) {
 		if err := f.Truncate(int64(pos)); err != nil {
 			_ = f.Close()
@@ -441,6 +467,15 @@ func (d *Dict) RetiredGroups() uint32 {
 
 // Ceiling é o número máximo de grupos vivos declarado.
 func (d *Dict) Ceiling() uint32 { return d.ceiling }
+
+// SyncedBytes devolve o prefixo do arquivo que um fsync tornou durável — o
+// piso que o checkpoint grava no manifest (seção 0x0002) e que a próxima
+// abertura confere. Seguro para leitores concorrentes.
+func (d *Dict) SyncedBytes() int64 {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.syncedSize
+}
 
 // SizeBytes devolve o tamanho válido do arquivo.
 func (d *Dict) SizeBytes() int64 {

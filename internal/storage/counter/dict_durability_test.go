@@ -145,14 +145,14 @@ func TestProcessCrashTailIsMadeDurableBeforeTheVectorReferencesIt(t *testing.T) 
 		}
 	}
 
-	c1, err := Open(dir, def, 1024, false)
+	c1, err := Open(dir, def, 1024, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	transitionAll(c1)
 	c1.abandonForTest()
 
-	c2, err := Open(dir, def, 1024, false)
+	c2, err := Open(dir, def, 1024, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestProcessCrashTailIsMadeDurableBeforeTheVectorReferencesIt(t *testing.T) 
 	if err := os.Truncate(dictPath, synced); err != nil {
 		t.Fatal(err)
 	}
-	c3, err := Open(dir, def, 1024, false)
+	c3, err := Open(dir, def, 1024, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

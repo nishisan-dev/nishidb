@@ -98,7 +98,7 @@ func payload(t *testing.T, olt string, slot, port int64, auth bool) []byte {
 
 func openCounter(t *testing.T, dir string, def Definition, recreate bool) *Counter {
 	t.Helper()
-	c, err := Open(dir, def, 1024, recreate)
+	c, err := Open(dir, def, 1024, recreate, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

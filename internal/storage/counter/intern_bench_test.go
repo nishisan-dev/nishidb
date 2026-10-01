@@ -35,7 +35,7 @@ func benchDirFor(b *testing.B) string {
 // Uma linha por grupo, cada uma com uma OLT diferente, e os payloads montados
 // fora da medição.
 func BenchmarkNewGroupUntilCheckpoint(b *testing.B) {
-	c, err := Open(benchDirFor(b), defByOLT("olt", false, 1<<30), 1024, false)
+	c, err := Open(benchDirFor(b), defByOLT("olt", false, 1<<30), 1024, false, 0)
 	if err != nil {
 		b.Fatal(err)
 	}

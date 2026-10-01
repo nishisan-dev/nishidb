@@ -230,7 +230,13 @@ type Counter struct {
 // Com recreate, o marcador de construção em curso (building.go) é gravado
 // ANTES de qualquer arquivo ser posto de lado: quem o remove é o Store, depois
 // do checkpoint que adota a construção.
-func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, error) {
+//
+// dictFloor é o piso de durabilidade do dicionário que o manifest gravou
+// (zero: sem piso). Um dicionário que perdeu dado abaixo dele faz o Open
+// devolver ErrDictBelowFloor sem tocar em arquivo nenhum, e quem chama abre de
+// novo com recreate. Com recreate o piso não se aplica: os arquivos antigos
+// vão para o lado.
+func Open(dir string, def Definition, minRows uint64, recreate bool, dictFloor int64) (*Counter, error) {
 	if err := validateDefinition(def); err != nil {
 		return nil, err
 	}
@@ -248,7 +254,10 @@ func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, 
 			}
 		}
 	}
-	dict, err := OpenDict(filepath.Join(dir, dictFileName), def.MaxGroups)
+	if recreate {
+		dictFloor = 0
+	}
+	dict, err := OpenDict(filepath.Join(dir, dictFileName), def.MaxGroups, dictFloor)
 	if err != nil {
 		return nil, fmt.Errorf("contador %s: %w", def.Name, err)
 	}
@@ -927,6 +936,12 @@ func (c *Counter) RecordAudit(divergences int, when time.Time) {
 	c.auditDivergences.Store(int64(divergences))
 	c.auditLast.Store(when.Unix())
 }
+
+// DictSyncedBytes é o prefixo do dicionário de grupos que um fsync tornou
+// durável: o piso que o checkpoint grava no manifest. Lido sob o wmu, logo
+// depois do fsync do ApplyOverlay, ele é exatamente o tamanho no instante do
+// fsync.
+func (c *Counter) DictSyncedBytes() int64 { return c.dict.SyncedBytes() }
 
 // Msync força as páginas sujas do vetor para disco.
 func (c *Counter) Msync() error { return c.vector.Msync() }

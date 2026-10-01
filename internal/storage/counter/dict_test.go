@@ -12,7 +12,7 @@ import (
 
 func openDict(t *testing.T, path string, ceiling uint32) *Dict {
 	t.Helper()
-	d, err := OpenDict(path, ceiling)
+	d, err := OpenDict(path, ceiling, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestDictSyncFailureIsReportedAsDictSync(t *testing.T) {
 // prefixo do arquivo como durável e nunca sincroniza a cauda que herda.
 func TestDictCloseSyncsAPendingAppend(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "grupos.dict")
-	d, err := OpenDict(path, 10)
+	d, err := OpenDict(path, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,5 +422,46 @@ func TestOpenDictSyncsTheTailItInherits(t *testing.T) {
 	openDict(t, empty, 10)
 	if len(rec.calls) != 0 {
 		t.Fatalf("o arquivo só com o header não tem o que sincronizar na abertura; chamadas = %v", rec.calls)
+	}
+}
+
+// TestOpenDictBelowTheFloorRefusesWithoutTruncating: prefixo válido menor que
+// o piso é ErrDictBelowFloor, e o arquivo fica exatamente como estava — quem
+// reconstrói o põe de lado como evidência. O arquivo vazio com piso (o
+// dicionário perdido inteiro) é o mesmo caso. Prefixo igual ao piso abre.
+func TestOpenDictBelowTheFloorRefusesWithoutTruncating(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "grupos.dict")
+	d := openDict(t, path, 10)
+	for _, key := range []string{"a", "b"} {
+		if _, err := d.Intern([]byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	floor := st.Size()
+	if err := os.Truncate(path, floor-1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenDict(path, 10, floor); !errors.Is(err, ErrDictBelowFloor) {
+		t.Fatalf("OpenDict abaixo do piso = %v, quer ErrDictBelowFloor", err)
+	}
+	if st, err := os.Stat(path); err != nil || st.Size() != floor-1 {
+		t.Fatalf("a abertura abaixo do piso mexeu no arquivo: tamanho %d, quer %d intocado (%v)", st.Size(), floor-1, err)
+	}
+	if d2, err := OpenDict(path, 10, floor-entryOverhead-1); err != nil {
+		t.Fatalf("prefixo igual ao piso tem de abrir: %v", err)
+	} else if err := d2.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	empty := filepath.Join(t.TempDir(), "grupos.dict")
+	if _, err := OpenDict(empty, 10, headerSize); !errors.Is(err, ErrDictBelowFloor) {
+		t.Fatalf("OpenDict de um dicionário ausente com piso = %v, quer ErrDictBelowFloor", err)
 	}
 }

@@ -16,7 +16,7 @@ func openMeasuredCounter(t testing.TB) (*Counter, []byte, time.Time) {
 	def.RetainEmptyGroups = time.Second
 	def.WriteInstantField = 5
 	def.Measures = []MeasureDefinition{{"rate", time.Minute, time.Second}, {"rate_5m", 5 * time.Minute, time.Minute}}
-	c, err := Open(t.TempDir(), def, 1024, false)
+	c, err := Open(t.TempDir(), def, 1024, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

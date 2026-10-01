@@ -158,7 +158,7 @@ func TestEachDeriverGetsItsOwnScopeEvaluator(t *testing.T) {
 func TestValidateRefusesScopeWithoutAnEvaluator(t *testing.T) {
 	def := defByOLT("spl", true, 100)
 	def.Scope = "eligible = true"
-	_, err := Open(t.TempDir(), def, 1024, false)
+	_, err := Open(t.TempDir(), def, 1024, false, 0)
 	if err == nil || err.Error() != "counter spl: scope declared without an evaluator" {
 		t.Fatalf("Open com scope sem avaliador: %v, quero a recusa própria", err)
 	}

@@ -121,7 +121,27 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 			recreate, reason = true, fmt.Sprintf("os parâmetros mudaram (groupBy %v → %v, where %q → %q, scope %q → %q)",
 				info.Columns, columnsOf(def), oldWhere, def.Where, oldScope, def.Scope)
 		}
-		c, err := counter.Open(counterDir, def, minRows, recreate)
+		// O piso de durabilidade do dicionário (seção 0x0002 do manifest) só
+		// vale para o contador que vai ser ADOTADO: com recreate os arquivos
+		// vão para o lado de qualquer jeito.
+		var dictFloor int64
+		if had && !recreate {
+			dictFloor = info.DictValidBytes
+		}
+		c, err := counter.Open(counterDir, def, minRows, recreate, dictFloor)
+		if errors.Is(err, counter.ErrDictBelowFloor) {
+			// O dicionário perdeu dado que um checkpoint declarou durável.
+			// Adotá-lo deixaria o vetor apontando para ids que ele não tem, e
+			// a dobra os zeraria como órfãos: contagem baixa sem erro. A
+			// resposta é reconstruir, e é decidida AQUI — antes do
+			// OpenMeasures, que com reset não confere os ids do snapshot das
+			// medidas contra um dicionário que encolheu.
+			s.opts.Log.Warn("counter.dict_below_durable_floor",
+				"the group dictionary lost bytes that a checkpoint had recorded as durable; the counter is rebuilt from the live rows",
+				"counter", def.Name, "durable_floor_bytes", dictFloor, "error", err.Error())
+			recreate, reason = true, "o dicionário de grupos perdeu dado abaixo do piso de durabilidade do último checkpoint"
+			c, err = counter.Open(counterDir, def, minRows, true, 0)
+		}
 		if err != nil {
 			return fmt.Errorf("storage: abrir o contador %q de %s: %w", def.Name, opts.Dir, err)
 		}
@@ -251,6 +271,11 @@ func columnsOf(def counter.Definition) []uint16 {
 
 // infoOfCounters é a seção do manifest, na ordem em que os contadores
 // foram declarados.
+//
+// DictValidBytes é o piso de durabilidade do dicionário de cada contador: o
+// prefixo que um fsync tornou durável. Lido sob o wmu, DEPOIS do fsync que é a
+// primeira coisa do ApplyOverlay de cada contador neste mesmo checkpoint — é o
+// tamanho no instante desse fsync, e nada interna grupo entre os dois.
 func (s *Store) infoOfCounters() []checkpoint.CounterInfo {
 	if len(s.counters) == 0 {
 		return nil
@@ -258,7 +283,10 @@ func (s *Store) infoOfCounters() []checkpoint.CounterInfo {
 	out := make([]checkpoint.CounterInfo, 0, len(s.counters))
 	for _, c := range s.counters {
 		def := c.Def()
-		out = append(out, checkpoint.CounterInfo{Name: def.Name, Columns: columnsOf(def), Where: identityOf(def)})
+		out = append(out, checkpoint.CounterInfo{
+			Name: def.Name, Columns: columnsOf(def), Where: identityOf(def),
+			DictValidBytes: c.DictSyncedBytes(),
+		})
 	}
 	return out
 }
