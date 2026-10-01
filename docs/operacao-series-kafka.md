@@ -78,8 +78,12 @@ TLS valida o certificado e o nome do broker; sem `caFile`, usa as CAs do sistema
 ## Mensagem e chave
 
 ```json
-{"dataset":"telecom","counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"rows":812,"auth_5m_avg":807.5,"at":"2026-09-20T15:00:00.000Z"}
+{"dataset":"telecom","counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"rows":905,"auth_5m_avg":807.5,"at":"2026-09-20T15:00:00.000Z"}
 ```
+
+`total` são os serviços do grupo que satisfazem o `where` (812 autenticados);
+`rows` são os membros do grupo — com o `groupBy` completo e dentro do `scope`,
+satisfaçam ou não o `where` (905 serviços na OLT). `rows` nunca é `null`.
 
 Cada mensagem contém seus nomes de coluna e sua identificação. Não há mensagem
 separada de cabeçalho nem lote de linhas dentro do JSON. Os valores mantêm seus
