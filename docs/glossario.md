@@ -1010,6 +1010,10 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | fila durável de entrega | delivery queue / Manager | internal/alarmdelivery |
 | retrato da entrega por destino | AlarmDeliveryStats | internal/protocol |
 | descarte de evento novo | dropped / `alarm.delivery.dropped` | internal/alarmdelivery |
+| contrapressão na admissão (a varredura espera vaga em memória na fila, em vez de descartar, quando o gravador não acompanha a rajada) | admission backpressure / `queue.offer` + `space` | internal/alarmdelivery |
+| tempo de espera da admissão | `AdmissionWaitSeconds` / `nishidb_alarm_delivery_admission_wait_seconds_total` | internal/alarmdelivery, internal/protocol, internal/metrics |
+| rajada de alarmes (muitos grupos disparando na mesma passada) | burst | internal/alarmdelivery, internal/server |
+| passada interrompida (a varredura abandonada entre grupos pelo Stop, sem a fase dois) | `errSweepAborted` / `evaluate(stop)` | internal/alarm |
 
 ## Medidas de contadores (issue #75)
 

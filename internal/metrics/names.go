@@ -763,4 +763,8 @@ const (
 	MetAlarmDeliveryActive                 = "nishidb_alarm_delivery_active"
 	MetAlarmDeliveryFailed                 = "nishidb_alarm_delivery_failed"
 	MetAlarmDeliveryPaused                 = "nishidb_alarm_delivery_paused"
+	// MetAlarmDeliveryAdmissionWaitSecondsTotal é o tempo acumulado em que a
+	// varredura esperou vaga em memória na fila do destino: o sinal de que o
+	// disco do alarme não acompanha a rajada.
+	MetAlarmDeliveryAdmissionWaitSecondsTotal = "nishidb_alarm_delivery_admission_wait_seconds_total"
 )
