@@ -29,30 +29,27 @@ schema:
       type: int64
 `
 
-// durationOfEvent roda o caminho REAL — Parse e depois a avaliação — sobre um
-// estado anterior dado, e devolve a duração escolhida.
-func durationOfEvent(t *testing.T, h *harness, prevPayload []byte, event string) time.Duration {
+// ttlAfter aplica os eventos em sequência pelo caminho REAL — Parse, merge e
+// decisão do prazo sobre o payload final — e devolve o prazo gravado no record
+// da key "a".
+func ttlAfter(t *testing.T, h *harness, events ...string) time.Duration {
 	t.Helper()
-	if err := h.m.patch.Parse([]byte(event), h.c, time.Now()); err != nil {
-		t.Fatalf("Parse(%s): %v", event, err)
+	for _, ev := range events {
+		h.apply(ev)
 	}
-	d, err := h.m.durationOf(prevPayload, h.m.patch.entries)
-	if err != nil {
-		t.Fatalf("durationOf: %v", err)
-	}
-	return d
+	return h.storedTTL("a")
 }
 
 func TestPrazoUsaAPrimeiraRegraQueCasa(t *testing.T) {
 	h := newHarness(t, prazoYAML)
-	if d := durationOfEvent(t, h, nil, `{"id":"a","tipo":2}`); d != 3*time.Minute {
+	if d := ttlAfter(t, h, `{"id":"a","tipo":2}`); d != 3*time.Minute {
 		t.Errorf("duração = %v, quero 3m", d)
 	}
 }
 
 func TestPrazoCaiNaRegraDeFundoQuandoNenhumaCasa(t *testing.T) {
 	h := newHarness(t, prazoYAML)
-	if d := durationOfEvent(t, h, nil, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
+	if d := ttlAfter(t, h, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
 		t.Errorf("duração = %v, quero 7d", d)
 	}
 }
@@ -76,7 +73,7 @@ schema:
       type: int64
 `
 	h := newHarness(t, yaml)
-	if d := durationOfEvent(t, h, nil, `{"id":"a","tipo":1}`); d != 0 {
+	if d := ttlAfter(t, h, `{"id":"a","tipo":1}`); d != 0 {
 		t.Errorf("duração = %v: sem regra de fundo, quem não casa não tem prazo", d)
 	}
 }
@@ -103,10 +100,10 @@ schema:
       type: int64
 `
 	h := newHarness(t, yaml)
-	if d := durationOfEvent(t, h, nil, `{"id":"a","tipo":9}`); d != 0 {
+	if d := ttlAfter(t, h, `{"id":"a","tipo":9}`); d != 0 {
 		t.Errorf("duração = %v, quero 0 (imortal)", d)
 	}
-	if d := durationOfEvent(t, h, nil, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
+	if d := ttlAfter(t, h, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
 		t.Errorf("duração = %v, quero o fundo", d)
 	}
 }
@@ -115,16 +112,14 @@ schema:
 // valendo do estado anterior, porque é isso que o merge vai produzir.
 func TestPrazoVeOValorDoEstadoQuandoOEventoNaoTrazOCampo(t *testing.T) {
 	h := newHarness(t, prazoYAML)
-	prev := encodeFields(t, fieldKV{h.fieldID("tipo"), vi64(2)})
-	if d := durationOfEvent(t, h, prev, `{"id":"a","sev":5}`); d != 3*time.Minute {
+	if d := ttlAfter(t, h, `{"id":"a","tipo":2}`, `{"id":"a","sev":5}`); d != 3*time.Minute {
 		t.Errorf("duração = %v, quero 3m: o tipo=2 do estado continua valendo", d)
 	}
 }
 
 func TestPrazoVeOValorDoEventoQuandoEleSobrescreveOEstado(t *testing.T) {
 	h := newHarness(t, prazoYAML)
-	prev := encodeFields(t, fieldKV{h.fieldID("tipo"), vi64(2)})
-	if d := durationOfEvent(t, h, prev, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
+	if d := ttlAfter(t, h, `{"id":"a","tipo":2}`, `{"id":"a","tipo":1}`); d != 7*24*time.Hour {
 		t.Errorf("duração = %v, quero 7d: o evento tirou a condição de valer", d)
 	}
 }
@@ -132,8 +127,7 @@ func TestPrazoVeOValorDoEventoQuandoEleSobrescreveOEstado(t *testing.T) {
 // null explícito APAGA o campo no merge, então a condição deixa de casar.
 func TestPrazoTrataNullExplicitoComoAusente(t *testing.T) {
 	h := newHarness(t, prazoYAML)
-	prev := encodeFields(t, fieldKV{h.fieldID("tipo"), vi64(2)})
-	if d := durationOfEvent(t, h, prev, `{"id":"a","tipo":null}`); d != 7*24*time.Hour {
+	if d := ttlAfter(t, h, `{"id":"a","tipo":2}`, `{"id":"a","tipo":null}`); d != 7*24*time.Hour {
 		t.Errorf("duração = %v, quero 7d: o campo foi removido", d)
 	}
 }
@@ -184,17 +178,17 @@ func TestContadoresDeRegraContamPorRegra(t *testing.T) {
 	h.apply(`{"id":"c","tipo":1}`)
 
 	m := h.m.Metrics()
-	if len(m.RegrasCasadas) != 2 {
-		t.Fatalf("%d contadores, quero um por regra", len(m.RegrasCasadas))
+	if len(m.TTLRuleMatches) != 2 {
+		t.Fatalf("%d contadores, quero um por regra", len(m.TTLRuleMatches))
 	}
-	if m.RegrasCasadas[0] != 2 {
-		t.Errorf("regra condicional casou %d vezes, quero 2", m.RegrasCasadas[0])
+	if m.TTLRuleMatches[0] != 2 {
+		t.Errorf("regra condicional casou %d vezes, quero 2", m.TTLRuleMatches[0])
 	}
-	if m.RegrasCasadas[1] != 1 {
-		t.Errorf("regra de fundo casou %d vezes, quero 1", m.RegrasCasadas[1])
+	if m.TTLRuleMatches[1] != 1 {
+		t.Errorf("regra de fundo casou %d vezes, quero 1", m.TTLRuleMatches[1])
 	}
-	if m.WithoutRegra != 0 {
-		t.Errorf("withoutRegra = %d: com regra de fundo, ninguém fica sem", m.WithoutRegra)
+	if m.TTLUnmatched != 0 {
+		t.Errorf("ttlUnmatched = %d: com regra de fundo, ninguém fica sem", m.TTLUnmatched)
 	}
 }
 
@@ -217,8 +211,8 @@ schema:
       type: int64
 `)
 	h.apply(`{"id":"a","tipo":1}`)
-	if m := h.m.Metrics(); m.WithoutRegra != 1 || m.RegrasCasadas[0] != 0 {
-		t.Errorf("withoutRegra=%d regra[0]=%d, quero 1 e 0", m.WithoutRegra, m.RegrasCasadas[0])
+	if m := h.m.Metrics(); m.TTLUnmatched != 1 || m.TTLRuleMatches[0] != 0 {
+		t.Errorf("ttlUnmatched=%d regra[0]=%d, quero 1 e 0", m.TTLUnmatched, m.TTLRuleMatches[0])
 	}
 }
 

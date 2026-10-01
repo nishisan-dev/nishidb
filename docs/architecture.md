@@ -1727,6 +1727,17 @@ deixaria o prazo curto de quando a condição valia sobreviver ao evento que a
 quebra — e a entidade morreria logo depois de o alarme reabrir. São 8 bytes por
 versão de record para tornar impossível a única falha que arruinaria a feature.
 
+O prazo é decidido sobre o **payload final** da escrita — o mesmo que vai ao
+`Put` —, e só sobre ele. A entry de `_expiresIn` entra no patch com valor
+provisório, o merge (ou o replace, ou o create) monta o payload, as regras são
+avaliadas sobre esse payload e o valor decidido substitui os 8 bytes do int64
+no lugar. Assim a política de escrita inteira já foi aplicada quando a regra
+olha: a congelada aparece pelo valor congelado, a `merge: sum` pela soma, e em
+`mode: replace` ou sobre a linha vencida (que renasce do vazio) o estado
+anterior simplesmente não está lá. Uma versão anterior avaliava sobre "o
+estado anterior com o patch por cima", e divergia do record exatamente nesses
+quatro casos.
+
 O índice `prazos.idx` (rowId→duração) é DERIVADO do campo, como o de escritas:
 o replay do tail o reconstrói pelo mesmo `applyRecord`. Zero nele significa
 **desconhecido**, e por isso a entidade imortal — a que casou com uma regra

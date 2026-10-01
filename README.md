@@ -795,10 +795,13 @@ O que precisa estar claro antes de escrever a lista:
 - **A ordem é semântica.** Primeira que casa vence, então reordenar as regras
   muda o comportamento. Uma regra de fundo antes de uma condicional tornaria a
   condicional inalcançável, e por isso é recusada no load.
-- **A condição vê o estado PÓS-MERGE.** O valor de cada campo é o que o evento
+- **A condição vê o estado PÓS-MERGE.** Ela é avaliada sobre o próprio
+  documento que a escrita grava: o valor de cada campo é o que o evento
   trouxe; se ele não mencionar o campo, vale o que já estava no estado; `null`
   explícito apaga. É por isso que um evento parcial não muda o prazo por
-  acidente.
+  acidente. Pelo mesmo motivo, uma coluna congelada é vista pelo valor
+  congelado, uma `merge: sum` pela soma, e em `mode: replace` — ou sobre uma
+  entidade já vencida, que renasce do vazio — só existe o que o evento trouxe.
 - **O prazo é reavaliado a cada escrita, e isso é o cancelamento.** Um alarme
   que fecha ganha 3 minutos; se reabrir em 90 segundos, a escrita nova o
   devolve para os 7 dias. O prazo escolhido é gravado no documento como o campo

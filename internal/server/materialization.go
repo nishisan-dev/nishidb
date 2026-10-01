@@ -21,7 +21,7 @@ func materializationStats(spec *schema.DatasetSpec, snap materializer.MetricsSna
 		FrozenPreserved: snap.CongeladasPreservadas,
 		Summed:          snap.Acumuladas,
 		SummedSaturated: snap.Saturadas,
-		TTLUnmatched:    snap.WithoutRegra,
+		TTLUnmatched:    snap.TTLUnmatched,
 	}
 	regras := spec.Materialization.TTLRules
 	if len(regras) == 0 {
@@ -30,8 +30,8 @@ func materializationStats(spec *schema.DatasetSpec, snap materializer.MetricsSna
 	out.TTLRules = make([]protocol.TTLRuleStats, 0, len(regras))
 	for i, r := range regras {
 		var casou int64
-		if i < len(snap.RegrasCasadas) {
-			casou = snap.RegrasCasadas[i]
+		if i < len(snap.TTLRuleMatches) {
+			casou = snap.TTLRuleMatches[i]
 		}
 		out.TTLRules = append(out.TTLRules, protocol.TTLRuleStats{
 			Index:            i,
@@ -95,13 +95,13 @@ func samplesOfMaterializacao(dataset string, spec *schema.DatasetSpec, snap mate
 			Family: metrics.MetTTLUnmatched, Name: metrics.MetTTLUnmatched,
 			Help:   "escritas que não casaram com regra de ttl nenhuma; só acontece em dataset sem regra de fundo",
 			Type:   metrics.TypeCounter,
-			Labels: rotulo, Value: float64(snap.WithoutRegra),
+			Labels: rotulo, Value: float64(snap.TTLUnmatched),
 		},
 	}
 	for i := range spec.Materialization.TTLRules {
 		var casou int64
-		if i < len(snap.RegrasCasadas) {
-			casou = snap.RegrasCasadas[i]
+		if i < len(snap.TTLRuleMatches) {
+			casou = snap.TTLRuleMatches[i]
 		}
 		out = append(out, metrics.Sample{
 			Family: metrics.MetTTLRuleMatched, Name: metrics.MetTTLRuleMatched,

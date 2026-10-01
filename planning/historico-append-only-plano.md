@@ -128,7 +128,7 @@ Parse(event)          ← já produz entries ORDENADAS por FieldID, sem duplicat
                         e _writtenAt injetado (:241)
   └─ historico.Apenda(encodePatchHistory(entries, filtro))   ← NOVO
 stale check
-emitePrazo
+emitTTL
 merge / encodePatch
 store.Put
 ```
