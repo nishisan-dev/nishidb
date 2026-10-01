@@ -1038,3 +1038,16 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | comparação linear entre colunas (`<col> [* k] <op> <col> [* k]`, só na condição de alarme) | ColumnComparison / ColumnTerm / BoundColumnComparison / CompileAlarmCondition | internal/query/parser, internal/query/binder, internal/predicate, internal/alarm |
 | opções da condição (o que o parse e o bind aceitam além da gramática do WHERE) | ConditionOptions / ParseConditionWith / BindConditionWith | internal/query/parser, internal/query/binder |
 | par do evento (total e membros lidos do payload que decidiu o alarme) | groupCounts / countsOf | internal/alarm |
+
+## Prazo de requisição no driver JDBC (issue #91)
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| prazo de espera (do cliente, por requisição) | RequestTimeout | clients/jdbc |
+| prazo de rede (o silêncio máximo do servidor numa consulta; duração inteira nos documentos pequenos) | `socketTimeoutMs` / networkTimeout | clients/jdbc |
+| folga do queryTimeout (o que o cliente espera além do prazo do servidor) | QUERY_TIMEOUT_GRACE_MS | clients/jdbc |
+| corpo com prazo (o stream da resposta que se fecha quando uma leitura não volta a tempo) | TimedInputStream | clients/jdbc |
+| corpo atento ao abandono | AbandonAwareInputStream | clients/jdbc |
+| falha de leitura já montada | ResponseFailureException | clients/jdbc |
+| abandonar a conexão (derrubar sem esperar o servidor) | abandon / `abort` | clients/jdbc |
+| conexão inexistente (o SQLSTATE de toda operação em conexão fechada) | CONNECTION_DOES_NOT_EXIST / 08003 | clients/jdbc |

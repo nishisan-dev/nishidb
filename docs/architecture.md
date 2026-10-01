@@ -1127,6 +1127,20 @@ em que o proxy corporativo respondia 403 e o operador culpava o servidor),
 caminho para desligar a verificação de certificado, e senha que nunca é
 argumento de processo.
 
+**Prazo de espera do cliente, por enquanto só no JDBC** (issue #91). O
+`queryTimeout` vai ao servidor, que cancela a varredura do lado dela; mas um
+servidor que aceita a requisição e não responde prendia a thread do cliente
+sem limite, e o pool que valida com `isValid` esgotava. O driver passou a
+limitar a espera: na consulta, o SILÊNCIO do servidor — a espera pelos
+cabeçalhos e cada espera por bytes do stream, nunca a duração dele —; nos
+documentos pequenos (health, metadata, catálogo, stats), a requisição
+inteira. São três prazos, do mais
+específico ao mais geral: `isValid(s)`, o `queryTimeout` mais 5 s de folga, e
+o prazo de rede (`socketTimeoutMs` / `setNetworkTimeout`, default zero = sem
+prazo), cujo estouro fecha a conexão como o contrato do JDBC pede. O detalhe
+está no README, na seção do driver; o client Python ainda não tem o
+equivalente.
+
 E a mesma divisão de prova: os unitários de cada um falam com um servidor HTTP
 da própria plataforma, com respostas escritas à mão — eles provam que o client
 faz o que quem o escreveu ACHA que o servidor emite. A outra metade é
