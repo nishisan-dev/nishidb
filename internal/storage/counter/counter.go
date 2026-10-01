@@ -220,6 +220,10 @@ type Counter struct {
 // por divergência de parâmetros, decidida pelo Store a partir do manifest
 // ANTES da recovery; RemoveOld remove os renomeados quando a reconstrução
 // terminar.
+//
+// Com recreate, o marcador de construção em curso (building.go) é gravado
+// ANTES de qualquer arquivo ser posto de lado: quem o remove é o Store, depois
+// do checkpoint que adota a construção.
 func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, error) {
 	if err := validateDefinition(def); err != nil {
 		return nil, err
@@ -228,6 +232,9 @@ func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, 
 		return nil, fmt.Errorf("contador %s: criar %s: %w", def.Name, dir, err)
 	}
 	if recreate {
+		if err := markBuilding(dir); err != nil {
+			return nil, fmt.Errorf("contador %s: %w", def.Name, err)
+		}
 		for _, name := range []string{dictFileName, vectorFileName} {
 			from := filepath.Join(dir, name)
 			if err := os.Rename(from, from+oldSuffix); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -668,6 +675,11 @@ func (c *Counter) Fold() error {
 // Clear apaga o vetor, o overlay e os totais; o dicionário fica, porque os ids
 // são estáveis. É o começo de uma reconstrução: o Store transiciona de novo
 // cada linha viva.
+//
+// O vetor é zerado IN PLACE, num mmap compartilhado: as páginas zeradas podem
+// chegar ao disco antes do checkpoint. Por isso quem chama grava antes o
+// marcador de construção em curso (MarkBuilding) — sem ele, um crash entre o
+// Clear e o checkpoint deixaria a reabertura adotar o vetor zerado.
 func (c *Counter) Clear() error {
 	if err := c.vector.Clear(); err != nil {
 		return err

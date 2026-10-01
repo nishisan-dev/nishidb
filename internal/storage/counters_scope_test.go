@@ -113,7 +113,7 @@ func TestScopedCounterRecoversToTheContinuousStateAndAuditsClean(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2 := openStore(t, optionsWithCounters(dir, byOLTWithScope("spl", splScope)))
-	if s2.CountersConstruidosForTest() != 0 {
+	if s2.CountersBuiltForTest() != 0 {
 		t.Fatal("a recovery tem de chegar lá por dobra + replay, sem reconstrução")
 	}
 	exigeTotal(t, s2, "spl", "A", totA, refsA)
@@ -139,7 +139,7 @@ func reopenCounted(t *testing.T, s *Store, dir string, c counterOfTest) (*Store,
 		t.Fatal(err)
 	}
 	s2 := openStore(t, optionsWithCounters(dir, c))
-	return s2, s2.CountersConstruidosForTest()
+	return s2, s2.CountersBuiltForTest()
 }
 
 // TestScopeIdentityDecidesAdoptOrRebuild cobre as garantias 5 e 6: manter o

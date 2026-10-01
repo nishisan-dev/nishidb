@@ -97,7 +97,7 @@ func countersLocal(argConfig, dataset string, audit, rebuild bool, amb Context) 
 		code := writeOutputWithContext("counters", amb, func(w io.Writer) { writeAudit(w, dataset, rows) })
 		return auditOutcome(rows, code, amb)
 	case rebuild:
-		recs, err := st.ReconstroiCounters(amb.Ctx)
+		recs, err := st.RebuildCounters(amb.Ctx)
 		if err != nil {
 			notify(amb, "counters: reconstrução: %v\n", err)
 			return errorCode(err)

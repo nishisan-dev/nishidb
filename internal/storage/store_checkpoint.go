@@ -290,6 +290,11 @@ func (s *Store) checkpoint() error {
 			return s.failWriter(err)
 		}
 	}
+	// Por último, e só no sucesso: a construção de um contador está adotada
+	// quando o checkpoint que levou o vetor completo ao disco terminou. Antes
+	// disso o marcador de construção em curso é o que impede a reabertura de
+	// adotar um vetor zerado ou parcial.
+	s.clearAdoptedBuildingMarks()
 	return nil
 }
 

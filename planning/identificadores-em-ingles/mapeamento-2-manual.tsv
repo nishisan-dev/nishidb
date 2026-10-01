@@ -995,3 +995,6 @@ internal/storage	local	Store.openCounters.recria	recreate	tradução das funçõ
 internal/storage	local	Store.openCounters.motivo	reason	tradução das funções tocadas pelo escopo do contador e pela coluna rows (30/09/2026)
 internal/storage	local	Store.openCounters.orfas	orphans	tradução das funções tocadas pelo escopo do contador e pela coluna rows (30/09/2026)
 internal/storage	local	Store.openCounters.sobras	leftovers	tradução das funções tocadas pelo escopo do contador e pela coluna rows (30/09/2026)
+internal/storage	method	Store.ReconstroiCounters	RebuildCounters	tradução das funções tocadas pelo marcador de construção do contador (01/10/2026)
+internal/storage	field	Store.countersConstruidos	countersBuilt	tradução das funções tocadas pelo marcador de construção do contador (01/10/2026)
+internal/storage	method	Store.CountersConstruidosForTest	CountersBuiltForTest	tradução das funções tocadas pelo marcador de construção do contador (01/10/2026)

@@ -83,7 +83,7 @@ func BenchmarkReconstroiContadores1M(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := s.ReconstroiCounters(context.Background()); err != nil {
+		if _, err := s.RebuildCounters(context.Background()); err != nil {
 			b.Fatal(err)
 		}
 	}

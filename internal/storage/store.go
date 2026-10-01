@@ -378,10 +378,16 @@ type Store struct {
 	// countersToRebuild são os que a abertura decidiu reconstruir; a
 	// varredura roda depois do ramo de recovery e a lista é esvaziada.
 	countersToRebuild []pendingCounterRebuild
-	// countersConstruidos conta as reconstruções desta abertura — o
+	// countersAwaitingAdoption são os contadores cuja construção TERMINOU e
+	// cujo marcador de construção em curso (counter.MarkBuilding) só pode
+	// sair depois do checkpoint que leva o vetor completo ao disco. O fim de
+	// um checkpoint bem-sucedido remove os marcadores e esvazia a lista.
+	// Writer-only (wmu).
+	countersAwaitingAdoption []*counter.Counter
+	// countersBuilt conta as reconstruções desta abertura — o
 	// observável que separa "adotou" de "reconstruiu e chegou ao mesmo
 	// resultado", como scheduleBuilt.
-	countersConstruidos int
+	countersBuilt int
 	// audTrace é o seam de teste da auditoria dos contadores: chamado depois
 	// de cada linha varrida. Nil em produção.
 	audTrace func(linha types.RowID)

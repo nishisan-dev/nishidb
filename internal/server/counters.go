@@ -103,7 +103,7 @@ func (s *Server) handleRebuildOfCounters(w http.ResponseWriter, r *http.Request)
 	defer cancel()
 
 	results, parcial := processDatasets(targets, func(d *dataset) (protocol.DatasetRebuild, error) {
-		recs, err := d.st.ReconstroiCounters(ctx)
+		recs, err := d.st.RebuildCounters(ctx)
 		if err != nil {
 			return protocol.DatasetRebuild{}, err
 		}

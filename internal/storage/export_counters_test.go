@@ -2,10 +2,10 @@ package storage
 
 import "github.com/nishisan-dev/nishidb/internal/types"
 
-// CountersConstruidosForTest expõe quantos contadores esta abertura teve de
+// CountersBuiltForTest expõe quantos contadores esta abertura teve de
 // construir em vez de adotar — o observável que separa "adotou" de
 // "reconstruiu e chegou ao mesmo resultado", como o da agenda.
-func (s *Store) CountersConstruidosForTest() int { return s.countersConstruidos }
+func (s *Store) CountersBuiltForTest() int { return s.countersBuilt }
 
 // PartialCheckpointWithCountersForTest é o PartialCheckpointForTest com os
 // passos dos contadores: segSync, overlays aplicados (locations e contadores)

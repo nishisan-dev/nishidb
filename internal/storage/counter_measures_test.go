@@ -257,7 +257,7 @@ func TestTogglingTotalPreservesMeasuresAndRebuildDoesNotCountEvents(t *testing.T
 	}
 	s = openStore(t, measureOptions(dir, true, time.Minute))
 	requireOccurrences(t, s, at, 3)
-	if _, err := s.ReconstroiCounters(context.Background()); err != nil {
+	if _, err := s.RebuildCounters(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	requireOccurrences(t, s, at, 3)
