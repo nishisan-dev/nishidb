@@ -107,3 +107,36 @@ func TestFailedOverlayDrainKeepsTheMap(t *testing.T) {
 		t.Fatalf("o dreno que falhou trocou ou esvaziou o mapa: %d entradas restantes", c.OverlayLen())
 	}
 }
+
+// TestOverlayDrainCompletedByARetryStillReplacesTheMap: um dreno grande que
+// falha depois de apagar a maior parte do mapa (o Set de uma linha nova que
+// precisa crescer o vetor, por exemplo) e termina numa nova tentativa pequena
+// ainda deixou o mapa no tamanho do pico. A troca julga as entradas drenadas
+// desde o último dreno completo, e não só o resto que a nova tentativa achou.
+//
+// A falha no meio não tem como ser provocada por fora (o vetor é concreto e a
+// ordem do mapa é aleatória), então o teste parte do estado que ela deixa: a
+// contagem das entradas já apagadas pela tentativa que falhou.
+func TestOverlayDrainCompletedByARetryStillReplacesTheMap(t *testing.T) {
+	c := openCounter(t, t.TempDir(), defByOLT("aut", true, 100), false)
+	c.overlayShrinkThreshold = 64
+	ps := twoGroupPayloads(t)
+	for round := 0; round < 4; round++ { // regime: média de 10 entradas por dreno
+		transitionRange(t, c, 0, 10, flipped(ps, round))
+		if err := c.ApplyOverlay(nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.drainedSinceEmpty = 4000 // apagadas pela tentativa que falhou no meio
+	transitionRange(t, c, 5000, 5010, ps)
+	before := c.overlayIdentityForTest()
+	if err := c.ApplyOverlay(nil); err != nil {
+		t.Fatal(err)
+	}
+	if c.overlayIdentityForTest() == before {
+		t.Fatalf("a nova tentativa que fechou um dreno de 4010 entradas (média %d) não trocou o mapa", c.drainAvg)
+	}
+	if c.drainedSinceEmpty != 0 {
+		t.Fatalf("o dreno completo não zerou a contagem: %d", c.drainedSinceEmpty)
+	}
+}

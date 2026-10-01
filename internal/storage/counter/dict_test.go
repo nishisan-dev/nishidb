@@ -465,3 +465,28 @@ func TestOpenDictBelowTheFloorRefusesWithoutTruncating(t *testing.T) {
 		t.Fatalf("OpenDict de um dicionário ausente com piso = %v, quer ErrDictBelowFloor", err)
 	}
 }
+
+// TestOpenDictShorterThanItsHeaderWithAFloorIsBelowTheFloor: com piso
+// registrado, um grupos.dict truncado DENTRO do header (1 a 7 bytes) é dado
+// durável perdido como qualquer prefixo abaixo do piso — ErrDictBelowFloor, que
+// reconstrói o contador —, e não "header inválido", que recusaria a abertura do
+// dataset inteiro. Sem piso, o header incompleto continua recusado como
+// inválido. O arquivo fica intocado nos dois casos.
+func TestOpenDictShorterThanItsHeaderWithAFloorIsBelowTheFloor(t *testing.T) {
+	header := append(dictMagic[:], dictVersion, 0, 0, 0)
+	for size := 1; size < headerSize; size++ {
+		path := filepath.Join(t.TempDir(), "grupos.dict")
+		if err := os.WriteFile(path, header[:size], 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := OpenDict(path, 10, headerSize+20); !errors.Is(err, ErrDictBelowFloor) {
+			t.Fatalf("dicionário de %d bytes com piso = %v, quer ErrDictBelowFloor", size, err)
+		}
+		if st, err := os.Stat(path); err != nil || st.Size() != int64(size) {
+			t.Fatalf("a abertura mexeu no dicionário de %d bytes (%v)", size, err)
+		}
+		if _, err := OpenDict(path, 10, 0); err == nil || errors.Is(err, ErrDictBelowFloor) {
+			t.Fatalf("dicionário de %d bytes SEM piso = %v, quer o erro de header inválido", size, err)
+		}
+	}
+}

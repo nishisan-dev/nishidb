@@ -184,9 +184,15 @@ func OpenDict(path string, ceiling uint32, floor int64) (*Dict, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("contador: ler %s: %w", path, err)
 	}
-	if len(raw) == 0 && floor > 0 {
+	// Arquivo menor que o header com piso registrado é o mesmo dano que o
+	// prefixo abaixo do piso — dado durável perdido —, e não header
+	// corrompido: o caminho certo é reconstruir o contador, e não recusar a
+	// abertura do dataset inteiro. Sem piso (manifest de binário anterior), o
+	// header incompleto continua sendo recusado como inválido.
+	if len(raw) < headerSize && floor > 0 {
 		_ = f.Close()
-		return nil, fmt.Errorf("%w: %s is empty and the last checkpoint recorded %d durable bytes", ErrDictBelowFloor, path, floor)
+		return nil, fmt.Errorf("%w: %s has %d bytes (shorter than its header) and the last checkpoint recorded %d durable bytes",
+			ErrDictBelowFloor, path, len(raw), floor)
 	}
 	if len(raw) == 0 {
 		var h [headerSize]byte

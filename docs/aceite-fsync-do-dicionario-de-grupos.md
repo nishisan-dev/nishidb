@@ -203,7 +203,7 @@ desenho diferente do que ele descrevia, registrado no próprio item.
 
 ## O que NÃO foi verificado
 
-- Ressalvas da refutação deixadas para depois: o fsync do diretório do marcador `building` não tem seam de teste (O2); o `.old` que a reconstrução pelo piso põe de lado é apagado no fim da construção, sem preservar a evidência (O3); um `grupos.dict` com header incompleto e piso maior que zero dá "header inválido" (erro duro na abertura) em vez de `ErrDictBelowFloor`, que reconstruiria — improvável em ext4 (O4); e a histerese pode não trocar o mapa do overlay num `RebuildCounters` poucos checkpoints depois de uma construção grande (dreno ≈ 4× a média), e a memória só volta na troca seguinte (O5).
+- Ressalvas da refutação deixadas para depois: o fsync do diretório do marcador `building` não tem seam de teste (O2); o `.old` que a reconstrução pelo piso põe de lado é apagado no fim da construção, sem preservar a evidência (O3); e a histerese pode não trocar o mapa do overlay num `RebuildCounters` poucos checkpoints depois de uma construção grande (dreno ≈ 4× a média), e a memória só volta na troca seguinte (O5).
 
 - A medida no piloto: os números acima são da bancada na `.217`, e a projeção
   para a carga do `service_view` é aritmética, não rodada.
@@ -211,3 +211,24 @@ desenho diferente do que ele descrevia, registrado no próprio item.
   EIO de writeback real foi provocado.
 - A troca do mapa sob o perfil real de checkpoints do piloto: a histerese foi
   provada com limiar reduzido em teste, não observada num regime de produção.
+
+## Review do Codex no PR #94 (01/10/2026)
+
+Dois apontamentos P2, os dois procedentes e corrigidos:
+
+- **Header truncado com piso** (era a ressalva O4 da refutação): um `grupos.dict`
+  com 1 a 7 bytes e piso maior que zero dava "header inválido" e recusava a
+  abertura do dataset inteiro; agora é `ErrDictBelowFloor` e o contador é
+  reconstruído. Sem piso, continua recusado como inválido.
+  `TestOpenDictShorterThanItsHeaderWithAFloorIsBelowTheFloor`; mutante (voltar a
+  `len(raw) == 0`) → vermelho: "dicionário de 1 bytes com piso = contador:
+  header inválido …, quer ErrDictBelowFloor".
+- **Dreno parcial com nova tentativa:** um `ApplyOverlay` que falha depois de
+  apagar a maior parte de um mapa grande e termina numa nova tentativa pequena
+  julgava a troca só pelo resto, e o mapa ficava no tamanho do pico. A contagem
+  `drainedSinceEmpty` sobrevive às tentativas que falham e é ela que decide.
+  `TestOverlayDrainCompletedByARetryStillReplacesTheMap` (parte do estado que a
+  falha deixa: a ordem do mapa é aleatória e o vetor é concreto, então a falha no
+  meio não é provocável por fora); mutante (julgar só o resto) → vermelho: "a
+  nova tentativa que fechou um dreno de 4010 entradas (média 7) não trocou o
+  mapa".

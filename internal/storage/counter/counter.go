@@ -197,6 +197,13 @@ type Counter struct {
 	// centenas de milhares de transições por checkpoint. Writer-only.
 	drainAvg               int
 	overlayShrinkThreshold int
+	// drainedSinceEmpty conta as entradas drenadas desde o último ApplyOverlay
+	// que esvaziou o overlay — inclusive por tentativas que falharam no meio. É
+	// o tamanho do dreno que a troca do mapa julga: um dreno grande que
+	// falha depois de apagar a maior parte e termina numa nova tentativa
+	// pequena ainda deixou o mapa no tamanho do pico, e só esta contagem o
+	// enxerga. Writer-only.
+	drainedSinceEmpty int
 
 	// Por grupo, índice = id (0 reservado). Crescem sob dict.mu quando um id
 	// nasce; os leitores indexam sob RLock e conferem o limite.
@@ -776,13 +783,15 @@ func (c *Counter) ApplyOverlay(step SyncStep) error {
 	if err := c.dict.Sync(step); err != nil {
 		return fmt.Errorf("counter %s: %w", c.def.Name, err)
 	}
-	drained := len(c.over)
 	for r, v := range c.over {
 		if err := c.vector.Set(r, v); err != nil {
 			return err
 		}
 		delete(c.over, r)
+		c.drainedSinceEmpty++
 	}
+	drained := c.drainedSinceEmpty
+	c.drainedSinceEmpty = 0
 	if drained > c.overlayShrinkThreshold && drained > overlayShrinkFactor*c.drainAvg {
 		c.over = make(map[types.RowID]uint32)
 	}
