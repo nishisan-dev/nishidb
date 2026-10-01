@@ -1021,3 +1021,16 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | numerador da janela | MeasureCount | internal/storage/counter |
 | geração de medidas | `measures.<epoch>.snapshot` / MeasureCounters | internal/storage/counter, internal/storage/checkpoint |
 | identidade da fonte amostrada | `.win.source` / reconcileSource | internal/countermetrics |
+
+## Prazo de requisição no driver JDBC (issue #91)
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| prazo de espera (do cliente, por requisição) | RequestTimeout | clients/jdbc |
+| prazo de rede (o silêncio máximo do servidor numa consulta; duração inteira nos documentos pequenos) | `socketTimeoutMs` / networkTimeout | clients/jdbc |
+| folga do queryTimeout (o que o cliente espera além do prazo do servidor) | QUERY_TIMEOUT_GRACE_MS | clients/jdbc |
+| corpo com prazo (o stream da resposta que se fecha quando uma leitura não volta a tempo) | TimedInputStream | clients/jdbc |
+| corpo atento ao abandono | AbandonAwareInputStream | clients/jdbc |
+| falha de leitura já montada | ResponseFailureException | clients/jdbc |
+| abandonar a conexão (derrubar sem esperar o servidor) | abandon / `abort` | clients/jdbc |
+| conexão inexistente (o SQLSTATE de toda operação em conexão fechada) | CONNECTION_DOES_NOT_EXIST / 08003 | clients/jdbc |
