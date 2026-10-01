@@ -64,28 +64,34 @@ func TestContadorNaoAlocaNoCaminhoQuente(t *testing.T) {
 	})
 }
 
-// TestScopedTransitionDoesNotAllocate é o gate acima com `scope` declarado: o
+// Os dois gates abaixo são o gate acima com `scope` declarado, UM POR RAMO: o
 // avaliador do scope roda em toda transição, antes da chave e do where, e o
-// gate velho não passa por ele. As linhas alternam dentro e fora do escopo,
-// então o caminho que sai cedo (WithoutGroup) e o que segue até o grupo são
-// medidos os dois.
-func TestScopedTransitionDoesNotAllocate(t *testing.T) {
+// gate velho não passa por ele. Um gate só alternando os dois ramos não
+// serviria — AllocsPerRun devolve a média inteira, e uma alocação em dois de
+// cinco payloads sairia 0.
+
+// TestScopedTransitionInsideTheScopeDoesNotAllocate: só payloads DENTRO do
+// escopo, alternando grupo e condição para que toda chamada medida seja uma
+// transição de verdade, que segue do scope até o grupo.
+func TestScopedTransitionInsideTheScopeDoesNotAllocate(t *testing.T) {
 	c := openCounter(t, t.TempDir(), defByOLTWithScope("spl", nil), false)
 	const rows = 1 << 12
 	ps := [][]byte{
 		scopedPayload(t, "A", 1, true, true),
-		scopedPayload(t, "B", 2, false, false),
+		scopedPayload(t, "B", 2, false, true),
 		scopedPayload(t, "A", 1, false, true),
 		scopedPayload(t, "B", 2, true, true),
-		scopedPayload(t, "A", 3, true, false),
 	}
 	for r := types.RowID(0); r < rows; r++ {
 		if err := c.Transition(r, ps[int(r)%len(ps)], false); err != nil {
 			t.Fatal(err)
 		}
 	}
+	before := c.Transitions()
+	// i anda um passo à frente de r: a linha r foi gravada com ps[r%4] e
+	// recebe ps[(r+1)%4], que muda o grupo ou a condição.
 	var r types.RowID
-	i := 0
+	i := 1
 	if n := testing.AllocsPerRun(2000, func() {
 		r = (r + 1) & (rows - 1)
 		i = (i + 1) % len(ps)
@@ -93,6 +99,40 @@ func TestScopedTransitionDoesNotAllocate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}); n != 0 {
-		t.Errorf("allocs/transição com scope = %.1f, quer 0", n)
+		t.Errorf("allocs/transição dentro do escopo = %.1f, quer 0", n)
+	}
+	if moved := c.Transitions() - before; moved < 2000 {
+		t.Fatalf("só %d das 2001 chamadas foram transição: o gate mediu o caminho que não muda nada", moved)
+	}
+}
+
+// TestScopedTransitionLeavingTheScopeDoesNotAllocate: só payloads FORA do
+// escopo, sobre linhas que estavam todas dentro — toda chamada medida tira uma
+// linha diferente do seu grupo, pelo ramo que sai cedo do Derive (WithoutGroup)
+// e pelo decremento do grupo antigo.
+func TestScopedTransitionLeavingTheScopeDoesNotAllocate(t *testing.T) {
+	c := openCounter(t, t.TempDir(), defByOLTWithScope("spl", nil), false)
+	const rows = 1 << 12
+	in := [][]byte{scopedPayload(t, "A", 1, true, true), scopedPayload(t, "B", 2, false, true)}
+	for r := types.RowID(0); r < rows; r++ {
+		if err := c.Transition(r, in[int(r)%len(in)], false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := [][]byte{scopedPayload(t, "A", 1, true, false), scopedPayload(t, "B", 2, false, false)}
+	before := c.Transitions()
+	var r types.RowID
+	i := 0
+	if n := testing.AllocsPerRun(2000, func() {
+		r++ // linha nova a cada chamada: 2001 < rows, então toda saída é real
+		i = (i + 1) % len(out)
+		if err := c.Transition(r, out[i], false); err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 {
+		t.Errorf("allocs/transição saindo do escopo = %.1f, quer 0", n)
+	}
+	if moved := c.Transitions() - before; moved < 2000 {
+		t.Fatalf("só %d das 2001 chamadas foram transição: o gate mediu o caminho que não muda nada", moved)
 	}
 }

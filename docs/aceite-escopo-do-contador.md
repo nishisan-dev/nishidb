@@ -44,7 +44,7 @@ E uma quarta que a refutação acrescentou: o par `total`/`rows` tem de ser lido
 | R3. O evento lê `total`/`rows` do payload que decidiu | `TestEventTotalAndRowsAreReadFromTheDecidingPayload` |
 | R4/R14. Scope na descrição das métricas por taxa e na assinatura do alarme | `TestMeasureSourceRestoresAndResetsOnlyWhenItsMeaningChanges`, `TestChangingOnlyTheScopeInvalidatesTheRestoredTimer` |
 | R5. Recusas do scope espelham as do where | `TestCompileRefusesScopeOverASummedField`, `TestValidateRefusesScopeWithoutAnEvaluator`, `TestCompileRefusesColumnComparisonInTheScope` |
-| R6. Transição com scope não aloca | `TestScopedTransitionDoesNotAllocate` |
+| R6. Transição com scope não aloca, em cada ramo | `TestScopedTransitionInsideTheScopeDoesNotAllocate`, `TestScopedTransitionLeavingTheScopeDoesNotAllocate` |
 | C. Comparação entre colunas não aloca | `TestLinearColumnComparisonDoesNotAllocate` |
 | R12. Um avaliador do scope por Deriver | `TestEachDeriverGetsItsOwnScopeEvaluator` |
 | `rows` em `value:` e em `enrich.bind` | `TestRowsIsAValueColumnAndABindableColumn` |
@@ -75,7 +75,8 @@ foi revertido, a suíte voltou ao verde. Nenhuma ficou no código.
 | 7 | `fmt.Sprintf` na montagem do `rows` | 1,0 alocação em três gates da tabela |
 | 1 | o `Derive` ignora o scope | "Limit = 2 depois de uma linha fora do escopo, quero 1" (e o ponta a ponta: "total 4 rows 13, quero 1 e 10") |
 | 2 | a saída sem lápide não desconta o grupo antigo | "A depois de sair do escopo: total 1 refs 2" |
-| R6 | `fmt.Sprintf` no ramo do scope do `Derive` | 1,0 alocação por transição |
+| R6 | `fmt.Sprintf` só no ramo FORA do escopo do `Derive` (M15) | 1,0 alocação por transição no gate de saída; o de dentro fica verde |
+| R6 | `fmt.Sprintf` só no ramo DENTRO do escopo (M15b) | 1,0 alocação por transição no gate de dentro; o de saída fica verde |
 | R12 | o Deriver novo reusa o avaliador do writer | "instanciou 1 avaliadores no total, quero 2" |
 | 4 | o Deriver da auditoria sem scope | a auditoria acusa 2 grupos divergentes |
 | 5 | a identidade exclui o scope | "trocar o scope reconstruiu 0 contadores, quero 1"; golden diverge |
