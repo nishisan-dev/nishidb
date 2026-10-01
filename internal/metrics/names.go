@@ -151,6 +151,16 @@ const (
 	// porque é a ordem que decide qual vence.
 	MetTTLRuleMatched = "nishidb_ttl_rule_matched_total"
 	MetTTLUnmatched   = "nishidb_ttl_unmatched_total"
+	// MetTTLAnchorAbsent tem o mesmo rótulo `rule` e só existe para as regras
+	// com `anchor`: escritas em que a regra teria decidido e a âncora faltava
+	// no record, e a próxima regra foi tentada.
+	MetTTLAnchorAbsent = "nishidb_ttl_anchor_absent_total"
+	// MetTTLAnchorInFuture são as âncoras posteriores à escrita, limitadas a
+	// ela — o sinal de uma origem com relógio adiantado.
+	MetTTLAnchorInFuture = "nishidb_ttl_anchor_in_future_total"
+	// MetTTLExpiredOnWrite são os records gravados já vencidos: a âncora mais
+	// o prazo ficou no passado. Backlog relido é a causa típica.
+	MetTTLExpiredOnWrite = "nishidb_ttl_expired_on_write_total"
 
 	// Séries da tabela histórica, publicadas no rótulo do dataset BASE — é
 	// nele que o operador declarou o bloco, e é nele que vai procurar.

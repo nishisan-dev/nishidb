@@ -183,7 +183,7 @@ inglês correspondente.
 | derivadas (colunas do histórico; e as colunas aninhadas derivadas de `extract`) | derived | internal/materializer/history.go, internal/query/binder, internal/schema |
 | derivar / derivação (reconstruir o logger a partir da raiz; e calcular grupo e condição a partir do payload) | derive / derivation | internal/logging/logging.go, internal/storage/counter, internal/schema |
 | vencimentos | expiries | internal/storage/schedule.go |
-| prazo / prazos (a DURAÇÃO de ociosidade da linha, em millis: por quanto tempo ela pode ficar sem escrita — o TTL) | TTL / TTLs | internal/storage/rowindex |
+| prazo / prazos (o `_expiresIn` da linha, em millis, contado a partir de `_writtenAt`: a duração de ociosidade nas regras `expireAfterWrite`, e o que resta até a âncora + `expireAfter` nas regras ancoradas — o TTL) | TTL / TTLs | internal/storage/rowindex |
 | padrão (valor herdado quando a chave está ausente) | default — `Default` e `default` em nome composto (`DefaultMaxRows`, `defaultTimeout`); `defaultValue` em parâmetro ou local solto, porque `default` é palavra reservada em Go | internal/units |
 | padrão (formato de data, de rota ou de LIKE) | pattern | internal/typeparse/datetime.go, internal/server/auth.go, internal/query/parser/parser.go |
 | entrada (de teste) | input | internal/units/units_test.go |
@@ -252,7 +252,7 @@ inglês correspondente.
 | antes / depois (medição de teste) | before / after | internal/memprof/memprof_test.go, internal/storage/mmap/region_test.go, internal/storage/fielddict/typehint_test.go |
 | antes (o gancho que o dublê roda no instante do fsync, antes de delegar) | before sync | internal/storage/fielddict/typehint_test.go |
 | anterior (o valor anterior) | prev | internal/query/lexer, internal/testutil/radiusgen, internal/buildinfo/buildinfo_internal_test.go |
-| fundo (regra ou duração de fundo: a regra de TTL sem `when`) | fallback | internal/schema/ttl_rule.go, internal/storage/checkpoint/manifest.go |
+| fundo (regra ou duração de fundo: a regra de TTL sem `when` E sem `anchor`) | fallback / IsFallback / HasFallback | internal/schema/ttl_rule.go, internal/storage/checkpoint/manifest.go |
 | coluna | column | internal/counters, internal/storage/checkpoint/manifest.go |
 | índice | index | internal/index, internal/storage/checkpoint/manifest.go |
 | cauda (TLV do manifest) | tail | internal/storage/checkpoint/manifest.go |
@@ -1038,6 +1038,18 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | comparação linear entre colunas (`<col> [* k] <op> <col> [* k]`, só na condição de alarme) | ColumnComparison / ColumnTerm / BoundColumnComparison / CompileAlarmCondition | internal/query/parser, internal/query/binder, internal/predicate, internal/alarm |
 | opções da condição (o que o parse e o bind aceitam além da gramática do WHERE) | ConditionOptions / ParseConditionWith / BindConditionWith | internal/query/parser, internal/query/binder |
 | par do evento (total e membros lidos do payload que decidiu o alarme) | groupCounts / countsOf | internal/alarm |
+
+## TTL ancorado num campo do documento
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| âncora (o campo temporal do documento a partir do qual a regra conta o prazo) | `anchor` / TTLRule.Anchor | internal/schema, internal/materializer |
+| prazo contado da âncora | `expireAfter` / TTLRule.ExpireAfter | internal/schema |
+| menor prazo mortal (o `_expiresIn` de quem já nasce vencido; 1 é o sentinela de imortal) | MinMortalTTL | internal/storage/rowindex |
+| vencida na escrita (a linha cuja âncora + `expireAfter` já passou quando ela é gravada) | ExpiredOnWrite / `ttlExpiredOnWrite` | internal/materializer, internal/protocol, internal/metrics |
+| âncora no futuro (limitada ao instante da escrita) | AnchorInFuture / `ttlAnchorInFuture` | internal/materializer, internal/protocol, internal/metrics |
+| âncora ausente (a regra ancorada que não casou porque o campo não está no documento) | AnchorAbsent / `anchorAbsent` | internal/materializer, internal/protocol, internal/metrics |
+| carimbo do prazo (a decisão do prazo sobre o payload final, gravada no lugar) | stampTTL / OverwriteInt64 | internal/materializer, internal/storage/encoding |
 
 ## Prazo de requisição no driver JDBC (issue #91)
 

@@ -87,7 +87,7 @@ func registerMetricsOfDataset(reg *metrics.Registry, s *Server) {
 			// dataset base. As séries de política de escrita saem no rótulo
 			// de quem as aplicou.
 			if d.mat != nil {
-				out = append(out, samplesOfMaterializacao(d.nome, d.spec, d.mat.Metrics())...)
+				out = append(out, samplesOfMaterialization(d.nome, d.spec, d.mat.Metrics())...)
 			}
 			out = append(out, samplesOfHistory(d)...)
 			// As séries do índice por segmento saem para TODO dataset, e não só
