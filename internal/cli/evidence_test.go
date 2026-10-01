@@ -74,7 +74,7 @@ func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
 		"../../docs/aceite-formato-do-groupkey.md",
 		"../../docs/aceite-identificadores-em-ingles.md",
 		"../../docs/aceite-schema-declarado.md",
-		"../../docs/aceite-metricas-de-janela.md",
+		"../../docs/aceite-metricas-de-janela.md", "../../docs/aceite-escopo-do-contador.md",
 		"../../docs/architecture.md", "../../docs/debitos.md", "../../docs/operacao-kafka.md",
 		"../../docs/metricas.md",
 		"../../docs/mutacoes-indice-por-segmento.md",
