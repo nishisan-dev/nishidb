@@ -1,0 +1,86 @@
+Fsync do dicionário de grupos no checkpoint — bancada de aceite
+================================================================
+
+Data:    2026-10-01
+Máquina: 10.200.20.217, Intel Xeon (Cascadelake), 78 vCPU, Linux 6.8.0-139-generic,
+         ext4 (/dev/root)
+Go:      go1.26.5 (o pinado no CI)
+Disco:   NISHIDB_BENCH_DIR=/opt/build/nishidb/tmp/dict-bench — fsync de verdade
+Leitura: docs/aceite-fsync-do-dicionario-de-grupos.md
+
+O QUE ESTE ARQUIVO É
+
+A saída crua das duas bancadas que o aceite cita, sem edição além do corte das
+linhas de cabeçalho repetidas (goos/goarch/pkg/cpu) e dos logs.
+
+  BenchmarkNewGroupUntilCheckpoint (internal/storage/counter): um grupo novo
+  por operação, mais a parte que lhe cabe do checkpoint (ApplyOverlay + msync
+  do vetor) — b.N grupos e UM checkpoint no fim, dentro da medida.
+
+  BenchmarkCounterColdBuild (internal/storage): abrir um dataset de 4.096
+  linhas, uma OLT por linha, construindo o contador (open_building_counter)
+  contra abrir o mesmo dataset sem contador (open_without_counter). A
+  diferença por grupo é o custo da construção.
+
+ANTES — commit 9bc7b07 (Intern com fsync por grupo) + os dois arquivos de
+bancada, sem nenhuma outra mudança
+
+$ NISHIDB_BENCH_DIR=... go test ./internal/storage/counter/ -run '^$' \
+    -bench BenchmarkNewGroupUntilCheckpoint -benchtime=2000x -count=3
+BenchmarkNewGroupUntilCheckpoint-78    	    2000	   1403321 ns/op	     598 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	    2000	   1421456 ns/op	     598 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	    2000	   1708139 ns/op	     598 B/op	       5 allocs/op
+
+$ NISHIDB_BENCH_DIR=... go test ./internal/storage/ -run '^$' \
+    -bench BenchmarkCounterColdBuild -benchtime=3x -count=3
+BenchmarkCounterColdBuild/open_without_counter-78         	       3	  69829997 ns/op	     16718 ns/group
+BenchmarkCounterColdBuild/open_without_counter-78         	       3	 133586718 ns/op	     32157 ns/group
+BenchmarkCounterColdBuild/open_without_counter-78         	       3	  74519833 ns/op	     17765 ns/group
+BenchmarkCounterColdBuild/open_building_counter-78        	       3	5674164878 ns/op	   1384694 ns/group
+BenchmarkCounterColdBuild/open_building_counter-78        	       3	6485164215 ns/op	   1582606 ns/group
+BenchmarkCounterColdBuild/open_building_counter-78        	       3	5534275322 ns/op	   1350567 ns/group
+
+DEPOIS — commit 9a2b897 (fsync no checkpoint, piso e troca do overlay; medido sobre
+o mesmo código antes de um ajuste de comentário no manifest e nas chamadas de
+teste do counter.Open em internal/counters, e na formatação de um teste)
+
+$ NISHIDB_BENCH_DIR=... go test ./internal/storage/counter/ -run '^$' \
+    -bench BenchmarkNewGroupUntilCheckpoint -benchtime=2000x -count=6
+BenchmarkNewGroupUntilCheckpoint-78    	    2000	      8834 ns/op	     598 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	    2000	      9201 ns/op	     598 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	    2000	      8584 ns/op	     598 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	    2000	      7764 ns/op	     598 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	    2000	      8574 ns/op	     598 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	    2000	      4408 ns/op	     598 B/op	       5 allocs/op
+
+$ NISHIDB_BENCH_DIR=... go test ./internal/storage/counter/ -run '^$' \
+    -bench BenchmarkNewGroupUntilCheckpoint -benchtime=200000x -count=6
+BenchmarkNewGroupUntilCheckpoint-78    	  200000	      4580 ns/op	     657 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	  200000	      4596 ns/op	     657 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	  200000	      4796 ns/op	     657 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	  200000	      5160 ns/op	     657 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	  200000	      4798 ns/op	     657 B/op	       5 allocs/op
+BenchmarkNewGroupUntilCheckpoint-78    	  200000	      4980 ns/op	     657 B/op	       5 allocs/op
+
+$ NISHIDB_BENCH_DIR=... go test ./internal/storage/ -run '^$' \
+    -bench BenchmarkCounterColdBuild -benchtime=3x -count=6
+BenchmarkCounterColdBuild/open_without_counter-78         	       3	  68412378 ns/op	     16376 ns/group
+BenchmarkCounterColdBuild/open_without_counter-78         	       3	  74912521 ns/op	     17916 ns/group
+BenchmarkCounterColdBuild/open_without_counter-78         	       3	  78699664 ns/op	     18874 ns/group
+BenchmarkCounterColdBuild/open_without_counter-78         	       3	  65925166 ns/op	     15773 ns/group
+BenchmarkCounterColdBuild/open_without_counter-78         	       3	  57999059 ns/op	     13901 ns/group
+BenchmarkCounterColdBuild/open_without_counter-78         	       3	  59655066 ns/op	     14292 ns/group
+BenchmarkCounterColdBuild/open_building_counter-78        	       3	 105272372 ns/op	     25120 ns/group
+BenchmarkCounterColdBuild/open_building_counter-78        	       3	 119092574 ns/op	     28413 ns/group
+BenchmarkCounterColdBuild/open_building_counter-78        	       3	 119942413 ns/op	     28661 ns/group
+BenchmarkCounterColdBuild/open_building_counter-78        	       3	 119944746 ns/op	     28659 ns/group
+BenchmarkCounterColdBuild/open_building_counter-78        	       3	 100468334 ns/op	     23841 ns/group
+BenchmarkCounterColdBuild/open_building_counter-78        	       3	 110537412 ns/op	     26311 ns/group
+
+HEAP DO OVERLAY — o gate TestOverlayDrainAfterABuildReturnsTheHeap, mesmo
+commit, mesma máquina
+
+$ go test ./internal/storage/counter/ -run TestOverlayDrainAfterABuildReturnsTheHeap -count=3 -v
+    overlay_heap_gate_test.go:47: heap: antes 2007040, construído 25788416 (+23781376), depois do checkpoint 2023424 (+16384)
+    overlay_heap_gate_test.go:47: heap: antes 2023424, construído 25722880 (+23699456), depois do checkpoint 2031616 (+8192)
+    overlay_heap_gate_test.go:47: heap: antes 2023424, construído 25272320 (+23248896), depois do checkpoint 2023424 (+0)

@@ -12,7 +12,7 @@ import (
 // alocação (TestContadorNaoAlocaNoCaminhoQuente). É o custo que TODA escrita do
 // dataset paga por contador declarado, dentro do applyRecord.
 func BenchmarkTransitionHotPath(b *testing.B) {
-	c, err := Open(b.TempDir(), defByPON("pon", 100), 1024, false)
+	c, err := Open(b.TempDir(), defByPON("pon", 100), 1024, false, 0)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func BenchmarkTransitionHotPathScope(b *testing.B) {
 		{"with_scope", defByOLTWithScope("spl", nil)},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			c, err := Open(b.TempDir(), tc.def, 1024, false)
+			c, err := Open(b.TempDir(), tc.def, 1024, false, 0)
 			if err != nil {
 				b.Fatal(err)
 			}

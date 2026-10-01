@@ -407,7 +407,7 @@ por grupo na internação e guardado ao lado da chave (tarefa B2 define
   - `TestDicionarioAposentaENuncaReemite`: aposenta o id 2, reabre, `Key(2)` vivo=false, `Intern(mesma chave)` devolve id 4.
   - `TestDicionarioRecusaOTeto`: teto 2, terceira chave → `ErrGroupCeilingReached`; aposentar uma libera uma vaga.
   - `TestDicionarioNaoAlocaNoLookup` (`!race`, teto 0 sobre `Intern` de chave existente e `ByKey`).
-  - **Mutação obrigatória**: remover o `f.Sync()` de `Intern` e provar que um teste fica vermelho — `TestDicionarioFsyncaAntesDeDevolverOId` usa um seam `afterWrite func()` (como `agenda.afterWrite`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
+  - **Mutação obrigatória**: remover o `f.Sync()` de `Intern` e provar que um teste fica vermelho — `TestDictInternDefersTheSyncToTheCheckpoint` usa um seam `afterWrite func()` (como `agenda.afterWrite`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `contador: dicionário de grupos append-only com fsync por entrada e aposentadoria`.
 
@@ -659,7 +659,7 @@ func (s *Store) EstatisticasOfCounters() []counter.Stats
 ### Tarefa C3: auditoria sob snapshot e reconstrução em operação
 
 **Arquivos:**
-- Criar: `internal/storage/counter/audit.go` (tipos + comparação), `internal/storage/counters.go` (`AuditaCounters`, `ReconstroiCounters`), testes
+- Criar: `internal/storage/counter/audit.go` (tipos + comparação), `internal/storage/counters.go` (`AuditaCounters`, `RebuildCounters`), testes
 
 **Interfaces produzidas:**
 ```go
@@ -674,7 +674,7 @@ type Report struct {
 }
 // Store
 func (s *Store) AuditaCounters(ctx context.Context) ([]counter.Report, error)
-func (s *Store) ReconstroiCounters(ctx context.Context) ([]counter.Stats, error)
+func (s *Store) RebuildCounters(ctx context.Context) ([]counter.Stats, error)
 ```
 
 Mecânica de `AuditaCounters`: `entra()`; `wmu.Lock()`; `snap := s.OpenSnapshot()`
@@ -691,7 +691,7 @@ própria "grupo não internado"). Ao fim compara com a cópia e monta o relatór
 `CloseSnapshot`. `ErrSnapshotExpirado` ⇒ a auditoria é INCONCLUSIVA: devolve o
 erro, nunca um relatório (o CLI já o traduz para exit 5). Godoc nomeia a
 definição: "viva = com location e sem lápide", e por que a visibilidade da
-consulta (prazo vencido) não serve de oráculo. `ReconstroiCounters` = sob
+consulta (prazo vencido) não serve de oráculo. `RebuildCounters` = sob
 `wmu`: `Clear()` + varredura como na abertura; documentar que segura o writer
 pela varredura inteira.
 

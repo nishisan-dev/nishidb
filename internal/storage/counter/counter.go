@@ -45,6 +45,36 @@ const (
 	pairTotalUnit  uint64 = 1 << pairTotalShift
 )
 
+// OverlayShrinkThreshold é o tamanho, em entradas drenadas, a partir do qual
+// um ApplyOverlay pode trocar o mapa do overlay por um novo em vez de só
+// esvaziá-lo (issue #88).
+//
+// O mapa do Go NÃO encolhe: nem `delete` entrada por entrada nem `clear`
+// devolvem a capacidade alcançada no pico. Na construção de um contador, toda
+// linha viva do dataset passa pelo overlay antes do primeiro checkpoint — no
+// piloto, ~7M de entradas e ~319 MB de heap presos até o restart, por contador
+// construído. Trocar o mapa devolve isso ao GC.
+//
+// 65.536 entradas são ~1-2 MB de mapa (chave de 8 bytes, valor de 4 e a
+// sobra da tabela): abaixo disso a capacidade presa não importa, e a troca só
+// faria o mapa crescer de novo a cada intervalo. O limiar também mantém os
+// gates de alocação do caminho quente — que medem linhas já presentes num
+// overlay de poucos milhares de entradas — longe da troca.
+const OverlayShrinkThreshold = 1 << 16
+
+// overlayShrinkFactor e overlayDrainSmoothing são a HISTERESE da troca. Acima
+// do limiar, o mapa só é trocado quando o dreno é maior que overlayShrinkFactor
+// vezes a média móvel dos drenos anteriores (peso 1/overlayDrainSmoothing para
+// o dreno novo). Num dataset em que cada intervalo entre checkpoints toca mais
+// que o limiar em regime, trocar a cada checkpoint seria só churn: o mapa novo
+// cresceria até o mesmo tamanho no intervalo seguinte. A média sobe para o
+// regime em um ou dois checkpoints, e daí em diante só o PICO — a construção, a
+// reconstrução, a ingestão fria de um backlog — passa de 4 vezes ela.
+const (
+	overlayShrinkFactor   = 4
+	overlayDrainSmoothing = 4
+)
+
 // MaxGroupRows é o teto de linhas de UM grupo: os refs moram nos 32 bits baixos
 // da palavra do grupo. Ver ErrGroupRowsCeiling.
 const MaxGroupRows = 1<<32 - 1
@@ -136,6 +166,12 @@ const (
 // (rowindex.Locations), pelo mesmo motivo: uma página descarregada pelo kernel
 // antes do crash não pode descrever um record que não existe.
 //
+// O dicionário de grupos segue a mesma régua pelo outro lado: o grupo novo é
+// só um append, e o fsync dele é a primeira coisa do ApplyOverlay. Assim o
+// vetor nunca recebe um id além do prefixo já fsyncado do grupos.dict, e um
+// crash que leve a cauda não sincronizada do dicionário não deixa nenhum
+// artefato durável apontando para ela (ver o godoc do Dict).
+//
 // # Concorrência
 //
 // Transition, Fold, Clear, ApplyOverlay, RecordCoveredTouches e
@@ -154,6 +190,20 @@ type Counter struct {
 	// over é o overlay: transições ainda não aplicadas ao mmap. Writer-only —
 	// ninguém lê o vetor além do writer, então não precisa de lock.
 	over map[types.RowID]uint32
+	// drainAvg é a média móvel dos drenos do overlay (entradas por
+	// ApplyOverlay bem-sucedido), a régua da histerese da troca do mapa.
+	// overlayShrinkThreshold é OverlayShrinkThreshold fora de teste — campo,
+	// como groupRowsCeiling, para que o teste da histerese não precise de
+	// centenas de milhares de transições por checkpoint. Writer-only.
+	drainAvg               int
+	overlayShrinkThreshold int
+	// drainedSinceEmpty conta as entradas drenadas desde o último ApplyOverlay
+	// que esvaziou o overlay — inclusive por tentativas que falharam no meio. É
+	// o tamanho do dreno que a troca do mapa julga: um dreno grande que
+	// falha depois de apagar a maior parte e termina numa nova tentativa
+	// pequena ainda deixou o mapa no tamanho do pico, e só esta contagem o
+	// enxerga. Writer-only.
+	drainedSinceEmpty int
 
 	// Por grupo, índice = id (0 reservado). Crescem sob dict.mu quando um id
 	// nasce; os leitores indexam sob RLock e conferem o limite.
@@ -220,7 +270,17 @@ type Counter struct {
 // por divergência de parâmetros, decidida pelo Store a partir do manifest
 // ANTES da recovery; RemoveOld remove os renomeados quando a reconstrução
 // terminar.
-func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, error) {
+//
+// Com recreate, o marcador de construção em curso (building.go) é gravado
+// ANTES de qualquer arquivo ser posto de lado: quem o remove é o Store, depois
+// do checkpoint que adota a construção.
+//
+// dictFloor é o piso de durabilidade do dicionário que o manifest gravou
+// (zero: sem piso). Um dicionário que perdeu dado abaixo dele faz o Open
+// devolver ErrDictBelowFloor sem tocar em arquivo nenhum, e quem chama abre de
+// novo com recreate. Com recreate o piso não se aplica: os arquivos antigos
+// vão para o lado.
+func Open(dir string, def Definition, minRows uint64, recreate bool, dictFloor int64) (*Counter, error) {
 	if err := validateDefinition(def); err != nil {
 		return nil, err
 	}
@@ -228,6 +288,9 @@ func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, 
 		return nil, fmt.Errorf("contador %s: criar %s: %w", def.Name, dir, err)
 	}
 	if recreate {
+		if err := markBuilding(dir); err != nil {
+			return nil, fmt.Errorf("contador %s: %w", def.Name, err)
+		}
 		for _, name := range []string{dictFileName, vectorFileName} {
 			from := filepath.Join(dir, name)
 			if err := os.Rename(from, from+oldSuffix); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -235,7 +298,10 @@ func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, 
 			}
 		}
 	}
-	dict, err := OpenDict(filepath.Join(dir, dictFileName), def.MaxGroups)
+	if recreate {
+		dictFloor = 0
+	}
+	dict, err := OpenDict(filepath.Join(dir, dictFileName), def.MaxGroups, dictFloor)
 	if err != nil {
 		return nil, fmt.Errorf("contador %s: %w", def.Name, err)
 	}
@@ -253,6 +319,8 @@ func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, 
 		byText:           make(map[string]uint32),
 		now:              time.Now,
 		groupRowsCeiling: MaxGroupRows,
+
+		overlayShrinkThreshold: OverlayShrinkThreshold,
 	}
 	c.deriv = c.NewDeriver()
 	// Os slices por grupo e os textos nascem do dicionário que já está em
@@ -482,10 +550,10 @@ func (c *Counter) transition(rowID types.RowID, payload []byte, tombstone, occur
 		}
 		if hasGroup {
 			// A colisão é conferida ANTES do Intern, e não depois: o Intern
-			// fsynca a chave antes de o id existir em memória, e id de grupo
-			// nunca é reemitido — uma chave colidente que chegasse ao disco
-			// faria TODA abertura seguinte falhar, deixando o dataset
-			// impossível de abrir. Só no caminho de grupo novo: com grupo
+			// grava a chave no arquivo, e o próximo checkpoint (ou o fsync de
+			// uma aposentadoria) a torna durável — uma chave colidente que
+			// chegasse ao disco faria TODA abertura seguinte falhar, deixando o
+			// dataset impossível de abrir. Só no caminho de grupo novo: com grupo
 			// conhecido o ByKey devolve na hora e nada é renderizado, que é o
 			// que mantém o caminho quente sem alocação.
 			if _, known := c.dict.ByKey(key); !known {
@@ -668,6 +736,15 @@ func (c *Counter) Fold() error {
 // Clear apaga o vetor, o overlay e os totais; o dicionário fica, porque os ids
 // são estáveis. É o começo de uma reconstrução: o Store transiciona de novo
 // cada linha viva.
+//
+// O overlay é esvaziado com clear, que NÃO devolve a capacidade do mapa — e
+// não precisa: a reconstrução o enche de novo com todas as linhas vivas, e é o
+// ApplyOverlay do checkpoint seguinte que troca o mapa depois do dreno grande.
+//
+// O vetor é zerado IN PLACE, num mmap compartilhado: as páginas zeradas podem
+// chegar ao disco antes do checkpoint. Por isso quem chama grava antes o
+// marcador de construção em curso (MarkBuilding) — sem ele, um crash entre o
+// Clear e o checkpoint deixaria a reabertura adotar o vetor zerado.
 func (c *Counter) Clear() error {
 	if err := c.vector.Clear(); err != nil {
 		return err
@@ -687,15 +764,38 @@ func (c *Counter) Clear() error {
 
 // ApplyOverlay leva o overlay ao mmap e o esvazia. SÓ no checkpoint, DEPOIS
 // do fdatasync dos segmentos: é isso que garante que nenhuma página do vetor
-// descreve transição de record não durável. Erro no meio deixa o restante no
-// overlay para o próximo checkpoint.
-func (c *Counter) ApplyOverlay() error {
+// descreve transição de record não durável. Erro de Set no meio deixa o
+// restante no overlay para o próximo checkpoint (retentável).
+//
+// A PRIMEIRA coisa que ele faz é o fsync do dicionário de grupos (Dict.Sync,
+// pelo passo step). É aqui, e não num passo separado do checkpoint, porque
+// este é o ÚNICO caminho que grava id de grupo no vetor: com o fsync dentro
+// dele, nenhum chamador — o checkpoint, um seam de teste, um caminho futuro —
+// consegue levar ao vetor um id que o dicionário em disco não resolve. Falha
+// do fsync volta como ErrDictSync, sem nenhum Set: é falha de durabilidade, e
+// quem chama deixa o writer falho em vez de tentar de novo.
+//
+// Depois de drenar TUDO com sucesso, um dreno grande troca o mapa por um novo
+// (OverlayShrinkThreshold e a histerese ao lado dele): é o que devolve ao GC a
+// memória que a construção de um contador prendia até o restart. Falha no meio
+// não troca nada — o que sobrou continua no mapa para o próximo checkpoint.
+func (c *Counter) ApplyOverlay(step SyncStep) error {
+	if err := c.dict.Sync(step); err != nil {
+		return fmt.Errorf("counter %s: %w", c.def.Name, err)
+	}
 	for r, v := range c.over {
 		if err := c.vector.Set(r, v); err != nil {
 			return err
 		}
 		delete(c.over, r)
+		c.drainedSinceEmpty++
 	}
+	drained := c.drainedSinceEmpty
+	c.drainedSinceEmpty = 0
+	if drained > c.overlayShrinkThreshold && drained > overlayShrinkFactor*c.drainAvg {
+		c.over = make(map[types.RowID]uint32)
+	}
+	c.drainAvg += (drained - c.drainAvg) / overlayDrainSmoothing
 	return nil
 }
 
@@ -898,6 +998,12 @@ func (c *Counter) RecordAudit(divergences int, when time.Time) {
 	c.auditDivergences.Store(int64(divergences))
 	c.auditLast.Store(when.Unix())
 }
+
+// DictSyncedBytes é o prefixo do dicionário de grupos que um fsync tornou
+// durável: o piso que o checkpoint grava no manifest. Lido sob o wmu, logo
+// depois do fsync do ApplyOverlay, ele é exatamente o tamanho no instante do
+// fsync.
+func (c *Counter) DictSyncedBytes() int64 { return c.dict.SyncedBytes() }
 
 // Msync força as páginas sujas do vetor para disco.
 func (c *Counter) Msync() error { return c.vector.Msync() }

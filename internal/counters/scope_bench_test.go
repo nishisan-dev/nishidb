@@ -55,7 +55,7 @@ counters:
 			if err != nil {
 				b.Fatal(err)
 			}
-			c, err := counter.Open(b.TempDir(), defs[0], 1024, false)
+			c, err := counter.Open(b.TempDir(), defs[0], 1024, false, 0)
 			if err != nil {
 				b.Fatal(err)
 			}

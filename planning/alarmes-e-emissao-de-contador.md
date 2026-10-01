@@ -136,7 +136,7 @@ declarado dividido por 4, com piso — é o cálculo do `watchdogInterval`
 (`watchdog.go:39`), pelo mesmo motivo: amostrar mais fino que o prazo que se
 quer medir. Não sobe goroutine se nenhum contador declara alarme. A passada
 inteira é exposta como método público (`EvaluateOnce`) para o teste chamá-la
-direto, como `counters_retirement_test.go:31` faz com `AposentaGroupsVazios`.
+direto, como `counters_retirement_test.go:31` faz com `RetireEmptyGroups`.
 
 **Ciclo de vida — a parte perigosa.** `Store.Counters()` lê o campo direto, sem
 `entra()`/`sai()`: não guarda contra `Close()` concorrente. Como o laço vive no

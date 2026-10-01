@@ -995,6 +995,11 @@ internal/storage	local	Store.openCounters.recria	recreate	tradução das funçõ
 internal/storage	local	Store.openCounters.motivo	reason	tradução das funções tocadas pelo escopo do contador e pela coluna rows (30/09/2026)
 internal/storage	local	Store.openCounters.orfas	orphans	tradução das funções tocadas pelo escopo do contador e pela coluna rows (30/09/2026)
 internal/storage	local	Store.openCounters.sobras	leftovers	tradução das funções tocadas pelo escopo do contador e pela coluna rows (30/09/2026)
+internal/storage	method	Store.ReconstroiCounters	RebuildCounters	tradução das funções tocadas pelo marcador de construção do contador (01/10/2026)
+internal/storage	field	Store.countersConstruidos	countersBuilt	tradução das funções tocadas pelo marcador de construção do contador (01/10/2026)
+internal/storage	method	Store.CountersConstruidosForTest	CountersBuiltForTest	tradução das funções tocadas pelo marcador de construção do contador (01/10/2026)
+internal/storage	method	Store.AposentaGroupsVazios	RetireEmptyGroups	tradução das funções tocadas pelo fsync do dicionário de grupos no checkpoint (01/10/2026)
+internal/storage/counter	func	TestDicionarioFsyncaAntesDeDevolverOId	TestDictInternDefersTheSyncToTheCheckpoint	o teste passou a provar a nova ordem (fsync do dicionário de grupos no checkpoint), 01/10/2026
 internal/predicate	type	RegraCompilada	CompiledRule	tradução das funções tocadas pela decisão do prazo sobre o payload final (01/10/2026)
 internal/predicate	func	CompileRegras	CompileRules	tradução das funções tocadas pela decisão do prazo sobre o payload final (01/10/2026)
 internal/materializer	field	MetricsSnapshot.RegrasCasadas	TTLRuleMatches	tradução das funções tocadas pela decisão do prazo sobre o payload final (01/10/2026)

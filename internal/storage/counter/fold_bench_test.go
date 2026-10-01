@@ -14,7 +14,7 @@ import (
 // de segundos.
 func BenchmarkDobra1M(b *testing.B) {
 	const rows = 1 << 20
-	c, err := Open(b.TempDir(), defByPON("pon", 4096), rows, false)
+	c, err := Open(b.TempDir(), defByPON("pon", 4096), rows, false, 0)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func BenchmarkDobra1M(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	if err := c.ApplyOverlay(); err != nil {
+	if err := c.ApplyOverlay(nil); err != nil {
 		b.Fatal(err)
 	}
 	b.ResetTimer()

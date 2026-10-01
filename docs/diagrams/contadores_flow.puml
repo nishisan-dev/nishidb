@@ -28,7 +28,8 @@ partition "Escrita (applyRecord, sob wmu)" {
         stop
       endif
       :Interna no dicionário
-      (fsync ANTES de devolver o id);
+      (só o append, sem fsync: o id
+      é visível e ainda não durável);
     endif
     :nova = id | conditionBit;
   endif
@@ -50,13 +51,24 @@ partition "Checkpoint" {
   start
   :segSync (records duráveis);
   :ApplyOverlay das locations;
-  :ApplyOverlay dos contadores
-  (o mmap nunca fica à frente do log);
+  :ApplyOverlay dos contadores:
+  1º fsync do grupos.dict se sujo
+  (syncDictContadores; falha = writer falho),
+  depois os Sets no vetor
+  (o mmap nunca fica à frente do log
+  nem do dicionário durável);
+  if (dreno > 65.536 e > 4x a média?) then (sim)
+    :troca o mapa do overlay
+    (devolve o pico ao GC);
+  endif
   :msync ... msync dos contadores;
   :RecordCoveredTouches(transições)
   (autoriza a aposentadoria);
   :manifest com a seção 0x0001
-  (nome, colunas, where);
+  (nome, colunas, where) e a 0x0002
+  (piso: bytes fsyncados do grupos.dict);
+  :remove o marcador building
+  das construções adotadas;
   stop
 }
 
@@ -66,10 +78,13 @@ partition "Abertura" {
   no dicionário (ordem contratual);
   :callback CompilaContadores(dict):
   compila o schema e as definições;
-  if (manifest sem a seção,
-  colunas/where diferentes,
-  ou vetor não cobre as linhas?) then (sim)
-    :recria os dois arquivos
+  :abre o grupos.dict: fsync da cauda
+  herdada (abertura sincronizada);
+  if (marcador building, manifest sem a seção,
+  colunas/where diferentes, dicionário
+  abaixo do piso ou vetor não cobre as linhas?) then (sim)
+    :grava o marcador building
+    e recria os dois arquivos
     (reconstrução pendente);
   else (não)
     :DOBRA: totais e refs por grupo

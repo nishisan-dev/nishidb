@@ -330,7 +330,7 @@ var errSweepAborted = errors.New("alarm: sweep aborted by stop")
 // EvaluateOnce faz UMA passada por todos os alarmes de todos os contadores.
 //
 // É público para que o teste a chame direto, em vez de esperar um tique — é o
-// mesmo motivo do AposentaGroupsVazios no storage. Não é interrompível: a
+// mesmo motivo do RetireEmptyGroups no storage. Não é interrompível: a
 // interrupção é do laço, que passa o cancelamento do Stop a evaluate.
 func (r *Runner) EvaluateOnce() error { return r.evaluate(nil) }
 

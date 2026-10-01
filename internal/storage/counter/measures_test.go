@@ -16,7 +16,7 @@ func openMeasuredCounter(t testing.TB) (*Counter, []byte, time.Time) {
 	def.RetainEmptyGroups = time.Second
 	def.WriteInstantField = 5
 	def.Measures = []MeasureDefinition{{"rate", time.Minute, time.Second}, {"rate_5m", 5 * time.Minute, time.Minute}}
-	c, err := Open(t.TempDir(), def, 1024, false)
+	c, err := Open(t.TempDir(), def, 1024, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,14 +70,14 @@ func TestMeasuresExpireAtBucketBoundariesAndRetainEmptyGroups(t *testing.T) {
 	if err := c.Transition(0, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ApplyOverlay(); err != nil {
+	if err := c.ApplyOverlay(nil); err != nil {
 		t.Fatal(err)
 	}
 	cover(c)
-	if n, err := c.RetireEmptyGroups(at.Add(time.Minute)); err != nil || n != 0 {
+	if n, err := c.RetireEmptyGroups(at.Add(time.Minute), nil); err != nil || n != 0 {
 		t.Fatalf("aposentou grupo com taxa de 5m: %d %v", n, err)
 	}
-	if n, err := c.RetireEmptyGroups(at.Add(5 * time.Minute)); err != nil || n != 1 {
+	if n, err := c.RetireEmptyGroups(at.Add(5*time.Minute), nil); err != nil || n != 1 {
 		t.Fatalf("grupo vazio após janela: %d %v", n, err)
 	}
 	for _, m := range c.measures {

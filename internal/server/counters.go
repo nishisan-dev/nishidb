@@ -103,8 +103,17 @@ func (s *Server) handleRebuildOfCounters(w http.ResponseWriter, r *http.Request)
 	defer cancel()
 
 	results, parcial := processDatasets(targets, func(d *dataset) (protocol.DatasetRebuild, error) {
-		recs, err := d.st.ReconstroiCounters(ctx)
+		recs, err := d.st.RebuildCounters(ctx)
 		if err != nil {
+			return protocol.DatasetRebuild{}, err
+		}
+		// A reconstrução só é ADOTADA pelo checkpoint seguinte, que tira o
+		// marcador de construção em curso. Um dataset sem ingestão Kafka não
+		// tem checkpoint periódico, e o encerramento fecha o Store sem
+		// checkpoint: sem este, a subida seguinte trataria a reconstrução bem
+		// sucedida como interrompida e varreria tudo de novo. O CLI local faz o
+		// mesmo depois da mesma chamada.
+		if err := d.st.Checkpoint(); err != nil {
 			return protocol.DatasetRebuild{}, err
 		}
 		out := protocol.DatasetRebuild{Name: d.nome, Counters: make([]protocol.CounterRebuild, 0, len(recs))}

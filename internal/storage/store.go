@@ -381,10 +381,21 @@ type Store struct {
 	// countersToRebuild são os que a abertura decidiu reconstruir; a
 	// varredura roda depois do ramo de recovery e a lista é esvaziada.
 	countersToRebuild []pendingCounterRebuild
-	// countersConstruidos conta as reconstruções desta abertura — o
+	// countersAwaitingAdoption são os contadores cuja construção TERMINOU e
+	// cujo marcador de construção em curso (counter.MarkBuilding) só pode
+	// sair depois do checkpoint que leva o vetor completo ao disco. O fim de
+	// um checkpoint bem-sucedido remove os marcadores e esvazia a lista.
+	// Writer-only (wmu).
+	countersAwaitingAdoption []*counter.Counter
+	// dictSyncHook é o seam de teste do fsync do dicionário de grupos (nil em
+	// produção): recebe o contador e o fsync de fato, e decide se o chama —
+	// é por ele que os testes injetam a falha de fsync e observam o prefixo
+	// que ficou durável. Ver counterDictSyncStep.
+	dictSyncHook func(counter string, sync func() error) error
+	// countersBuilt conta as reconstruções desta abertura — o
 	// observável que separa "adotou" de "reconstruiu e chegou ao mesmo
 	// resultado", como scheduleBuilt.
-	countersConstruidos int
+	countersBuilt int
 	// audTrace é o seam de teste da auditoria dos contadores: chamado depois
 	// de cada linha varrida. Nil em produção.
 	audTrace func(linha types.RowID)

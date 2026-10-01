@@ -33,10 +33,12 @@ func (c *Counter) UseClock(now func() time.Time) { c.now = now }
 // outro grupo. A cobertura vem do checkpoint (segSync → ApplyOverlay → msync),
 // que é o que torna record E página duráveis juntos.
 //
-// A aposentadoria é registro durável no dicionário (fsync), e o id nunca é
-// reemitido. Grupos são inventário físico, com rotatividade lenta; reciclar
-// ids entra depois, com medida na mão, se entrar.
-func (c *Counter) RetireEmptyGroups(now time.Time) (int, error) {
+// A aposentadoria é registro durável no dicionário (fsync próprio, que leva
+// junto os appends de grupo pendentes), e um id durável nunca é reemitido.
+// Grupos são inventário físico, com rotatividade lenta; reciclar ids entra
+// depois, com medida na mão, se entrar. Falha desse fsync volta como
+// ErrDictSync, e o Store deixa o writer falho (step tem o papel do Dict.Sync).
+func (c *Counter) RetireEmptyGroups(now time.Time, step SyncStep) (int, error) {
 	if c.def.RetainEmptyGroups <= 0 {
 		return 0, nil
 	}
@@ -59,7 +61,7 @@ func (c *Counter) RetireEmptyGroups(now time.Time) (int, error) {
 		if !c.retireMeasures(g, now.UnixMilli()) {
 			continue
 		}
-		if err := c.dict.Retire(g); err != nil {
+		if err := c.dict.Retire(g, step); err != nil {
 			return retired, err
 		}
 		c.dict.mu.Lock()
