@@ -1,6 +1,8 @@
 package cli_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -89,6 +91,13 @@ func TestCountersLocalListaAuditaEReconstroi(t *testing.T) {
 	}
 	if !strings.Contains(a.stdout.String(), "LINHAS") || !strings.Contains(a.stdout.String(), "24") {
 		t.Errorf("reconstrução sem as linhas varridas:\n%s", a.stdout.String())
+	}
+	// A reconstrução local termina num checkpoint, que a adota: sem ele o
+	// marcador de construção ficaria no disco e a próxima abertura
+	// reconstruiria tudo de novo.
+	marker := filepath.Join(a.dir, "dados", "servicos", "indexes", "contadores", "autenticados_por_olt", "building")
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Errorf("depois de counters --rebuild o marcador de construção ficou no disco (%v): a próxima abertura reconstruiria de novo", err)
 	}
 	// O resultado da auditoria vive na ABERTURA (não é persistido), e cada
 	// `--config` é uma abertura nova: a listagem local volta a dizer "nunca".

@@ -100,7 +100,7 @@ do dicionário não discrimina nada. O que entrou:
 | Piso: abaixo dele, reconstrução com log nomeado, sem tocar no arquivo; acima, adota e trunca a cauda; sem a seção, abre como antes | `TestOpenDictBelowTheFloorRefusesWithoutTruncating`, `TestCounterDictBelowTheDurableFloorIsRebuilt`, `TestCounterDictAboveTheDurableFloorIsAdopted`, `TestManifestWithoutTheFloorOpensAsBefore` |
 | Seção 0x0002: ida e volta, bytes literais, ignorável, nome não declarado ignorado, nome repetido/seção duplicada/tamanho inconsistente recusados | `TestCounterDictFloorRoundTrip`, `TestCounterDictFloorSectionGoldenBytes`, `TestCounterDictFloorSectionIsIgnorableByAnOlderBinary`, `TestCounterDictFloorOfAnUndeclaredCounterIsIgnored`, `TestCounterDictFloorSectionInconsistentIsRefused`, `TestCaudaSaiEmOrdemCrescenteDeTagComContadores` |
 | Chave viva duplicada é cauda rasgada | `TestOpenDictTreatsADuplicateLiveKeyAsATornTail` |
-| Marcador de construção: reconstrução em operação ou construção na abertura interrompidas são refeitas; adotada por checkpoint, o marcador sai | `TestOnlineRebuildInterruptedBeforeTheCheckpointIsRebuiltOnReopen`, `TestOnlineRebuildFollowedByACheckpointIsAdoptedOnReopen`, `TestOpenTimeBuildInterruptedBeforeItsCheckpointIsRebuiltOnReopen` |
+| Marcador de construção: reconstrução em operação ou construção na abertura interrompidas são refeitas, inclusive a reconstrução que falha depois de outra bem-sucedida sem checkpoint no meio (achado da refutação); adotada por checkpoint, o marcador sai, e o `nishidb counters --config --rebuild` termina nesse checkpoint | `TestOnlineRebuildInterruptedBeforeTheCheckpointIsRebuiltOnReopen`, `TestFailedRebuildAfterASuccessfulOneKeepsTheBuildingMarker`, `TestOnlineRebuildFollowedByACheckpointIsAdoptedOnReopen`, `TestOpenTimeBuildInterruptedBeforeItsCheckpointIsRebuiltOnReopen`, `TestCountersLocalListaAuditaEReconstroi` |
 | O dreno grande devolve o heap; abaixo do limiar o mapa é o mesmo; em regime acima do limiar não troca a cada checkpoint; falha no meio não troca | `TestOverlayDrainAfterABuildReturnsTheHeap`, `TestSmallOverlayDrainKeepsTheMap`, `TestOverlayMapIsReplacedOnlyByADrainFarAboveTheSteadyState`, `TestFailedOverlayDrainKeepsTheMap` |
 
 O binário anterior lendo o manifest COM a seção 0x0002 foi conferido também
@@ -202,6 +202,8 @@ desenho diferente do que ele descrevia, registrado no próprio item.
   justificativa ("derivado, reconstruível") que não vale para ele.
 
 ## O que NÃO foi verificado
+
+- Ressalvas da refutação deixadas para depois: o fsync do diretório do marcador `building` não tem seam de teste (O2); o `.old` que a reconstrução pelo piso põe de lado é apagado no fim da construção, sem preservar a evidência (O3); e as ressalvas O4 e O5 do relatório da refutação.
 
 - A medida no piloto: os números acima são da bancada na `.217`, e a projeção
   para a carga do `service_view` é aritmética, não rodada.

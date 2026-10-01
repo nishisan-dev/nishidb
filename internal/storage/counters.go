@@ -626,8 +626,11 @@ func (s *Store) AuditaCounters(ctx context.Context) ([]counter.Report, error) {
 // de construção em curso é gravado ANTES dele e só sai no fim do primeiro
 // checkpoint bem-sucedido DEPOIS da varredura (awaitAdoption). Um processo que
 // morra nesse meio reabre reconstruindo, em vez de adotar o vetor zerado.
-// Uma varredura que falha deixa o marcador no lugar e o contador fora da
-// lista: a reabertura reconstrói.
+// Cada construção tira o contador da fila de adoção antes do MarkBuilding — a
+// fila pode guardar o contador de uma reconstrução anterior ainda não
+// checkpointada —, e ele só volta à fila quando a varredura termina. Uma
+// varredura que falha deixa o marcador no lugar e o contador fora da fila: o
+// checkpoint seguinte não remove o marcador, e a reabertura reconstrói.
 func (s *Store) RebuildCounters(ctx context.Context) ([]counter.Rebuild, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
@@ -647,6 +650,13 @@ func (s *Store) RebuildCounters(ctx context.Context) ([]counter.Rebuild, error) 
 	out := make([]counter.Rebuild, 0, len(s.counters))
 	for _, c := range s.counters {
 		start := time.Now()
+		// Uma reconstrução ANTERIOR bem-sucedida pode ter deixado o contador
+		// na fila de adoção sem checkpoint no meio. Esta nova construção
+		// invalida aquela: o contador sai da fila ANTES de o vetor ser zerado,
+		// e só volta se a varredura terminar. Sem isto, uma varredura que
+		// falha agora deixaria o checkpoint seguinte remover o marcador de
+		// uma construção incompleta.
+		s.countersAwaitingAdoption = slices.DeleteFunc(s.countersAwaitingAdoption, func(x *counter.Counter) bool { return x == c })
 		if err := c.MarkBuilding(); err != nil {
 			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Name, err)
 		}

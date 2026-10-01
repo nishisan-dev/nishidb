@@ -102,6 +102,13 @@ func countersLocal(argConfig, dataset string, audit, rebuild bool, amb Context) 
 			notify(amb, "counters: reconstrução: %v\n", err)
 			return errorCode(err)
 		}
+		// O checkpoint é o que adota a reconstrução: leva o vetor ao disco e
+		// remove o marcador de construção. Fechar sem ele faria a próxima
+		// abertura reconstruir tudo de novo.
+		if err := st.Checkpoint(); err != nil {
+			notify(amb, "counters: checkpoint depois da reconstrução: %v\n", err)
+			return errorCode(err)
+		}
 		rows := make([]rowOfRebuild, 0, len(recs))
 		for _, r := range recs {
 			rows = append(rows, rowOfRebuild{name: r.Name, rows: r.Rows, groups: r.Groups, durationMs: r.Duration.Milliseconds()})

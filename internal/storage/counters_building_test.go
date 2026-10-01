@@ -2,9 +2,12 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Os testes deste arquivo provam o marcador de construção em curso
@@ -85,6 +88,64 @@ func TestOnlineRebuildFollowedByACheckpointIsAdoptedOnReopen(t *testing.T) {
 	s2 := openStore(t, optionsWithCounters(dir, byOLT("aut", true)))
 	if n := s2.CountersBuiltForTest(); n != 0 {
 		t.Errorf("a reabertura reconstruiu %d contadores; a construção adotada por checkpoint tem de ser adotada", n)
+	}
+	exigeTotal(t, s2, "aut", "A", 5, 10)
+}
+
+// ctxFailsAfter é o contexto cujo Err devolve nil nas primeiras n chamadas e
+// Canceled depois — o jeito determinístico de cancelar uma varredura DEPOIS do
+// Clear, que é quando o vetor já está zerado.
+type ctxFailsAfter struct {
+	context.Context
+	n atomic.Int32
+}
+
+func (c *ctxFailsAfter) Err() error {
+	if c.n.Add(-1) < 0 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func (c *ctxFailsAfter) Done() <-chan struct{}       { return nil }
+func (c *ctxFailsAfter) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+// TestFailedRebuildAfterASuccessfulOneKeepsTheBuildingMarker: a primeira
+// reconstrução termina e põe o contador na fila de adoção; a segunda, sem
+// checkpoint no meio, é cancelada na varredura, com o vetor já zerado. O
+// checkpoint seguinte não pode remover o marcador — a construção em disco é a
+// incompleta —, e a reabertura tem de reconstruir em vez de adotar o vetor
+// zerado. (Achado da refutação: a fila guardava o contador da primeira.)
+func TestFailedRebuildAfterASuccessfulOneKeepsTheBuildingMarker(t *testing.T) {
+	dir := t.TempDir()
+	s, rel := storeWithCounters(t, dir, byOLT("aut", true))
+	for i := 0; i < 10; i++ {
+		k := "c-" + string(rune('a'+i))
+		mustPut(t, s, k, 1, payloadServico(t, s, k, "A", i%2 == 0, rel.agora()), nil)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RebuildCounters(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &ctxFailsAfter{Context: context.Background()}
+	ctx.n.Store(1) // passa na entrada do RebuildCounters, falha na varredura
+	if _, err := s.RebuildCounters(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a segunda reconstrução = %v; quer cancelada na varredura", err)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(buildingMarkerPath(dir, "aut")); err != nil {
+		t.Fatalf("o checkpoint depois de uma reconstrução interrompida removeu o marcador: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2 := openStore(t, optionsWithCounters(dir, byOLT("aut", true)))
+	if n := s2.CountersBuiltForTest(); n != 1 {
+		t.Errorf("a reabertura reconstruiu %d contadores; com a última construção interrompida ela tem de reconstruir", n)
 	}
 	exigeTotal(t, s2, "aut", "A", 5, 10)
 }
