@@ -15,6 +15,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -96,6 +97,8 @@ class RequestTimeoutTest {
         volatile int trickleRows;
 
         final List<String> queryBodies = Collections.synchronizedList(new ArrayList<>());
+        /** GETs de documento (metadata, stats, health) que chegaram ao dublê. */
+        final AtomicInteger documentRequests = new AtomicInteger();
         /** Uma permissão por requisição de consulta que CHEGOU ao dublê. */
         final Semaphore queryArrived = new Semaphore(0);
         /** Solta os handlers presos; contado no close. */
@@ -123,6 +126,9 @@ class RequestTimeoutTest {
 
         private void handle(HttpExchange ex) throws IOException {
             String path = ex.getRequestURI().getPath();
+            if (!"/v1/query".equals(path)) {
+                documentRequests.incrementAndGet();
+            }
             Mode mode;
             String body;
             if ("/v1/query".equals(path)) {
@@ -175,7 +181,7 @@ class RequestTimeoutTest {
                     ex.sendResponseHeaders(200, 0);
                     try (OutputStream out = ex.getResponseBody()) {
                         // Espaços antes do fecho: o JSON só termina depois de
-                        // ~6 s, e cada byte chega bem antes de qualquer prazo
+                        // ~10 s, e cada byte chega bem antes de qualquer prazo
                         // de silêncio do teste.
                         for (byte b : (body.substring(0, body.length() - 1) + " ".repeat(20) + "}")
                                 .getBytes(StandardCharsets.UTF_8)) {
@@ -822,6 +828,43 @@ class RequestTimeoutTest {
                 SQLException timeout = assertThrows(SQLException.class, c::getNetworkTimeout);
                 assertEquals("08003", timeout.getSQLState(), timeout.getMessage());
             }
+        }
+    }
+
+    /**
+     * O DatabaseMetaData obtido ANTES do close ou do abort não escapa da
+     * guarda: catálogo e versão respondem 08003, sem "em voo", e nada chega ao
+     * dublê — nem com o executor do abort ainda pendente, quando o cliente
+     * HTTP continua vivo.
+     */
+    @Test
+    void metadataObtainedBeforeCloseOrAbortReports08003AndSendsNothing() throws Exception {
+        List<Runnable> pending = new ArrayList<>();
+        try (StubServer stub = new StubServer()) {
+            Connection closed = connect(stub, "");
+            DatabaseMetaData closedMeta = closed.getMetaData();
+            closed.close();
+            Connection aborted = connect(stub, "");
+            DatabaseMetaData abortedMeta = aborted.getMetaData();
+            aborted.abort(Runnable::run);
+            Connection pendingAbort = connect(stub, "");
+            DatabaseMetaData pendingMeta = pendingAbort.getMetaData();
+            pendingAbort.abort(pending::add);
+            int before = stub.documentRequests.get();
+            for (DatabaseMetaData m : List.of(closedMeta, abortedMeta, pendingMeta)) {
+                SQLException tables = failureWithin(5_000, "getTables de metadata antigo",
+                        () -> m.getTables(null, null, "%", null));
+                assertEquals("08003", tables.getSQLState(), tables.getMessage());
+                assertFalse(tables.getMessage().contains("em voo"), tables.getMessage());
+                SQLException version = failureWithin(5_000, "getDatabaseProductVersion de metadata antigo",
+                        m::getDatabaseProductVersion);
+                assertEquals("08003", version.getSQLState(), version.getMessage());
+                assertFalse(version.getMessage().contains("em voo"), version.getMessage());
+            }
+            assertEquals(before, stub.documentRequests.get(),
+                    "o metadata de uma conexão fechada ainda mandou requisição ao servidor");
+        } finally {
+            pending.forEach(Runnable::run);
         }
     }
 

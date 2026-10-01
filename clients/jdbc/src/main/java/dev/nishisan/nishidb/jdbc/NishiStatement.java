@@ -486,8 +486,8 @@ public class NishiStatement implements Statement {
         }
     }
 
-    @Override
     /** Fechado também quando a conexão foi fechada — por close, abort ou estouro do prazo de rede. */
+    @Override
     public boolean isClosed() {
         return fechado || conexao.isClosed();
     }

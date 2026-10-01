@@ -687,7 +687,7 @@ public final class NishiConnection implements Connection {
         return alvo.isInstance(this);
     }
 
-    private void exigeAberta() throws SQLException {
+    void exigeAberta() throws SQLException {
         if (fechado) {
             // 08003, o mesmo do Statement de conexão fechada: o fato é um só
             // — a conexão não existe mais —, e o 08001 é de "não consegui
