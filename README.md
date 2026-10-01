@@ -2525,7 +2525,10 @@ requisição, seja maior ou menor:
 `Connection.abort(executor)` derruba a conexão sem esperar o servidor: a
 requisição presa em outra thread — esperando os cabeçalhos ou lendo o corpo —
 sai com `SQLException` `08003` de conexão fechada, e os `Statement` da conexão
-passam a recusar execução com o mesmo `08003`. O
+passam a recusar execução com o mesmo `08003`. É o código de conexão fechada
+em todo o driver: operação numa conexão fechada por `close`, `abort` ou
+estouro do prazo de rede responde `08003`, e o `08001` fica só para a falha
+ao conectar (URL, CA, handshake, servidor inalcançável). O
 default de `socketTimeoutMs` é zero de propósito — quem não pediu prazo não
 ganha um —, então ligá-lo é decisão de quem conhece a consulta mais longa que
 a aplicação faz sem `queryTimeout`.

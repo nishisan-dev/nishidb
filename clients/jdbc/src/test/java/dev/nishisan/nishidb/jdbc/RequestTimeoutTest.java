@@ -796,6 +796,35 @@ class RequestTimeoutTest {
         }
     }
 
+    /**
+     * Operação numa Connection FECHADA sai com 08003 — o mesmo código do
+     * Statement de conexão fechada e da requisição em voo no abort —, e não
+     * com o 08001 de "não consegui conectar". Vale para o close, o abort e o
+     * estouro do prazo de rede.
+     */
+    @Test
+    void operationsOnAClosedConnectionReport08003() throws Exception {
+        try (StubServer stub = new StubServer()) {
+            Connection closed = connect(stub, "");
+            closed.close();
+            Connection aborted = connect(stub, "");
+            aborted.abort(Runnable::run);
+            Connection timedOut = connect(stub, "?socketTimeoutMs=300");
+            stub.metadata = Mode.HANG;
+            failureWithin(5_000, "getTables com socketTimeoutMs=300",
+                    () -> timedOut.getMetaData().getTables(null, null, "%", null));
+            for (Connection c : List.of(closed, aborted, timedOut)) {
+                assertTrue(c.isClosed());
+                SQLException create = assertThrows(SQLException.class, c::createStatement);
+                assertEquals("08003", create.getSQLState(), create.getMessage());
+                SQLException meta = assertThrows(SQLException.class, c::getMetaData);
+                assertEquals("08003", meta.getSQLState(), meta.getMessage());
+                SQLException timeout = assertThrows(SQLException.class, c::getNetworkTimeout);
+                assertEquals("08003", timeout.getSQLState(), timeout.getMessage());
+            }
+        }
+    }
+
     // ------------------------------------------------- precedência dos prazos
 
     /** {@code isValid(1)} vence um prazo de rede MAIOR: volta em ~1 s, e não em 10. */
