@@ -2438,10 +2438,8 @@ que houve mudança.
 grupo` — quatro bytes por linha (`rowindex.Dense32`, o primeiro vetor de 32
 bits do produto: 32 MB por 8M linhas, e o contador pode existir várias vezes
 sobre o mesmo dataset). O dicionário `grupos.dict` interna a chave composta do
-grupo → id, append-only com CRC por registro e **fsync antes de devolver o id**
-(cópia do `fielddict`, pela mesma invariante: nenhuma entrada do vetor pode
-apontar para um id que a reabertura não resolva); aposentar um grupo é um
-registro nele. Os totais e os `refs` (quantas linhas apontam para o grupo,
+grupo → id, append-only com CRC por registro; aposentar um grupo é um registro
+nele (com fsync próprio). Os totais e os `refs` (quantas linhas apontam para o grupo,
 independente da condição) vivem em heap e **não são persistidos**. Os dois de
 um grupo moram numa **palavra de 64 bits só** — `refs` nos 32 bits baixos,
 `total` nos 32 altos —, mexida com UMA soma atômica por transição e lida com
@@ -2470,7 +2468,43 @@ descreveria um record que o crash levou. `escritas`, `prazos` e a agenda
 aceitam essa classe de resíduo porque ela é benigna na leitura; no contador
 seria número publicado errado. Então a transição vai para um overlay em heap,
 e só o `ApplyOverlay` do checkpoint, **depois do fdatasync dos segmentos**, a
-leva ao mmap — a mesma invariante das locations.
+leva ao mmap — a mesma invariante das locations. O mapa do overlay não encolhe
+sozinho (nem `delete` nem `clear` devolvem a capacidade do pico), e por isso um
+dreno acima de 65.536 entradas e de 4 vezes a média móvel dos drenos anteriores
+troca o mapa por um novo: a construção de um contador deixava o pico preso até
+o restart (~319 MB por contador no piloto, issue #88); no gate de heap,
+`TestOverlayDrainAfterABuildReturnsTheHeap`, 600 mil linhas crescem o heap em
+~22 MB e o checkpoint o devolve a menos de 20 KB do patamar anterior.
+
+**Por que o dicionário de grupos é fsyncado no checkpoint.** Nenhum record
+carrega id de grupo: os únicos artefatos duráveis que o referenciam são o
+vetor (que só recebe id no `ApplyOverlay`) e o snapshot das medidas (gravado
+depois dele no mesmo checkpoint). Então o grupo novo é só um append no
+`grupos.dict`, e o fsync de todos os appends pendentes é a **primeira coisa do
+`ApplyOverlay`** de cada contador — antes do primeiro `Set` do vetor e antes do
+`SaveMeasures`. A invariante é: nenhum artefato durável referencia id de grupo
+além do prefixo já fsyncado do dicionário. Um id em memória antes do
+checkpoint é como a location no overlay — visível, não durável —, e um crash
+que o leve faz o replay re-internar a chave, talvez com outro id, sem que nada
+durável apontasse para ele. É a assimetria com o `fields.dict`, cujos ids os
+records carregam e que por isso continua com fsync por entrada. Três peças
+fecham as bordas: a abertura sincroniza a cauda que herdou (o page cache
+sobrevive à morte do processo, e sem isso o vetor passaria a apontar para ids
+que só existem no cache); a falha desse fsync — e a do registro de
+aposentadoria, que leva junto os appends pendentes — deixa o writer falho, como
+a do `segSync`; e o checkpoint grava no manifest, numa seção ignorável própria
+(0x0002), o piso de durabilidade de cada dicionário: a abertura que encontra
+um prefixo válido menor reconstrói o contador, em vez de adotá-lo com as
+entradas do vetor zeradas como órfãs. Detalhes, provas e números em
+[`aceite-fsync-do-dicionario-de-grupos.md`](aceite-fsync-do-dicionario-de-grupos.md).
+
+**Por que existe o marcador de construção.** A reconstrução em operação zera o
+vetor in place (mmap compartilhado), e a construção na abertura só o completa
+no checkpoint do fim do `Open`. Um processo que morresse no meio deixava, com
+os mesmos parâmetros no manifest, um vetor zerado ou parcial que a reabertura
+adotava. O arquivo `building` no diretório do contador é gravado (com fsync)
+antes de zerar ou construir e removido só depois do checkpoint que adota a
+construção; presente na abertura, ele força a reconstrução.
 
 **Os quatro momentos.** Um evento chega: passo 7c do `applyRecord`, depois do
 commit da location e ao lado da agenda, nos dois modos (write e replay). Uma
@@ -2557,9 +2591,9 @@ marcadores colados, nenhum dígito ou `-` logo depois de um `int64`, nenhum
 `\` em literal) mais o escape do primeiro caractere do literal seguinte fazem
 o texto ter uma leitura única da esquerda para a direita. Embaixo disso há uma
 rede: um texto que colidisse com o de outro grupo vivo é recusado ANTES do
-`Intern`, porque o dicionário fsynca a chave antes de devolver o id e o id
-nunca é reemitido — uma chave colidente que chegasse ao disco faria toda
-abertura seguinte falhar.
+`Intern`, porque o `Intern` grava a chave no dicionário, o próximo checkpoint
+a torna durável, e id durável nunca é reemitido — uma chave colidente que
+chegasse ao disco faria toda abertura seguinte falhar.
 Ela mora em `internal/counters`, não no pacote `meta`, porque o `meta`
 descreve o dataset pela definição estática e não conhece o storage; o motor
 manda `_meta.fields` para o `meta` e qualquer outra tabela do `_meta` para o
@@ -2602,19 +2636,26 @@ segura o writer pela varredura, e o custo é dito.
 Em regime — grupos internados, linha no overlay — dois contadores custam
 **+0,5 µs por evento** (3,99 → 4,51 µs, +13 %, n = 6), com **zero alocação**
 nos dois lados; o gate `TestPutNaoAlocaMaisComContadores` trava que o `Put`
-real não aloca mais com contadores do que sem (1,0 nos dois). A carga fria é
-outro número: cada grupo novo paga o fsync do dicionário, ≈ 0,6 ms — 600
-grupos em 366 ms na bancada. A dobra de um milhão de linhas custa **38–52 ms**
-e fica no caminho do `Open`; a reconstrução em operação varre um milhão de
-linhas vivas em **0,8 s por contador** com o writer parado, e a reconstrução
-por mudança de parâmetro recria o dicionário e paga o fsync por grupo de novo
-(265 grupos em 299 ms no ponta a ponta).
+real não aloca mais com contadores do que sem (1,0 nos dois). A carga fria era
+outro número naquela bancada: cada grupo novo pagava o fsync do dicionário,
+≈ 0,6 ms — 600 grupos em 366 ms. Desde 01/10/2026 o fsync é do checkpoint, e
+o grupo novo custa **4,4–9,2 µs** até o checkpoint que o torna durável (contra
+1,40–1,71 ms com o fsync por grupo, no mesmo disco), e a construção a frio de
+4.096 grupos cai de 5,5–6,5 s para ~0,1 s — medidas na
+[`aceite-fsync-do-dicionario-de-grupos.md`](aceite-fsync-do-dicionario-de-grupos.md),
+saída crua em
+[`counter-dict-fsync-20261001.txt`](../benchmark/baselines/counter-dict-fsync-20261001.txt).
+A dobra de um milhão de linhas custa **38–52 ms** e fica no caminho do `Open`;
+a reconstrução em operação varre um milhão de linhas vivas em **0,8 s por
+contador** com o writer parado.
 
-**Limites conhecidos.** O fsync por grupo novo é bounded pelo inventário, mas
-no nível de PON ou splitter (10⁵ a 10⁶ grupos) o custo da carga inicial não
-foi medido (débito 108). `_counters` fica fora do isolamento de snapshot
+**Limites conhecidos.** `_counters` fica fora do isolamento de snapshot
 (débito 109), e `WHERE olt = …` num contador composto varre os grupos em vez
-de usar índice (débito 110).
+de usar índice (débito 110). A construção a frio ainda passa todas as linhas
+pelo overlay antes do primeiro checkpoint, e esse é o pico de memória da
+abertura (débito 129); uma reconstrução em operação que falha no meio deixa o
+contador parcial até a reabertura (débito 130); o `msync` do vetor não deixa
+o writer falho (débito 132).
 
 ## Métricas de janela do contador
 
