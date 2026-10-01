@@ -23,7 +23,17 @@ var testingAllocsPerRun = testing.AllocsPerRun
 // passada é lixo proporcional ao inventário, não ao problema. Só um gate de
 // alocação prova essa guarda; foi uma mutação que mostrou que nenhum teste de
 // comportamento poderia.
-func TestPassadaNaoAlocaPorGrupoSaudavel(t *testing.T) {
+func TestPassadaNaoAlocaPorGrupoSaudavel(t *testing.T) { checkHealthyPassAllocs(t, allocsOfPass) }
+
+// TestInterruptiblePassDoesNotAllocatePerHealthyGroup é o mesmo gate pelo
+// caminho de produção: o laço passa o cancelamento do Stop à passada, e o
+// teste do cancelamento por grupo precisa ficar fora da conta de alocação.
+func TestInterruptiblePassDoesNotAllocatePerHealthyGroup(t *testing.T) {
+	checkHealthyPassAllocs(t, allocsOfInterruptiblePass)
+}
+
+func checkHealthyPassAllocs(t *testing.T, allocs func(*testing.T, *Runner) float64) {
+	t.Helper()
 	gs := make([]grupo, 0, 64)
 	for i := int64(0); i < 64; i++ {
 		gs = append(gs, grupo{olt: "OLT_A", slot: i, total: 500, live: true})
@@ -33,7 +43,7 @@ func TestPassadaNaoAlocaPorGrupoSaudavel(t *testing.T) {
 	// Uma passada antes da medida, para que os buffers reusados já tenham
 	// nascido: o gate mede o regime permanente, não a primeira vez.
 	passada(t, r)
-	base := allocsOfPass(t, r)
+	base := allocs(t, r)
 	if base != 0 {
 		t.Fatalf("a passada alocou %v vez(es) por rodada sobre 64 grupos saudáveis", base)
 	}
@@ -47,6 +57,17 @@ func TestPassadaNaoAlocaPorGrupoSaudavel(t *testing.T) {
 // valendo e inelegível — a OLT que nunca teve ninguém, que existe aos milhares
 // num contador por PON e que, sem a guarda, ganharia tracker a cada passada.
 func TestSweepWithQualifyWhenDoesNotAllocatePerGroup(t *testing.T) {
+	checkQualifiedSweepAllocs(t, allocsOfPass)
+}
+
+// TestInterruptibleSweepWithQualifyWhenDoesNotAllocatePerGroup é o mesmo gate
+// pelo caminho de produção, interrompível.
+func TestInterruptibleSweepWithQualifyWhenDoesNotAllocatePerGroup(t *testing.T) {
+	checkQualifiedSweepAllocs(t, allocsOfInterruptiblePass)
+}
+
+func checkQualifiedSweepAllocs(t *testing.T, allocs func(*testing.T, *Runner) float64) {
+	t.Helper()
 	metrics := defaultWindowMetrics()
 	gs := make([]grupo, 0, 64)
 	for i := int64(0); i < 64; i++ {
@@ -59,7 +80,7 @@ func TestSweepWithQualifyWhenDoesNotAllocatePerGroup(t *testing.T) {
 	}
 	r, _, _ := newQualifiedRunner(t, f, src, specWithMetrics(metrics, nearlyEmptyAlarm()), "", t0)
 	passada(t, r)
-	if n := allocsOfPass(t, r); n != 0 {
+	if n := allocs(t, r); n != 0 {
 		t.Fatalf("a passada alocou %v vez(es) por rodada sobre 64 grupos saudáveis com qualifyWhen", n)
 	}
 
@@ -67,7 +88,7 @@ func TestSweepWithQualifyWhenDoesNotAllocatePerGroup(t *testing.T) {
 		src.setWindows(id, 0, 3)
 	}
 	passada(t, r)
-	if n := allocsOfPass(t, r); n != 0 {
+	if n := allocs(t, r); n != 0 {
 		t.Fatalf("a passada alocou %v vez(es) por rodada sobre 64 grupos com a condição valendo e inelegíveis", n)
 	}
 	if got := r.trackedGroups(); got != 0 {
@@ -91,6 +112,17 @@ func TestSweepWithQualifyWhenDoesNotAllocatePerGroup(t *testing.T) {
 // declarado não aloca — a contraparte do caminho saudável é
 // TestPassadaNaoAlocaPorGrupoSaudavel.
 func TestPendingGroupsWithDeclaredValueDoNotAllocatePerPass(t *testing.T) {
+	checkPendingPassAllocs(t, allocsOfPass)
+}
+
+// TestInterruptiblePendingGroupsWithDeclaredValueDoNotAllocatePerPass é o
+// mesmo gate pelo caminho de produção, interrompível.
+func TestInterruptiblePendingGroupsWithDeclaredValueDoNotAllocatePerPass(t *testing.T) {
+	checkPendingPassAllocs(t, allocsOfInterruptiblePass)
+}
+
+func checkPendingPassAllocs(t *testing.T, allocs func(*testing.T, *Runner) float64) {
+	t.Helper()
 	metrics := defaultWindowMetrics()
 	gs := make([]grupo, 0, 64)
 	for i := int64(0); i < 64; i++ {
@@ -114,7 +146,7 @@ func TestPendingGroupsWithDeclaredValueDoNotAllocatePerPass(t *testing.T) {
 	// tenham nascido — o gate mede o regime permanente.
 	clock.advance(time.Minute)
 	passada(t, r)
-	base := allocsOfPass(t, r)
+	base := allocs(t, r)
 	if base != 0 {
 		t.Fatalf("a passada alocou %v vez(es) por rodada sobre 64 grupos pending com value: declarado", base)
 	}
@@ -124,6 +156,19 @@ func allocsOfPass(t *testing.T, r *Runner) float64 {
 	t.Helper()
 	return testingAllocsPerRun(100, func() {
 		if err := r.EvaluateOnce(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// allocsOfInterruptiblePass mede a passada como o laço a chama, com um canal
+// de Stop ainda aberto. O canal nasce fora da medida: o que se mede é o
+// cancelamento observado por grupo, não a criação dele.
+func allocsOfInterruptiblePass(t *testing.T, r *Runner) float64 {
+	t.Helper()
+	stop := make(chan struct{})
+	return testingAllocsPerRun(100, func() {
+		if err := r.evaluate(stop); err != nil {
 			t.Fatal(err)
 		}
 	})

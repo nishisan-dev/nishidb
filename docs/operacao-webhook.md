@@ -94,6 +94,9 @@ Um sucesso HTTP remove o arquivo e sincroniza o diretório antes de enviar o
 próximo. O remetente e o gravador são independentes, então lentidão HTTP não
 impede persistir os demais eventos.
 
+A vaga no buffer de memória é devolvida quando o arquivo é publicado, não
+quando o receptor confirma. Por isso a varredura nunca espera o HTTP.
+
 | Limite por fila | Valor |
 |---|---|
 | Arquivos e reservas em disco | `queue.maxBytes`, default 256MiB |
@@ -107,17 +110,67 @@ mínimo configurável acomoda um corpo máximo mais seu cabeçalho. Blocos,
 metadados e inodes do filesystem podem ocupar mais espaço que a soma dos bytes
 dos arquivos. O limite de quantidade também restringe esse custo.
 
-Quando qualquer limite impede admitir um evento, **o novo evento é descartado
-somente para aquele destino**. Os anteriores permanecem. Um corpo grande
-demais é recusado por inteiro, sem truncar enriquecimento. O log do alarme
+Com o **buffer de memória cheio** (eventos ou bytes), a admissão **espera** o
+gravador publicar um arquivo e liberar vaga, em vez de descartar. A espera
+termina pela vaga liberada ou pela falha local do destino (o evento é contado
+em `destination_failed`). O tempo esperado acumula em
+`admission_wait_seconds_total`. Um disco lento para o alarme aparece ali, e
+não como perda.
+
+Numa rajada, como milhares de grupos disparando na mesma passada, a varredura
+passa a durar aproximadamente **eventos × destinos × custo de uma gravação
+durável**. Os destinos multiplicam porque cada evento é oferecido aos destinos
+do `notify` em série, um depois do outro: a varredura só passa ao próximo
+destino depois de admitir no anterior. Na medição do
+[aceite](aceite-webhook.md), uma gravação custou de 2,8 a 3,6 ms,
+cerca de 350 eventos por segundo por destino; 10.000 disparos para um destino
+seguraram a varredura por perto de 30 segundos, e para dois destinos seriam
+perto de 60.
+
+Quando um limite **de disco** (bytes ou quantidade, contando as reservas em
+memória) impede admitir um evento, **o novo evento é descartado somente para
+aquele destino**, sem esperar. É o que impede um receptor fora do ar por dias
+de travar a varredura: as pendências enchem o disco, e daí em diante os novos
+eventos são descartados. O mesmo vale para um corpo grande demais, recusado por
+inteiro, sem truncar enriquecimento. Os anteriores permanecem. O log do alarme
 continua sendo emitido. Reduzir `maxBytes` abaixo das pendências existentes
 preserva os arquivos e impede novas admissões até a fila baixar.
+
+O motivo `memory_full` não é mais emitido desde que o buffer cheio passou a
+esperar. A série continua publicada, sempre em zero, para não quebrar painéis
+e alertas que a referenciam.
 
 A garantia durável começa na publicação confirmada do arquivo. Uma queda pode
 perder eventos ainda em memória ou em gravação; não há contagem recuperável
 exata dessas perdas. Não há transação entre a fila e `alarms.state`.
-No encerramento normal, o buffer é persistido e HTTP é cancelado, sem esperar
-pelo receptor. Uma falha de disco durante esse processo é devolvida ao operador.
+
+No encerramento normal, a varredura em curso é **interrompida** e não levada
+até o fim. A interrupção acontece antes do próximo grupo, enquanto a varredura
+percorre os grupos do contador, ou antes da próxima resolução, enquanto ela
+resolve os grupos que sumiram do contador. O que já foi decidido fica
+coerente com o que foi emitido. O que ficou sem decisão não é resolvido nem
+descartado. O estado é gravado em `alarms.state` com o cronômetro de todos
+os grupos ainda acompanhados.
+
+Na subida seguinte, o que venceu o prazo é anunciado como restaurado, com novo
+`eventId` e `restored: true`, e o que ainda não venceu continua pendente. O
+arquivo guarda só o cronômetro, não se o alarme já tinha disparado. Por isso,
+um grupo disparado que sumiu do contador e cuja resolução não chegou a sair
+antes da parada é descartado na subida **sem** evento `resolved`, como
+acontece com todo grupo disparado que some com o processo parado.
+
+Depois disso as filas são fechadas: o buffer de memória é persistido e o HTTP é
+cancelado, sem esperar pelo receptor. Uma falha de disco durante esse processo é
+devolvida ao operador.
+
+O custo do encerramento numa rajada é, por dataset, o que está em curso (os
+eventos do grupo corrente, um por alarme do contador que mude de estado, ou
+uma resolução, cada um com até uma gravação durável por destino) mais a
+persistência do que estiver no buffer: até 256 gravações por destino, cerca de
+um segundo por destino no disco medido. Ele não depende do tamanho da rajada,
+nem da quantidade de disparos nem da de resoluções, e por isso cabe no prazo de
+parada do serviço. Como a varredura já parou quando as filas fecham, nenhuma
+admissão está esperando nesse momento.
 
 ## Reinício e intervenção
 
@@ -142,6 +195,15 @@ esse anúncio tem novo `eventId` e `restored: true`. É diferente de uma
 retentativa da fila, que preserva a identidade anterior. Para consultar o estado
 corrente, use `<schema>.alarms` ou `_counters.alarms` no dataset da consulta.
 
+**Depois de toda subida do servidor, o receptor deve reconciliar os alarmes que
+tem abertos contra essa view.** Há `alarm.firing` que nunca recebem o
+`alarm.resolved` correspondente: o grupo disparado que some com o processo
+parado, e — com mais frequência — os grupos de um lote de aposentadorias que o
+encerramento interrompeu na fase dois. Em ambos, o grupo volta pendente na
+subida e é descartado sem evento, porque o `alarms.state` guarda só o
+cronômetro, não a fase. O alarme que o receptor ainda tem aberto e que não
+aparece mais na view está resolvido.
+
 ## Diagnóstico
 
 `/v1/stats` acrescenta `datasets[].alarmDelivery`, uma lista por destino. Os
@@ -151,7 +213,9 @@ a recuperação; contadores acumulam desde a subida. A idade considera o evento
 durável mais antigo, a partir do seu `at`.
 
 Observe `disk_events`, `oldest_pending_seconds`, `failed_attempts_total`,
-`persistence_errors_total` e `dropped_total`. `active=1` significa remetente
+`persistence_errors_total`, `dropped_total` e `admission_wait_seconds_total`
+(`admissionWaitSeconds` no JSON). Esta última crescendo indica que a gravação
+em disco não acompanhou uma rajada e que a varredura esperou por isso. `active=1` significa remetente
 ligado, inclusive quando está esperando para retentar; não garante receptor
 saudável. Estados possíveis no JSON: `ready`, `running`, `paused`, `failed`,
 `closed`. As séries numéricas existem desde a abertura, inclusive com zero.

@@ -367,7 +367,10 @@ conjunto fechado. As séries existem desde a abertura da fila e vêm da mesma
 estrutura de `datasets[].alarmDelivery` em `/v1/stats`. Contadores reiniciam
 com o processo; gauges de disco são recuperadas dos arquivos. Motivos de
 descarte: `memory_full`, `disk_full` (bytes ou quantidade), `event_too_large`,
-`encoding_error`, `destination_failed`, `closed`. Perdas numa queda antes da
+`encoding_error`, `destination_failed`, `closed`. `memory_full` não é mais
+emitido: com o buffer de memória cheio a admissão espera o gravador (o tempo
+aparece em `admission_wait_seconds_total`). A série é mantida, sempre em zero,
+para não quebrar painéis e alertas. Perdas numa queda antes da
 persistência não têm contagem exata recuperável.
 
 | Métrica | Tipo | Significado |
@@ -385,3 +388,4 @@ persistência não têm contagem exata recuperável.
 | `nishidb_alarm_delivery_active` | gauge | 1 enquanto o remetente está ligado, inclusive durante retentativa |
 | `nishidb_alarm_delivery_failed` | gauge | 1 após falha local que exige intervenção e reinício |
 | `nishidb_alarm_delivery_paused` | gauge | 1 quando o destino foi removido e a fila foi preservada |
+| `nishidb_alarm_delivery_admission_wait_seconds_total` | counter | segundos que a varredura esperou vaga no buffer de memória porque a gravação em disco não acompanhou a rajada; acumulado ao fim de cada espera |

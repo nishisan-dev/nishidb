@@ -45,6 +45,12 @@ partition "Passada (cadência = menor sustainedFor / 4)" {
     Só o lock FOLHA do dicionário,
     nada do Store: a varredura não
     disputa nada com a ingestão.
+    Stop no meio da passada: ela é
+    abandonada antes do próximo grupo,
+    SEM a fase dois; o Stop grava o
+    alarms.state dos grupos como estão.
+    Na fase dois, o Stop interrompe
+    antes da próxima resolução.
   end note
   :Avalia o `when` sobre a linha
   que a tabela virtual monta;
@@ -151,10 +157,13 @@ partition "Saída" {
   lidas da MESMA linha que decidiu);
   if (notify seleciona destinos?) then (sim)
     :Admite corpo JSON imutável no buffer
-    de cada destino, sem I/O de entrega;
+    de cada destino, em série, sem I/O de entrega;
     note right
-      Buffer ou disco reservado cheio:
-      descarta o novo e conta o motivo.
+      Buffer de memória cheio: ESPERA o
+      gravador liberar vaga (nunca o HTTP);
+      o tempo vai para admission_wait.
+      Disco reservado cheio: descarta o
+      novo e conta o motivo, sem esperar.
       Gravador independente publica arquivo
       (temp -> fsync -> rename -> dirsync).
       Só então remetente faz POST.

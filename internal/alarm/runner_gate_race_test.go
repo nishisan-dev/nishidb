@@ -18,3 +18,15 @@ func TestSweepWithQualifyWhenDoesNotAllocatePerGroup(t *testing.T) {
 func TestPendingGroupsWithDeclaredValueDoNotAllocatePerPass(t *testing.T) {
 	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
 }
+
+func TestInterruptiblePassDoesNotAllocatePerHealthyGroup(t *testing.T) {
+	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+}
+
+func TestInterruptibleSweepWithQualifyWhenDoesNotAllocatePerGroup(t *testing.T) {
+	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+}
+
+func TestInterruptiblePendingGroupsWithDeclaredValueDoNotAllocatePerPass(t *testing.T) {
+	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+}
