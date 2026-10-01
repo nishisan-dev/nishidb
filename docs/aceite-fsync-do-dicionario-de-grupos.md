@@ -232,3 +232,13 @@ Dois apontamentos P2, os dois procedentes e corrigidos:
   meio não é provocável por fora); mutante (julgar só o resto) → vermelho: "a
   nova tentativa que fechou um dreno de 4010 entradas (média 7) não trocou o
   mapa".
+- **Rebuild remoto sem adoção** (segunda rodada do review): `POST
+  /v1/counters/rebuild` respondia sucesso com o marcador `building` ainda no
+  disco — só um checkpoint posterior o tira, e um dataset sem ingestão Kafka não
+  tem checkpoint periódico, enquanto o encerramento fecha o Store sem
+  checkpoint; a subida seguinte varreria tudo de novo. A rota agora faz o
+  checkpoint antes de responder, como o CLI local.
+  `TestRemoteRebuildIsAdoptedBeforeTheResponse`; mutante (sem o checkpoint) →
+  vermelho: "a rota respondeu sucesso com a reconstrução ainda não adotada:
+  marcadores […/autenticados_por_olt/building …]".
+
