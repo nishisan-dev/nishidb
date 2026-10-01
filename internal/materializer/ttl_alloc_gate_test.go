@@ -75,6 +75,21 @@ func ttlDecisions(m *Materializer) int64 {
 	return total
 }
 
+// TestTTLAnchorDecisionDoesNotAllocate é o gate da regra ancorada, ao lado do
+// gate da decisão: o caminho dela — a busca da âncora e do `_writtenAt` no
+// payload, a conta e as séries por desfecho — é rota própria, e o gate da
+// decisão não a exercita. Um caso por desfecho: âncora mantida (update sem
+// lastAuthAt), âncora ausente que cai na regra seguinte, âncora no futuro e
+// âncora já vencida.
+func TestTTLAnchorDecisionDoesNotAllocate(t *testing.T) {
+	runTTLAllocCases(t, []ttlAllocCase{
+		{"ancora mantida", anchorYAML, false, []string{`{"id":"a","lastAuthAt":"2026-09-30T12:00:00Z"}`, `{"id":"a","sev":1}`}},
+		{"ancora ausente cai na seguinte", anchorFirstYAML, false, []string{`{"id":"a","sev":1}`, `{"id":"a","sev":2}`}},
+		{"ancora no futuro", anchorYAML, false, []string{`{"id":"a","lastAuthAt":"2999-01-01T00:00:00Z"}`, `{"id":"a","sev":1}`}},
+		{"ancora vencida", anchorYAML, false, []string{`{"id":"a","lastAuthAt":"2000-01-01T00:00:00Z"}`, `{"id":"a","sev":1}`}},
+	})
+}
+
 func runTTLAllocCases(t *testing.T, cases []ttlAllocCase) {
 	t.Helper()
 	for _, tc := range cases {

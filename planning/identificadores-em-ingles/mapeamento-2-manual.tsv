@@ -1005,3 +1005,8 @@ internal/materializer	field	Materializer.regras	rules	tradução das funções t
 internal/materializer	local	New.regras	rules	tradução das funções tocadas pela decisão do prazo sobre o payload final (01/10/2026)
 internal/materializer	method	PatchBuffer.emitePrazo	emitTTL	tradução das funções tocadas pela decisão do prazo sobre o payload final (01/10/2026)
 internal/materializer	method	Materializer.preencheSlots	fillSlots	tradução das funções tocadas pela decisão do prazo sobre o payload final (01/10/2026)
+internal/predicate	param	CompileRules.regras	rules	tradução das funções tocadas pelo TTL ancorado (01/10/2026)
+internal/server	func	samplesOfMaterializacao	samplesOfMaterialization	tradução das funções tocadas pelo TTL ancorado (01/10/2026)
+internal/server	local	samplesOfMaterializacao.rotulo	label	tradução das funções tocadas pelo TTL ancorado (01/10/2026)
+internal/server	local	materializationStats.regras	rules	tradução das funções tocadas pelo TTL ancorado (01/10/2026)
+internal/server	local	Server.openDataset.regras	rules	tradução das funções tocadas pelo TTL ancorado (01/10/2026)

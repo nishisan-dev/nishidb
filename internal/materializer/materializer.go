@@ -207,6 +207,15 @@ type Metrics struct {
 	// um que casa sempre, e os dois são erros de configuração comuns.
 	byTTLRule    []atomic.Int64
 	ttlUnmatched atomic.Int64
+	// ttlAnchorAbsent conta, por regra, as escritas em que a regra ancorada
+	// teria decidido (o `when` casou, ou não existe) e a âncora faltava no
+	// record — a escrita caiu para a regra seguinte. Só as regras com
+	// `anchor` sobem; as outras ficam em zero.
+	ttlAnchorAbsent []atomic.Int64
+	// ttlAnchorInFuture conta as âncoras posteriores à escrita, limitadas ao
+	// instante dela, e ttlExpiredOnWrite os records que nasceram vencidos.
+	ttlAnchorInFuture atomic.Int64
+	ttlExpiredOnWrite atomic.Int64
 	// congeladasCapturadas conta a CAPTURA (o valor entrou no patch); a
 	// PRESERVAÇÃO (o merge segurou o anterior) e os efeitos da soma vivem em
 	// efeitos, porque quem os enxerga é o merge. Captura sem preservação é
@@ -248,6 +257,13 @@ type MetricsSnapshot struct {
 	// as escritas que não casaram com nenhuma. Vazia num dataset sem regras.
 	TTLRuleMatches []int64
 	TTLUnmatched   int64
+	// TTLAnchorAbsent é indexada como TTLRuleMatches: as escritas em que a
+	// âncora da regra faltava e a próxima regra foi tentada. TTLAnchorInFuture
+	// são as âncoras limitadas ao instante da escrita, e TTLExpiredOnWrite os
+	// records gravados já vencidos.
+	TTLAnchorAbsent   []int64
+	TTLAnchorInFuture int64
+	TTLExpiredOnWrite int64
 	// CongeladasCapturadas e CongeladasPreservadas contam as duas metades do
 	// congelamento: a entry emitida na ingestão e o valor anterior segurado
 	// pelo merge.
@@ -343,6 +359,7 @@ func New(c *schema.Compiled, s Store) (*Materializer, error) {
 		}
 		m.rules = rules
 		m.metrics.byTTLRule = make([]atomic.Int64, len(rules))
+		m.metrics.ttlAnchorAbsent = make([]atomic.Int64, len(rules))
 		m.slots = make([][]predicate.Slot, len(rules))
 		for i := range rules {
 			m.slots[i] = predicate.NovosSlots(rules[i].Slots.IDs)
@@ -381,6 +398,14 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 		}
 	}
 	s.TTLUnmatched = m.metrics.ttlUnmatched.Load()
+	if n := len(m.metrics.ttlAnchorAbsent); n > 0 {
+		s.TTLAnchorAbsent = make([]int64, n)
+		for i := range m.metrics.ttlAnchorAbsent {
+			s.TTLAnchorAbsent[i] = m.metrics.ttlAnchorAbsent[i].Load()
+		}
+	}
+	s.TTLAnchorInFuture = m.metrics.ttlAnchorInFuture.Load()
+	s.TTLExpiredOnWrite = m.metrics.ttlExpiredOnWrite.Load()
 	s.CongeladasCapturadas = m.metrics.congeladasCapturadas.Load()
 	s.CongeladasPreservadas = m.metrics.efeitos.congeladas.Load()
 	s.Acumuladas = m.metrics.efeitos.acumuladas.Load()

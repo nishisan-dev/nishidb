@@ -29,18 +29,18 @@ func refusesRules(t *testing.T, rules string, snippets ...string) {
 }
 
 func TestTTLListaVaziaEhRecusada(t *testing.T) {
-	refusesRules(t, "  ttl: []\n", "vazia")
+	refusesRules(t, "  ttl: []\n", "empty list")
 }
 
 // A regra de fundo casa com tudo: colocá-la antes de uma condicional tornaria
 // a condicional inalcançável, e a ordem é semântica aqui.
 func TestRegraSemWhenNoMeioEhRecusada(t *testing.T) {
 	refusesRules(t, "  ttl:\n    - expireAfterWrite: 7d\n    - when: \"id = 'a'\"\n      expireAfterWrite: 3m\n",
-		"última")
+		"must be the last")
 }
 
 func TestDuasRegrasSemWhenSaoRecusadas(t *testing.T) {
-	refusesRules(t, "  ttl:\n    - expireAfterWrite: 7d\n    - expireAfterWrite: 3m\n", "última")
+	refusesRules(t, "  ttl:\n    - expireAfterWrite: 7d\n    - expireAfterWrite: 3m\n", "must be the last")
 }
 
 func TestRegraSemExpireAfterWriteEhRecusada(t *testing.T) {
@@ -49,7 +49,7 @@ func TestRegraSemExpireAfterWriteEhRecusada(t *testing.T) {
 
 func TestDuracaoAbaixoDaResolucaoEhRecusada(t *testing.T) {
 	for _, d := range []string{"30s", "1s", "59s"} {
-		refusesRules(t, "  ttl:\n    - expireAfterWrite: "+d+"\n", "resolução")
+		refusesRules(t, "  ttl:\n    - expireAfterWrite: "+d+"\n", "collector resolution")
 	}
 	// O piso exato é aceito.
 	s, err := Parse([]byte(yamlWithRules("  ttl:\n    - expireAfterWrite: 1m\n")), BuiltinDefaults)
@@ -79,11 +79,11 @@ func TestZeroNumericoEhRecusadoMasNeverEhAceito(t *testing.T) {
 // O gate da migração: a forma antiga tem de dar erro NOMEANDO a nova, não
 // decodificar em silêncio nem morrer com a mensagem do yaml.
 func TestFormaEscalarAntigaEhRecusada(t *testing.T) {
-	refusesRules(t, "  ttl:\n    expireAfterWrite: 7d\n", "materialization.ttl", "lista")
+	refusesRules(t, "  ttl:\n    expireAfterWrite: 7d\n", "materialization.ttl", "list of rules")
 }
 
 func TestFormaFieldTypeAntigaEhRecusada(t *testing.T) {
-	refusesRules(t, "  ttl:\n    field: exp\n    type: timestamp\n", "lista")
+	refusesRules(t, "  ttl:\n    field: exp\n    type: timestamp\n", "list of rules")
 }
 
 func TestChaveDesconhecidaNaRegraEhRecusada(t *testing.T) {
@@ -192,7 +192,7 @@ func TestDescreveRegrasMostraOrdemEFundo(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := DescribeRules(s.Materialization.TTLRules)
-	for _, snippet := range []string{`[0] when="id = 'a'" 3m0s`, `[1] when="id = 'b'" never`, "[2] fundo 168h0m0s"} {
+	for _, snippet := range []string{`[0] when="id = 'a'" 3m0s`, `[1] when="id = 'b'" never`, "[2] fallback 168h0m0s"} {
 		if !strings.Contains(got, snippet) {
 			t.Errorf("descrição %q não contém %q", got, snippet)
 		}

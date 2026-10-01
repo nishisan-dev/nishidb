@@ -1688,6 +1688,9 @@ nas séries correspondentes do `/metrics`:
 | `nishidb_merge_sum_saturated_total` | o teto foi alcançado — a partir daí a coluna não cresce mais |
 | `nishidb_ttl_rule_matched_total{rule}` | qual regra está decidindo o quê, pelo índice no YAML |
 | `nishidb_ttl_unmatched_total` | escritas sem regra nenhuma (só em dataset sem regra de fundo) |
+| `nishidb_ttl_anchor_absent_total{rule}` | a regra ancorada teria decidido e a âncora faltava; a próxima foi tentada |
+| `nishidb_ttl_anchor_in_future_total` | âncoras posteriores à escrita, limitadas a ela |
+| `nishidb_ttl_expired_on_write_total` | documentos gravados já vencidos (âncora + prazo no passado) |
 
 Os dois lados saem da MESMA leitura do snapshot do materializer: dois
 contadores para o mesmo fato divergem no dia em que um caminho de erro esquece
@@ -1702,24 +1705,39 @@ campos crus e tocar poucos.
 ## Expiração por inatividade
 
 `materialization.ttl` é uma **lista de regras**: cada uma tem uma condição
-(`when`, com a gramática do WHERE) e um idle timeout, e a **primeira que casa**
-decide o prazo da entidade. A regra sem `when` é a de fundo e só pode ser a
-última. Cada escrita renova o prazo — entidade ativa nunca expira, entidade
-abandonada sai sozinha —, e é isso que impede o estado vivo de crescer com o
-espaço de chaves; a compaction não segura isso, porque ela recupera versões
-superadas, não entidades inteiras.
+(`when`, com a gramática do WHERE) e um prazo, e a **primeira que casa**
+decide o prazo da entidade. O prazo é um idle timeout (`expireAfterWrite`,
+contado da escrita) ou é contado de um campo temporal do documento (`anchor` +
+`expireAfter`). A regra sem `when` e sem `anchor` é a de fundo e só pode ser a
+última (`TTLRule.IsFallback` é o predicado único). Com `expireAfterWrite`, cada
+escrita renova o prazo — entidade ativa nunca expira, entidade abandonada sai
+sozinha —, e é isso que impede o estado vivo de crescer com o espaço de
+chaves; a compaction não segura isso, porque ela recupera versões superadas,
+não entidades inteiras.
 
 São DOIS campos de sistema no payload, e a divisão é deliberada:
 
 | Campo | Tipo | O que guarda |
 |---|---|---|
 | `_writtenAt` | timestamp | o instante da última escrita — um **fato** |
-| `_expiresIn` | int64 (millis) | a **duração** que a regra escolheu para esta entidade |
+| `_expiresIn` | int64 (millis) | o **prazo** que a regra escolheu, contado a partir de `_writtenAt` |
 
-A duração é gravada em vez do prazo absoluto por duas razões. A primeira é
-composição: com o instante ao lado, mudar a regra no YAML vale na hora para as
-linhas existentes. A segunda é ordem: reordenar as regras no arquivo não muda o
-significado do que já está gravado.
+O storage vence a linha em `_writtenAt + _expiresIn` e não conhece campo de
+negócio. Numa regra com `expireAfterWrite`, `_expiresIn` é a própria duração.
+Numa regra com `anchor`, o materializer o resolve sobre o record como
+`min(âncora, _writtenAt) + expireAfter − _writtenAt`: a âncora no futuro é
+limitada ao instante da escrita, e a escrita que não muda a âncora grava um
+prazo menor que leva ao MESMO vencimento — é isso que faz o dying gasp não
+renovar. Os dois termos vêm do próprio record (o `_writtenAt` é carimbado nele
+na ingestão), então o replay e a reconstrução da agenda chegam ao mesmo
+vencimento sem ler relógio nenhum.
+
+A âncora já vencida daria `_expiresIn ≤ 0`, que o índice de prazos grava como
+imortal; o materializer grava `rowindex.MinMortalTTL` (2 ms) no lugar — o
+sentinela de imortal é 1. A linha some da consulta a partir de
+`_writtenAt + 2 ms` e o coletor a recolhe como qualquer outra. A conta é por
+comparação (`âncora ≤ _writtenAt − expireAfter`), sem somar a âncora a nada: a
+âncora vem do dado e pode ser qualquer int64.
 
 `_expiresIn` é emitido em **toda** escrita, e não só quando o valor muda. O
 merge preserva campo que o evento não menciona, então uma emissão condicional
@@ -1738,7 +1756,7 @@ anterior simplesmente não está lá. Uma versão anterior avaliava sobre "o
 estado anterior com o patch por cima", e divergia do record exatamente nesses
 quatro casos.
 
-O índice `prazos.idx` (rowId→duração) é DERIVADO do campo, como o de escritas:
+O índice `prazos.idx` (rowId→prazo) é DERIVADO do campo, como o de escritas:
 o replay do tail o reconstrói pelo mesmo `applyRecord`. Zero nele significa
 **desconhecido**, e por isso a entidade imortal — a que casou com uma regra
 `never` — é gravada com um sentinela (`rowindex.ImmortalTTL`). Sem essa
@@ -1866,7 +1884,11 @@ reprocessar nada, e o que impede essas entidades de ficarem imortais.
 
 Já a entidade que tem instante mas não tem `_expiresIn` — a materializada antes
 das REGRAS — cai na duração da regra de **fundo**. Sem regra de fundo, ela não
-expira até a primeira escrita seguinte, que lhe grava um prazo.
+expira até a primeira escrita seguinte, que lhe grava um prazo. Uma regra com
+`anchor` na última posição não é fundo: a âncora nunca foi avaliada para essa
+linha, e dar-lhe o prazo dela seria inventar um vencimento. Pelo mesmo motivo,
+trocar um YAML com fundo por um sem fundo muda a duração de fundo gravada no
+manifest, a agenda é reconstruída na subida e essas linhas deixam de expirar.
 
 O que **não** volta é a chave: a lápide é copiada para frente enquanto a
 primary nomear a key, e esquecê-la exige `tombstoneRetention`, que ainda não

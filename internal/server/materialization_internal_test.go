@@ -98,7 +98,7 @@ func TestAmostrasDeMaterializacaoPublicamAsSeries(t *testing.T) {
 		TTLRuleMatches:        []int64{4, 2},
 		TTLUnmatched:          3,
 	}
-	samples := samplesOfMaterializacao("d", specWithPoliticas(), snap)
+	samples := samplesOfMaterialization("d", specWithPoliticas(), snap)
 
 	values := map[string]float64{}
 	for _, a := range samples {

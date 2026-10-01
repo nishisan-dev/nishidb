@@ -774,8 +774,7 @@ esta e a congelada são políticas de escrita opostas do mesmo campo.
 #### Expiração: regras de TTL condicionais
 
 O bloco `ttl:` é uma **lista de regras**. Cada evento é avaliado contra elas na
-ordem do arquivo, e a **primeira que casa** decide por quanto tempo a entidade
-pode ficar sem receber escrita:
+ordem do arquivo, e a **primeira que casa** decide quando a entidade vence:
 
 ```yaml
 materialization:
@@ -786,9 +785,51 @@ materialization:
       expireAfterWrite: 3m
     - when: "kind = 'audit'"
       expireAfterWrite: never     # casou e decidiu que não expira
-    # Regra sem `when` é a de FUNDO: casa com tudo, e só pode ser a última.
+    # Regra sem `when` e sem `anchor` é a de FUNDO: casa com tudo, e só pode
+    # ser a última.
     - expireAfterWrite: 7d
 ```
+
+`expireAfterWrite` conta o prazo a partir da **escrita**: toda escrita que
+casa com a regra o renova. Para contar a partir de um **campo do documento**,
+a regra declara `anchor` e `expireAfter`:
+
+```yaml
+materialization:
+  ttl:
+    - when: "lastAuthAt IS NULL"
+      expireAfterWrite: 1h        # sem autenticação: 1h, renovada a cada escrita
+    - anchor: lastAuthAt
+      expireAfter: 48h            # autenticado: vence 48h depois da última autenticação
+```
+
+A entidade vence em `min(âncora, escrita) + expireAfter`, e uma escrita que
+**não muda** a âncora **não renova** o prazo — um evento que só traz o estado
+do equipamento não mantém vivo um serviço que parou de autenticar.
+
+- **A regra ancorada só casa com a âncora PRESENTE** no documento pós-merge.
+  Ausente, a próxima regra é tentada, e `nishidb_ttl_anchor_absent_total{rule}`
+  conta. `anchor` combina com `when`: valem as duas condições.
+- **A âncora precisa ser `timestamp` ou `datetime` declarado** — inclusive uma
+  congelada (`frozenFrom: "@writeTime"` é timestamp) ou uma coluna derivada de
+  `extract:` com esse tipo. `auto`, campo de sistema, campo excluído e campo
+  inexistente são recusados na subida, cada um com a sua mensagem.
+- **`expireAfter` e `expireAfterWrite` são exclusivos**, e `expireAfter` exige
+  `anchor`. `anchor` com `never` é recusado: imortal não tem prazo a contar da
+  âncora. O piso de 1 minuto vale igual.
+- **Âncora no futuro é limitada ao instante da escrita** (prazo =
+  `expireAfter` contado da escrita), e
+  `nishidb_ttl_anchor_in_future_total` conta. Consequência: enquanto a âncora
+  estiver no futuro, uma reentrega do mesmo evento pelo Kafka empurra o prazo
+  para frente, porque a escrita é nova.
+- **Âncora já vencida faz a entidade nascer vencida.** Um backlog relido grava
+  a linha, ela some da consulta logo após a escrita
+  (`nishidb_ttl_expired_on_write_total` sobe) e o coletor lhe dá a lápide na
+  passada seguinte. Até a lápide, o contador mantido na escrita ainda a conta
+  — para ele, viva é linha sem lápide. A escrita seguinte da mesma chave a
+  encontra expirada e parte do vazio, como em toda expiração.
+- **Com `anchor` sobre `frozenFrom: "@writeTime"` há teto de idade absoluta**,
+  contado do nascimento da entidade: nenhuma escrita o move.
 
 O que precisa estar claro antes de escrever a lista:
 
@@ -805,7 +846,9 @@ O que precisa estar claro antes de escrever a lista:
 - **O prazo é reavaliado a cada escrita, e isso é o cancelamento.** Um alarme
   que fecha ganha 3 minutos; se reabrir em 90 segundos, a escrita nova o
   devolve para os 7 dias. O prazo escolhido é gravado no documento como o campo
-  de sistema `_expiresIn` (uma duração em millis, fora do `SELECT *`).
+  de sistema `_expiresIn`: os millis, contados a partir de `_writtenAt`, até o
+  vencimento (fora do `SELECT *`). Numa regra sem `anchor` ele é a própria
+  duração; numa com `anchor`, o que resta até `âncora + expireAfter`.
 - **`never` não é `0`.** `never` declara imortalidade e vence a regra de fundo;
   `0` é recusado, porque parece esquecimento.
 - **A duração mínima é 1 minuto** — a resolução do coletor. Abaixo dela o
@@ -814,11 +857,15 @@ O que precisa estar claro antes de escrever a lista:
 - **Adotar as regras num dataset já populado não exige reprocessar.** As
   entidades materializadas antes não têm `_expiresIn`, e caem no prazo da regra
   de fundo até a primeira escrita seguinte. Sem regra de fundo, elas não
-  expiram.
-- **Renovar empurra o prazo indefinidamente.** Uma entidade que casa com uma
-  regra de 3 minutos mas recebe evento a cada 60 segundos nunca expira. É o
-  comportamento escolhido (não há teto de idade absoluta), e ele está fixado em
-  teste.
+  expiram — e uma regra com `anchor` na última posição **não** é fundo.
+- **Trocar um YAML que tinha regra de fundo por um sem fundo** zera a duração
+  de fundo: a agenda de vencimentos é reconstruída na subida, e as entidades
+  sem `_expiresIn` passam a não expirar até a primeira escrita seguinte. Um
+  dataset novo não tem linha nessa situação.
+- **Com `expireAfterWrite`, renovar empurra o prazo indefinidamente.** Uma
+  entidade que casa com uma regra de 3 minutos mas recebe evento a cada 60
+  segundos nunca expira. É o comportamento escolhido para o idle timeout, e ele
+  está fixado em teste; quem quer teto declara a regra com `anchor`.
 
 A forma antiga — `ttl:` como bloco único com `expireAfterWrite`, ou com
 `field`/`type` — é **recusada na subida**, com a mensagem apontando a lista.

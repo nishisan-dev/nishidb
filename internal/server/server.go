@@ -550,14 +550,18 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 			"valor não coube no tipo fixado da coluna aninhada; a coluna é removida nessa linha e o documento guarda o valor",
 			"coluna", column, "tipoFixado", fixado, "tipoQueVeio", veio)
 	})
-	if regras := spec.Materialization.TTLRules; len(regras) > 0 {
+	if rules := spec.Materialization.TTLRules; len(rules) > 0 {
 		// O operador precisa poder conferir que o YAML que escreveu é o que o
 		// processo entendeu — inclusive a ORDEM, que aqui é semântica.
+		//
+		// temFundo vem do predicado único de fundo, e não da duração: um fundo
+		// `never` tem duração zero e é fundo, e uma regra ancorada na última
+		// posição tem duração e não é.
 		log.Info("ttl.regras",
 			"regras de expiração carregadas",
-			"dataset", spec.Name, "total", len(regras),
-			"temFundo", spec.Materialization.FallbackDuration > 0,
-			"regras", schema.DescribeRules(regras))
+			"dataset", spec.Name, "total", len(rules),
+			"temFundo", schema.HasFallback(rules),
+			"regras", schema.DescribeRules(rules))
 	}
 	mat, err := materializer.New(compilado, st)
 	if err != nil {
