@@ -270,7 +270,7 @@ func NewEmitter(opts Options) (*Emitter, error) {
 // EmitOnce escreve uma linha por grupo vivo do contador.
 //
 // Público para que o teste o chame direto, em vez de esperar um tique — o mesmo
-// motivo do AposentaGroupsVazios no storage.
+// motivo do RetireEmptyGroups no storage.
 //
 // A varredura toma apenas o lock FOLHA do dicionário do contador, e nada do
 // Store: é isso que atende, por construção, a exigência da issue de que a

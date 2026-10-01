@@ -201,7 +201,7 @@ func TestChangingMeasureWindowResetsWithoutBackfill(t *testing.T) {
 }
 
 func TestMeasuresRecoverAtEveryCheckpointBoundary(t *testing.T) {
-	for _, stage := range []string{"segSync", "applyOverlayContadores", "msyncContadores", "counterMeasures", "manifest"} {
+	for _, stage := range []string{"segSync", "syncDictContadores", "applyOverlayContadores", "msyncContadores", "counterMeasures", "manifest"} {
 		t.Run(stage, func(t *testing.T) {
 			opts := measureOptions(t.TempDir(), true, time.Minute)
 			s := openStore(t, opts)

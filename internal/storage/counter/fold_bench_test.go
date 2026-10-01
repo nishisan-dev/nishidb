@@ -30,7 +30,7 @@ func BenchmarkDobra1M(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	if err := c.ApplyOverlay(); err != nil {
+	if err := c.ApplyOverlay(nil); err != nil {
 		b.Fatal(err)
 	}
 	b.ResetTimer()

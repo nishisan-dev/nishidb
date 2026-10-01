@@ -136,6 +136,12 @@ const (
 // (rowindex.Locations), pelo mesmo motivo: uma página descarregada pelo kernel
 // antes do crash não pode descrever um record que não existe.
 //
+// O dicionário de grupos segue a mesma régua pelo outro lado: o grupo novo é
+// só um append, e o fsync dele é a primeira coisa do ApplyOverlay. Assim o
+// vetor nunca recebe um id além do prefixo já fsyncado do grupos.dict, e um
+// crash que leve a cauda não sincronizada do dicionário não deixa nenhum
+// artefato durável apontando para ela (ver o godoc do Dict).
+//
 // # Concorrência
 //
 // Transition, Fold, Clear, ApplyOverlay, RecordCoveredTouches e
@@ -489,10 +495,10 @@ func (c *Counter) transition(rowID types.RowID, payload []byte, tombstone, occur
 		}
 		if hasGroup {
 			// A colisão é conferida ANTES do Intern, e não depois: o Intern
-			// fsynca a chave antes de o id existir em memória, e id de grupo
-			// nunca é reemitido — uma chave colidente que chegasse ao disco
-			// faria TODA abertura seguinte falhar, deixando o dataset
-			// impossível de abrir. Só no caminho de grupo novo: com grupo
+			// grava a chave no arquivo, e o próximo checkpoint (ou o fsync de
+			// uma aposentadoria) a torna durável — uma chave colidente que
+			// chegasse ao disco faria TODA abertura seguinte falhar, deixando o
+			// dataset impossível de abrir. Só no caminho de grupo novo: com grupo
 			// conhecido o ByKey devolve na hora e nada é renderizado, que é o
 			// que mantém o caminho quente sem alocação.
 			if _, known := c.dict.ByKey(key); !known {
@@ -699,9 +705,20 @@ func (c *Counter) Clear() error {
 
 // ApplyOverlay leva o overlay ao mmap e o esvazia. SÓ no checkpoint, DEPOIS
 // do fdatasync dos segmentos: é isso que garante que nenhuma página do vetor
-// descreve transição de record não durável. Erro no meio deixa o restante no
-// overlay para o próximo checkpoint.
-func (c *Counter) ApplyOverlay() error {
+// descreve transição de record não durável. Erro de Set no meio deixa o
+// restante no overlay para o próximo checkpoint (retentável).
+//
+// A PRIMEIRA coisa que ele faz é o fsync do dicionário de grupos (Dict.Sync,
+// pelo passo step). É aqui, e não num passo separado do checkpoint, porque
+// este é o ÚNICO caminho que grava id de grupo no vetor: com o fsync dentro
+// dele, nenhum chamador — o checkpoint, um seam de teste, um caminho futuro —
+// consegue levar ao vetor um id que o dicionário em disco não resolve. Falha
+// do fsync volta como ErrDictSync, sem nenhum Set: é falha de durabilidade, e
+// quem chama deixa o writer falho em vez de tentar de novo.
+func (c *Counter) ApplyOverlay(step SyncStep) error {
+	if err := c.dict.Sync(step); err != nil {
+		return fmt.Errorf("counter %s: %w", c.def.Name, err)
+	}
 	for r, v := range c.over {
 		if err := c.vector.Set(r, v); err != nil {
 			return err

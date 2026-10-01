@@ -253,7 +253,7 @@ func TestAgregadoNaoDescontaEntradaAlemDoDicionario(t *testing.T) {
 	if err := c.Transition(1, payload(t, "A", 1, 2, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ApplyOverlay(); err != nil {
+	if err := c.ApplyOverlay(nil); err != nil {
 		t.Fatal(err)
 	}
 	// Um id que o dicionário nunca emitiu, escrito por baixo do contador.
@@ -446,7 +446,7 @@ func TestDobraReproduzOsTotais(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.ApplyOverlay(); err != nil {
+	if err := c.ApplyOverlay(nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Msync(); err != nil {
@@ -501,7 +501,7 @@ func TestDobraReproduzOsAgregados(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.ApplyOverlay(); err != nil {
+	if err := c.ApplyOverlay(nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Msync(); err != nil {
@@ -552,7 +552,8 @@ func TestOverlayNaoVaiAoMmapAntesDoApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Segunda instância sobre os mesmos arquivos, SEM apply: dobra zero.
-	// (O dicionário já tem a OLT A — ele é fsyncado por entrada.)
+	// (O dicionário já tem a OLT A: o append dela está no arquivo — no page
+	// cache, que a segunda instância lê —, mesmo sem o fsync do checkpoint.)
 	peeker := openCounter(t, dir, def, false)
 	if err := peeker.Fold(); err != nil {
 		t.Fatal(err)
@@ -563,7 +564,7 @@ func TestOverlayNaoVaiAoMmapAntesDoApply(t *testing.T) {
 	if err := peeker.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ApplyOverlay(); err != nil {
+	if err := c.ApplyOverlay(nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Msync(); err != nil {
@@ -598,12 +599,12 @@ func TestDobraTrataIdAposentadoComoOrfa(t *testing.T) {
 	if err := c.Transition(1, payload(t, "B", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ApplyOverlay(); err != nil {
+	if err := c.ApplyOverlay(nil); err != nil {
 		t.Fatal(err)
 	}
 	// Retire A por baixo (o dicionário é de teste aqui) e grava uma entrada
 	// apontando para um id que nunca existiu.
-	if err := c.dict.Retire(1); err != nil {
+	if err := c.dict.Retire(1, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.vector.Set(2, 99); err != nil {
@@ -748,7 +749,7 @@ func TestAbrirComRecriaComecaDoZero(t *testing.T) {
 	if err := c.Transition(0, payload(t, "A", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ApplyOverlay(); err != nil {
+	if err := c.ApplyOverlay(nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Close(); err != nil {

@@ -660,9 +660,15 @@ func (s *Store) hasCounterWithRetention() bool {
 	return false
 }
 
-// AposentaGroupsVazios roda UMA passada de aposentadoria em todos os
+// RetireEmptyGroups roda UMA passada de aposentadoria em todos os
 // contadores, sob o wmu. Devolve quantos grupos saíram.
-func (s *Store) AposentaGroupsVazios() (int, error) {
+//
+// O registro de aposentadoria é fsyncado na hora, e a falha desse fsync deixa
+// o writer FALHO (ErrDictSync → failWriter), como a do checkpoint: depois de
+// um EIO de writeback as páginas perdidas saem do cache como limpas, e o
+// próximo fsync — o do checkpoint — "passaria" com os grupos pendentes fora do
+// disco. Só parar o laço deixaria essa porta do fsyncgate aberta.
+func (s *Store) RetireEmptyGroups() (int, error) {
 	if err := s.entra(); err != nil {
 		return 0, err
 	}
@@ -674,8 +680,11 @@ func (s *Store) AposentaGroupsVazios() (int, error) {
 	}
 	total := 0
 	for _, c := range s.counters {
-		n, err := c.RetireEmptyGroups(s.now())
+		n, err := c.RetireEmptyGroups(s.now(), s.counterDictSyncStep(c, ""))
 		total += n
+		if errors.Is(err, counter.ErrDictSync) {
+			return total, s.failWriter(fmt.Errorf("storage: aposentar grupos do contador %q: %w", c.Def().Name, err))
+		}
 		if err != nil {
 			return total, fmt.Errorf("storage: aposentar grupos do contador %q: %w", c.Def().Name, err)
 		}
@@ -728,7 +737,7 @@ func (s *Store) runRetirement(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		n, err := s.AposentaGroupsVazios()
+		n, err := s.RetireEmptyGroups()
 		if err != nil {
 			// Erro aqui é do writer (sticky) ou do store fechando; insistir
 			// só produz log em laço.

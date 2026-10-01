@@ -326,7 +326,7 @@ func (r *Runner) findAlarm(counterName, alarmName string) *runnerAlarm {
 // EvaluateOnce faz UMA passada por todos os alarmes de todos os contadores.
 //
 // É público para que o teste a chame direto, em vez de esperar um tique — é o
-// mesmo motivo do AposentaGroupsVazios no storage.
+// mesmo motivo do RetireEmptyGroups no storage.
 func (r *Runner) EvaluateOnce() error {
 	inicio := time.Now()
 	defer func() { r.lastSweep.Store(int64(time.Since(inicio))) }()

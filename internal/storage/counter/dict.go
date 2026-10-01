@@ -55,9 +55,33 @@ var (
 // "sem grupo" — é quem chama que decide isso, e conta.
 var ErrGroupCeilingReached = errors.New("contador: teto de grupos atingido")
 
+// ErrDictSync marca a falha do fsync do dicionário de grupos — no checkpoint
+// (ApplyOverlay) ou no registro de aposentadoria (Retire).
+//
+// É falha de DURABILIDADE, e quem a recebe deixa o writer falho (stickyErr no
+// Store), nunca tenta de novo: o kernel reporta o EIO de writeback uma vez e
+// limpa as páginas, e uma segunda chamada "bem-sucedida" deixaria um buraco no
+// meio do arquivo. A varredura da reabertura pararia nele, e os grupos
+// posteriores — já referenciados pelo vetor — sumiriam (fsyncgate).
+var ErrDictSync = errors.New("counter: group dictionary fsync failed")
+
+// SyncStep é por onde o fsync do dicionário passa quando quem o pede quer
+// observá-lo: o Store embrulha o passo no trace de ordem do checkpoint e no
+// seam de falha injetada dos testes. A função recebida é o fsync de fato;
+// nil é chamar direto.
+type SyncStep func(sync func() error) error
+
+// run executa o fsync pelo passo, ou direto quando não há passo.
+func (step SyncStep) run(sync func() error) error {
+	if step == nil {
+		return sync()
+	}
+	return step(sync)
+}
+
 // dictFile é a superfície de arquivo do dicionário. Interface para
-// os testes conferirem a ORDEM das chamadas de durabilidade (WriteAt antes de
-// Sync, Sync antes de o id sair).
+// os testes conferirem a ORDEM das chamadas de durabilidade (o WriteAt do
+// Intern sem Sync, o Sync do checkpoint antes do primeiro Set do vetor).
 type dictFile interface {
 	io.WriterAt
 	Sync() error
@@ -75,15 +99,30 @@ var openDictFile = func(path string) (dictFile, error) {
 
 // Dict é o interning dos grupos de um contador: chave composta → id.
 //
-// Intern e Retire são exclusivos do writer; Key, ByKey e os contadores
+// Intern, Retire e Sync são exclusivos do writer; Key, ByKey e os contadores
 // são seguros para leitores concorrentes. O mutex é FOLHA na ordem de locks do
 // Store: nada tomado sob ele toma o wmu. O writer o toma sob o wmu, e só ao
 // internar um grupo NOVO ou aposentar — o lookup de chave existente é um RLock.
 //
-// Ids nunca são reemitidos: aposentar um grupo o tira do mapa, e a mesma chave,
-// se reaparecer, ganha o próximo id. Reciclar exigiria provar que nenhuma
-// entrada do vetor ainda aponta para o id, e essa prova é do tipo que falha em
-// produção e não em teste (planning §6.5).
+// # Durabilidade: no checkpoint, não por entrada
+//
+// O Intern só faz o append; o fsync de todos os appends pendentes acontece no
+// checkpoint (Sync, chamado como primeira coisa do Counter.ApplyOverlay). A
+// invariante que isso preserva é: NENHUM ARTEFATO DURÁVEL REFERENCIA ID DE
+// GRUPO ALÉM DO PREFIXO JÁ FSYNCADO DESTE ARQUIVO. Nenhum record carrega id de
+// grupo; os únicos referenciadores duráveis do id são o vetor (que só recebe
+// o id no ApplyOverlay, depois do fsync) e o snapshot das medidas (gravado
+// depois do ApplyOverlay no mesmo checkpoint). Um id em memória antes do
+// checkpoint é como a location no overlay: visível aos leitores, não durável.
+// Um crash pode fazê-lo sumir, e o replay re-interna a chave — talvez com
+// outro id —, o que é correto porque nada durável apontava para ele.
+//
+// Ids DURÁVEIS nunca são reemitidos: aposentar um grupo o tira do mapa, e a
+// mesma chave, se reaparecer, ganha o próximo id. Reciclar exigiria provar que
+// nenhuma entrada do vetor ainda aponta para o id, e essa prova é do tipo que
+// falha em produção e não em teste (planning §6.5). Um id que só existiu em
+// memória e se perdeu num crash pode, sim, sair de novo para outra chave — o id
+// não é exposto para fora do contador, e nada durável o referenciava.
 type Dict struct {
 	mu   sync.RWMutex
 	f    dictFile
@@ -172,8 +211,16 @@ func OpenDict(path string, ceiling uint32) (*Dict, error) {
 
 // readRecords percorre o prefixo válido e devolve onde ele termina. Para no
 // primeiro registro incompleto, com CRC errado ou logicamente impossível (uma
-// aposentadoria de id que não existe ou já saiu): a partir dali é cauda
-// rasgada, e o que vier depois não pode ser confiado.
+// aposentadoria de id que não existe ou já saiu, ou uma entrada cuja chave já
+// é de um grupo VIVO): a partir dali é cauda rasgada, e o que vier depois não
+// pode ser confiado.
+//
+// A chave viva duplicada é impossível por construção — o Intern devolve o id
+// existente e nunca escreve —, então ela só aparece num arquivo danificado.
+// Aceitá-la sobrescreveria o mapa em silêncio: a chave passaria a resolver
+// para o id novo, e as entradas do vetor que apontam para o antigo contariam
+// num grupo que nenhuma chave alcança. Chave de grupo APOSENTADO não está no
+// mapa e volta legitimamente com id novo.
 func (d *Dict) readRecords(raw []byte) int {
 	pos := headerSize
 	for pos < len(raw) {
@@ -205,6 +252,9 @@ func (d *Dict) readRecords(raw []byte) int {
 		if crc32.Checksum(body, castagnoli) != binary.LittleEndian.Uint32(rest[2+n:2+n+4]) {
 			break
 		}
+		if _, dup := d.byKey[string(body[2:])]; dup {
+			break
+		}
 		key := make([]byte, n)
 		copy(key, body[2:])
 		d.internInMemory(key)
@@ -229,9 +279,15 @@ func (d *Dict) retireInMemory(id uint32) {
 	d.retiredGroups++
 }
 
-// Intern devolve o id do grupo, criando-o (com fsync) se novo. Exclusivo do
-// writer. Chave já internada nunca toca o arquivo nem aloca: o lookup é
-// m[string(key)], que o compilador não materializa.
+// Intern devolve o id do grupo, criando-o se novo. Exclusivo do writer. Chave
+// já internada nunca toca o arquivo nem aloca: o lookup é m[string(key)], que o
+// compilador não materializa.
+//
+// O grupo novo é só um APPEND, sem fsync: o id devolvido é visível aos leitores
+// e não é durável até o próximo Sync, que o checkpoint faz antes de o vetor
+// receber qualquer id (ver o godoc do Dict). Antes deste desenho cada grupo
+// novo pagava um fsync — ~2 ms medidos no piloto, ~80 min de writer parado
+// numa carga fria de 2,46M grupos (issue #88).
 //
 // ErrGroupCeilingReached quando um grupo NOVO não cabe: o teto conta vivos, e
 // aposentar um grupo libera a vaga.
@@ -257,33 +313,65 @@ func (d *Dict) Intern(key []byte) (uint32, error) {
 	entry = append(entry, key...)
 	entry = binary.LittleEndian.AppendUint32(entry, crc32.Checksum(entry, castagnoli))
 
-	// fsync ANTES de o id existir em memória: nenhuma entrada do vetor pode
-	// apontar para um id que a reabertura não resolva (invariante do
-	// fielddict, §32/§14.6, aplicada aos grupos).
+	// Sem fsync: a durabilidade é do checkpoint (Sync). Um append que falha não
+	// avança size, e o próximo sobrescreve os bytes que ele tenha deixado.
 	if _, err := d.f.WriteAt(entry, d.size); err != nil {
 		return 0, fmt.Errorf("contador: append do grupo: %w", err)
-	}
-	if err := d.f.Sync(); err != nil {
-		return 0, fmt.Errorf("contador: fsync do grupo: %w", err)
 	}
 
 	keyClone := make([]byte, len(key))
 	copy(keyClone, key)
 	d.mu.Lock()
 	d.size += int64(len(entry))
-	d.syncedSize = d.size
 	id := d.internInMemory(keyClone)
 	d.mu.Unlock()
 	return id, nil
 }
 
+// Sync torna durável todo append pendente — é o fsync do checkpoint, que o
+// Counter.ApplyOverlay faz antes de levar qualquer id ao vetor. Dicionário
+// limpo (sem append desde o último fsync) não toca o arquivo; quem quiser
+// observar o passo o passa em step, que roda mesmo quando não há o que
+// sincronizar. Exclusivo do writer.
+//
+// Erro sai embrulhado em ErrDictSync: é falha de durabilidade, e o writer
+// tem de ficar falho (ver ErrDictSync).
+func (d *Dict) Sync(step SyncStep) error {
+	if err := step.run(func() error { return d.syncTo(d.size) }); err != nil {
+		return fmt.Errorf("%w: %w", ErrDictSync, err)
+	}
+	return nil
+}
+
+// syncTo faz o fsync quando o arquivo tem bytes além do último prefixo
+// sincronizado, e registra target como o novo prefixo durável.
+func (d *Dict) syncTo(target int64) error {
+	if target <= d.syncedSize {
+		return nil
+	}
+	if err := d.f.Sync(); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.syncedSize = target
+	d.mu.Unlock()
+	return nil
+}
+
 // Retire registra (com fsync) que o grupo saiu: ele deixa de resolver por
 // chave e de ser vivo, e o id nunca é reemitido. Exclusivo do writer.
+//
+// O fsync aqui continua sendo por registro: a aposentadoria é rara (no máximo
+// uma passada por minuto) e precisa estar durável antes de o grupo sair da
+// memória. Como o fsync é do ARQUIVO, ele leva junto os appends de grupo
+// pendentes desde o último checkpoint — e é por isso que o prefixo
+// sincronizado avança até o fim do registro. step tem o mesmo papel que no
+// Sync, e o erro do fsync sai embrulhado em ErrDictSync pela mesma razão.
 //
 // Aposentar um id inexistente ou já aposentado é erro, não no-op: a decisão é
 // do coletor sobre um grupo vivo, e a repetição denunciaria um coletor que
 // perdeu o próprio estado.
-func (d *Dict) Retire(id uint32) error {
+func (d *Dict) Retire(id uint32, step SyncStep) error {
 	d.mu.RLock()
 	valid := id >= 1 && int(id) <= len(d.keys) && d.live[id-1]
 	d.mu.RUnlock()
@@ -297,12 +385,12 @@ func (d *Dict) Retire(id uint32) error {
 	if _, err := d.f.WriteAt(rec[:], d.size); err != nil {
 		return fmt.Errorf("contador: append da aposentadoria de %d: %w", id, err)
 	}
-	if err := d.f.Sync(); err != nil {
-		return fmt.Errorf("contador: fsync da aposentadoria de %d: %w", id, err)
+	end := d.size + retirementRecordSize
+	if err := step.run(func() error { return d.syncTo(end) }); err != nil {
+		return fmt.Errorf("%w: aposentadoria do grupo %d: %w", ErrDictSync, id, err)
 	}
 	d.mu.Lock()
-	d.size += retirementRecordSize
-	d.syncedSize = d.size
+	d.size = end
 	d.retireInMemory(id)
 	d.mu.Unlock()
 	return nil

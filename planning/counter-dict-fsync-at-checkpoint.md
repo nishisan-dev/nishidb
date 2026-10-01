@@ -12,7 +12,7 @@ Base: branch `feature/counter-scope-rows` (PR #90 — par de 64 bits por grupo).
 
 - O "desenho no plano" citado pelo débito 108 NÃO existe em lugar nenhum; o
   plano dos contadores fixa o OPOSTO (fsync por entrada, tarefa B1,
-  `TestDicionarioFsyncaAntesDeDevolverOId`). `store_checkpoint.go:30-34` proíbe
+  `TestDictInternDefersTheSyncToTheCheckpoint`). `store_checkpoint.go:30-34` proíbe
   batching de dicionário (falando de fields/values.dict).
 - Nenhum RECORD carrega id de grupo. Os únicos referenciadores DURÁVEIS do id
   são o vetor (`grupos.idx`, só via `ApplyOverlay` no checkpoint) e o snapshot
@@ -127,7 +127,7 @@ durabilidade próprio).
 `store_checkpoint.go:30-34` (estreitar para fields/values.dict e explicar a
 assimetria: records carregam fieldIDs, não ids de grupo), godoc de `dict.go`
 (`:~202-204`, `:~230-232`), `counter.go:~484-490` (argumento da colisão cita
-"o Intern fsynca a chave"), `TestDicionarioFsyncaAntesDeDevolverOId` (vira o
+"o Intern fsynca a chave"), `TestDictInternDefersTheSyncToTheCheckpoint` (vira o
 teste da nova ordem — renomeie para inglês e registre o par no
 `mapeamento-2-manual.tsv`), `docs/debitos.md` item 108 (marcar como resolvido
 segundo a convenção do arquivo, sem renumerar), `docs/architecture.md` se
@@ -240,7 +240,7 @@ DURÁVEIS (um id perdido no crash pode ser reemitido para outra chave; o id não
 é exposto externamente); `dict.go:~58-60,~202,~230-232`,
 `collision_test.go:~74`, `counter_test.go:~555`,
 `docs/architecture.md:~2440-2441,~2606-2613`. `docs/aceite-contadores.md:~37`
-cita `TestDicionarioFsyncaAntesDeDevolverOId`: descubra como o repositório
+cita `TestDictInternDefersTheSyncToTheCheckpoint`: descubra como o repositório
 trata teste renomeado/removido citado em aceite antigo (registro de rodada não
 se reescreve; veja `TestRenamedIdentifiersAreNotCitedByTheirOldNames`,
 `scripts/renamecite` e o mapeamento) e siga o mecanismo existente; relate a

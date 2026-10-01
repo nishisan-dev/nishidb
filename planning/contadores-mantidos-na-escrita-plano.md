@@ -407,7 +407,7 @@ por grupo na internação e guardado ao lado da chave (tarefa B2 define
   - `TestDicionarioAposentaENuncaReemite`: aposenta o id 2, reabre, `Key(2)` vivo=false, `Intern(mesma chave)` devolve id 4.
   - `TestDicionarioRecusaOTeto`: teto 2, terceira chave → `ErrGroupCeilingReached`; aposentar uma libera uma vaga.
   - `TestDicionarioNaoAlocaNoLookup` (`!race`, teto 0 sobre `Intern` de chave existente e `ByKey`).
-  - **Mutação obrigatória**: remover o `f.Sync()` de `Intern` e provar que um teste fica vermelho — `TestDicionarioFsyncaAntesDeDevolverOId` usa um seam `afterWrite func()` (como `agenda.afterWrite`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
+  - **Mutação obrigatória**: remover o `f.Sync()` de `Intern` e provar que um teste fica vermelho — `TestDictInternDefersTheSyncToTheCheckpoint` usa um seam `afterWrite func()` (como `agenda.afterWrite`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `contador: dicionário de grupos append-only com fsync por entrada e aposentadoria`.
 
