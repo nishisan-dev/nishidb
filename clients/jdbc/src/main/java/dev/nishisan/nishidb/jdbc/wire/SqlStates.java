@@ -37,6 +37,12 @@ public final class SqlStates {
     public static final String CONEXAO_NAO_ESTABELECIDA = "08001";
     /** 08006 — a conexão terminou no meio. */
     public static final String CONEXAO_INTERROMPIDA = "08006";
+    /**
+     * 08003 — a conexão não existe mais: foi fechada por {@code abort} ou pelo
+     * estouro do prazo de rede, e a operação pedida nela (ou em voo nela) não
+     * tem mais por onde ir. Distinto do 08001, que é "não consegui conectar".
+     */
+    public static final String CONNECTION_DOES_NOT_EXIST = "08003";
     /** 08P01 — violação de protocolo: o driver falou errado, ou não é o servidor esperado. */
     public static final String PROTOCOLO_VIOLADO = "08P01";
 

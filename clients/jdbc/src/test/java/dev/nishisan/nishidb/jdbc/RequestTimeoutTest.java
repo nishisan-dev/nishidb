@@ -80,7 +80,9 @@ class RequestTimeoutTest {
         /** Responde depois de {@link StubServer#queryDelayMs}. */
         DELAYED,
         /** Manda uma linha a cada {@link StubServer#rowIntervalMs}. */
-        TRICKLE
+        TRICKLE,
+        /** Documento: manda um byte a cada 300 ms — nunca fica em silêncio pelo prazo. */
+        TRICKLE_BYTES
     }
 
     /** O servidor dublê, com o comportamento de cada rota trocável no meio do teste. */
@@ -169,6 +171,20 @@ class RequestTimeoutTest {
                                 .getBytes(StandardCharsets.UTF_8));
                     }
                 }
+                case TRICKLE_BYTES -> {
+                    ex.sendResponseHeaders(200, 0);
+                    try (OutputStream out = ex.getResponseBody()) {
+                        // Espaços antes do fecho: o JSON só termina depois de
+                        // ~6 s, e cada byte chega bem antes de qualquer prazo
+                        // de silêncio do teste.
+                        for (byte b : (body.substring(0, body.length() - 1) + " ".repeat(20) + "}")
+                                .getBytes(StandardCharsets.UTF_8)) {
+                            out.write(b);
+                            out.flush();
+                            sleep(300);
+                        }
+                    }
+                }
                 default -> throw new IllegalStateException(mode.name());
             }
         }
@@ -242,7 +258,7 @@ class RequestTimeoutTest {
             } catch (SQLException e) {
                 return e;
             }
-            return fail(what + " voltou sem lançar: o estouro do prazo não chegou à aplicação");
+            return fail(what + " voltou sem lançar: a falha esperada não chegou à aplicação");
         });
     }
 
@@ -617,6 +633,7 @@ class RequestTimeoutTest {
             long ms = elapsedMs(start);
             assertTrue(e != null, "a consulta presa voltou sem erro depois do abort");
             assertTrue(e.getMessage().contains("fechada"), e.getMessage());
+            assertEquals("08003", e.getSQLState(), e.getMessage());
             assertTrue(ms <= 2_000, "abort levou " + ms + " ms para destravar a consulta");
             assertEquals(1, executed.get(), "abort não usou o executor recebido");
             assertThrows(SQLException.class, c::createStatement);
@@ -635,6 +652,227 @@ class RequestTimeoutTest {
             c.abort(r -> executed.incrementAndGet());
             assertEquals(0, executed.get(), "abort numa conexão fechada fez alguma coisa");
             assertTrue(e.getMessage().contains("executor"), e.getMessage());
+        }
+    }
+
+    /**
+     * Statement criado ANTES do abort não executa mais, e a consulta nem sai.
+     *
+     * <p>O executor aqui guarda a tarefa sem rodá-la: o cliente HTTP continua
+     * vivo, e só a checagem do próprio Statement impede a consulta de chegar
+     * ao servidor que o abort mandou esquecer.
+     */
+    @Test
+    void statementCreatedBeforeAbortRefusesToExecuteAndSendsNothing() throws Exception {
+        List<Runnable> pending = new ArrayList<>();
+        try (StubServer stub = new StubServer(); Connection c = connect(stub, "")) {
+            Statement st = c.createStatement();
+            c.abort(pending::add);
+            assertTrue(c.isClosed());
+            assertTrue(st.isClosed(), "o Statement de uma conexão abortada se diz aberto");
+            SQLException e = failureWithin(5_000, "executeQuery num Statement de conexão abortada",
+                    () -> st.executeQuery("SELECT id FROM eventos"));
+            assertEquals("08003", e.getSQLState(), e.getMessage());
+            assertFalse(e.getMessage().contains("em voo"), "não havia requisição em voo: " + e.getMessage());
+            assertTrue(stub.queryBodies.isEmpty(),
+                    "a consulta chegou ao servidor depois do abort: " + stub.queryBodies);
+        } finally {
+            pending.forEach(Runnable::run);
+        }
+    }
+
+    /**
+     * Depois do estouro do prazo de rede, o Statement que já existia recebe
+     * "conexão fechada" (08003) — e não a mensagem de requisição em voo, que
+     * não havia.
+     */
+    @Test
+    void statementAfterANetworkTimeoutGetsConnectionClosed() throws Exception {
+        try (StubServer stub = new StubServer(); Connection c = connect(stub, "?socketTimeoutMs=500")) {
+            Statement other = c.createStatement();
+            stub.query = Mode.HANG;
+            SQLException first = failureWithin(5_000, "executeQuery com socketTimeoutMs=500", () -> {
+                try (Statement st = c.createStatement()) {
+                    st.executeQuery("SELECT id FROM eventos");
+                }
+            });
+            assertEquals("08006", first.getSQLState(), first.getMessage());
+            int sent = stub.queryBodies.size();
+            stub.query = Mode.ANSWER;
+            SQLException e = failureWithin(5_000, "executeQuery no Statement que já existia",
+                    () -> other.executeQuery("SELECT id FROM eventos"));
+            assertEquals("08003", e.getSQLState(), e.getMessage());
+            assertFalse(e.getMessage().contains("em voo"), "não havia requisição em voo: " + e.getMessage());
+            assertEquals(sent, stub.queryBodies.size(), "a consulta saiu de um Statement de conexão fechada");
+        }
+    }
+
+    /**
+     * Um executor que RECUSA a tarefa não deixa a consulta presa nem vaza
+     * {@code RejectedExecutionException} para quem abortou.
+     */
+    @Test
+    void abortWithARejectingExecutorStillUnblocksTheStuckRequest() throws Exception {
+        Executor rejecting = r -> {
+            throw new java.util.concurrent.RejectedExecutionException("pool desligado");
+        };
+        try (StubServer stub = new StubServer(); Connection c = connect(stub, "")) {
+            stub.query = Mode.HANG;
+            Future<SQLException> stuck = WORKERS.submit(() -> {
+                try (Statement st = c.createStatement()) {
+                    st.executeQuery("SELECT id FROM eventos");
+                    return null;
+                } catch (SQLException e) {
+                    return e;
+                }
+            });
+            assertTrue(stub.queryArrived.tryAcquire(5, TimeUnit.SECONDS), "a consulta não chegou ao dublê");
+            try {
+                c.abort(rejecting);
+            } catch (RuntimeException e) {
+                fail("a recusa do executor vazou do abort: " + e);
+            }
+            assertTrue(c.isClosed());
+            SQLException e;
+            try {
+                e = stuck.get(3, TimeUnit.SECONDS);
+            } catch (TimeoutException t) {
+                e = fail("com o executor recusando, o abort não destravou a consulta presa em 3 s");
+            }
+            assertTrue(e != null, "a consulta presa voltou sem erro depois do abort");
+            assertEquals("08003", e.getSQLState(), e.getMessage());
+        }
+    }
+
+    /**
+     * Abort com a consulta já LENDO o corpo — cabeçalhos e schema chegaram,
+     * o corpo parou — também sai com "conexão fechada" 08003, e não com a
+     * queda genérica "lendo a resposta: closed".
+     */
+    @Test
+    void abortWhileReadingTheBodyGivesConnectionClosed() throws Exception {
+        try (StubServer stub = new StubServer(); Connection c = connect(stub, "")) {
+            stub.query = Mode.HEADERS_THEN_STALL;
+            Future<SQLException> stuck = WORKERS.submit(() -> {
+                try (Statement st = c.createStatement()) {
+                    st.executeQuery("SELECT id FROM eventos").next();
+                    return null;
+                } catch (SQLException e) {
+                    return e;
+                }
+            });
+            assertTrue(stub.queryArrived.tryAcquire(5, TimeUnit.SECONDS), "a consulta não chegou ao dublê");
+            // Os cabeçalhos e a linha de schema saem logo em seguida; a folga
+            // garante que a thread já está presa na leitura do CORPO.
+            Thread.sleep(500);
+            c.abort(Runnable::run);
+            SQLException e;
+            try {
+                e = stuck.get(3, TimeUnit.SECONDS);
+            } catch (TimeoutException t) {
+                e = fail("abort não destravou a leitura do corpo em 3 s");
+            }
+            assertTrue(e != null, "a leitura presa voltou sem erro depois do abort");
+            assertEquals("08003", e.getSQLState(), e.getMessage());
+            assertTrue(e.getMessage().contains("fechada"), e.getMessage());
+        }
+    }
+
+    /**
+     * O {@code close()} depois do abort fecha o que o abort deixou aberto: os
+     * Statement e os ResultSet deles.
+     */
+    @Test
+    void closeAfterAbortClosesTheStatementsAndTheirResults() throws Exception {
+        try (StubServer stub = new StubServer()) {
+            Connection c = connect(stub, "");
+            Statement st = c.createStatement();
+            ResultSet rs = st.executeQuery("SELECT id FROM eventos");
+            assertTrue(rs.next());
+            c.abort(Runnable::run);
+            assertFalse(rs.isClosed(), "o abort fechou o ResultSet, que podia estar em uso noutra thread");
+            c.close();
+            assertTrue(rs.isClosed(), "o close() depois do abort deixou o ResultSet aberto");
+        }
+    }
+
+    // ------------------------------------------------- precedência dos prazos
+
+    /** {@code isValid(1)} vence um prazo de rede MAIOR: volta em ~1 s, e não em 10. */
+    @Test
+    void isValidSecondsWinOverALongerNetworkTimeout() throws Exception {
+        try (StubServer stub = new StubServer(); Connection c = connect(stub, "?socketTimeoutMs=10000")) {
+            stub.health = Mode.HANG;
+            long start = System.nanoTime();
+            boolean valid = within(15_000, "isValid(1) com prazo de rede de 10 s", () -> c.isValid(1));
+            long ms = elapsedMs(start);
+            assertFalse(valid);
+            assertTrue(ms <= 2_500, "isValid(1) levou " + ms + " ms: valeu o prazo de rede, e não o próprio");
+        }
+    }
+
+    /**
+     * O queryTimeout vence um prazo de rede MAIOR: {@code setQueryTimeout(1)}
+     * com prazo de rede de 60 s estoura em ~6 s.
+     */
+    @Test
+    void queryTimeoutShorterThanTheNetworkTimeoutWins() throws Exception {
+        try (StubServer stub = new StubServer(); Connection c = connect(stub, "?socketTimeoutMs=60000")) {
+            stub.query = Mode.HANG;
+            long start = System.nanoTime();
+            long limit = 1_000 + NishiStatement.QUERY_TIMEOUT_GRACE_MS;
+            SQLException e = failureWithin(limit + 4_000, "setQueryTimeout(1) com prazo de rede de 60 s", () -> {
+                try (Statement st = c.createStatement()) {
+                    st.setQueryTimeout(1);
+                    st.executeQuery("SELECT id FROM eventos");
+                }
+            });
+            long ms = elapsedMs(start);
+            assertInstanceOf(SQLTimeoutException.class, e, e.toString());
+            assertTrue(ms <= limit + 2_000, "levou " + ms + " ms: valeu o prazo de rede de 60 s");
+        }
+    }
+
+    /**
+     * A resposta do servidor que chega DENTRO da folga é entregue:
+     * {@code setQueryTimeout(1)} e o servidor respondendo em 2,5 s.
+     *
+     * <p>Sem a folga, o cliente desistiria em 1 s, antes do servidor — e é
+     * a resposta dele, com o erro próprio, que a folga existe para deixar
+     * chegar. O número é fixo no teste, e não lido da constante: o teste que
+     * usa a constante se cumpre sozinho quando ela vai a zero.
+     */
+    @Test
+    void serverAnswerWithinTheGraceIsDelivered() throws Exception {
+        try (StubServer stub = new StubServer(); Connection c = connect(stub, "")) {
+            stub.query = Mode.DELAYED;
+            stub.queryDelayMs = 2_500;
+            within(12_000, "setQueryTimeout(1) com resposta em 2,5 s", () -> {
+                try (Statement st = c.createStatement()) {
+                    st.setQueryTimeout(1);
+                    try (ResultSet rs = st.executeQuery("SELECT id FROM eventos")) {
+                        assertTrue(rs.next(), "a resposta dentro da folga não trouxe a linha");
+                    }
+                }
+                return null;
+            });
+        }
+    }
+
+    /**
+     * No documento, o prazo é da requisição INTEIRA: um health que pinga um
+     * byte a cada 300 ms — nunca em silêncio por 1 s — estoura {@code isValid(1)}
+     * em ~1 s do mesmo jeito.
+     */
+    @Test
+    void documentTimeoutCoversTheWholeRequestNotOnlySilence() throws Exception {
+        try (StubServer stub = new StubServer(); Connection c = connect(stub, "")) {
+            stub.health = Mode.TRICKLE_BYTES;
+            long start = System.nanoTime();
+            boolean valid = within(10_000, "isValid(1) com o health pingando bytes", () -> c.isValid(1));
+            long ms = elapsedMs(start);
+            assertFalse(valid, "isValid(1) esperou o health inteiro, que leva ~10 s");
+            assertTrue(ms <= 2_500, "isValid(1) com o health pingando levou " + ms + " ms");
         }
     }
 

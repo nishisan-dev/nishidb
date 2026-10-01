@@ -3,6 +3,7 @@ package dev.nishisan.nishidb.jdbc.wire;
 import dev.nishisan.nishidb.jdbc.json.JsonException;
 import dev.nishisan.nishidb.jdbc.json.JsonParser;
 import dev.nishisan.nishidb.jdbc.json.JsonValue;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -124,7 +125,7 @@ public final class Transporte implements AutoCloseable {
                 .build();
 
         HttpResponse<InputStream> resp = envia(req, HttpResponse.BodyHandlers.ofInputStream(), timeout);
-        InputStream body = timed(resp.body(), timeout, null);
+        InputStream body = body(resp.body(), timeout, null);
         if (resp.statusCode() == 200) {
             return body;
         }
@@ -152,12 +153,12 @@ public final class Transporte implements AutoCloseable {
         HttpRequest req = requisicao(caminho, timeout).GET().build();
         HttpResponse<InputStream> resp = envia(req, HttpResponse.BodyHandlers.ofInputStream(), timeout);
         Long deadline = start + Duration.ofMillis(timeout.millis()).toNanos();
-        try (InputStream corpo = timed(resp.body(), timeout, deadline)) {
+        try (InputStream corpo = body(resp.body(), timeout, deadline)) {
             if (resp.statusCode() != 200) {
                 throw falhaDoServidor(resp.statusCode(), corpo);
             }
             return JsonParser.le(corpo);
-        } catch (ResponseTimeoutException e) {
+        } catch (ResponseFailureException e) {
             throw e.failure();
         } catch (JsonException e) {
             throw new SQLRecoverableException(caminho + ": resposta ilegivel: " + e.getMessage(),
@@ -215,9 +216,73 @@ public final class Transporte implements AutoCloseable {
         return b;
     }
 
-    /** O corpo com prazo, ou o próprio corpo quando não há prazo. */
-    private static InputStream timed(InputStream body, RequestTimeout timeout, Long deadlineNanos) {
-        return timeout.isSet() ? new TimedInputStream(body, timeout, deadlineNanos) : body;
+    /**
+     * O corpo como quem lê o recebe: com o prazo, quando há, e com a falha de
+     * leitura depois de um {@link #abandon()} traduzida em conexão fechada.
+     */
+    private InputStream body(InputStream raw, RequestTimeout timeout, Long deadlineNanos) {
+        InputStream in = timeout.isSet() ? new TimedInputStream(raw, timeout, deadlineNanos) : raw;
+        return new AbandonAwareInputStream(in);
+    }
+
+    /**
+     * A exceção da requisição que estava em voo quando a conexão foi
+     * derrubada de propósito — esperando os cabeçalhos ou lendo o corpo.
+     */
+    private static SQLException closedInFlight(Throwable cause) {
+        return new SQLNonTransientConnectionException("esta conexao foi fechada (abort ou estouro do prazo de rede) "
+                + "com a requisicao em voo", SqlStates.CONNECTION_DOES_NOT_EXIST, cause);
+    }
+
+    /**
+     * Traduz a falha de leitura do corpo depois de um {@link #abandon()}.
+     *
+     * <p>Sem isto, a thread presa no corpo quando o abort chega sairia com a
+     * queda genérica do {@link LeitorNdjson} — 08006 "lendo a resposta:
+     * closed" —, que manda procurar um problema de rede onde houve um abort.
+     * A falha que já vem montada ({@link ResponseFailureException}, do prazo)
+     * passa intacta: o estouro do prazo de rede também abandona o transporte,
+     * e a exceção certa ali é a do prazo.
+     */
+    private final class AbandonAwareInputStream extends FilterInputStream {
+
+        AbandonAwareInputStream(InputStream in) {
+            super(in);
+        }
+
+        @Override
+        public int read() throws IOException {
+            try {
+                return in.read();
+            } catch (IOException e) {
+                throw translate(e);
+            }
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            try {
+                return in.read(b, off, len);
+            } catch (IOException e) {
+                throw translate(e);
+            }
+        }
+
+        @Override
+        public long skip(long n) throws IOException {
+            try {
+                return in.skip(n);
+            } catch (IOException e) {
+                throw translate(e);
+            }
+        }
+
+        private IOException translate(IOException e) {
+            if (e instanceof ResponseFailureException || !abandoned) {
+                return e;
+            }
+            return new ResponseFailureException(closedInFlight(e));
+        }
     }
 
     private <T> HttpResponse<T> envia(HttpRequest req, HttpResponse.BodyHandler<T> handler, RequestTimeout timeout)
@@ -240,8 +305,7 @@ public final class Transporte implements AutoCloseable {
             throw falha;
         } catch (IOException e) {
             if (abandoned) {
-                throw new SQLNonTransientConnectionException("esta conexao foi fechada com a requisicao em voo",
-                        SqlStates.CONEXAO_NAO_ESTABELECIDA, e);
+                throw closedInFlight(e);
             }
             throw new SQLNonTransientConnectionException(
                     "falando com " + base + ": " + e.getMessage(), SqlStates.CONEXAO_NAO_ESTABELECIDA, e);
@@ -285,7 +349,7 @@ public final class Transporte implements AutoCloseable {
                 }
                 return SqlStates.excecaoDe(codigo, mensagem);
             }
-        } catch (ResponseTimeoutException e) {
+        } catch (ResponseFailureException e) {
             return e.failure();
         } catch (JsonException | IOException e) {
             texto = e.getMessage();

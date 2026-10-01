@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * A conexão do §70 — um {@link Transporte} e os tetos do dataset.
@@ -61,10 +62,15 @@ import java.util.concurrent.Executor;
  *       {@code SQLTimeoutException} 57014, e a conexão continua utilizável.
  *   <li>O prazo de rede — {@code socketTimeoutMs} na URL, depois
  *       {@link #setNetworkTimeout}: toda requisição sem prazo próprio
- *       (metadata, catálogo, consulta sem queryTimeout, {@code isValid(0)}).
- *       Estouro FECHA a conexão, que é o contrato do
+ *       (metadata, catálogo, stats, consulta sem queryTimeout,
+ *       {@code isValid(0)}). Estouro FECHA a conexão, que é o contrato do
  *       {@code setNetworkTimeout}. Zero, o default, é sem prazo.
  * </ul>
+ *
+ * <p>O que cada prazo mede depende do caminho, e não da origem: na consulta,
+ * a espera pelos cabeçalhos e cada espera por bytes do stream (o silêncio,
+ * nunca a duração); nos documentos pequenos (health, metadata, catálogo,
+ * stats), a requisição inteira — ver {@link RequestTimeout}.
  */
 public final class NishiConnection implements Connection {
 
@@ -602,10 +608,14 @@ public final class NishiConnection implements Connection {
      * <p>Marca a conexão fechada AQUI, antes de voltar — quem chamou abort
      * pode contar com {@code isClosed()} verdadeiro na linha seguinte — e
      * derruba o cliente HTTP no {@code executor}, como o contrato pede. A
-     * requisição presa em outra thread sai com {@code SQLException} de conexão
-     * fechada; os Statement não são fechados aqui, porque podem estar em uso
-     * justamente nela, e o {@link #close()} que vier depois os fecha. Chamado
-     * numa conexão já fechada, não faz nada.
+     * requisição presa em outra thread — esperando os cabeçalhos ou já lendo o
+     * corpo — sai com {@code SQLException} 08003 de conexão fechada. Os
+     * Statement não são fechados aqui, porque podem estar em uso justamente
+     * nela; eles passam a se recusar a executar (08003) desde já, e o
+     * {@link #close()} que vier depois os fecha de fato. Se o executor recusar
+     * a tarefa, o cliente HTTP é derrubado na thread de quem abortou — é um
+     * {@code shutdownNow}, que não espera —, e a recusa não vaza. Chamado numa
+     * conexão já fechada, não faz nada.
      *
      * <p>Não consulta {@code SecurityManager} pela permissão
      * {@code SQLPermission("callAbort")}: o piso do driver é o JDK 21, onde o
@@ -622,7 +632,16 @@ public final class NishiConnection implements Connection {
             return;
         }
         fechado = true;
-        executor.execute(transporte::abandon);
+        try {
+            executor.execute(transporte::abandon);
+        } catch (RejectedExecutionException e) {
+            // O executor recusou (pool desligado, fila cheia). A conexão já
+            // está marcada fechada, e deixá-la assim com o cliente HTTP vivo
+            // manteria presa a requisição que o abort veio destravar. O
+            // abandon é um shutdownNow, que não espera nada: roda aqui mesmo,
+            // e a recusa não vaza como RuntimeException para quem abortou.
+            transporte.abandon();
+        }
     }
 
     /**

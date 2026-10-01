@@ -26,6 +26,16 @@ import java.util.concurrent.TimeUnit;
  * {@code deadlineNanos}, a espera também não passa do instante absoluto — é
  * o modo dos documentos pequenos, em que o prazo é da requisição inteira.
  *
+ * <p><b>Há uma corrida, e ela é inerente.</b> O alarme pode disparar no
+ * instante em que a leitura volta COM dados: ele marca o estouro e fecha o
+ * stream antes que a leitura desligue o alarme. Os bytes daquela leitura são
+ * entregues — ela voltou bem —, e é a leitura SEGUINTE que lança o estouro. O
+ * prazo não foi descumprido: aquela espera durou o prazo inteiro, e o servidor
+ * só respondeu no limite. Fechar a corrida exigiria cancelar o alarme e
+ * concluir a leitura atomicamente, e o {@code read} do HttpClient não oferece
+ * esse ponto; o que a classe garante é que o estouro nunca chega antes do
+ * prazo, e que nenhum byte lido é descartado.
+ *
  * <p>O custo é um agendamento por leitura, e uma leitura do
  * {@link LeitorNdjson} traz até 64 KiB: em escala de linha, nada. Sem prazo,
  * o corpo nem é embrulhado.
@@ -118,7 +128,7 @@ final class TimedInputStream extends FilterInputStream {
                 timedOut = expired;
             }
             if (timedOut) {
-                ResponseTimeoutException t = expiredException();
+                ResponseFailureException t = expiredException();
                 t.addSuppressed(e);
                 throw t;
             }
@@ -152,12 +162,12 @@ final class TimedInputStream extends FilterInputStream {
      * Só a thread que lê chama isto — o stream não é de uso concorrente —, e
      * fora do {@code lock}: a política pode derrubar a conexão inteira.
      */
-    private ResponseTimeoutException expiredException() {
+    private ResponseFailureException expiredException() {
         if (failure == null) {
             failure = timeout.onExpiry().onExpiry("o servidor ficou " + timeout.millis()
                     + " ms sem mandar bytes da resposta");
         }
-        return new ResponseTimeoutException(failure);
+        return new ResponseFailureException(failure);
     }
 
     private static ScheduledThreadPoolExecutor newTimer() {

@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLNonTransientConnectionException;
 import java.sql.SQLTimeoutException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
@@ -486,8 +487,9 @@ public class NishiStatement implements Statement {
     }
 
     @Override
+    /** Fechado também quando a conexão foi fechada — por close, abort ou estouro do prazo de rede. */
     public boolean isClosed() {
-        return fechado;
+        return fechado || conexao.isClosed();
     }
 
     @Override
@@ -637,9 +639,24 @@ public class NishiStatement implements Statement {
         }
     }
 
+    /**
+     * Recusa o Statement fechado E o Statement de conexão fechada.
+     *
+     * <p>A segunda checagem existe por causa do {@code abort} e do estouro do
+     * prazo de rede: os dois marcam a conexão fechada sem fechar os Statement
+     * (eles podem estar em uso na thread presa), e sem ela um Statement criado
+     * antes ainda mandaria a consulta ao servidor — que o abort já mandou
+     * esquecer. Com o executor do abort ainda não executado, a consulta iria
+     * de fato.
+     */
     final void exigeAberto() throws SQLException {
         if (fechado) {
             throw new SQLException("este Statement já foi fechado", SqlStates.CURSOR_INVALIDO);
+        }
+        if (conexao.isClosed()) {
+            throw new SQLNonTransientConnectionException("a conexão deste Statement foi fechada "
+                    + "(close, abort ou estouro do prazo de rede); abra outra",
+                    SqlStates.CONNECTION_DOES_NOT_EXIST);
         }
     }
 

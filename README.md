@@ -2492,16 +2492,20 @@ na abertura, nunca lido como default:
 | `tls` | `false` | `true` para falar HTTPS |
 | `tlsCaFile` | — | PEM com a CA do servidor; exige `tls=true` |
 | `connectTimeoutMs` | `10000` | prazo do **handshake**; não limita a consulta |
-| `socketTimeoutMs` | `0` (sem prazo) | prazo de **espera pelo servidor** em cada requisição; estourado, fecha a conexão |
+| `socketTimeoutMs` | `0` (sem prazo) | **prazo de rede** da requisição sem prazo próprio (ver abaixo); estourado, fecha a conexão |
 
 **Prazos de espera do cliente (issue #91).** Um servidor que aceita a
 requisição e não responde — processo parado, conexão meio-aberta, firewall
 que descarta pacote em silêncio — não prende mais a thread do cliente sem
-limite. O prazo mede o **silêncio** do servidor: a espera pelos cabeçalhos e
-cada espera por bytes do corpo. Não mede a duração: uma consulta que continua
-mandando linhas nunca estoura, e o tempo que a aplicação gasta processando
-linhas não conta. Do mais específico para o mais geral — o específico
-substitui o geral naquela requisição, seja maior ou menor:
+limite. Na **consulta**, o prazo mede o **silêncio** do servidor: a espera
+pelos cabeçalhos e cada espera por bytes do stream. Ali ele não mede a
+duração: uma consulta que continua mandando linhas nunca estoura, e o tempo
+que a aplicação gasta processando linhas não conta. Nos **documentos
+pequenos** — o `/v1/health` do `isValid`, a metadata, o catálogo e o
+`/v1/stats` —, o prazo é da **requisição inteira**, cabeçalhos e corpo
+somados: um servidor que pinga um byte por vez estoura do mesmo jeito. Do
+mais específico para o mais geral — o específico substitui o geral naquela
+requisição, seja maior ou menor:
 
 - **`isValid(s)`** volta em `s` segundos (o prazo é da requisição inteira ao
   `/v1/health`) e o estouro é `false`, nunca exceção — é o que o HikariCP usa
@@ -2513,12 +2517,15 @@ substitui o geral naquela requisição, seja maior ou menor:
   `57014` do timeout do servidor, e a conexão **continua utilizável**.
 - **O prazo de rede** — `socketTimeoutMs`, ajustável depois por
   `Connection.setNetworkTimeout` — vale para toda requisição sem prazo
-  próprio: metadata, catálogo e consulta sem `queryTimeout`. Estourado, a
+  próprio: metadata, catálogo e `/v1/stats` (requisição inteira) e consulta
+  sem `queryTimeout` (cada espera do stream). Estourado, a
   conexão é **fechada**, como manda o contrato do `setNetworkTimeout`, com
   `SQLRecoverableException` `08006`: abra outra e repita.
 
 `Connection.abort(executor)` derruba a conexão sem esperar o servidor: a
-requisição presa em outra thread sai com `SQLException` de conexão fechada. O
+requisição presa em outra thread — esperando os cabeçalhos ou lendo o corpo —
+sai com `SQLException` `08003` de conexão fechada, e os `Statement` da conexão
+passam a recusar execução com o mesmo `08003`. O
 default de `socketTimeoutMs` é zero de propósito — quem não pediu prazo não
 ganha um —, então ligá-lo é decisão de quem conhece a consulta mais longa que
 a aplicação faz sem `queryTimeout`.
