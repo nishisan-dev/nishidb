@@ -20,8 +20,8 @@ import (
 //
 // É menos do que o alarme pede, e de propósito: a emissão não avalia condição
 // nenhuma, então não precisa da linha montada pela tabela virtual — a chave, o
-// texto e o total bastam, e são exatamente o que o dicionário do contador
-// entrega sob o seu lock folha.
+// texto, o total e os refs (a coluna `rows`) bastam, e são exatamente o que o
+// dicionário do contador entrega sob o seu lock folha, o par numa carga só.
 type Reader interface {
 	Limit() uint32
 	Group(id uint32) (key, text []byte, total, refs int64, live bool)
@@ -71,8 +71,10 @@ type Options struct {
 	// Columns são os nomes das colunas do groupBy, na ordem declarada.
 	Columns []string
 	// Metrics são as métricas de janela do contador, na ordem declarada.
-	// Vazio é o contador que não declara `metrics:`, e a linha dele é a mesma
-	// de sempre, byte a byte.
+	// Vazio é o contador que não declara `metrics:`, e a linha dele não leva
+	// coluna de métrica nenhuma — só as fixas: `total` e `rows` (que entrou
+	// para todo contador, logo depois de `total`), entre as colunas do groupBy
+	// e as medidas.
 	Metrics []Metric
 	Reader  Reader
 	// Dir é o diretório da série dentro do dataset, e File o nome do arquivo.
@@ -282,13 +284,13 @@ func (e *Emitter) EmitOnce() error {
 	e.atBuf = at.AppendFormat(e.atBuf[:0], timeLayout)
 	limit := e.opts.Reader.Limit()
 	for id := uint32(1); id < limit; id++ {
-		key, text, total, _, live := e.opts.Reader.Group(id)
+		key, text, total, rows, live := e.opts.Reader.Group(id)
 		if !live {
 			// Grupo aposentado: saiu do inventário, e continuar a publicá-lo
 			// faria o gráfico mostrar um equipamento que não existe.
 			continue
 		}
-		line, err := e.appendLine(e.buf[:0], id, key, text, total)
+		line, err := e.appendLine(e.buf[:0], id, key, text, total, rows)
 		e.buf = line
 		if err != nil {
 			e.errs.Add(1)
@@ -346,7 +348,10 @@ func (e *Emitter) failFile(err error) error {
 //
 // id é o id do grupo, e não só o índice do laço: é a chave com que a métrica
 // de janela publica o agregado dele, a mesma que a tabela do contador usa.
-func (e *Emitter) appendLine(dst []byte, id uint32, key, text []byte, total int64) ([]byte, error) {
+//
+// A ordem das colunas fixas é a do `SELECT *` da tabela: `total`, `rows`, as
+// medidas e as métricas. `rows` nunca é null — também com `total: false`.
+func (e *Emitter) appendLine(dst []byte, id uint32, key, text []byte, total, rows int64) ([]byte, error) {
 	vals, err := valuekey.DecodeComposite(key, e.vals[:0])
 	e.vals = vals
 	if err != nil {
@@ -367,6 +372,8 @@ func (e *Emitter) appendLine(dst []byte, id uint32, key, text []byte, total int6
 	} else {
 		dst = executor.AppendValue(dst, types.Value{Type: types.TypeInt64, I64: total})
 	}
+	dst = append(dst, `,"rows":`...)
+	dst = executor.AppendValue(dst, types.Value{Type: types.TypeInt64, I64: rows})
 	for i, m := range e.opts.Measures {
 		dst = append(dst, e.measurePrefixes[i]...)
 		v := float64(e.measureReader.MeasureCount(id, i, e.atMillis)) * m.Scale()

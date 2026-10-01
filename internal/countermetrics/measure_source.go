@@ -18,6 +18,13 @@ type measureReader interface {
 // reconcileSource preserva o formato inteiro dos baldes e identifica a grandeza
 // amostrada por uma descrição exata. Remover o .win antes de publicar a nova
 // descrição impede adotar dados antigos após crash entre as duas operações.
+//
+// O scope entra na descrição porque restringe a população que a measure conta:
+// a linha fora do escopo é WithoutGroup no contador e não registra ocorrência.
+// Mudar só o scope muda a grandeza, e a história medida sob o escopo antigo é
+// descartada. Ele é omitido quando vazio, e é isso que mantém byte a byte a
+// descrição gravada por um contador sem scope — nada é zerado na troca de
+// binário.
 func (s *Sampler) reconcileSource(path string, c *counterState, spec schema.CounterMetricSpec) (bool, error) {
 	var expected []byte
 	if spec.Rate != nil {
@@ -26,7 +33,8 @@ func (s *Sampler) reconcileSource(path string, c *counterState, spec schema.Coun
 			Rate    *schema.CounterMeasureSpec
 			GroupBy []string
 			Where   string
-		}{spec.Rate, c.groupBy, c.where})
+			Scope   string `json:",omitempty"`
+		}{spec.Rate, c.groupBy, c.where, c.scope})
 		if err != nil {
 			return false, err
 		}

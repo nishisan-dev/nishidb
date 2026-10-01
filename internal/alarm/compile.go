@@ -100,6 +100,8 @@ const (
 	bindGroupKey
 	// bindTotal: a contagem do grupo.
 	bindTotal
+	// bindRows: os membros do grupo.
+	bindRows
 )
 
 // bind liga um `?` da consulta a um valor da linha do contador.
@@ -217,11 +219,20 @@ func compileAlarm(label string, as schema.AlarmSpec, def counter.Definition, met
 		cited = slices.Concat(ids, qualifyIDs)
 	}
 	a.metricsFingerprint = metricsFingerprintOf(sc, metrics, cited, def.Measures...)
-	if citesMeasure(sc, def, metrics, cited) {
+	// O contexto do contador entra na assinatura quando a regra depende dele: a
+	// taxa citada é contada sobre a população que groupBy, where e scope
+	// decidem, e o scope decide a população de TODA coluna — `rows`, `total` e
+	// as métricas. Trocar o scope reconstrói o contador e zera as measures;
+	// sem o scope aqui, o cronômetro restaurado mediria uma sustentação sobre
+	// outra população. Com scope vazio o campo é omitido, e a assinatura de um
+	// alarme sem scope fica byte a byte a de antes — nada é descartado na troca
+	// de binário.
+	if def.Scope != "" || citesMeasure(sc, def, metrics, cited) {
 		context, err := json.Marshal(struct {
 			GroupBy []string
 			Where   string
-		}{def.Names, def.Where})
+			Scope   string `json:",omitempty"`
+		}{def.Names, def.Where, def.Scope})
 		if err != nil {
 			return a, err
 		}
@@ -353,9 +364,9 @@ func compileEnrich(label string, es schema.EnrichSpec, def counter.Definition) (
 // A validação é POR NOME, e não por tipo: o groupBy aceita int64 e boolean, e
 // aceitá-lo aqui tornaria o `firingValue` ambíguo entre "o total do grupo" e
 // "a OLT que disparou" — a identidade do grupo já está no groupKey e nas
-// Columns do evento, e não é isso que value: declara. Só schema.CounterTotalColumn
-// e as colunas geradas pelas métricas de janela (`<métrica>_<avg|min|max>`)
-// são aceitas, e a lista sai de valueColumnNames — a MESMA enumeração que
+// Columns do evento, e não é isso que value: declara. Só schema.CounterTotalColumn,
+// schema.CounterRowsColumn, as medidas e as colunas geradas pelas métricas de
+// janela (`<métrica>_<avg|min|max>`) são aceitas, e a lista sai de valueColumnNames — a MESMA enumeração que
 // metricColumnsOf usa para resolver as colunas do laço (runner.go), para que
 // as duas listas nunca divirjam.
 //
@@ -385,14 +396,14 @@ func resolveValueColumn(label string, as schema.AlarmSpec, metrics []schema.Coun
 	return col, f.ID, f.Type, nil
 }
 
-// valueColumnNames lista os nomes aceitos por `value:`: schema.CounterTotalColumn,
-// seguido das colunas geradas por cada métrica de janela, na ordem declarada
+// valueColumnNames lista os nomes aceitos por `value:`: schema.CounterTotalColumn
+// e schema.CounterRowsColumn, seguidos das medidas e das colunas geradas por cada métrica de janela, na ordem declarada
 // (métrica, depois agregado) — a MESMA enumeração que metricColumnsOf usa
 // para resolver as colunas do laço (runner.go), para que as duas listas nunca
 // divirjam.
 func valueColumnNames(metrics []schema.CounterMetricSpec, measures ...counter.MeasureDefinition) []string {
-	out := make([]string, 0, 1+len(metrics)*3)
-	out = append(out, schema.CounterTotalColumn)
+	out := make([]string, 0, 2+len(measures)+len(metrics)*3)
+	out = append(out, schema.CounterTotalColumn, schema.CounterRowsColumn)
 	for _, m := range measures {
 		out = append(out, m.Name)
 	}
@@ -412,14 +423,16 @@ func resolveBind(label, col string, def counter.Definition) (bind, error) {
 		return bind{column: col, kind: bindGroupKey, groupIndex: -1, fieldType: types.TypeString}, nil
 	case schema.CounterTotalColumn:
 		return bind{null: def.DisableTotal, column: col, kind: bindTotal, groupIndex: -1, fieldType: types.TypeInt64}, nil
+	case schema.CounterRowsColumn:
+		return bind{column: col, kind: bindRows, groupIndex: -1, fieldType: types.TypeInt64}, nil
 	}
 	for i, n := range def.Names {
 		if n == col {
 			return bind{column: col, kind: bindGroupColumn, groupIndex: i, fieldType: def.Types[i]}, nil
 		}
 	}
-	return bind{}, fmt.Errorf("%s.bind: %q não é coluna da tabela do contador %q (ligáveis: %s, %s e as do groupBy: %v)",
-		label, col, def.Name, schema.CounterKeyColumn, schema.CounterTotalColumn, def.Names)
+	return bind{}, fmt.Errorf("%s.bind: %q não é coluna da tabela do contador %q (ligáveis: %s, %s, %s e as do groupBy: %v)",
+		label, col, def.Name, schema.CounterKeyColumn, schema.CounterTotalColumn, schema.CounterRowsColumn, def.Names)
 }
 
 // citesMeasure identifica dependência de uma taxa, direta ou por agregado.

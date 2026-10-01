@@ -63,3 +63,36 @@ func TestContadorNaoAlocaNoCaminhoQuente(t *testing.T) {
 		}
 	})
 }
+
+// TestScopedTransitionDoesNotAllocate é o gate acima com `scope` declarado: o
+// avaliador do scope roda em toda transição, antes da chave e do where, e o
+// gate velho não passa por ele. As linhas alternam dentro e fora do escopo,
+// então o caminho que sai cedo (WithoutGroup) e o que segue até o grupo são
+// medidos os dois.
+func TestScopedTransitionDoesNotAllocate(t *testing.T) {
+	c := openCounter(t, t.TempDir(), defByOLTWithScope("spl", nil), false)
+	const rows = 1 << 12
+	ps := [][]byte{
+		scopedPayload(t, "A", 1, true, true),
+		scopedPayload(t, "B", 2, false, false),
+		scopedPayload(t, "A", 1, false, true),
+		scopedPayload(t, "B", 2, true, true),
+		scopedPayload(t, "A", 3, true, false),
+	}
+	for r := types.RowID(0); r < rows; r++ {
+		if err := c.Transition(r, ps[int(r)%len(ps)], false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var r types.RowID
+	i := 0
+	if n := testing.AllocsPerRun(2000, func() {
+		r = (r + 1) & (rows - 1)
+		i = (i + 1) % len(ps)
+		if err := c.Transition(r, ps[i], false); err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 {
+		t.Errorf("allocs/transição com scope = %.1f, quer 0", n)
+	}
+}

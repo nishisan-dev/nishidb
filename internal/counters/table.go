@@ -30,11 +30,11 @@ const maxAggregatesPerMetric = 3
 
 // maxRowColumns é o teto de colunas de UMA linha da tabela e o tamanho do array
 // de pilha em que record a compõe: o groupBy no teto (maxGroupingColumns), as
-// duas fixas (groupKey e total), as medidas e as geradas pelas métricas —
+// três fixas (groupKey, total e rows), as medidas e as geradas pelas métricas —
 // schema.MaxCounterMetrics métricas com os maxAggregatesPerMetric agregados
 // cada. Os tetos são conferidos no TableSchema, e é isso que garante que a
 // linha nunca transborda o array nem precisa de uma fatia do heap por grupo.
-const maxRowColumns = maxGroupingColumns + 2 + schema.MaxCounterMetrics*maxAggregatesPerMetric + schema.MaxCounterMeasures
+const maxRowColumns = maxGroupingColumns + 3 + schema.MaxCounterMetrics*maxAggregatesPerMetric + schema.MaxCounterMeasures
 
 // Reader é o que a tabela virtual precisa do contador. Interface, e não o
 // *counter.Counter, para que o teste da tabela e o do contador não se
@@ -43,7 +43,8 @@ type Reader interface {
 	// Limit é o maior id de grupo emitido mais um.
 	Limit() uint32
 	// Group devolve a chave composta, o texto (groupKey), o total e os refs do
-	// grupo, e se ele está vivo. Chave e texto são estáveis.
+	// grupo, e se ele está vivo. Chave e texto são estáveis. total e refs são
+	// UM par consistente — lidos da mesma carga, nunca de dois instantes.
 	Group(id uint32) (key, text []byte, total, refs int64, live bool)
 	// ByText resolve o groupKey de um grupo vivo para o id.
 	ByText(text []byte) (uint32, bool)
@@ -96,8 +97,9 @@ type MetricSource interface {
 //
 // A tabela tem a coluna `groupKey` como key (o texto canônico do grupo — a
 // key da v1 é uma coluna string única, e um groupBy composto não tem coluna
-// que identifique a linha), as colunas do groupBy abertas e tipadas, `total`
-// e as colunas das métricas de janela (`<metric>_<aggregate>`). Um grupo que
+// que identifique a linha), as colunas do groupBy abertas e tipadas, `total`,
+// `rows` (os membros do grupo: os refs, que nunca são NULL) e as colunas das
+// métricas de janela (`<metric>_<aggregate>`). Um grupo que
 // chegou a zero permanece com total 0 (é o equipamento que apagou por inteiro,
 // e é o caso que interessa); um grupo aposentado não aparece.
 //
@@ -137,6 +139,9 @@ func Table(def counter.Definition, l Reader, metrics []schema.CounterMetricSpec,
 	if f.idTotal, err = idOfColumn(sc, schema.CounterTotalColumn); err != nil {
 		return nil, nil, err
 	}
+	if f.idRows, err = idOfColumn(sc, schema.CounterRowsColumn); err != nil {
+		return nil, nil, err
+	}
 	for i, n := range def.Names {
 		if f.columns[i], err = idOfColumn(sc, n); err != nil {
 			return nil, nil, err
@@ -157,7 +162,8 @@ func Table(def counter.Definition, l Reader, metrics []schema.CounterMetricSpec,
 // compilar texto, e um leitor inventado é a porta para a condição acabar
 // compilada contra um schema que não é o da tabela de verdade.
 //
-// As colunas das métricas entram depois de `total`, na ordem declarada (métrica,
+// `rows` entra logo depois de `total`, sempre int64 e nunca NULL — também com
+// `total: false`. As colunas das métricas entram depois, na ordem declarada (métrica,
 // depois agregado): `avg` como double, `min` e `max` como int64. Todas são
 // nuláveis — sem amostra na janela a coluna fica ausente da linha.
 func TableSchema(def counter.Definition, metrics []schema.CounterMetricSpec) (*schema.Compiled, error) {
@@ -194,7 +200,7 @@ func TableSchema(def counter.Definition, metrics []schema.CounterMetricSpec) (*s
 	for _, n := range def.Names {
 		fmt.Fprintf(&sb, ", %s", n)
 	}
-	fmt.Fprintf(&sb, ", %s", schema.CounterTotalColumn)
+	fmt.Fprintf(&sb, ", %s, %s", schema.CounterTotalColumn, schema.CounterRowsColumn)
 	for _, m := range def.Measures {
 		fmt.Fprintf(&sb, ", %s", m.Name)
 	}
@@ -212,6 +218,7 @@ func TableSchema(def counter.Definition, metrics []schema.CounterMetricSpec) (*s
 		fmt.Fprintf(&sb, "    %s:\n      type: %s\n", n, kind)
 	}
 	fmt.Fprintf(&sb, "    %s:\n      type: int64\n", schema.CounterTotalColumn)
+	fmt.Fprintf(&sb, "    %s:\n      type: int64\n", schema.CounterRowsColumn)
 	for _, m := range def.Measures {
 		fmt.Fprintf(&sb, "    %s:\n      type: double\n", m.Name)
 	}
@@ -418,6 +425,7 @@ type source struct {
 	l             Reader
 	idKey         types.FieldID
 	idTotal       types.FieldID
+	idRows        types.FieldID
 	columns       []types.FieldID // FieldID de cada coluna do groupBy, na ordem declarada
 	metrics       []metricBinding // só as métricas com leitor; vazio sem MetricSource
 }
@@ -441,11 +449,11 @@ func (f *source) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (ty
 		return types.Record{}, buf, false, nil
 	}
 	group := uint32(id)
-	key, text, total, _, live := f.l.Group(group)
+	key, text, total, rows, live := f.l.Group(group)
 	if !live {
 		return types.Record{}, buf, false, nil
 	}
-	return f.record(id, group, key, text, total, snap.Instant, buf)
+	return f.record(id, group, key, text, total, rows, snap.Instant, buf)
 }
 
 func (f *source) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
@@ -475,7 +483,11 @@ type pair struct {
 // record codifica UM grupo como uma linha. O payload exige FieldID crescente;
 // os pares são ordenados num array de pilha, sem alocar — a linha é montada
 // por grupo a cada consulta do alarme.
-func (f *source) record(row types.RowID, group uint32, key, text []byte, total int64, instant time.Time, buf []byte) (types.Record, []byte, bool, error) {
+//
+// total e rows vêm da MESMA leitura de Group, e por isso são um par que o
+// grupo de fato teve: o alarme que compara os dois na mesma linha nunca vê um
+// rasgo entre eles.
+func (f *source) record(row types.RowID, group uint32, key, text []byte, total, rows int64, instant time.Time, buf []byte) (types.Record, []byte, bool, error) {
 	var pairs [maxRowColumns]pair
 	n := 0
 	pairs[n] = pair{f.idKey, types.Value{Type: types.TypeString, Bytes: text}}
@@ -484,6 +496,8 @@ func (f *source) record(row types.RowID, group uint32, key, text []byte, total i
 		pairs[n] = pair{f.idTotal, types.Value{Type: types.TypeInt64, I64: total}}
 		n++
 	}
+	pairs[n] = pair{f.idRows, types.Value{Type: types.TypeInt64, I64: rows}}
+	n++
 	base := n
 	err := valuekey.WalkComposite(key, func(i int, v types.Value) error {
 		if i >= len(f.columns) {

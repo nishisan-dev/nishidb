@@ -93,13 +93,13 @@ func TestTheEmittedLineCarriesTheWindowColumnsTheTableServes(t *testing.T) {
 
 	// Os mesmos números que a tabela serve, lidos pelo mesmo motor.
 	table := rowsByGroupKey(t, engineRows(t, srv,
-		"SELECT groupKey, total, auth_5m_avg, auth_24h_max FROM _counters.autenticados_por_olt"))
+		"SELECT groupKey, total, rows, auth_5m_avg, auth_24h_max FROM _counters.autenticados_por_olt"))
 	for _, group := range []string{"OLT_A", "OLT_B"} {
 		emitted, ok := byGroup[group]
 		if !ok {
 			t.Fatalf("o grupo %q não saiu na série: %v", group, byGroup)
 		}
-		for _, col := range []string{"total", "auth_5m_avg", "auth_24h_max"} {
+		for _, col := range []string{"total", "rows", "auth_5m_avg", "auth_24h_max"} {
 			if emitted[col] != table[group][col] {
 				t.Errorf("%s.%s: a série diz %v e a tabela diz %v",
 					group, col, emitted[col], table[group][col])
@@ -112,10 +112,11 @@ func TestTheEmittedLineCarriesTheWindowColumnsTheTableServes(t *testing.T) {
 	}
 }
 
-// TestACounterWithoutWindowMetricsEmitsTheLineUnchanged fixa o outro lado do
-// contrato: quem não declara `metrics:` tem a linha de sempre, e nenhuma chave
-// nova aparece nela.
-func TestACounterWithoutWindowMetricsEmitsTheLineUnchanged(t *testing.T) {
+// TestACounterWithoutWindowMetricsEmitsTheFixedColumnsAndRows fixa o outro
+// lado do contrato: quem não declara `metrics:` tem só as colunas fixas — as
+// de sempre mais `rows`, que entrou para todo contador (quebra aditiva) — e
+// nenhuma de métrica.
+func TestACounterWithoutWindowMetricsEmitsTheFixedColumnsAndRows(t *testing.T) {
 	a := newEnvWithStorage(t, blockPadrao, "")
 	a.writeDataset("servicos", fmt.Sprintf(specServicesComEmissao, "servicos"))
 	seedServices(t, a, "servicos", 24)
@@ -128,10 +129,13 @@ func TestACounterWithoutWindowMetricsEmitsTheLineUnchanged(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &row); err != nil {
 			t.Fatalf("a linha não é JSON: %v\n%s", err, line)
 		}
-		if len(row) != 5 {
-			t.Errorf("a linha de quem não declara métricas tem %d campos, quero os 5 de sempre: %v", len(row), row)
+		if len(row) != 6 {
+			t.Errorf("a linha de quem não declara métricas tem %d campos, quero os 6 fixos: %v", len(row), row)
 		}
-		for _, col := range []string{"counter", "groupKey", "olt", "total", "at"} {
+		if total, rows := row["total"].(float64), row["rows"].(float64); rows < total {
+			t.Errorf("rows %v menor que total %v: os membros incluem os que contam", rows, total)
+		}
+		for _, col := range []string{"counter", "groupKey", "olt", "total", "rows", "at"} {
 			if _, ok := row[col]; !ok {
 				t.Errorf("a linha perdeu o campo %q: %v", col, row)
 			}

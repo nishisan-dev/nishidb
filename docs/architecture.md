@@ -2484,8 +2484,14 @@ novo: dobra, replay, e o contador está no ponto certo.
 
 **Adotar ou reconstruir.** O manifest grava por contador, numa seção
 **ignorável** (`0x0001`), o que decide o conteúdo do vetor: nome, colunas e o
-texto do `where`. Seção ausente, colunas ou `where` diferentes, ou vetor que
-não cobre as linhas: reconstrói, recriando os **dois** arquivos — chaves de
+texto de identidade das condições. Sem `scope`, esse texto é o `where`
+normalizado, byte a byte o que o campo sempre gravou; com `scope`, é
+`<where>\n<scope>` — e como os dois chegam normalizados por `strings.Fields`,
+nenhum contém `\n` e nenhum `where` sozinho produz esse texto
+(`TestCountersManifestSectionBytesAreLiteral` trava os bytes à mão). É o que
+faz o rollback para um binário sem `scope` reconstruir em vez de adotar
+(`TestScopeIdentityDecidesAdoptOrRebuild`). Seção ausente, colunas ou
+identidade diferentes, ou vetor que não cobre as linhas: reconstrói, recriando os **dois** arquivos — chaves de
 outras colunas não podem poluir um dicionário cujos ids nunca são reemitidos.
 A reconstrução é uma varredura das linhas vivas, logada com motivo e duração,
 e é o que faz "declarar um contador num dataset povoado" ser um reinício e não
@@ -2506,18 +2512,32 @@ nesse caso o estado durável ainda diz "a linha está aqui". Aposentar é regist
 durável, o id nunca é reemitido, e o reinício só estende a visibilidade (o
 instante em que o grupo esvaziou não é persistido).
 
+**O escopo: quem é membro.** O `scope` é um segundo filtro, avaliado pelo
+MESMO `Deriver` e sobre o MESMO payload pós-merge do `where`, antes da chave e
+da condição: a linha fora dele sai `WithoutGroup`, idêntica à linha sem alguma
+coluna do `groupBy` — não interna grupo, não conta em `refs` nem no total, e
+desce do grupo antigo pelo mesmo caminho de decremento, `emptySince` e
+aposentadoria. O vetor de 4 bytes não muda; o que muda é quem chega a ter
+entrada nele. A auditoria instancia o seu avaliador do scope pela mesma
+fábrica (o scratch é de um dono só), e por isso a recuperação e a auditoria
+de um contador com scope chegam aos mesmos números
+(`TestScopedCounterRecoversToTheContinuousStateAndAuditsClean`). O scope entra
+também na descrição das métricas de janela por taxa e na assinatura dos alarmes
+do contador: trocá-lo zera a história e invalida os cronômetros salvos.
+
 **A tabela virtual.** `_counters.<nome>` é um schema sintético compilado do
 mesmo YAML de um dataset de verdade, como o `_meta`, com a key `groupKey` (o
 texto do grupo — a key da v1 é uma coluna string única, e um
 `groupBy` composto não tem coluna que identifique a linha), as colunas do
-`groupBy` abertas e tipadas, e `total`. Diferente do `_meta`, ela é
+`groupBy` abertas e tipadas, `total` e `rows` — o `refs` do grupo, os membros,
+lido na MESMA carga que dá o `total`. Diferente do `_meta`, ela é
 **registrada no motor** sob o dataset e corre pelo pipeline inteiro — planner
 com métricas, top-N, orçamento —, porque `ORDER BY total ASC LIMIT 5` sobre
 milhares de grupos é exatamente a consulta do caso de uso. Os totais são lidos
 no presente; o que o snapshot congela é o conjunto de grupos. A lista dos
 contadores sai pelo mesmo caminho: `_meta.counters` é uma tabela virtual
 registrada sob o dataset — uma linha por contador, com a definição (`name`,
-`groupBy`, `condition`) e o retrato vivo de `EstatisticasOfCounters`
+`groupBy`, `condition`, `scope`) e o retrato vivo de `EstatisticasOfCounters`
 (`rows`, `total`, `groups`, `maxGroups`, `retired`, `refused`, `orphans`,
 `bytes`, `auditDivergent`, `auditAt`, os dois últimos NULL até a primeira
 auditoria), mais `keyFormat`, o molde efetivo da key.
@@ -2868,6 +2888,10 @@ divergir da primeira. As colunas geradas pelas métricas de janela do contador
 mesmo schema da tabela, e o laço lê os valores pela MESMA fonte que a tabela de
 consulta recebeu — o que o `when` enxerga é o que o SELECT devolve.
 
+**O evento anuncia o par que decidiu.** O `total` e o `rows` do evento são
+lidos do payload que a condição avaliou, e não da leitura da varredura
+(`TestEventTotalAndRowsAreReadFromTheDecidingPayload`).
+
 **Elegibilidade é um terceiro fato, e não parte da condição.** O `qualifyWhen`
 é opcional, fala a mesma linguagem do `when`, compila contra o MESMO schema e
 responde se o grupo é assunto do alarme:
@@ -3065,7 +3089,9 @@ Até a v0.9.1 ela era `_meta.alarms`, removida sem período de convivência.
 `firedAt` e `firingValue` são gravados no tracker SÓ na transição para o
 disparo, lidos do MESMO payload que decidiu — inclusive quando a coluna é
 `total`, porque o total que a varredura tem em mãos vem de outra leitura do
-contador e pode divergir (`TestFiringValueIsReadFromTheDecidingPayload`). A
+contador e pode divergir (`TestEventTotalAndRowsAreReadFromTheDecidingPayload`).
+Pela mesma razão o `total` e o `rows` do evento — no disparo e na resolução —
+também saem desse payload, e não da leitura da varredura. A
 coluna vem da chave `value:` do alarme (default `total`), aceita só entre
 `total` e as colunas das métricas de janela. Enquanto o alarme dispara os dois
 ficam congelados (`TestFiringValueAndFiredAtStayFrozenWhileFiring`). O

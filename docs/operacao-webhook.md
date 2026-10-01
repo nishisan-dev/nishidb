@@ -46,7 +46,7 @@ configuração inválida, referência desconhecida e fila corrompida impedem.
 
 Colunas de `groupBy` dos alarmes com `notify` não podem colidir com campos do
 evento (`eventId`, `event`, `dataset`, `counter`, `alarm`, `groupKey`, `total`,
-`condition`, `sustainedFor`, `since`, `at`, `reason`, `qualifyCondition`,
+`rows`, `condition`, `sustainedFor`, `since`, `at`, `reason`, `qualifyCondition`,
 `valueColumn`, `firingValue`, `restored`, `downtimeMs`, `metrics`, `enrichment`)
 ou do logger (`timestamp`, `level`, `component`, `message`, `time`, `msg`).
 A recusa impede JSON com chaves ambíguas. Alarmes sem push mantêm a
@@ -66,6 +66,14 @@ Em alarmes sobre `measures`, `valueColumn` identifica a medida escolhida em
 também aparecem em `metrics`, como `"metrics":{"stop_rate":"30"}`.
 Com `total: false`, o campo `total` é `null`; configure `value: stop_rate`
 para que o disparo registre a taxa, pois o padrão de `value` continua `total`.
+
+Todo corpo — `alarm.firing` e `alarm.resolved` — traz `total` e `rows`: o
+total do grupo e os seus membros (as linhas com o `groupBy` completo e dentro
+do `scope` do contador, satisfaçam ou não o `where`), os dois lidos da MESMA
+linha que decidiu o evento. `rows` nunca é `null`, nem com `total: false`; para
+o grupo aposentado (`group_retired`) os dois são `0`. Com
+`when: "total * 10 <= rows"`, o corpo do disparo diz de quantos membros o total
+é fração, sem consulta extra.
 Consulte a unidade (`second`, `minute`, `hour` ou `day`) na configuração da
 medida para interpretar o limiar e o valor recebido.
 

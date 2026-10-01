@@ -19,9 +19,9 @@ import (
 )
 
 // WithoutGroup é a entrada do vetor de uma linha que não está em grupo nenhum:
-// nunca vista, tombstonada, sem alguma coluna do groupBy, ou recusada pelo
-// teto. É zero porque zero é o que o fallocate deixa no arquivo — "nunca
-// gravada" e "sem grupo" são deliberadamente a mesma coisa.
+// nunca vista, tombstonada, sem alguma coluna do groupBy, fora do `scope`, ou
+// recusada pelo teto. É zero porque zero é o que o fallocate deixa no arquivo —
+// "nunca gravada" e "sem grupo" são deliberadamente a mesma coisa.
 const WithoutGroup uint32 = 0
 
 // conditionBit marca, na entrada do vetor, que a linha satisfazia o `where`
@@ -29,9 +29,10 @@ const WithoutGroup uint32 = 0
 // teto físico de grupos é 2^31-1.
 const conditionBit uint32 = 1 << 31
 
-// Evaluator é o `where` compilado: diz se o payload (o estado INTEIRO da
-// linha, pós-merge) satisfaz a condição. Quem o implementa é o predicado; este
-// pacote só conhece a interface, para que o storage não importe o binder.
+// Evaluator é o `where` (ou o `scope`) compilado: diz se o payload (o estado
+// INTEIRO da linha, pós-merge) satisfaz a condição. Quem o implementa é o
+// predicado; este pacote só conhece a interface, para que o storage não importe
+// o binder.
 type Evaluator interface {
 	Evaluate(payload []byte) (bool, error)
 }
@@ -82,6 +83,15 @@ type Definition struct {
 	// não instância, porque o writer e a auditoria avaliam em goroutines
 	// diferentes e o scratch é de um dono só.
 	NewEvaluator func() Evaluator
+	// Scope é o texto normalizado do filtro de MEMBRO; "" é "sem escopo", e
+	// nesse caso NewScopeEvaluator é nil e toda linha com o groupBy completo é
+	// membro. A linha fora do escopo é WithoutGroup — não interna grupo e não
+	// conta nem nos refs nem no total, exatamente como a linha sem alguma
+	// coluna do groupBy.
+	Scope string
+	// NewScopeEvaluator é a fábrica do avaliador do Scope, pela mesma razão de
+	// NewEvaluator: cada Deriver tem o seu.
+	NewScopeEvaluator func() Evaluator
 	// MaxGroups é o teto de grupos VIVOS.
 	MaxGroups uint32
 	// RetainEmptyGroups é quanto tempo um grupo com refs == 0 continua
@@ -270,6 +280,8 @@ func validateDefinition(def Definition) error {
 		return fmt.Errorf("contador %s: maxGroups %d fora de [1, %d]", def.Name, def.MaxGroups, conditionBit-1)
 	case def.Where != "" && def.NewEvaluator == nil:
 		return fmt.Errorf("contador %s: where declarado sem avaliador", def.Name)
+	case def.Scope != "" && def.NewScopeEvaluator == nil:
+		return fmt.Errorf("counter %s: scope declared without an evaluator", def.Name)
 	case def.Format == nil:
 		return fmt.Errorf("contador %s: sem molde de groupKey — quem monta a Definition tem de passar o declarado ou o keyformat.Default", def.Name)
 	case def.Format.Len() != len(def.Columns):
@@ -330,6 +342,7 @@ func (c *Counter) OnRefuse(fn func()) { c.onRefuse = fn }
 type Deriver struct {
 	c          *Counter
 	eval       Evaluator
+	scope      Evaluator
 	fr         encoding.FieldReader
 	vals       []types.Value // na ordem DECLARADA do groupBy
 	order      []int         // posição declarada da i-ésima coluna em ordem crescente de id
@@ -338,11 +351,17 @@ type Deriver struct {
 	keyBuf     []byte
 }
 
-// NewDeriver instancia um derivador com avaliador e scratch próprios.
+// NewDeriver instancia um derivador com avaliadores e scratch próprios. Os
+// avaliadores do `where` e do `scope` saem das MESMAS fábricas da Definition,
+// numa instância por Deriver: o scratch de um avaliador é de um dono só, e o
+// writer e a auditoria derivam em goroutines diferentes.
 func (c *Counter) NewDeriver() *Deriver {
 	d := &Deriver{c: c, vals: make([]types.Value, len(c.def.Columns))}
 	if c.def.NewEvaluator != nil {
 		d.eval = c.def.NewEvaluator()
+	}
+	if c.def.NewScopeEvaluator != nil {
+		d.scope = c.def.NewScopeEvaluator()
 	}
 	// O payload é ordenado por FieldID; o groupBy não. A leitura casa os dois
 	// por merge linear sobre a ordem crescente e devolve cada valor à posição
@@ -366,7 +385,9 @@ func (c *Counter) NewDeriver() *Deriver {
 
 // Derive lê o payload UMA vez e devolve a chave composta do grupo e a condição.
 // hasGroup=false quando alguma coluna do groupBy está ausente (NULL é ausência)
-// ou com tipo diferente do declarado — a linha não é contada. A chave é válida
+// ou com tipo diferente do declarado, ou quando a linha está fora do `scope` —
+// nos três casos a linha não é contada. O payload é o estado pós-merge, então
+// o scope e o where enxergam a linha inteira, e não o patch. A chave é válida
 // até a próxima chamada. Não aloca.
 func (d *Deriver) Derive(payload []byte) (key []byte, cond, hasGroup bool, err error) {
 	d.foundCount = 0
@@ -395,6 +416,18 @@ func (d *Deriver) Derive(payload []byte) (key []byte, cond, hasGroup bool, err e
 	}
 	if d.foundCount != len(d.ids) {
 		return nil, false, false, nil
+	}
+	// O scope vem ANTES da chave e do where: a linha fora do escopo não é
+	// membro de grupo nenhum, e montar a chave ou avaliar a condição dela seria
+	// trabalho jogado fora.
+	if d.scope != nil {
+		member, err := d.scope.Evaluate(payload)
+		if err != nil {
+			return nil, false, false, err
+		}
+		if !member {
+			return nil, false, false, nil
+		}
 	}
 	d.keyBuf, err = valuekey.AppendComposite(d.keyBuf[:0], d.vals)
 	if err != nil {
@@ -825,7 +858,8 @@ type Stats struct {
 	Bytes         int64  // vetor + dicionário + mmap e snapshot das medidas
 	// Rows é quantas linhas vivas apontam para algum grupo — a soma dos refs.
 	// Menor que o rows do dataset é diagnóstico direto: são as linhas SEM
-	// alguma coluna do groupBy, que o contador não conta por desenho.
+	// alguma coluna do groupBy e, quando o contador declara `scope`, as fora
+	// do escopo — o contador não conta nenhuma das duas, por desenho.
 	Rows int64
 	// Total é quantas linhas satisfazem a condição no dataset inteiro — a soma
 	// dos totais dos grupos. Sem `where`, é igual a Rows.

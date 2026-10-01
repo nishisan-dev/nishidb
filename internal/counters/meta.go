@@ -38,15 +38,17 @@ type ListedCounter interface {
 // verdade, como o `_meta.fields` e o `_counters.<nome>`.
 //
 // `rows` e `total` são os agregados do contador — quantas linhas apontam para
-// algum grupo e quantas satisfazem a condição, no dataset inteiro. `rows`
-// nunca é NULL; `total` é NULL com total: false. Quando habilitado, zero é
-// um fato medido desde a abertura. `total` repete de
-// propósito o nome da coluna do `_counters.<nome>`: é a soma dela. E `rows`
-// menor que o rows do dataset é diagnóstico direto — são as linhas sem alguma
-// coluna do groupBy, que o contador não conta por desenho.
+// algum grupo (os membros) e quantas satisfazem a condição, no dataset
+// inteiro. `rows` nunca é NULL; `total` é NULL com total: false. Quando
+// habilitado, zero é um fato medido desde a abertura. Os dois repetem de
+// propósito os nomes das colunas do `_counters.<nome>`: são a soma delas. E
+// `rows` menor que o rows do dataset é diagnóstico direto — são as linhas sem
+// alguma coluna do groupBy e, com `scope`, as fora do escopo, que o contador
+// não conta por desenho.
 //
 // `condition`, e não `where`: WHERE é palavra reservada do SQL, e uma coluna
-// com esse nome seria impossível de projetar. `groupBy` é a lista das colunas
+// com esse nome seria impossível de projetar. `scope` é o filtro de membro
+// normalizado, ao lado dela; as duas são NULL quando o contador não as declara. `groupBy` é a lista das colunas
 // de agrupamento na ordem DECLARADA, junta por `|`; quem diz como a key da
 // tabela do contador é escrita é `keyFormat`, o molde efetivo — declarado ou o
 // default já expandido —, porque o molde pode trocar o separador e até
@@ -61,7 +63,7 @@ materialization:
   key:
     field: name
 schema:
-  include: [name, groupBy, keyFormat, condition, rows, total, groups, maxGroups, retired, refused, orphans, bytes, auditDivergent, auditAt]
+  include: [name, groupBy, keyFormat, condition, scope, rows, total, groups, maxGroups, retired, refused, orphans, bytes, auditDivergent, auditAt]
   fields:
     name:
       type: string
@@ -70,6 +72,8 @@ schema:
     keyFormat:
       type: string
     condition:
+      type: string
+    scope:
       type: string
     rows:
       type: int64
@@ -102,6 +106,7 @@ const (
 	cmGroupBy
 	cmKeyFormat
 	cmCondition
+	cmScope
 	cmRows
 	cmTotal
 	cmGroups
@@ -116,7 +121,7 @@ const (
 
 // metaColumnNames casa, posição a posição, com as constantes acima.
 var metaColumnNames = [...]string{
-	"name", "groupBy", "keyFormat", "condition", "rows", "total", "groups", "maxGroups",
+	"name", "groupBy", "keyFormat", "condition", "scope", "rows", "total", "groups", "maxGroups",
 	"retired", "refused", "orphans", "bytes", "auditDivergent", "auditAt",
 }
 
@@ -170,6 +175,7 @@ func TableMeta(cs []ListedCounter) (*schema.Compiled, query.Store, error) {
 			groupBy:   []byte(strings.Join(def.Names, GroupBySeparator)),
 			keyFormat: []byte(def.Format.String()),
 			cond:      []byte(def.Where),
+			scope:     []byte(def.Scope),
 		})
 	}
 	return sc, f, nil
@@ -188,6 +194,7 @@ type metaRow struct {
 	groupBy   []byte
 	keyFormat []byte
 	cond      []byte // vazio = sem condição (o contador conta toda linha com grupo)
+	scope     []byte // vazio = sem escopo (toda linha com o groupBy completo é membro)
 }
 
 // metaSource é o Store virtual de `_meta.counters`.
@@ -237,7 +244,8 @@ func (f *metaSource) Lookup(field types.FieldID, _ types.Value) (types.RowIDIter
 
 // record codifica UM contador como uma linha, lendo as estatísticas no
 // presente. Coluna ausente é NULL: a condição quando o contador não tem
-// `where`, e as duas da auditoria enquanto nenhuma auditoria concluiu.
+// `where`, o escopo quando não tem `scope`, e as duas da auditoria enquanto
+// nenhuma auditoria concluiu.
 func (f *metaSource) record(row types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	l := f.rows[row-1]
 	est := l.c.Stats()
@@ -257,6 +265,11 @@ func (f *metaSource) record(row types.RowID, buf []byte) (types.Record, []byte, 
 				continue
 			}
 			v = types.Value{Type: types.TypeString, Bytes: l.cond}
+		case cmScope:
+			if len(l.scope) == 0 {
+				continue
+			}
+			v = types.Value{Type: types.TypeString, Bytes: l.scope}
 		case cmRows:
 			v = types.Value{Type: types.TypeInt64, I64: est.Rows}
 		case cmTotal:

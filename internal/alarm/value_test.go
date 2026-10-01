@@ -75,10 +75,10 @@ func TestValueDefaultsToTotal(t *testing.T) {
 }
 
 // swayingTotalReader é um dublê de counters.Reader que devolve, para o MESMO
-// grupo, o total da leitura #1 (o que Runner.sweep tem em mãos, rc.reader.
-// Group) e o total da leitura #2 (a que produz o payload avaliado, dentro de
-// counters/table.go, (*source).GetByRowID) DIFERENTES — a única forma de
-// provar que firedValueOf lê do payload, e não do total que o sweep já tinha.
+// grupo, o par (total, rows) da leitura #1 (o que Runner.sweep tem em mãos,
+// rc.reader.Group) e o da leitura #2 (a que produz o payload avaliado, dentro
+// de counters/table.go, (*source).GetByRowID) DIFERENTES — a única forma de
+// provar que o evento lê do payload, e não do que o sweep já tinha.
 //
 // A contagem é POR ID: a primeira Group(id) de cada passada (ímpar) é o
 // sweep, a segunda (par) é a leitura que monta o payload — a MESMA ordem em
@@ -89,29 +89,30 @@ func TestValueDefaultsToTotal(t *testing.T) {
 type swayingTotalReader struct {
 	*fakeCounter
 	sweepTotal, payloadTotal int64
+	sweepRows, payloadRows   int64
 	calls                    map[uint32]int
 }
 
 func (s *swayingTotalReader) Group(id uint32) ([]byte, []byte, int64, int64, bool) {
-	key, text, _, refs, live := s.fakeCounter.Group(id)
+	key, text, _, _, live := s.fakeCounter.Group(id)
 	if s.calls == nil {
 		s.calls = make(map[uint32]int)
 	}
 	s.calls[id]++
 	if s.calls[id]%2 == 1 {
-		return key, text, s.sweepTotal, refs, live
+		return key, text, s.sweepTotal, s.sweepRows, live
 	}
-	return key, text, s.payloadTotal, refs, live
+	return key, text, s.payloadTotal, s.payloadRows, live
 }
 
-// TestFiringValueIsReadFromTheDecidingPayload: o total que o sweep tem em
-// mãos e o total que produziu o payload avaliado vêm de DUAS leituras
-// diferentes do contador, e podem divergir entre elas. O evento tem de trazer
-// o total do sweep em Total (como sempre) e o firingValue do PAYLOAD — nunca
-// o contrário.
-func TestFiringValueIsReadFromTheDecidingPayload(t *testing.T) {
+// TestEventTotalAndRowsAreReadFromTheDecidingPayload: o par que o sweep tem em
+// mãos e o par que produziu o payload avaliado vêm de DUAS leituras diferentes
+// do contador, e podem divergir entre elas. O evento traz Total, Rows e o
+// firingValue do PAYLOAD que decidiu — o par que a condição de fato viu —, no
+// disparo e na resolução.
+func TestEventTotalAndRowsAreReadFromTheDecidingPayload(t *testing.T) {
 	f := newFakeCounter(t, defByPON("autenticados_por_pon"), grupo{olt: "OLT_A", slot: 3, total: 50, live: true})
-	dbl := &swayingTotalReader{fakeCounter: f, sweepTotal: 999, payloadTotal: 50}
+	dbl := &swayingTotalReader{fakeCounter: f, sweepTotal: 999, payloadTotal: 50, sweepRows: 7, payloadRows: 80}
 	def := defByPON("autenticados_por_pon")
 	defs, err := Compile("telecom", specWith(alarmeDe("total < 100")), []counter.Definition{def})
 	if err != nil {
@@ -131,11 +132,20 @@ func TestFiringValueIsReadFromTheDecidingPayload(t *testing.T) {
 	if e.State != StateFiring {
 		t.Fatalf("estado = %q, quero disparo", e.State)
 	}
-	if e.Total != 999 {
-		t.Fatalf("total do evento (do sweep) = %d, quero 999 — o teste não exercita a divergência", e.Total)
+	if e.Total != 50 || e.Rows != 80 {
+		t.Fatalf("disparo com total %d rows %d, quero 50 e 80 — o par do PAYLOAD que decidiu, não o do sweep (999, 7)",
+			e.Total, e.Rows)
 	}
 	if e.FiringValue != 50 {
 		t.Errorf("firingValue = %v, quero 50 — o valor do PAYLOAD que decidiu, não o total do sweep", e.FiringValue)
+	}
+	dbl.payloadTotal, dbl.payloadRows = 500, 600
+	clock.advance(time.Minute)
+	passada(t, r)
+	e = sink.last()
+	if e.State != StateResolved || e.Total != 500 || e.Rows != 600 {
+		t.Fatalf("resolução %q com total %d rows %d, quero resolved com 500 e 600 (o payload que resolveu)",
+			e.State, e.Total, e.Rows)
 	}
 }
 

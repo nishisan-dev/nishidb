@@ -21,7 +21,7 @@ func (o *capturingOutput) Publish(key, body []byte, at time.Time) {
 }
 
 func TestOneReadingFeedsFileAndAllKafkaOutputs(t *testing.T) {
-	f := newFakeCounter(t, grupo{"A", 1, 0, true}, grupo{"B", 2, 7, true}, grupo{"old", 3, 8, false})
+	f := newFakeCounter(t, grupo{"A", 1, 0, true, 0}, grupo{"B", 2, 7, true, 9}, grupo{"old", 3, 8, false, 0})
 	a, b := &capturingOutput{}, &capturingOutput{}
 	dir := t.TempDir()
 	e, err := NewEmitter(Options{Dataset: "services", Counter: "by_olt", Columns: []string{"olt", "slot"}, Reader: f,
@@ -59,6 +59,15 @@ func TestOneReadingFeedsFileAndAllKafkaOutputs(t *testing.T) {
 	if rows[0]["total"] != float64(0) {
 		t.Fatal("zero group missing")
 	}
+	// `rows` vai nas DUAS saídas, arquivo e Kafka, com o valor dos membros e
+	// não o do total (7 contra 9).
+	var kafkaRow map[string]any
+	if err := json.Unmarshal(a.samples[1].body, &kafkaRow); err != nil {
+		t.Fatal(err)
+	}
+	if kafkaRow["rows"] != float64(9) || kafkaRow["total"] != float64(7) || rows[1]["rows"] != float64(9) {
+		t.Fatalf("rows do grupo B: Kafka %v, arquivo %v; quero 9 nos dois (total 7)", kafkaRow, rows[1])
+	}
 	// Fail the file after the first sweep. Both Kafka outputs must continue.
 	if err := e.w.f.Close(); err != nil {
 		t.Fatal(err)
@@ -75,7 +84,7 @@ func TestOneReadingFeedsFileAndAllKafkaOutputs(t *testing.T) {
 }
 
 func TestKafkaOnlyCreatesNoDirectoryAndKeyDoesNotUseDisplayText(t *testing.T) {
-	f := newFakeCounter(t, grupo{"A|B", 1, 1, true}, grupo{"A", 2, 2, true})
+	f := newFakeCounter(t, grupo{"A|B", 1, 1, true, 0}, grupo{"A", 2, 2, true, 0})
 	f.texts[0], f.texts[1] = []byte("same display"), []byte("same display")
 	o := &capturingOutput{}
 	dir := filepath.Join(t.TempDir(), "series")

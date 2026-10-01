@@ -10,3 +10,8 @@ import "testing"
 func TestContadorNaoAlocaNoCaminhoQuente(t *testing.T) {
 	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
 }
+
+// Contraparte visível do gate de alocação da transição com scope sob -race.
+func TestScopedTransitionDoesNotAllocate(t *testing.T) {
+	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+}

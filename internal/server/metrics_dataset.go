@@ -299,7 +299,7 @@ func samplesOfCounters(dataset string, ests []counter.Stats) []metrics.Sample {
 			metrics.Sample{
 				Family: metrics.MetCounterRows,
 				Name:   metrics.MetCounterRows,
-				Help:   "linhas vivas que apontam para algum grupo deste contador; abaixo do rows do dataset são as linhas sem alguma coluna do groupBy, que o contador não conta por desenho",
+				Help:   "linhas vivas que apontam para algum grupo deste contador (os membros); abaixo do rows do dataset são as linhas sem alguma coluna do groupBy ou fora do scope, que o contador não conta por desenho",
 				Type:   metrics.TypeGauge,
 				Labels: rotulo,
 				Value:  float64(e.Rows),

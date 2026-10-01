@@ -580,10 +580,11 @@ const (
 //
 // Rows e CountedRows são os agregados do contador inteiro, e existem para que
 // o denominador e o numerador do alarme saiam do scrape sem uma consulta e sem
-// somar os grupos: Rows é quantas linhas apontam para algum grupo,
-// CountedRows quantas satisfazem a condição. Rows abaixo do
+// somar os grupos: Rows é quantas linhas apontam para algum grupo (os
+// membros), CountedRows quantas satisfazem a condição. Rows abaixo do
 // nishidb_rows do dataset é a diferença que ninguém enxergava sem varrer — as
-// linhas sem alguma coluna do groupBy, que o contador não conta por desenho.
+// linhas sem alguma coluna do groupBy e, com `scope`, as fora do escopo, que o
+// contador não conta por desenho.
 //
 // CountedRows, e não `nishidb_counter_total`: os dois são MEDIDORES — descem
 // quando uma linha é lapidada ou vence — e o sufixo _total é reservado a
