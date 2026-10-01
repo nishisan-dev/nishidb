@@ -35,7 +35,7 @@ E uma quarta que a refutação acrescentou: o par `total`/`rows` tem de ser lido
 | 5. Mudar o scope reconstrói, manter adota; sem scope o manifest é byte a byte o de antes | `TestScopeIdentityDecidesAdoptOrRebuild`, `TestCountersManifestSectionBytesAreLiteral`, `TestIdentityOfKeepsTheWhereAloneAndSplitsBack` |
 | 6. Rollback: definição sem scope e com o mesmo where reconstrói | `TestScopeIdentityDecidesAdoptOrRebuild` |
 | 7. `rows` na tabela = `refs` do grupo, também com `total: false`; os gates de alocação da tabela cobrem a coluna | `TestCounterTableRowsIsTheGroupMembersEvenWithTotalDisabled`, `TestTabelaDoContadorNaoAlocaPorLinha`, `TestCounterTableAtRowCeilingPublishesEveryColumn` |
-| 8. `total * 10 <= rows` decide na fronteira, NULL é falso, 128 bits com sinal | `TestLinearColumnComparisonDecidesAtTheBoundary`, `TestLinearColumnComparisonIsExactBeyondInt64`, `TestProportionAlarmFiresResolvesAndDisqualifiesOnTotalAndRows` |
+| 8. `total * 10 <= rows` decide na fronteira, NULL é falso, 128 bits com sinal; com os produtos iguais os operadores estritos são falsos e os largos verdadeiros | `TestLinearColumnComparisonDecidesAtTheBoundary`, `TestLinearColumnComparisonOperatorsAtExactEquality`, `TestLinearColumnComparisonIsExactBeyondInt64`, `TestProportionAlarmFiresResolvesAndDisqualifiesOnTotalAndRows` |
 | 9. Recusas na subida, cada uma com a mensagem própria | `TestLinearColumnComparisonRefusesWithItsOwnMessage`, `TestColumnComparisonStaysRefusedOutsideTheAlarm`, `TestCompileRefusesColumnComparisonInTheScope`, `TestSpecRefusesAnEmptyScopeAndRowsAsAColumnName` |
 | 10. `rows` e `total` no corpo/log de `alarm.firing` e `alarm.resolved` | `TestFiringAndResolvedCarryRowsAndTotalInLogAndBody` |
 | 11. Emissão periódica (arquivo e Kafka) leva `rows` | `TestOneReadingFeedsFileAndAllKafkaOutputs`, `TestACounterWithoutMetricsEmitsTheFixedColumnsWithRows`, `TestTheEmittedLineCarriesTheWindowColumnsTheTableServes` |
@@ -66,6 +66,8 @@ foi revertido, a suíte voltou ao verde. Nenhuma ficou no código.
 | 11 | a série grava o total no lugar do `rows` | Kafka e arquivo com `rows:7`, quero 9; linha literal diverge |
 | 8 | produto em `int64` | `total * 4611686018427387904 <= rows` com total 2 e rows 5 deu verdadeiro (e mais dois casos) |
 | 8 | `bits.Mul64` sobre o complemento de dois, sem tratar o sinal | cinco casos com negativo, ex. `slot * 3 < total * 2` com slot −3 deu falso |
+| 8 | `<` avaliado como `<=` (M6) | `total * 10 < rows` com total 1 e rows 10 deu verdadeiro (e os outros casos de igualdade) |
+| 8 | `>` avaliado como `>=` (M6b) | `total * 10 > rows` com total 1 e rows 10 deu verdadeiro (idem) |
 | 9 | guarda de tipo `int64` do binder desligada | a recusa sai da guarda do predicado ("programa inválido"), não da própria |
 | 9 | guarda `k >= 1` do parser desligada | a recusa sai do binder, com outra mensagem |
 | 9 | recusa de `k * coluna` desligada | "esperado nome de coluna…" / "conteúdo inesperado…" |

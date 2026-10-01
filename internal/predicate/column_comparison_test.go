@@ -122,6 +122,33 @@ func TestLinearColumnComparisonIsExactBeyondInt64(t *testing.T) {
 	}
 }
 
+// TestLinearColumnComparisonOperatorsAtExactEquality é a fronteira de cada
+// operador com os dois produtos IGUAIS: os estritos (`<`, `>`) são falsos e os
+// largos (`<=`, `>=`) verdadeiros. Sem estes casos, trocar `<` por `<=` ou `>`
+// por `>=` no avaliador passaria despercebido — os outros testes nunca
+// comparam produtos iguais com operador estrito. A igualdade é montada com
+// multiplicador de um lado só, dos dois lados, com negativos e acima de 64 bits.
+func TestLinearColumnComparisonOperatorsAtExactEquality(t *testing.T) {
+	c := compile(t, counterRowYAML)
+	for _, eq := range []struct {
+		left, right string
+		cols        map[string]int64
+	}{
+		{"total * 10", "rows", map[string]int64{"total": 1, "rows": 10}},
+		{"slot * 2", "total * 3", map[string]int64{"slot": 6, "total": 4}},
+		{"slot * 2", "total * 3", map[string]int64{"slot": -6, "total": -4}},
+		// 2 × 2^62 = 2^62 × 2 = 2^63: os dois produtos estouram o int64.
+		{"total * 4611686018427387904", "rows * 2", map[string]int64{"total": 2, "rows": 4611686018427387904}},
+	} {
+		for op, want := range map[string]bool{"<": false, ">": false, "<=": true, ">=": true, "=": true, "!=": false} {
+			cond := eq.left + " " + op + " " + eq.right
+			if got := evaluateRow(t, c, cond, eq.cols); got != want {
+				t.Errorf("%s com %v (produtos iguais) = %v, quero %v", cond, eq.cols, got, want)
+			}
+		}
+	}
+}
+
 // TestLinearColumnComparisonCitesBothColumnsInTheSlots: a coluna da direita
 // entra nos Slots.IDs — sem ela o coletor não a leria do payload e a impressão
 // digital das métricas do alarme não a enxergaria.
