@@ -1,5 +1,13 @@
 package counter
 
+import "reflect"
+
+// overlayIdentityForTest identifica o mapa do overlay: muda quando o
+// ApplyOverlay o troca por um novo, e só então.
+func (c *Counter) overlayIdentityForTest() uintptr {
+	return reflect.ValueOf(c.over).Pointer()
+}
+
 // wrapFileForTest substitui o handle do grupos.dict por um wrapper de
 // teste (o gravador de ordem das chamadas de durabilidade).
 func (d *Dict) wrapFileForTest(wrap func(dictFile) dictFile) {

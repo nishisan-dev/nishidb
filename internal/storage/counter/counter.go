@@ -45,6 +45,36 @@ const (
 	pairTotalUnit  uint64 = 1 << pairTotalShift
 )
 
+// OverlayShrinkThreshold é o tamanho, em entradas drenadas, a partir do qual
+// um ApplyOverlay pode trocar o mapa do overlay por um novo em vez de só
+// esvaziá-lo (issue #88).
+//
+// O mapa do Go NÃO encolhe: nem `delete` entrada por entrada nem `clear`
+// devolvem a capacidade alcançada no pico. Na construção de um contador, toda
+// linha viva do dataset passa pelo overlay antes do primeiro checkpoint — no
+// piloto, ~7M de entradas e ~319 MB de heap presos até o restart, por contador
+// construído. Trocar o mapa devolve isso ao GC.
+//
+// 65.536 entradas são ~1-2 MB de mapa (chave de 8 bytes, valor de 4 e a
+// sobra da tabela): abaixo disso a capacidade presa não importa, e a troca só
+// faria o mapa crescer de novo a cada intervalo. O limiar também mantém os
+// gates de alocação do caminho quente — que medem linhas já presentes num
+// overlay de poucos milhares de entradas — longe da troca.
+const OverlayShrinkThreshold = 1 << 16
+
+// overlayShrinkFactor e overlayDrainSmoothing são a HISTERESE da troca. Acima
+// do limiar, o mapa só é trocado quando o dreno é maior que overlayShrinkFactor
+// vezes a média móvel dos drenos anteriores (peso 1/overlayDrainSmoothing para
+// o dreno novo). Num dataset em que cada intervalo entre checkpoints toca mais
+// que o limiar em regime, trocar a cada checkpoint seria só churn: o mapa novo
+// cresceria até o mesmo tamanho no intervalo seguinte. A média sobe para o
+// regime em um ou dois checkpoints, e daí em diante só o PICO — a construção, a
+// reconstrução, a ingestão fria de um backlog — passa de 4 vezes ela.
+const (
+	overlayShrinkFactor   = 4
+	overlayDrainSmoothing = 4
+)
+
 // MaxGroupRows é o teto de linhas de UM grupo: os refs moram nos 32 bits baixos
 // da palavra do grupo. Ver ErrGroupRowsCeiling.
 const MaxGroupRows = 1<<32 - 1
@@ -160,6 +190,13 @@ type Counter struct {
 	// over é o overlay: transições ainda não aplicadas ao mmap. Writer-only —
 	// ninguém lê o vetor além do writer, então não precisa de lock.
 	over map[types.RowID]uint32
+	// drainAvg é a média móvel dos drenos do overlay (entradas por
+	// ApplyOverlay bem-sucedido), a régua da histerese da troca do mapa.
+	// overlayShrinkThreshold é OverlayShrinkThreshold fora de teste — campo,
+	// como groupRowsCeiling, para que o teste da histerese não precise de
+	// centenas de milhares de transições por checkpoint. Writer-only.
+	drainAvg               int
+	overlayShrinkThreshold int
 
 	// Por grupo, índice = id (0 reservado). Crescem sob dict.mu quando um id
 	// nasce; os leitores indexam sob RLock e conferem o limite.
@@ -275,6 +312,8 @@ func Open(dir string, def Definition, minRows uint64, recreate bool, dictFloor i
 		byText:           make(map[string]uint32),
 		now:              time.Now,
 		groupRowsCeiling: MaxGroupRows,
+
+		overlayShrinkThreshold: OverlayShrinkThreshold,
 	}
 	c.deriv = c.NewDeriver()
 	// Os slices por grupo e os textos nascem do dicionário que já está em
@@ -691,6 +730,10 @@ func (c *Counter) Fold() error {
 // são estáveis. É o começo de uma reconstrução: o Store transiciona de novo
 // cada linha viva.
 //
+// O overlay é esvaziado com clear, que NÃO devolve a capacidade do mapa — e
+// não precisa: a reconstrução o enche de novo com todas as linhas vivas, e é o
+// ApplyOverlay do checkpoint seguinte que troca o mapa depois do dreno grande.
+//
 // O vetor é zerado IN PLACE, num mmap compartilhado: as páginas zeradas podem
 // chegar ao disco antes do checkpoint. Por isso quem chama grava antes o
 // marcador de construção em curso (MarkBuilding) — sem ele, um crash entre o
@@ -724,16 +767,26 @@ func (c *Counter) Clear() error {
 // consegue levar ao vetor um id que o dicionário em disco não resolve. Falha
 // do fsync volta como ErrDictSync, sem nenhum Set: é falha de durabilidade, e
 // quem chama deixa o writer falho em vez de tentar de novo.
+//
+// Depois de drenar TUDO com sucesso, um dreno grande troca o mapa por um novo
+// (OverlayShrinkThreshold e a histerese ao lado dele): é o que devolve ao GC a
+// memória que a construção de um contador prendia até o restart. Falha no meio
+// não troca nada — o que sobrou continua no mapa para o próximo checkpoint.
 func (c *Counter) ApplyOverlay(step SyncStep) error {
 	if err := c.dict.Sync(step); err != nil {
 		return fmt.Errorf("counter %s: %w", c.def.Name, err)
 	}
+	drained := len(c.over)
 	for r, v := range c.over {
 		if err := c.vector.Set(r, v); err != nil {
 			return err
 		}
 		delete(c.over, r)
 	}
+	if drained > c.overlayShrinkThreshold && drained > overlayShrinkFactor*c.drainAvg {
+		c.over = make(map[types.RowID]uint32)
+	}
+	c.drainAvg += (drained - c.drainAvg) / overlayDrainSmoothing
 	return nil
 }
 
