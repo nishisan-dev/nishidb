@@ -80,7 +80,7 @@ class TransporteTest {
     void aConsultaDevolveOCorpoParaOLeitor() throws IOException {
         comServidor(ex -> responde(ex, 200, "{\"nishidb\":\"schema\",\"dataset\":\"d\",\"columns\":[]}\n"
                 + "{\"nishidb\":\"end\",\"rows\":0,\"truncated\":false}\n"), t -> {
-                    try (LeitorNdjson l = new LeitorNdjson(t.consulta("{}"))) {
+                    try (LeitorNdjson l = new LeitorNdjson(t.consulta("{}", RequestTimeout.NONE))) {
                         while (l.proxima()) {
                             // consome
                         }
@@ -98,7 +98,7 @@ class TransporteTest {
         comServidor(ex -> responde(ex, 400,
                 "{\"error\":{\"code\":\"UNSUPPORTED_CLAUSE\",\"message\":\"ORDER BY\",\"line\":1,\"column\":18}}"),
                 t -> {
-                    SQLException e = assertThrows(SQLException.class, () -> t.consulta("{}"));
+                    SQLException e = assertThrows(SQLException.class, () -> t.consulta("{}", RequestTimeout.NONE));
                     assertEquals("0A000", e.getSQLState());
                     assertTrue(e.getMessage().contains("ORDER BY"), e.getMessage());
                     assertTrue(e.getMessage().contains("linha 1"), e.getMessage());
@@ -119,7 +119,7 @@ class TransporteTest {
             ex.getResponseHeaders().add("Location", "http://outro-host/v1/query");
             responde(ex, 302, "");
         }, t -> {
-            SQLException e = assertThrows(SQLException.class, () -> t.consulta("{}"));
+            SQLException e = assertThrows(SQLException.class, () -> t.consulta("{}", RequestTimeout.NONE));
             assertEquals("08P01", e.getSQLState());
             assertTrue(e.getMessage().contains("credencial"), e.getMessage());
         });
@@ -135,7 +135,7 @@ class TransporteTest {
     @Test
     void corpoNaoJsonSugereOEsquema() throws IOException {
         comServidor(ex -> responde(ex, 400, "Client sent an HTTP request to an HTTPS server."), t -> {
-            SQLException e = assertThrows(SQLException.class, () -> t.consulta("{}"));
+            SQLException e = assertThrows(SQLException.class, () -> t.consulta("{}", RequestTimeout.NONE));
             assertTrue(e.getMessage().contains("tls"), e.getMessage());
         });
     }
@@ -154,7 +154,7 @@ class TransporteTest {
             String base = "http://127.0.0.1:" + srv.getAddress().getPort();
             try (Transporte t = new Transporte(Transporte.clienteHttp(Duration.ofSeconds(5), null), base,
                     Transporte.basic("leitor", "segredo"))) {
-                t.documento("/v1/metadata");
+                t.documento("/v1/metadata", RequestTimeout.NONE);
             }
         } catch (SQLException e) {
             throw new IllegalStateException(e);
@@ -170,7 +170,8 @@ class TransporteTest {
     void oDocumentoPequenoVoltaComoJsonValue() throws IOException {
         comServidor(ex -> responde(ex, 200, "{\"process\":{\"version\":\"v1.2.3 (abc)\"}}"), t -> {
             try {
-                assertEquals("v1.2.3 (abc)", t.documento("/v1/stats").campo("process").textoOu("version", null));
+                assertEquals("v1.2.3 (abc)",
+                        t.documento("/v1/stats", RequestTimeout.NONE).campo("process").textoOu("version", null));
             } catch (SQLException e) {
                 throw new IllegalStateException(e);
             }
@@ -187,7 +188,7 @@ class TransporteTest {
         srv.stop(0);
         try (Transporte t = new Transporte(Transporte.clienteHttp(Duration.ofSeconds(2), null),
                 "http://127.0.0.1:" + porta, null)) {
-            SQLException e = assertThrows(SQLException.class, () -> t.consulta("{}"));
+            SQLException e = assertThrows(SQLException.class, () -> t.consulta("{}", RequestTimeout.NONE));
             assertEquals("08001", e.getSQLState());
         }
     }
@@ -199,7 +200,7 @@ class TransporteTest {
             // Vinte erros seguidos: com o corpo vazando, o pool interno do
             // HttpClient acabaria e a vigésima chamada travaria.
             for (int i = 0; i < 20; i++) {
-                assertThrows(SQLException.class, () -> t.consulta("{}"));
+                assertThrows(SQLException.class, () -> t.consulta("{}", RequestTimeout.NONE));
             }
         });
     }
@@ -210,7 +211,7 @@ class TransporteTest {
         comServidor(ex -> responde(ex, 200, "{\"nishidb\":\"schema\",\"dataset\":\"d\",\"columns\":[]}\n"
                 + "{\"nishidb\":\"end\",\"rows\":0,\"truncated\":false}\n"), t -> {
                     for (int i = 0; i < 20; i++) {
-                        try (InputStream in = t.consulta("{}"); LeitorNdjson l = new LeitorNdjson(in)) {
+                        try (InputStream in = t.consulta("{}", RequestTimeout.NONE); LeitorNdjson l = new LeitorNdjson(in)) {
                             while (l.proxima()) {
                                 // consome
                             }

@@ -1010,6 +1010,10 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | fila durável de entrega | delivery queue / Manager | internal/alarmdelivery |
 | retrato da entrega por destino | AlarmDeliveryStats | internal/protocol |
 | descarte de evento novo | dropped / `alarm.delivery.dropped` | internal/alarmdelivery |
+| contrapressão na admissão (a varredura espera vaga em memória na fila, em vez de descartar, quando o gravador não acompanha a rajada) | admission backpressure / `queue.offer` + `space` | internal/alarmdelivery |
+| tempo de espera da admissão | `AdmissionWaitSeconds` / `nishidb_alarm_delivery_admission_wait_seconds_total` | internal/alarmdelivery, internal/protocol, internal/metrics |
+| rajada de alarmes (muitos grupos disparando na mesma passada) | burst | internal/alarmdelivery, internal/server |
+| passada interrompida (a varredura abandonada entre grupos pelo Stop, sem a fase dois) | `errSweepAborted` / `evaluate(stop)` | internal/alarm |
 
 ## Medidas de contadores (issue #75)
 
@@ -1046,3 +1050,16 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | âncora no futuro (limitada ao instante da escrita) | AnchorInFuture / `ttlAnchorInFuture` | internal/materializer, internal/protocol, internal/metrics |
 | âncora ausente (a regra ancorada que não casou porque o campo não está no documento) | AnchorAbsent / `anchorAbsent` | internal/materializer, internal/protocol, internal/metrics |
 | carimbo do prazo (a decisão do prazo sobre o payload final, gravada no lugar) | stampTTL / OverwriteInt64 | internal/materializer, internal/storage/encoding |
+
+## Prazo de requisição no driver JDBC (issue #91)
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| prazo de espera (do cliente, por requisição) | RequestTimeout | clients/jdbc |
+| prazo de rede (o silêncio máximo do servidor numa consulta; duração inteira nos documentos pequenos) | `socketTimeoutMs` / networkTimeout | clients/jdbc |
+| folga do queryTimeout (o que o cliente espera além do prazo do servidor) | QUERY_TIMEOUT_GRACE_MS | clients/jdbc |
+| corpo com prazo (o stream da resposta que se fecha quando uma leitura não volta a tempo) | TimedInputStream | clients/jdbc |
+| corpo atento ao abandono | AbandonAwareInputStream | clients/jdbc |
+| falha de leitura já montada | ResponseFailureException | clients/jdbc |
+| abandonar a conexão (derrubar sem esperar o servidor) | abandon / `abort` | clients/jdbc |
+| conexão inexistente (o SQLSTATE de toda operação em conexão fechada) | CONNECTION_DOES_NOT_EXIST / 08003 | clients/jdbc |

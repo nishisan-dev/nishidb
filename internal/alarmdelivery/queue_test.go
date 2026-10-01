@@ -57,6 +57,11 @@ func fastEndpoint(url string) *endpoint {
 }
 
 // O bloqueio é no passo real de gravação: nenhum POST pode ultrapassá-lo.
+//
+// "Nunca espera o disco" vale aqui COM vaga em memória, que é o caso deste
+// teste (um evento num buffer de 256). Com o buffer cheio a admissão espera o
+// gravador, e isso é provado em backpressure_test.go. O nome fica porque um
+// registro de aceite de 19/09 o cita.
 func TestOfferNeverWaitsForDiskAndHTTPWaitsForDurablePublication(t *testing.T) {
 	var calls atomic.Int64
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls.Add(1); w.WriteHeader(204) }))
@@ -97,23 +102,18 @@ func TestOfferNeverWaitsForDiskAndHTTPWaitsForDurablePublication(t *testing.T) {
 	}
 }
 
+// Só o teto de DISCO descarta: o de memória faz esperar, e tem teste próprio.
 func TestQueueLimitsRejectOnlyNewEvents(t *testing.T) {
-	for _, kind := range []string{"memory_count", "memory_bytes", "disk_count", "disk_bytes"} {
+	for _, kind := range []string{"disk_count", "disk_bytes"} {
 		t.Run(kind, func(t *testing.T) {
 			q := testQueue(t, filepath.Join(t.TempDir(), "noc"), nil)
 			body := eventBody(t, "same")
-			want := DropMemoryFull
+			want := DropDiskFull
 			switch kind {
-			case "memory_count":
-				q.memoryLimit = 2
-			case "memory_bytes":
-				q.memoryByteLimit = int64(2 * len(body))
 			case "disk_count":
 				q.diskLimit = 2
-				want = DropDiskFull
 			case "disk_bytes":
 				q.maxBytes = int64(2 * (len(body) + recordHeaderBytes))
-				want = DropDiskFull
 			}
 			entered, release := make(chan struct{}), make(chan struct{})
 			var once sync.Once

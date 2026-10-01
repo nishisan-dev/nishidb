@@ -114,7 +114,8 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
     }
 
     private String versaoDoProcesso() throws SQLException {
-        JsonValue stats = conexao.transporte().documento("/v1/stats");
+        conexao.exigeAberta(); // a mesma guarda de datasets(): metadata obtido antes do close/abort
+        JsonValue stats = conexao.transporte().documento("/v1/stats", conexao.networkTimeout());
         JsonValue processo = stats.campo("process");
         return processo == null ? "" : processo.textoOu("version", "");
     }
@@ -1542,7 +1543,13 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
      * o {@code _meta}, que é o que o servidor abre para ela.
      */
     private List<JsonValue> datasets() throws SQLException {
-        return conexao.transporte().documento(NishiConnection.metadataPath(conexao.schema())).itensDe("datasets");
+        // O DatabaseMetaData pode ter sido obtido ANTES do close/abort: sem a
+        // guarda, a requisição sairia de uma conexão fechada — e, com o
+        // executor do abort pendente, chegaria ao servidor.
+        conexao.exigeAberta();
+        return conexao.transporte()
+                .documento(NishiConnection.metadataPath(conexao.schema()), conexao.networkTimeout())
+                .itensDe("datasets");
     }
 
     private ResultSet resultado(List<Molduras.Coluna> colunas, List<Object[]> linhas) {

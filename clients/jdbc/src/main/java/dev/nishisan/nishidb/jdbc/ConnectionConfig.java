@@ -44,6 +44,10 @@ public final class ConnectionConfig {
         {"tls", "true para falar HTTPS. Default false."},
         {"tlsCaFile", "arquivo PEM com a CA que assina o certificado do servidor. Exige tls=true."},
         {"connectTimeoutMs", "prazo do handshake, em ms. Default 10000. NÃO limita a duração da consulta."},
+        {"socketTimeoutMs", "prazo de rede, em ms, para a requisição sem prazo próprio. Na consulta, limita a"
+                + " espera pelos cabeçalhos e cada espera por bytes do stream, não a duração dele; em metadata,"
+                + " catálogo e stats, limita a requisição inteira. Default 0, sem prazo. Estourado, fecha a"
+                + " conexão. É o valor inicial de getNetworkTimeout."},
     };
 
     private final String url;
@@ -55,9 +59,10 @@ public final class ConnectionConfig {
     private final boolean tls;
     private final String tlsCaFile;
     private final int connectTimeoutMs;
+    private final int socketTimeoutMs;
 
     private ConnectionConfig(String url, String host, int porta, String schema, String usuario, String senha,
-            boolean tls, String tlsCaFile, int connectTimeoutMs) {
+            boolean tls, String tlsCaFile, int connectTimeoutMs, int socketTimeoutMs) {
         this.url = url;
         this.host = host;
         this.porta = porta;
@@ -67,6 +72,7 @@ public final class ConnectionConfig {
         this.tls = tls;
         this.tlsCaFile = tlsCaFile;
         this.connectTimeoutMs = connectTimeoutMs;
+        this.socketTimeoutMs = socketTimeoutMs;
     }
 
     public static ConnectionConfig de(String url, Properties props) throws SQLException {
@@ -82,7 +88,9 @@ public final class ConnectionConfig {
                     + "e o certificado não seria verificado", SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         int prazo = prazo(escolhe(props, daUrl, "connectTimeoutMs"));
-        return new ConnectionConfig(url, u.host(), u.porta(), u.schema(), usuario, senha, tls, ca, prazo);
+        int socketTimeout = parseSocketTimeout(escolhe(props, daUrl, "socketTimeoutMs"));
+        return new ConnectionConfig(url, u.host(), u.porta(), u.schema(), usuario, senha, tls, ca, prazo,
+                socketTimeout);
     }
 
     /** A URL como o usuário a escreveu — é o que getURL do metadata publica. */
@@ -113,6 +121,14 @@ public final class ConnectionConfig {
 
     public int connectTimeoutMs() {
         return connectTimeoutMs;
+    }
+
+    /**
+     * O prazo de espera pelo servidor em cada requisição, em ms; zero é sem
+     * prazo. É o valor inicial do {@code getNetworkTimeout} da conexão.
+     */
+    public int socketTimeoutMs() {
+        return socketTimeoutMs;
     }
 
     /** A base HTTP, com o esquema que o tls decide. */
@@ -222,6 +238,30 @@ public final class ConnectionConfig {
         }
         if (ms <= 0) {
             throw new SQLException("connectTimeoutMs precisa ser positivo (recebido " + ms + ")",
+                    SqlStates.CONEXAO_NAO_ESTABELECIDA);
+        }
+        return ms;
+    }
+
+    /**
+     * Zero é aceito, e é o default: "sem prazo" é o comportamento que o
+     * driver sempre teve, e quem não pediu prazo não pode ganhar um. Negativo
+     * é recusado, e não lido como zero — um {@code -1} digitado por engano
+     * desligaria o prazo em silêncio.
+     */
+    private static int parseSocketTimeout(String v) throws SQLException {
+        if (v == null || v.isEmpty()) {
+            return 0;
+        }
+        int ms;
+        try {
+            ms = Integer.parseInt(v);
+        } catch (NumberFormatException e) {
+            throw new SQLException("socketTimeoutMs=\"" + v + "\" não é um número",
+                    SqlStates.CONEXAO_NAO_ESTABELECIDA);
+        }
+        if (ms < 0) {
+            throw new SQLException("socketTimeoutMs não pode ser negativo (recebido " + ms + "); 0 é sem prazo",
                     SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         return ms;

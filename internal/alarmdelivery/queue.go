@@ -1,6 +1,13 @@
 // Package alarmdelivery entrega eventos de alarme sem fazer I/O na varredura.
 // Cada fila pertence ao flock do dataset e tem dois donos de I/O: o gravador
 // e o remetente. O mutex protege somente memória, nunca disco nem HTTP.
+//
+// A admissão aplica contrapressão por memória: com o buffer cheio, a varredura
+// espera o GRAVADOR liberar vaga, em vez de descartar o evento. Ela nunca
+// espera o HTTP — a memória é liberada quando o arquivo é publicado, não
+// quando o receptor confirma —, e nunca espera vaga em disco: o teto de disco
+// continua descartando com `disk_full`, que é o que impede um receptor fora
+// do ar por dias de travar a varredura.
 package alarmdelivery
 
 import (
@@ -25,11 +32,19 @@ const (
 	recordHeaderBytes = 16
 )
 
+// Um corpo admitido sempre cabe no buffer vazio; sem isso, a espera por vaga
+// em memória não teria fim para um corpo entre os dois limites. A conversão
+// para uint não compila se a diferença ficar negativa.
+const _ = uint(maxMemoryBytes - maxEventBytes)
+
 // ErrQueue identifica falha de abertura ou persistência da fila do dataset.
 var ErrQueue = errors.New("alarm delivery queue failure")
 
 // Motivos fechados: nenhum label depende de URL, grupo ou conteúdo recebido.
 const (
+	// DropMemoryFull não é mais emitido: o buffer cheio faz a admissão esperar
+	// o gravador. Continua no conjunto fechado porque o label saiu na v0.10.0 e
+	// painéis e alertas o referenciam; a série segue publicada com zero.
 	DropMemoryFull = "memory_full"
 	DropDiskFull   = "disk_full"
 	DropTooLarge   = "event_too_large"
@@ -77,6 +92,10 @@ type queue struct {
 	senderDone             chan struct{}
 	cancel                 context.CancelFunc
 	closeOnce              sync.Once
+	// space acorda a admissão que espera vaga em memória. Usa mu e é
+	// sinalizado em toda liberação de memória pelo gravador, no close e na
+	// falha da fila.
+	space *sync.Cond
 	// Substituíveis pelos testes para bloquear ou falhar no passo real de I/O.
 	write    func(string, []byte, os.FileMode) error
 	remove   func(string) error
@@ -101,6 +120,7 @@ func openQueue(dir, name string, maxBytes int64, target *endpoint, log *logging.
 		write: atomicfile.Write, remove: os.Remove, syncDir: atomicfile.SyncDir,
 		stats: Stats{Destination: name, State: "ready", Dropped: make(map[string]uint64)},
 	}
+	q.space = sync.NewCond(&q.mu)
 	for _, reason := range DropReasons() {
 		q.stats.Dropped[reason] = 0
 	}
@@ -116,35 +136,58 @@ func openQueue(dir, name string, maxBytes int64, target *endpoint, log *logging.
 
 func (q *queue) path(seq uint64) string { return filepath.Join(q.dir, fmt.Sprintf("%020d.evt", seq)) }
 
-// offer só reserva memória e capacidade; nem o mutex nem o channel esperam I/O.
+// offer reserva memória e capacidade de disco para um evento. Nunca espera o
+// HTTP e nunca espera vaga em disco: fila fechada ou falha, corpo grande demais
+// e teto de disco (quantidade ou bytes, contando as reservas em memória)
+// descartam na hora. Só a memória cheia (eventos OU bytes) faz esperar, e a
+// espera termina pela vaga liberada pelo gravador, pelo close (`closed`) ou
+// pela falha da fila (`destination_failed`); a cada despertar todas as
+// condições são reavaliadas, porque o disco pode ter enchido no intervalo.
+// O tempo esperado acumula em AdmissionWaitSeconds.
 func (q *queue) offer(body []byte, at time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	size := int64(len(body) + recordHeaderBytes)
-	reason := ""
-	switch {
-	case q.closed:
-		reason = DropClosed
-	case q.failed != nil:
-		reason = DropFailed
-	case len(body) > maxEventBytes:
-		reason = DropTooLarge
-	case q.stats.MemoryEvents >= q.memoryLimit || int64(len(body)) > q.memoryByteLimit-q.stats.MemoryBytes:
-		reason = DropMemoryFull
-	case len(q.pending)-q.head+q.stats.MemoryEvents >= q.diskLimit || size > q.maxBytes-q.reservedBytes:
-		reason = DropDiskFull
+	var waitStart time.Time
+	for {
+		reason := ""
+		switch {
+		case q.closed:
+			reason = DropClosed
+		case q.failed != nil:
+			reason = DropFailed
+		case len(body) > maxEventBytes:
+			reason = DropTooLarge
+		case len(q.pending)-q.head+q.stats.MemoryEvents >= q.diskLimit || size > q.maxBytes-q.reservedBytes:
+			reason = DropDiskFull
+		}
+		if reason != "" {
+			q.endWaitLocked(waitStart)
+			q.dropLocked(reason)
+			return
+		}
+		if q.stats.MemoryEvents < q.memoryLimit && int64(len(body)) <= q.memoryByteLimit-q.stats.MemoryBytes {
+			break
+		}
+		if waitStart.IsZero() {
+			waitStart = time.Now()
+		}
+		q.space.Wait()
 	}
-	if reason != "" {
-		q.dropLocked(reason)
-		return
-	}
-	select {
-	case q.input <- queuedEvent{body: body, at: at}:
-		q.stats.MemoryEvents++
-		q.stats.MemoryBytes += int64(len(body))
-		q.reservedBytes += size
-	default:
-		q.dropLocked(DropMemoryFull)
+	q.endWaitLocked(waitStart)
+	// Não bloqueia: a capacidade do channel é maxMemoryEvents, e MemoryEvents
+	// (que conta o channel mais a gravação em curso) está abaixo de
+	// memoryLimit, que nunca passa dela. close(q.input) também exige mu.
+	q.input <- queuedEvent{body: body, at: at}
+	q.stats.MemoryEvents++
+	q.stats.MemoryBytes += int64(len(body))
+	q.reservedBytes += size
+}
+
+// endWaitLocked acumula a espera por vaga; waitStart zero é admissão sem espera.
+func (q *queue) endWaitLocked(waitStart time.Time) {
+	if !waitStart.IsZero() {
+		q.stats.AdmissionWaitSeconds += time.Since(waitStart).Seconds()
 	}
 }
 
@@ -199,6 +242,10 @@ func (q *queue) persistLoop() {
 			q.stats.DiskEvents++
 			q.stats.DiskBytes += size
 		}
+		// A vaga em memória volta na publicação do arquivo (ou na falha dela),
+		// nunca na confirmação HTTP: é o que impede o receptor de travar a
+		// varredura.
+		q.space.Broadcast()
 		q.mu.Unlock()
 		q.signal()
 	}
@@ -219,6 +266,9 @@ func (q *queue) fail(err error) {
 		q.failed = fmt.Errorf("%w: destination %q: %v", ErrQueue, q.name, err)
 		q.stats.State = "failed"
 	}
+	// A falha pode vir do remetente com o gravador parado no disco: só este
+	// aviso acorda quem espera vaga para que desista com destination_failed.
+	q.space.Broadcast()
 	cancel := q.cancel
 	q.mu.Unlock()
 	if cancel != nil {
@@ -256,6 +306,9 @@ func (q *queue) close() error {
 		q.mu.Lock()
 		q.closed = true
 		close(q.input)
+		// Quem espera vaga desiste com `closed` sem esperar o gravador, que
+		// pode estar parado no disco enquanto o close o aguarda abaixo.
+		q.space.Broadcast()
 		cancel, started := q.cancel, q.started
 		q.mu.Unlock()
 		if cancel != nil {

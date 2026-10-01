@@ -8,7 +8,7 @@ import (
 
 // Valores distintos e não nulos detectam troca de fios e contadores congelados.
 func TestDeliveryMetricsProjectDistinctValuesAndStates(t *testing.T) {
-	s := alarmdelivery.Stats{Destination: "noc", State: "failed", MemoryEvents: 2, MemoryBytes: 3, DiskEvents: 5, DiskBytes: 7, OldestPendingSeconds: 11, Delivered: 13, FailedAttempts: 17, PersistenceErrors: 19, LastSuccessTimestamp: 23, Dropped: map[string]uint64{alarmdelivery.DropDiskFull: 29}}
+	s := alarmdelivery.Stats{Destination: "noc", State: "failed", MemoryEvents: 2, MemoryBytes: 3, DiskEvents: 5, DiskBytes: 7, OldestPendingSeconds: 11, Delivered: 13, FailedAttempts: 17, PersistenceErrors: 19, LastSuccessTimestamp: 23, AdmissionWaitSeconds: 31, Dropped: map[string]uint64{alarmdelivery.DropDiskFull: 29}}
 	want := map[string]float64{
 		metrics.MetAlarmDeliveryMemoryEvents: 2, metrics.MetAlarmDeliveryMemoryBytes: 3,
 		metrics.MetAlarmDeliveryDiskEvents: 5, metrics.MetAlarmDeliveryDiskBytes: 7,
@@ -16,6 +16,7 @@ func TestDeliveryMetricsProjectDistinctValuesAndStates(t *testing.T) {
 		metrics.MetAlarmDeliveryFailedAttemptsTotal: 17, metrics.MetAlarmDeliveryPersistenceErrorsTotal: 19,
 		metrics.MetAlarmDeliveryLastSuccessTimestamp: 23, metrics.MetAlarmDeliveryActive: 0,
 		metrics.MetAlarmDeliveryFailed: 1, metrics.MetAlarmDeliveryPaused: 0,
+		metrics.MetAlarmDeliveryAdmissionWaitSecondsTotal: 31,
 	}
 	for _, sample := range samplesOfAlarmDelivery("d", s) {
 		if sample.Name != sample.Family {

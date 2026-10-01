@@ -667,4 +667,7 @@ type AlarmDeliveryStats struct {
 	PersistenceErrors    uint64            `json:"persistenceErrors"`
 	Dropped              map[string]uint64 `json:"dropped"`
 	LastSuccessTimestamp float64           `json:"lastSuccessTimestamp"`
+	// AdmissionWaitSeconds acumula, desde a subida, o tempo que a varredura
+	// esperou vaga em memória porque o gravador não acompanhou a rajada.
+	AdmissionWaitSeconds float64 `json:"admissionWaitSeconds"`
 }

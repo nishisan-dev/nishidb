@@ -323,11 +323,41 @@ func (r *Runner) findAlarm(counterName, alarmName string) *runnerAlarm {
 	return nil
 }
 
+// errSweepAborted é a passada interrompida pelo Stop. Não é falha: o laço
+// sai calado, e o Stop grava o estado como a interrupção o deixou.
+var errSweepAborted = errors.New("alarm: sweep aborted by stop")
+
 // EvaluateOnce faz UMA passada por todos os alarmes de todos os contadores.
 //
 // É público para que o teste a chame direto, em vez de esperar um tique — é o
-// mesmo motivo do AposentaGroupsVazios no storage.
-func (r *Runner) EvaluateOnce() error {
+// mesmo motivo do AposentaGroupsVazios no storage. Não é interrompível: a
+// interrupção é do laço, que passa o cancelamento do Stop a evaluate.
+func (r *Runner) EvaluateOnce() error { return r.evaluate(nil) }
+
+// evaluate é a passada; stop fechado a interrompe ENTRE duas decisões.
+//
+// A interrupção existe pela contrapressão da entrega de alarmes: numa rajada,
+// cada disparo ou resolução espera uma gravação durável por destino, e um Stop
+// que aguardasse a passada inteira passaria do prazo do encerramento do
+// serviço — o processo morreria sem gravar o estado, e a subida seguinte
+// reanunciaria os disparos com identidade nova.
+//
+// O cancelamento é observado antes de cada grupo da fase um e antes de cada
+// tracker da fase dois, então o Stop espera só o que está em curso: na fase
+// um, as decisões do grupo corrente (um evento por alarme do contador, cada
+// um oferecido a todos os destinos); na fase dois, uma resolução. O que sobra
+// da passada é abandonado: os contadores seguintes não rodam, e uma
+// interrupção na fase um pula também a fase dois, que resolveria como
+// ausentes os grupos que só não foram visitados. Os trackers já decididos
+// ficam como a decisão os deixou, coerentes com o que foi emitido (o
+// resolvido na fase dois já saiu e foi apagado). O Stop grava esse estado, e
+// os que ficaram sem decisão voltam na subida com o cronômetro que tinham.
+//
+// O arquivo de estado guarda só o cronômetro, não a fase: o grupo disparado
+// volta pendente na subida. Se ele continuar ausente, a passada seguinte o
+// descarta sem evento de resolução, como acontece com todo grupo disparado
+// que some com o processo parado.
+func (r *Runner) evaluate(stop <-chan struct{}) error {
 	inicio := time.Now()
 	defer func() { r.lastSweep.Store(int64(time.Since(inicio))) }()
 	now := r.now()
@@ -335,7 +365,12 @@ func (r *Runner) EvaluateOnce() error {
 	r.dirty = false
 	r.enrichBudget = maxEnrichmentsPerSweep
 	for _, rc := range r.counters {
-		if err := r.sweep(rc, now); err != nil {
+		if err := r.sweep(rc, now, stop); err != nil {
+			if errors.Is(err, errSweepAborted) && r.dirty {
+				// A view acompanha o que já foi emitido; o arquivo fica com o
+				// Stop, que grava em seguida.
+				r.publishSnapshot()
+			}
 			return err
 		}
 	}
@@ -351,10 +386,18 @@ func (r *Runner) EvaluateOnce() error {
 // Duas fases, e a segunda é o que impede alarme eterno: a varredura só enxerga
 // grupo VIVO, então um grupo aposentado simplesmente não aparece. É a ausência
 // dele na passada — e não um evento do storage — que resolve o alarme.
-func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
+//
+// stop fechado interrompe a varredura antes do próximo grupo ou do próximo
+// tracker da fase dois (ver evaluate). nil nunca interrompe.
+func (r *Runner) sweep(rc *runnerCounter, now time.Time, stop <-chan struct{}) error {
 	snap := rc.store.OpenSnapshot()
 	snap.Instant = now
 	for id := types.RowID(1); id <= snap.LimitRowID; id++ {
+		select {
+		case <-stop:
+			return errSweepAborted
+		default:
+		}
 		// Só a chave, o texto e o vivo vêm daqui. total e rows saem do
 		// payload que a condição avaliou (countsOf): esta leitura e a que
 		// montou a linha são duas, e entre elas o grupo pode ter mudado.
@@ -421,6 +464,11 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
 		for k, tr := range ra.trackers {
 			if tr.seen == r.pass {
 				continue
+			}
+			select {
+			case <-stop:
+				return errSweepAborted
+			default:
 			}
 			r.decide(rc, ra, tr, []byte(k), nil, nil, observation{}, now)
 		}
