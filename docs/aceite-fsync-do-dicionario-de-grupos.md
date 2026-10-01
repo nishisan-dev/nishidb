@@ -192,13 +192,13 @@ desenho diferente do que ele descrevia, registrado no próprio item.
 
 ## O que ficou como débito
 
-- **129** — a construção a frio ainda passa todas as linhas pelo overlay: o
+- **135** — a construção a frio ainda passa todas as linhas pelo overlay: o
   PICO de memória da abertura continua (o mapa é devolvido depois do checkpoint).
-- **130** — `RebuildCounters` com erro no meio deixa o contador parcial na
+- **136** — `RebuildCounters` com erro no meio deixa o contador parcial na
   sessão (a reabertura reconstrói, pelo marcador).
-- **131** — `FieldDictValidBytes` é gravado e nunca conferido na abertura: o
+- **137** — `FieldDictValidBytes` é gravado e nunca conferido na abertura: o
   dicionário de campos não tem a paridade do piso.
-- **132** — o `msync` do vetor dos contadores não deixa o writer falho, com uma
+- **138** — o `msync` do vetor dos contadores não deixa o writer falho, com uma
   justificativa ("derivado, reconstruível") que não vale para ele.
 
 ## O que NÃO foi verificado

@@ -2653,9 +2653,9 @@ contador** com o writer parado.
 (débito 109), e `WHERE olt = …` num contador composto varre os grupos em vez
 de usar índice (débito 110). A construção a frio ainda passa todas as linhas
 pelo overlay antes do primeiro checkpoint, e esse é o pico de memória da
-abertura (débito 129); uma reconstrução em operação que falha no meio deixa o
-contador parcial até a reabertura (débito 130); o `msync` do vetor não deixa
-o writer falho (débito 132).
+abertura (débito 135); uma reconstrução em operação que falha no meio deixa o
+contador parcial até a reabertura (débito 136); o `msync` do vetor não deixa
+o writer falho (débito 138).
 
 ## Métricas de janela do contador
 

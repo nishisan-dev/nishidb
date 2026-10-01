@@ -161,7 +161,7 @@ func (s *Store) checkpoint() error {
 	// Os contadores seguem a agenda: erro não sticky. A justificativa
 	// "derivados, reconstruíveis" NÃO vale para o vetor deles — uma página
 	// perdida num EIO seguida de um msync "bem-sucedido" deixa o vetor velho
-	// adotado, e nada na abertura dispara a reconstrução (débito 132).
+	// adotado, e nada na abertura dispara a reconstrução (débito 138).
 	// Depois do msync, cada contador registra que toda transição até
 	// aqui está durável em record E em página — é essa cobertura que autoriza
 	// a aposentadoria de um grupo vazio (counter.RetireEmptyGroups).
