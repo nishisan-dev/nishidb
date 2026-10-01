@@ -215,3 +215,41 @@ func TestEventoSemEnriquecimentoNaoTrazOCampo(t *testing.T) {
 		t.Errorf("enrichment = %#v num evento sem enriquecimento declarado", got["enrichment"])
 	}
 }
+
+// TestFiringAndResolvedCarryRowsAndTotalInLogAndBody: `rows` e `total` saem
+// nos DOIS estados e nas DUAS projeções — a linha de log e o corpo JSON do
+// webhook, que são a mesma projeção (eventArguments). Na resolução o par é o
+// que fez a condição passar, e sem `rows` o consumidor não saberia de quantos
+// membros o total voltou a ser fração. Com `total: false`, total sai null e
+// rows continua lá.
+func TestFiringAndResolvedCarryRowsAndTotalInLogAndBody(t *testing.T) {
+	for _, state := range []string{StateFiring, StateResolved} {
+		e := eventoDeExemplo()
+		e.State, e.Total, e.Rows = state, 1, 10
+		if state == StateResolved {
+			e.Reason, e.Total = ReasonConditionCleared, 2
+		}
+		var body map[string]any
+		raw, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatal(err)
+		}
+		for name, got := range map[string]map[string]any{"log": emitir(t, e), "corpo": body} {
+			if got["rows"] != float64(10) || got["total"] != float64(e.Total) {
+				t.Errorf("%s de %s: rows=%v total=%v, quero 10 e %d", name, state, got["rows"], got["total"], e.Total)
+			}
+		}
+		e.TotalDisabled = true
+		got := emitir(t, e)
+		if v, present := got["total"]; !present || v != nil || got["rows"] != float64(10) {
+			t.Errorf("%s com total desligado: total=%v (presente=%v) rows=%v, quero total null e rows 10",
+				state, v, present, got["rows"])
+		}
+	}
+	if !ReservedEventKey("rows") {
+		t.Error("rows é campo do evento e tem de ser chave reservada: uma coluna com esse nome geraria JSON ambíguo")
+	}
+}

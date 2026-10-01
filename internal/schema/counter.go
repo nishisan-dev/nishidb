@@ -19,6 +19,7 @@ import (
 //	counters:
 //	  - name: autenticados_por_olt
 //	    groupBy: [olt]
+//	    scope: eligible = true           # opcional; quem é membro (rows)
 //	    where: authenticated = true      # opcional; ausente conta toda linha
 //	    keyFormat: "{olt}.{slot:02}"     # opcional; molde do groupKey
 //	    maxGroups: 65536                 # opcional
@@ -31,7 +32,13 @@ import (
 // sai como sempre saiu — as colunas na ordem do groupBy separadas por `|`.
 //
 // A leitura sai por SQL em `_counters.<name>`, uma tabela por contador com a
-// coluna `groupKey`, as colunas do groupBy abertas e tipadas, e `total`.
+// coluna `groupKey`, as colunas do groupBy abertas e tipadas, `total` e `rows`.
+//
+// `scope` e `where` são dois filtros com papéis diferentes: o scope decide quem
+// é MEMBRO do grupo (a linha fora dele não conta em lugar nenhum, como a linha
+// sem alguma coluna do groupBy), e o where decide quem, entre os membros,
+// CONTA no total. `rows` é quantos membros o grupo tem; `total`, quantos deles
+// satisfazem o where.
 const (
 	// DefaultMaxGroups é o teto de grupos vivos quando o YAML não declara. É a
 	// proteção contra um groupBy declarado, por engano, sobre uma coluna de
@@ -53,6 +60,11 @@ const (
 	CounterKeyColumn = "groupKey"
 	// CounterTotalColumn é a coluna com a contagem.
 	CounterTotalColumn = "total"
+	// CounterRowsColumn é a coluna com os MEMBROS do grupo: as linhas com o
+	// groupBy completo e dentro do `scope`, satisfaçam ou não o `where`. É o
+	// denominador de um alarme de proporção (`total * 10 <= rows`). Nunca é
+	// NULL, nem com `total: false`.
+	CounterRowsColumn = "rows"
 	// ReservedAlarmsTable é o nome da view de alarmes publicada no schema de
 	// todo dataset, sob `_counters` — por isso nenhum contador, dataset ou
 	// tabela histórica pode usá-lo.
@@ -71,6 +83,10 @@ type CounterSpec struct {
 	// Where é a condição normalizada (espaços colapsados); "" é sem condição.
 	// NÃO é validada aqui: precisa do schema compilado, como o when do TTL.
 	Where string
+	// Scope é o filtro de membro normalizado, pela mesma regra do Where; "" é
+	// sem escopo (toda linha com o groupBy completo é membro). Também só é
+	// compilado contra o schema, em internal/counters.
+	Scope string
 	// MaxGroups é o teto de grupos vivos.
 	MaxGroups uint32
 	// RetainEmptyGroups é o prazo de visibilidade do grupo vazio; zero é never.
@@ -103,6 +119,7 @@ type rawCounter struct {
 	Name              string
 	GroupBy           []string
 	Where             *string
+	Scope             *string
 	MaxGroups         *int64
 	RetainEmptyGroups string
 	KeyFormat         *string
@@ -129,7 +146,7 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 	out := make([]rawCounter, 0, len(n.Content))
 	for i, item := range n.Content {
 		keyPath := fmt.Sprintf("counters[%d]", i)
-		keys, err := block(item, keyPath, "name", "groupBy", "where", "keyFormat",
+		keys, err := block(item, keyPath, "name", "groupBy", "where", "scope", "keyFormat",
 			"maxGroups", "retainEmptyGroups", "alarms", "metrics", "emit", "total", "measures")
 		if err != nil {
 			return nil, err
@@ -159,6 +176,10 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 				var w string
 				err = decodeInto(value, keyPath+".where", &w)
 				r.Where = &w
+			case "scope":
+				var sc string
+				err = decodeInto(value, keyPath+".scope", &sc)
+				r.Scope = &sc
 			case "keyFormat":
 				var kf string
 				err = decodeInto(value, keyPath+".keyFormat", &kf)
@@ -315,6 +336,13 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 			}
 			c.Where = w
 		}
+		if r.Scope != nil {
+			sc := strings.Join(strings.Fields(*r.Scope), " ")
+			if sc == "" {
+				return nil, specErrf("%s.scope empty — remove the key to make every row with a complete groupBy a member", keyPath)
+			}
+			c.Scope = sc
+		}
 		if r.KeyFormat != nil {
 			if err := validateKeyFormat(keyPath, *r.KeyFormat, r.GroupBy, columns); err != nil {
 				return nil, err
@@ -344,7 +372,7 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 						continue
 					}
 					switch col.Name {
-					case "dataset", "counter", "groupKey", "total", "at":
+					case "dataset", "counter", "groupKey", "total", "rows", "at":
 						return nil, specErrf("%s.emit: column %q collides with a reserved Kafka field", keyPath, col.Name)
 					}
 				}

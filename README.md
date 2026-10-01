@@ -568,11 +568,21 @@ counters:
   - name: autenticados_por_pon
     groupBy: [olt, slot]
     keyFormat: "{olt}.{slot:02}"   # opcional; BR_SPOAM_OLT.08
+
+  # Proporção por splitter: quem é MEMBRO do grupo (scope -> rows) e, entre
+  # os membros, quem CONTA (where -> total).
+  - name: spl1
+    groupBy: [olt, idPrimary]
+    keyFormat: "OLT_SPL_1.{olt}.{idPrimary}"
+    scope: "eligible = true AND authenticated IS NOT NULL"   # opcional
+    where: "authenticated = true"
 ```
 
 `groupBy` aceita colunas declaradas de tipo `string`, `int64` ou `boolean`
-(de topo ou extraídas), nunca a key nem a sequence; `where` tem a gramática do
-WHERE e não pode tocar campo com `merge: sum` nem campo de sistema;
+(de topo ou extraídas), nunca a key nem a sequence; `where` e `scope` têm a
+gramática do WHERE e não podem tocar campo com `merge: sum` nem campo de
+sistema; `scope` decide quem é membro de um grupo — a linha fora dele não conta
+em lugar nenhum, como a linha sem alguma coluna do `groupBy`;
 `keyFormat` é o molde do `groupKey`, descrito com as regras em "O formato do
 `groupKey`". Como se
 lê, o que custa e como se audita está em "Contadores mantidos na escrita",
@@ -1478,7 +1488,13 @@ nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT 
 
 Cada tabela tem `groupKey` (o texto do grupo — a própria OLT num `groupBy` de
 uma coluna, `olt|slot|port` num composto), as colunas do `groupBy` **abertas e
-tipadas**, e `total`. `groupKey`
+tipadas**, `total` e `rows`. `total` é quantas linhas do grupo satisfazem o
+`where`; `rows` é quantas linhas **o grupo tem** — os membros, satisfaçam ou
+não o `where` — e não as linhas do dataset. `rows` nunca é NULL, nem com
+`total: false`, e os dois são lidos juntos, de uma vez: um par que o grupo de
+fato teve, nunca o total de um instante com o rows de outro. `rows` é nome
+reservado: um `groupBy`, uma medida ou uma métrica chamados `rows` são
+recusados na subida. `groupKey`
 é a key da tabela: `WHERE groupKey = '…'` é busca direta; as outras colunas
 varrem os grupos (milhares, não milhões de linhas). **Um grupo que chega a
 zero permanece na tabela com `total: 0`** — o equipamento que apagou por
@@ -1488,6 +1504,39 @@ um grupo com 500 linhas não autenticadas tem total zero e 500 linhas). Linha
 sem alguma coluna do `groupBy` (ausente ou nula) não é contada. Os totais são
 lidos no **presente**: eles não entram no snapshot de leitura da consulta — o
 que a consulta congela é o conjunto de grupos.
+
+#### O escopo do contador: quem é membro
+
+`scope` é um filtro de **membro**, irmão do `where`: o `where` decide quem
+conta no `total`, o `scope` decide quem existe no grupo. A linha fora do escopo
+é tratada exatamente como a linha sem alguma coluna do `groupBy` — não cria
+grupo, não conta em `rows` nem em `total`, e sai do grupo (as duas colunas
+descem na mesma transição) quando um evento a torna inelegível, ou quando ela
+vence ou é apagada:
+
+```yaml
+counters:
+  - name: spl1
+    groupBy: [olt, idPrimary]
+    keyFormat: "OLT_SPL_1.{olt}.{idPrimary}"
+    scope: "eligible = true AND authenticated IS NOT NULL"
+    where: "authenticated = true"
+```
+
+```bash
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT groupKey, total, rows FROM _counters.spl1 ORDER BY rows DESC LIMIT 5"
+```
+
+O `scope` é avaliado sobre o **estado inteiro** da linha depois do merge, como
+o `where`: um patch que não traz `authenticated` não tira do escopo um serviço
+que já o tinha. Ele também restringe as medidas de taxa (`measures`): a linha
+fora do escopo não registra ocorrência. Mudar o `scope` **reconstrói o
+contador** na abertura, como mudar o `where`, zera as medidas, recomeça a
+história das métricas de janela por taxa (`counter_metric.source_changed`) e
+invalida o cronômetro salvo dos alarmes daquele contador. Voltar a um binário
+anterior ao `scope` também reconstrói: ele não adota um vetor que o escopo
+montou. `_meta.counters` mostra o escopo na coluna `scope`, ao lado de
+`condition` (NULL quando não foi declarado).
 
 #### O formato do `groupKey`
 
@@ -1521,7 +1570,7 @@ do nome seria escapado.
 declarou vê o default já expandido (`{olt}|{slot}`), e nunca precisa adivinhar
 por qual texto consultar.
 
-Mudar `groupBy` ou `where` de um contador, ou declarar um contador novo num
+Mudar `groupBy`, `where` ou `scope` de um contador, ou declarar um contador novo num
 dataset que já tem linhas, **reconstrói o contador na abertura** varrendo as
 linhas vivas (o log `counter.construido` diz o motivo e quanto custou — a
 ordem de grandeza de uma varredura completa). Mudar `maxGroups` não
@@ -1544,18 +1593,20 @@ Quais contadores um dataset tem, e como estão, também sai por SQL — a tabela
 nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT name, rows, total, groups, maxGroups, refused, auditDivergent, auditAt FROM _meta.counters"
 ```
 
-`rows` é quantas linhas vivas apontam para algum grupo do contador e `total`
-quantas satisfazem a condição, no dataset inteiro — o denominador e o
-numerador do alarme, em tempo constante, sem somar os grupos no cliente e sem
-varrer. `rows` **menor** que o `rows` do dataset (`/v1/stats`) é diagnóstico
-direto: são as linhas sem alguma coluna do `groupBy` (o serviço sem `olt`),
-que o contador não conta por desenho e que antes ninguém enxergava sem uma
-varredura. Sem `where`, `total` é igual a `rows`.
+`rows` é quantas linhas vivas apontam para algum grupo do contador (os
+membros) e `total` quantas satisfazem a condição, no dataset inteiro — o
+denominador e o numerador do alarme, em tempo constante, sem somar os grupos no
+cliente e sem varrer. `rows` **menor** que o `rows` do dataset (`/v1/stats`) é
+diagnóstico direto: são as linhas sem alguma coluna do `groupBy` (o serviço sem
+`olt`) e, com `scope`, as fora do escopo, que o contador não conta por desenho
+e que antes ninguém enxergava sem uma varredura. Sem `where`, `total` é igual a
+`rows`.
 
 `groupBy` é a lista das colunas de agrupamento na ordem declarada, junta por
 `|`, e `keyFormat` é o molde efetivo da key (os dois são independentes: o
 molde escolhe o separador dele e pode reordenar); `condition`
-é o `where` do YAML (NULL no denominador, que não tem condição); `retired`,
+é o `where` do YAML (NULL no denominador, que não tem condição); `scope` é o
+`scope` do YAML (NULL quando não foi declarado); `retired`,
 `refused` e `orphans` são os mesmos números do `nishidb counters`;
 `auditDivergent` e `auditAt` são NULL até a primeira auditoria conclusiva
 desde a subida — zero divergências e "nunca auditado" são afirmações
@@ -1821,10 +1872,36 @@ counters:
 ```
 
 O `when` fala a **mesma linguagem do `WHERE`** — é o mesmo avaliador — sobre as
-colunas da tabela do contador: `groupKey`, as do `groupBy`, `total`, as medidas
-de taxa (`stop_rate`) e as geradas pelas métricas de janela do contador
+colunas da tabela do contador: `groupKey`, as do `groupBy`, `total`, `rows`, as
+medidas de taxa (`stop_rate`) e as geradas pelas métricas de janela do contador
 (`auth_5m_avg`, ver acima). O `qualifyWhen` aceita essas mesmas colunas. Um
 nome de coluna errado **derruba a subida**, com a coluna nomeada.
+
+Além do `WHERE`, o `when` e o `qualifyWhen` aceitam uma forma que o SQL não
+tem: a **comparação linear inteira entre duas colunas da mesma linha**,
+`<coluna> [* k] <op> <coluna> [* k]`, com `k` inteiro positivo à direita da
+coluna — é como se escreve uma proporção sem divisão:
+
+```yaml
+    alarms:
+      - name: spl1_auth_drop
+        when: "total * 10 <= rows"    # no máximo 10% dos membros autenticados
+        qualifyWhen: "rows >= 6"      # só grupos com ao menos seis membros
+        sustainedFor: 2m
+```
+
+Ela combina com `AND`/`OR`/parênteses e com os termos de sempre. A conta é
+exata, em inteiro de 128 bits com sinal: nem arredondamento de ponto
+flutuante, nem estouro (`total * 4611686018427387904 <= rows` decide certo).
+Coluna NULL torna o termo falso para qualquer operador. Só colunas `int64`
+entram — `total`, `rows`, colunas `int64` do `groupBy` e `min`/`max` de janela
+sobre `total`; uma coluna `double` (a média, ou qualquer coluna de taxa) ou
+`string` é recusada na subida nomeando a coluna e o tipo. Também são recusados,
+cada um com a sua mensagem: `k * coluna` (o multiplicador vai à direita),
+multiplicador zero, negativo ou fracionário, e multiplicador contra literal
+(`total * 10 <= 100` — escreva `total <= 10`). O `WHERE` do SQL, o `where` e o
+`scope` do contador e o `when` do TTL continuam recusando coluna à direita do
+comparador.
 
 `sustainedFor` é o que separa alarme de rajada: mínimo de 10 s, e `never` é
 recusado (um alarme que nunca dispara não é um alarme). A varredura roda a cada
@@ -1832,7 +1909,7 @@ recusado (um alarme que nunca dispara não é um alarme). A varredura roda a cad
 
 `value` é opcional e diz **qual número** o alarme sustentou: a coluna cujo
 valor, lido na mesma linha que decidiu o disparo, vira o `firingValue` do
-alarme. Ausente, vale `total`. São aceitas `total`, as medidas de taxa
+alarme. Ausente, vale `total`. São aceitas `total`, `rows`, as medidas de taxa
 (`value: stop_rate`) e as colunas das métricas de janela do contador
 (`value: auth_5m_avg`); `groupKey`, as colunas do `groupBy` e nome inexistente
 derrubam a subida, com as colunas aceitas listadas. Com `total: false`, declare
@@ -1870,8 +1947,8 @@ antigo sai no log como `alarm.state_unreadable`, e os alarmes em curso recomeça
 a contar o prazo, uma vez.
 
 O `enrich` acompanha o evento com o resultado de consultas parametrizadas pelo
-grupo que alarmou — `bind` liga cada `?` a `groupKey`, `total` ou uma coluna do
-`groupBy`. Medidas de taxa e colunas de métricas de janela **não** são ligáveis
+grupo que alarmou — `bind` liga cada `?` a `groupKey`, `total`, `rows` ou uma
+coluna do `groupBy`. Medidas de taxa e colunas de métricas de janela **não** são ligáveis
 em `enrich.bind`, e a subida as recusa, embora possam ser usadas em `when`,
 `qualifyWhen` e `value`. Com `total: false`, `bind: [total]` liga NULL.
 O valor vai como **parâmetro**, nunca concatenado: um nome
@@ -1887,14 +1964,19 @@ O disparo é um `WARN` e a resolução um `INFO`:
 
 ```json
 {"event":"alarm.firing","counter":"autenticados_por_olt","alarm":"olt_down",
- "groupKey":"BR_SPOAM_OLT_14","total":42,"condition":"total < 100",
+ "groupKey":"BR_SPOAM_OLT_14","total":42,"rows":910,"condition":"total < 100",
  "valueColumn":"total","firingValue":42,
  "sustainedFor":"2m0s","since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:16:00.000Z",
  "olt":"BR_SPOAM_OLT_14",
  "enrichment":{"servicos_afetados":{"rows":[{"customerId":"cli-4471","ip":"10.0.0.9"}]}}}
 {"event":"alarm.resolved","reason":"condition_cleared","groupKey":"BR_SPOAM_OLT_14",
- "total":812,"since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:25:00.000Z"}
+ "total":812,"rows":910,"since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:25:00.000Z"}
 ```
+
+`total` e `rows` saem no disparo **e** na resolução, lidos da mesma linha que
+decidiu: o par que a condição de fato viu. Para o grupo aposentado os dois são
+zero. `rows` é campo reservado do evento: uma coluna do `groupBy` com esse nome
+seria recusada mesmo sem a reserva da tabela.
 
 `valueColumn` e `firingValue` só vêm no disparo; `firingValue` fica de fora
 quando a coluna é NULL naquele instante, inclusive `total` desativado.
@@ -1922,7 +2004,8 @@ O cronômetro **sobrevive ao reinício**: o "desde quando" é gravado em
 crash é "desde quando não há registro", que é maior — a lacuna real é
 desconhecida, e um número grande é a resposta honesta. Mudar o `when`, o
 `qualifyWhen`, o `sustainedFor`, a fonte ou a janela de uma métrica citada nas
-condições invalida o cronômetro salvo daquele alarme. Quando uma condição usa
+condições invalida o cronômetro salvo daquele alarme, e mudar o `scope` do
+contador invalida o de todos os alarmes dele. Quando uma condição usa
 uma medida, diretamente ou por uma métrica histórica, mudar a janela ou a
 unidade dessa medida, ou o `groupBy`/`where` do contador, também reinicia o
 prazo. Mudar uma medida que só aparece em `value` não altera a condição nem
@@ -2058,11 +2141,16 @@ nome. Uma linha por grupo vivo, a cada intervalo, **inclusive os com total zero*
 (o equipamento que apagou por inteiro é justamente a linha que interessa):
 
 ```json
-{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"at":"2026-09-12T03:30:00.000Z"}
-{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_09","olt":"BR_SPOAM_OLT_09","total":0,"at":"2026-09-12T03:30:00.000Z"}
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"rows":812,"at":"2026-09-12T03:30:00.000Z"}
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_09","olt":"BR_SPOAM_OLT_09","total":0,"rows":0,"at":"2026-09-12T03:30:00.000Z"}
 ```
 
-Os valores são **tipados**: `total` e as colunas `int64` saem como número, não
+`rows` sai em toda linha, logo depois de `total` (é a ordem do
+`SELECT * FROM _counters.<nome>`), e nunca é `null`. Ele entrou na linha de
+todo contador — quem compara a linha inteira passa a ver a chave nova; quem lê
+por nome não muda nada.
+
+Os valores são **tipados**: `total`, `rows` e as colunas `int64` saem como número, não
 como texto. A rotação é por tamanho, com o sufixo crescendo para o passado
 (`file`, `file.1`, …) — o teto de disco é `maxBytes × (keep+1)`. Não há fsync:
 é telemetria, e um crash perde a cauda da série, que é o desfecho certo.
@@ -2071,13 +2159,13 @@ Grupo aposentado deixa de ser emitido. Baixar o `keep` devolve o disco na subida
 seguinte.
 
 **Se o contador declara [`metrics:`](#métricas-de-janela-do-contador)**, a linha
-leva também as colunas geradas por elas, entre o `total` e o `at`, na ordem
+leva também as colunas geradas por elas, entre o `rows` e o `at`, na ordem
 declarada — as MESMAS colunas, com os mesmos valores, que um
 `SELECT * FROM _counters.<nome>` devolve para aquele grupo:
 
 ```json
-{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"auth_5m_avg":807.5,"auth_24h_max":830,"at":"2026-09-12T03:30:00.000Z"}
-{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_09","olt":"BR_SPOAM_OLT_09","total":0,"auth_5m_avg":null,"auth_24h_max":null,"at":"2026-09-12T03:30:00.000Z"}
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"rows":812,"auth_5m_avg":807.5,"auth_24h_max":830,"at":"2026-09-12T03:30:00.000Z"}
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_09","olt":"BR_SPOAM_OLT_09","total":0,"rows":0,"auth_5m_avg":null,"auth_24h_max":null,"at":"2026-09-12T03:30:00.000Z"}
 ```
 
 A chave sai **sempre**, e `null` é o grupo que a janela ainda não viu — nunca

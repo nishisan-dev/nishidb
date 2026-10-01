@@ -48,6 +48,7 @@ func eventArguments(e Event) []any {
 		"alarm", e.Alarm,
 		"groupKey", e.GroupKey,
 		"total", total,
+		"rows", e.Rows,
 		"condition", e.Condition,
 		"sustainedFor", e.SustainedFor.String(),
 		"since", e.Since.UTC().Format(logTimeLayout),
@@ -137,7 +138,7 @@ func eventAttributeValue(a slog.Attr) any {
 // ReservedEventKey impede JSON ambíguo nos alarmes que habilitam push.
 func ReservedEventKey(key string) bool {
 	switch key {
-	case "eventId", "event", "dataset", "counter", "alarm", "groupKey", "total",
+	case "eventId", "event", "dataset", "counter", "alarm", "groupKey", "total", "rows",
 		"condition", "sustainedFor", "since", "at", "reason", "qualifyCondition",
 		"valueColumn", "firingValue", "restored", "downtimeMs", "metrics", "enrichment",
 		"timestamp", "level", "component", "message", "time", "msg":

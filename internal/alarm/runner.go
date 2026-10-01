@@ -130,7 +130,10 @@ type runnerCounter struct {
 	// com o FieldID que a tabela PRÓPRIA do laço lhes deu — é o payload dela
 	// que o evento lê.
 	metricColumns []metricColumn
-	alarms        []*runnerAlarm
+	// totalID e rowsID são os FieldIDs de `total` e `rows` na tabela PRÓPRIA do
+	// laço: o evento lê os dois do payload que decidiu (ver countsOf).
+	totalID, rowsID types.FieldID
+	alarms          []*runnerAlarm
 }
 
 // metricColumn é uma coluna gerada por métrica de janela na linha do contador.
@@ -192,6 +195,16 @@ func New(defs []Definition, readers map[string]counters.Reader, opts Options) (*
 		rc.store = store
 		if rc.metricColumns, err = metricColumnsOf(sc, d.metrics, d.def.Measures...); err != nil {
 			return nil, fmt.Errorf("alarm: counter %q: %w", d.Counter, err)
+		}
+		for _, c := range []struct {
+			name string
+			id   *types.FieldID
+		}{{schema.CounterTotalColumn, &rc.totalID}, {schema.CounterRowsColumn, &rc.rowsID}} {
+			f, ok := sc.FieldByName([]byte(c.name))
+			if !ok {
+				return nil, fmt.Errorf("alarm: counter %q: column %q has no FieldID in the counter table", d.Counter, c.name)
+			}
+			*c.id = f.ID
 		}
 		rc.names, rc.format = d.def.Names, d.def.Format
 		for i := range d.alarms {
@@ -385,7 +398,10 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time, stop <-chan struct{}) e
 			return errSweepAborted
 		default:
 		}
-		key, text, total, _, live := rc.reader.Group(uint32(id))
+		// Só a chave, o texto e o vivo vêm daqui. total e rows saem do
+		// payload que a condição avaliou (countsOf): esta leitura e a que
+		// montou a linha são duas, e entre elas o grupo pode ter mudado.
+		key, text, _, _, live := rc.reader.Group(uint32(id))
 		if !live {
 			continue
 		}
@@ -437,7 +453,7 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time, stop <-chan struct{}) e
 				ra.stats.tracked.Add(1)
 			}
 			tr.seen = r.pass
-			r.decide(rc, ra, tr, key, text, total, rec.Payload,
+			r.decide(rc, ra, tr, key, text, rec.Payload,
 				observation{present: true, conditionHolds: holds, qualified: qualified}, now)
 		}
 	}
@@ -454,7 +470,7 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time, stop <-chan struct{}) e
 				return errSweepAborted
 			default:
 			}
-			r.decide(rc, ra, tr, []byte(k), nil, 0, nil, observation{}, now)
+			r.decide(rc, ra, tr, []byte(k), nil, nil, observation{}, now)
 		}
 	}
 	return nil
@@ -467,7 +483,7 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time, stop <-chan struct{}) e
 //
 // payload é a linha do grupo que a observação avaliou; nil para o grupo que a
 // varredura não viu.
-func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, text []byte, total int64,
+func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, text []byte,
 	payload []byte, o observation, now time.Time) {
 	before := tr.phase
 	d := tr.evaluate(o, ra.compiled.sustainedFor, now)
@@ -511,7 +527,8 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 		ra.stats.disqualified.Add(1)
 		ra.stats.firing.Add(-1)
 	}
-	e := r.event(rc, ra, key, text, total, payload, d, now)
+	counts := rc.countsOf(payload)
+	e := r.event(rc, ra, key, text, counts, payload, d, now)
 	// Só o DISPARO enriquece e carrega o valor capturado. O enriquecimento
 	// existe para dar contexto ao problema; na resolução o fato relevante é
 	// que ele passou, e executar as consultas outra vez dobraria o custo
@@ -521,20 +538,21 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 		e.ValueColumn = ra.compiled.valueColumn
 		e.FiringValue = tr.firingValue
 		e.HasFiringValue = tr.hasFiringValue
-		e.Enrichment = r.enrich(ra, key, text, total)
+		e.Enrichment = r.enrich(ra, key, text, counts)
 	}
 	r.sink.Emit(e)
 }
 
 // event monta o evento de uma decisão.
-func (r *Runner) event(rc *runnerCounter, ra *runnerAlarm, key, text []byte, total int64,
+func (r *Runner) event(rc *runnerCounter, ra *runnerAlarm, key, text []byte, counts groupCounts,
 	payload []byte, d decision, now time.Time) Event {
 	e := Event{
 		ID: fmt.Sprintf("%x", randomEventID()), Dataset: rc.def.Dataset,
 		Counter:          rc.def.Counter,
 		Alarm:            ra.compiled.name,
 		GroupKey:         string(text),
-		Total:            total,
+		Total:            counts.total,
+		Rows:             counts.rows,
 		TotalDisabled:    rc.def.def.DisableTotal,
 		Condition:        ra.compiled.when,
 		SustainedFor:     ra.compiled.sustainedFor,
@@ -621,6 +639,35 @@ func (r *Runner) metricsOf(rc *runnerCounter, payload []byte) []Column {
 	for i, c := range rc.metricColumns {
 		if present[i] {
 			out = append(out, Column{Name: c.name, Value: values[i]})
+		}
+	}
+	return out
+}
+
+// groupCounts é o par (total, rows) de um grupo como o evento o anuncia.
+type groupCounts struct{ total, rows int64 }
+
+// countsOf lê total e rows do MESMO payload que a decisão avaliou — o molde de
+// firedValueOf. Não da leitura do Group que a varredura fez antes: aquela e a
+// que montou a linha (counters/table.go, (*source).record) são duas cargas, e
+// entre elas o grupo pode ter mudado; o evento anunciaria um par que não foi o
+// que decidiu. payload nil — o grupo aposentado, que a varredura não viu — dá
+// zero e zero. Coluna ausente (total com `total: false`) fica zero.
+//
+// Só roda quando há evento a emitir, nunca no caminho saudável.
+func (rc *runnerCounter) countsOf(payload []byte) groupCounts {
+	var out groupCounts
+	if payload == nil {
+		return out
+	}
+	var fr encoding.FieldReader
+	fr.Reset(payload)
+	for id, v, ok := fr.Next(); ok; id, v, ok = fr.Next() {
+		switch id {
+		case rc.totalID:
+			out.total = v.I64
+		case rc.rowsID:
+			out.rows = v.I64
 		}
 	}
 	return out

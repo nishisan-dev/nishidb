@@ -155,7 +155,7 @@ func TestCounterTableWithMetricsPublishesTypedNullableMetricColumns(t *testing.T
 	eng := engineWithCounterMetrics(t, c, exampleMetrics(), ponMetricSource(t, c))
 
 	names, kinds, nullable := columnsOf(t, eng, "SELECT * FROM _counters.c")
-	sameColumnSet(t, names, "groupKey,olt,slot,port,total,auth_5m_avg,auth_24h_max,auth_24h_min")
+	sameColumnSet(t, names, "groupKey,olt,slot,port,total,rows,auth_5m_avg,auth_24h_max,auth_24h_min")
 	wantKinds := map[string]types.FieldType{
 		"auth_5m_avg":  types.TypeDouble,
 		"auth_24h_max": types.TypeInt64,
@@ -280,7 +280,7 @@ func TestCounterTableWithoutMetricSourceLeavesMetricColumnsNull(t *testing.T) {
 	eng := engineWithCounterMetrics(t, c, exampleMetrics(), nil)
 
 	names, _, _ := columnsOf(t, eng, "SELECT * FROM _counters.c")
-	sameColumnSet(t, names, "groupKey,olt,slot,port,total,auth_5m_avg,auth_24h_max,auth_24h_min")
+	sameColumnSet(t, names, "groupKey,olt,slot,port,total,rows,auth_5m_avg,auth_24h_max,auth_24h_min")
 	rows := consulta(t, eng, "SELECT groupKey FROM _counters.c WHERE auth_5m_avg IS NULL AND auth_24h_max IS NULL AND auth_24h_min IS NULL")
 	if len(rows) != 4 {
 		t.Fatalf("%d grupos com as métricas NULL, quero os 4: %v", len(rows), rows)
@@ -394,7 +394,7 @@ func TestTableRefusesMetricSourceWithoutDeclaredMetric(t *testing.T) {
 // record.
 const (
 	ceilingGroupingColumns = 16
-	ceilingColumns         = ceilingGroupingColumns + 2 + schema.MaxCounterMetrics*3 + schema.MaxCounterMeasures
+	ceilingColumns         = ceilingGroupingColumns + 3 + schema.MaxCounterMetrics*3 + schema.MaxCounterMeasures
 )
 
 // ceilingGroupText é o groupKey do único grupo da tabela no teto.
@@ -414,7 +414,7 @@ func (r *ceilingReader) Group(id uint32) ([]byte, []byte, int64, int64, bool) {
 	if id != 1 {
 		return nil, nil, 0, 0, false
 	}
-	return r.key, r.text, 42, 42, true
+	return r.key, r.text, 42, 57, true
 }
 
 func (r *ceilingReader) ByText(text []byte) (uint32, bool) {
@@ -458,6 +458,7 @@ func ceilingTable(t *testing.T) (*schema.Compiled, query.Store, map[string]types
 	reader := &ceilingReader{key: key, text: []byte(ceilingGroupText)}
 	want[schema.CounterKeyColumn] = types.Value{Type: types.TypeString, Bytes: reader.text}
 	want[schema.CounterTotalColumn] = types.Value{Type: types.TypeInt64, I64: 42}
+	want[schema.CounterRowsColumn] = types.Value{Type: types.TypeInt64, I64: 57}
 
 	src := fakeMetricSource{}
 	metrics := make([]schema.CounterMetricSpec, 0, schema.MaxCounterMetrics)
@@ -535,7 +536,7 @@ func checkCeilingPayload(t *testing.T, sc *schema.Compiled, payload []byte, want
 }
 
 // TestCounterTableAtRowCeilingPublishesEveryColumn: a linha no teto — 16
-// colunas do groupBy, duas fixas, oito medidas e oito métricas com três agregados — sai
+// colunas do groupBy, três fixas, oito medidas e oito métricas com três agregados — sai
 // inteira, em FieldID crescente, com cada média igual bit a bit à publicada.
 // É o único teste que ENCHE o array de pilha do record: abaixo do teto, um
 // array com uma posição a menos passaria verde.

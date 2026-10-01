@@ -20,6 +20,9 @@ type grupo struct {
 	slot  int64
 	total int64
 	live  bool
+	// rows são os membros do grupo; zero repete o total, que é o caso de quem
+	// não declara `where`. Fica por último porque há literais posicionais.
+	rows int64
 }
 
 // fakeCounter é o leitor mínimo que a emissão precisa: os grupos com seus
@@ -55,7 +58,11 @@ func (f *fakeCounter) Group(id uint32) ([]byte, []byte, int64, int64, bool) {
 		return nil, nil, 0, 0, false
 	}
 	g := f.groups[i]
-	return f.keys[i], f.texts[i], g.total, g.total, true
+	rows := g.rows
+	if rows == 0 {
+		rows = g.total
+	}
+	return f.keys[i], f.texts[i], g.total, rows, true
 }
 func (f *fakeCounter) ByText([]byte) (uint32, bool) { return 0, false }
 

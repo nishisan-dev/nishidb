@@ -375,9 +375,9 @@ type Store struct {
 	// applyRecord, sob o wmu; lidos pela tabela virtual e pela auditoria sem
 	// lock do Store.
 	counters []*counter.Counter
-	// countersARecriar são os que a abertura decidiu reconstruir; a
+	// countersToRebuild são os que a abertura decidiu reconstruir; a
 	// varredura roda depois do ramo de recovery e a lista é esvaziada.
-	countersARecriar []pendenciaOfCounter
+	countersToRebuild []pendingCounterRebuild
 	// countersConstruidos conta as reconstruções desta abertura — o
 	// observável que separa "adotou" de "reconstruiu e chegou ao mesmo
 	// resultado", como scheduleBuilt.
@@ -1310,7 +1310,7 @@ func Open(opts Options) (*Store, error) {
 	// varre as locations e elas ainda estavam sendo publicadas pelo replay; e
 	// antes do índice por segmento e da agenda, porque não depende de nenhum
 	// dos dois.
-	if err := s.reconstroiCountersPendentes(); err != nil {
+	if err := s.rebuildPendingCounters(); err != nil {
 		return nil, err
 	}
 	if len(s.counters) > 0 {

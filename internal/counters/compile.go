@@ -22,10 +22,16 @@ import (
 // Compile resolve as specs dos contadores contra o schema compilado.
 //
 // Aqui entram as recusas que a validação do YAML não pode fazer sem o schema:
-// o `where` pelo CompileCondition (parse, bind, campo de sistema), e a recusa de
-// `where` ou groupBy sobre coluna com `merge: sum` — com a soma, o estado deixa
-// de ser função pura do último evento e a idempotência do contador evapora
-// (planning §10). É recusa na subida, não documentação.
+// o `where` e o `scope` pelo CompileCondition (parse, bind, campo de sistema),
+// e a recusa de `where`, `scope` ou groupBy sobre coluna com `merge: sum` — com
+// a soma, o estado deixa de ser função pura do último evento e a idempotência
+// do contador evapora (planning §10). É recusa na subida, não documentação.
+//
+// O scope passa pelo MESMO CompileCondition do where, e não por um caminho
+// próprio: as duas condições são lidas pelo mesmo Deriver sobre o mesmo
+// payload, e `eligible = true` tem de significar nas duas o que significa num
+// WHERE. Isso inclui as recusas — comparação entre colunas, por exemplo, só
+// existe na condição de alarme.
 func Compile(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definition, error) {
 	if spec == nil || sc == nil {
 		return nil, fmt.Errorf("contadores: spec ou schema ausentes")
@@ -41,6 +47,7 @@ func Compile(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definitio
 			Names:             cs.GroupBy,
 			Types:             make([]types.FieldType, 0, len(cs.GroupBy)),
 			Where:             cs.Where,
+			Scope:             cs.Scope,
 			MaxGroups:         cs.MaxGroups,
 			RetainEmptyGroups: cs.RetainEmptyGroups,
 		}
@@ -84,7 +91,36 @@ func Compile(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definitio
 				return predicate.NewAvaliadorOfPayload(prog, ids)
 			}
 		}
+		if cs.Scope != "" {
+			newScope, err := compileScope(label, cs.Scope, sc)
+			if err != nil {
+				return nil, err
+			}
+			def.NewScopeEvaluator = newScope
+		}
 		out = append(out, def)
 	}
 	return out, nil
+}
+
+// compileScope compila o `scope` de um contador e devolve a FÁBRICA do
+// avaliador — uma instância por Deriver, porque o scratch do avaliador é de um
+// dono só.
+//
+// As recusas espelham as do where, com o rótulo `<contador>.scope`: campo com
+// `merge: sum` torna o membro função da soma dos eventos, e não do estado, e o
+// grupo de uma linha mudaria a cada reprocessamento.
+func compileScope(label, scope string, sc *schema.Compiled) (func() counter.Evaluator, error) {
+	prog, slots, err := predicate.CompileCondition(label+".scope", scope, sc)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range slots.IDs {
+		if f, ok := sc.FieldByID(id); ok && f.Accumulates {
+			return nil, fmt.Errorf("%s.scope: condition %q references %q, which has merge: sum — the sum is not idempotent, "+
+				"and a row's membership would stop being a function of its state", label, scope, f.Name)
+		}
+	}
+	ids := slots.IDs
+	return func() counter.Evaluator { return predicate.NewAvaliadorOfPayload(prog, ids) }, nil
 }

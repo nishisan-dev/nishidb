@@ -128,7 +128,7 @@ func TestCounterColumnsListFixedThenGroupByThenGenerated(t *testing.T) {
 	for i, c := range cols {
 		got[i] = c.Name + "@" + c.Origin
 	}
-	want := []string{"groupKey@", "total@", "olt@groupBy", "slot@groupBy", "a_max@metrics[0]", "a_avg@metrics[0]", "b_min@metrics[1]"}
+	want := []string{"groupKey@", "total@", "rows@", "olt@groupBy", "slot@groupBy", "a_max@metrics[0]", "a_avg@metrics[0]", "b_min@metrics[1]"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("colunas = %v\nquero %v", got, want)
 	}

@@ -1026,6 +1026,19 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | geração de medidas | `measures.<epoch>.snapshot` / MeasureCounters | internal/storage/counter, internal/storage/checkpoint |
 | identidade da fonte amostrada | `.win.source` / reconcileSource | internal/countermetrics |
 
+## Escopo do contador e comparação linear (issue #61)
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| escopo do contador (o predicado sobre a linha que decide se ela é membro de um grupo; fora dele a linha fica sem grupo) | `scope` / Definition.Scope | internal/schema, internal/storage/counter, internal/counters |
+| avaliador do escopo (instância própria por Deriver, da mesma fábrica) | NewScopeEvaluator | internal/storage/counter, internal/counters |
+| membros do grupo (as linhas no grupo, dentro do escopo e com o groupBy completo — não as linhas do dataset) | `rows` / CounterRowsColumn | internal/schema, internal/counters, internal/alarm, internal/series |
+| identidade do contador (o texto gravado no manifest que decide adotar ou reconstruir o vetor) | identityOf / identitySeparator / splitIdentity | internal/storage |
+| palavra do grupo (total e membros numa única palavra de 64 bits, lida e somada de uma vez) | pairs / MaxGroupRows / ErrGroupRowsCeiling | internal/storage/counter |
+| comparação linear entre colunas (`<col> [* k] <op> <col> [* k]`, só na condição de alarme) | ColumnComparison / ColumnTerm / BoundColumnComparison / CompileAlarmCondition | internal/query/parser, internal/query/binder, internal/predicate, internal/alarm |
+| opções da condição (o que o parse e o bind aceitam além da gramática do WHERE) | ConditionOptions / ParseConditionWith / BindConditionWith | internal/query/parser, internal/query/binder |
+| par do evento (total e membros lidos do payload que decidiu o alarme) | groupCounts / countsOf | internal/alarm |
+
 ## Prazo de requisição no driver JDBC (issue #91)
 
 | PT-BR | Identificador/contrato | Dono |

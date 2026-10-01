@@ -236,15 +236,28 @@ type ScheduleInfo struct {
 // CounterInfo descreve um contador mantido na escrita gravado no dataset.
 //
 // Os três campos são os que decidem o CONTEÚDO do vetor de grupos: outras
-// colunas ou outro where dão outro contador, e a abertura que encontrar
-// divergência reconstrói em vez de adotar. O teto (maxGroups) NÃO viaja:
-// mudá-lo não muda o que já foi contado — só é recusado quando menor que os
-// grupos em uso.
+// colunas, outro where ou outro scope dão outro contador, e a abertura que
+// encontrar divergência reconstrói em vez de adotar. O teto (maxGroups) NÃO
+// viaja: mudá-lo não muda o que já foi contado — só é recusado quando menor que
+// os grupos em uso.
 type CounterInfo struct {
 	Name string
 	// Columns são os FieldIDs do groupBy, na ordem declarada.
 	Columns []uint16
-	// Where é o texto normalizado da condição; vazio é "sem condição".
+	// Where é o texto de IDENTIDADE das duas condições do contador, montado
+	// pelo storage (identityOf em internal/storage/counters.go):
+	//
+	//   - sem scope: o where normalizado, byte a byte o que este campo sempre
+	//     gravou — vazio é "sem condição". Um dataset anterior ao scope abre
+	//     sem reconstruir;
+	//   - com scope: `<where>\n<scope>` (`\n<scope>` sem where). Where e scope
+	//     chegam normalizados por strings.Fields, então nenhum dos dois contém
+	//     `\n`, e nenhum where sozinho produz este texto.
+	//
+	// O nome do campo e o formato em disco ficaram os de antes de propósito: o
+	// binário que não conhece scope lê o texto combinado, compara com o seu
+	// where, não casa, e RECONSTRÓI — o rollback nunca adota um vetor cujo
+	// conteúdo um scope decidiu.
 	Where string
 }
 

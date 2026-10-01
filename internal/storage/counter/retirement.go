@@ -1,6 +1,9 @@
 package counter
 
-import "time"
+import (
+	"sync/atomic"
+	"time"
+)
 
 // UseClock troca o relógio do contador (o instante em que um grupo
 // esvaziou). O Store propaga o dele aqui; os testes o congelam.
@@ -44,7 +47,7 @@ func (c *Counter) RetireEmptyGroups(now time.Time) (int, error) {
 		if _, live := c.dict.Key(g); !live {
 			continue
 		}
-		if int(g) >= len(c.refs) || c.refs[g] != 0 {
+		if int(g) >= len(c.pairs) || pairRefs(atomic.LoadUint64(&c.pairs[g])) != 0 {
 			continue
 		}
 		if c.emptySince[g] == 0 || c.emptySince[g] > cutoff {

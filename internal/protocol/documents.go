@@ -357,9 +357,10 @@ type CounterStats struct {
 	TotalDisabled bool   `json:"-"`
 	Name          string `json:"name"`
 	// Rows e Total são os agregados do contador inteiro: quantas linhas vivas
-	// apontam para algum grupo, e quantas satisfazem a condição no dataset
-	// inteiro. Rows abaixo do rows do dataset são as linhas SEM alguma coluna
-	// do groupBy, que o contador não conta por desenho.
+	// apontam para algum grupo (os membros), e quantas satisfazem a condição no
+	// dataset inteiro. Rows abaixo do rows do dataset são as linhas SEM alguma
+	// coluna do groupBy e, com `scope`, as fora do escopo — o contador não
+	// conta nenhuma das duas, por desenho.
 	Rows                 int64  `json:"rows"`
 	Total                int64  `json:"total"`
 	Groups               uint32 `json:"groups"`

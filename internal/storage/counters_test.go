@@ -44,6 +44,10 @@ type counterOfTest struct {
 	ceiling   uint32
 	retention time.Duration
 	keyFormat string
+	// scope é o TEXTO do scope; vazio é sem scope. O avaliador é sempre
+	// `eligible = true` — o texto é o que entra na identidade, e é ele que os
+	// testes de adotar/reconstruir variam.
+	scope string
 }
 
 // callbackOfCounters é o CompilaContadores dos testes: resolve os nomes pelo
@@ -78,6 +82,14 @@ func callbackOfCounters(cs ...counterOfTest) func(*fielddict.Dict) ([]counter.De
 				}
 				def.Where = "authenticated = true"
 				def.NewEvaluator = func() counter.Evaluator { return &avaliadorByID{field: auth} }
+			}
+			if c.scope != "" {
+				eligible, err := dict.LookupOrCreate([]byte("eligible"))
+				if err != nil {
+					return nil, err
+				}
+				def.Scope = c.scope
+				def.NewScopeEvaluator = func() counter.Evaluator { return &avaliadorByID{field: eligible} }
 			}
 			cols := keyformat.Columns(def.Names, def.Types)
 			if c.keyFormat == "" {

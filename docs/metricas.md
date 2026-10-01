@@ -210,7 +210,7 @@ Dez por contador declarado no bloco `counters:`, com o rótulo `counter`.
 | `nishidb_counter_groups_retired_total` | counter | `counter`, `dataset` | grupos aposentados por ficarem sem linha há mais que retainEmptyGroups, desde a criação do contador |
 | `nishidb_counter_orphan_entries` | gauge | `counter`, `dataset` | entradas do vetor apontando para grupo aposentado ou inexistente, zeradas na dobra da abertura; não é esperado fora de uma janela de crash |
 | `nishidb_counter_bytes` | gauge | `counter`, `dataset` | bytes em disco do contador: vetor de grupos mais dicionário |
-| `nishidb_counter_rows` | gauge | `counter`, `dataset` | linhas vivas que apontam para algum grupo deste contador; abaixo do rows do dataset são as linhas sem alguma coluna do groupBy, que o contador não conta por desenho |
+| `nishidb_counter_rows` | gauge | `counter`, `dataset` | linhas vivas que apontam para algum grupo deste contador (os membros); abaixo do rows do dataset são as linhas sem alguma coluna do groupBy ou fora do scope, que o contador não conta por desenho |
 | `nishidb_counter_counted_rows` | gauge | `counter`, `dataset` | linhas que satisfazem a condição deste contador no dataset inteiro; sem `where`, igual ao rows do contador |
 | `nishidb_counter_audit_divergent_groups` | gauge | `counter`, `dataset` | divergências na última auditoria conclusiva — grupos, linhas sem grupo internado e os dois agregados; 0 até a primeira (ver o timestamp ao lado) |
 | `nishidb_counter_audit_last_success_timestamp` | gauge | `counter`, `dataset` | Unix timestamp da última auditoria conclusiva do contador; 0 até a primeira |

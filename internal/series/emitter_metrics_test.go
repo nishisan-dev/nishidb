@@ -129,7 +129,7 @@ func TestTheMetricColumnsFollowTheDeclaredOrder(t *testing.T) {
 	line := linesOfSeries(t, dir)[0]
 	// A ordem é a declarada, e `at` continua sendo o último campo: a linha de
 	// antes das métricas é um prefixo desta.
-	want := `,"total":812,"auth_5m_avg":807.5,"auth_24h_max":830,"auth_24h_min":780,"at":`
+	want := `,"total":812,"rows":812,"auth_5m_avg":807.5,"auth_24h_max":830,"auth_24h_min":780,"at":`
 	if !strings.Contains(line, want) {
 		t.Errorf("a linha não traz as colunas na ordem declarada\nesperava conter: %s\nveio: %s", want, line)
 	}
@@ -155,7 +155,7 @@ func TestAGroupWithNoSampleInTheWindowGetsNull(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("esperava duas linhas, veio %d", len(lines))
 	}
-	want := `,"total":5,"auth_5m_avg":null,"auth_24h_max":null,"auth_24h_min":null,"at":`
+	want := `,"total":5,"rows":5,"auth_5m_avg":null,"auth_24h_max":null,"auth_24h_min":null,"at":`
 	if !strings.Contains(lines[1], want) {
 		t.Errorf("o grupo sem amostra não saiu com null\nesperava conter: %s\nveio: %s", want, lines[1])
 	}
@@ -181,14 +181,20 @@ func TestWithoutAMetricSourceEveryColumnIsNull(t *testing.T) {
 	if err := e.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	want := `,"total":812,"auth_5m_avg":null,"auth_24h_max":null,"auth_24h_min":null,"at":`
+	want := `,"total":812,"rows":812,"auth_5m_avg":null,"auth_24h_max":null,"auth_24h_min":null,"at":`
 	if line := linesOfSeries(t, dir)[0]; !strings.Contains(line, want) {
 		t.Errorf("sem fonte as colunas deviam sair null\nesperava conter: %s\nveio: %s", want, line)
 	}
 }
 
-func TestACounterWithoutMetricsEmitsTheSameLineAsBefore(t *testing.T) {
-	f := newFakeCounter(t, grupo{olt: "OLT_A", slot: 1, total: 812, live: true})
+// TestACounterWithoutMetricsEmitsTheFixedColumnsWithRows fixa, LITERAL, a
+// linha de quem não declara métricas. Ela ganhou `rows` logo depois de `total`
+// — quebra aditiva do contrato da série, registrada para as notas da release:
+// o consumidor que lê por nome não muda nada, e quem compara a linha inteira
+// passa a ver a chave nova. rows (1000) é diferente de total (812) para que uma
+// coluna trocada pela outra não passe.
+func TestACounterWithoutMetricsEmitsTheFixedColumnsWithRows(t *testing.T) {
+	f := newFakeCounter(t, grupo{olt: "OLT_A", slot: 1, total: 812, rows: 1000, live: true})
 	e, dir := emitterWithMetrics(t, f, nil)
 	if err := e.EmitOnce(); err != nil {
 		t.Fatal(err)
@@ -196,9 +202,9 @@ func TestACounterWithoutMetricsEmitsTheSameLineAsBefore(t *testing.T) {
 	if err := e.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	want := `{"counter":"autenticados_por_pon","groupKey":"OLT_A|1","olt":"OLT_A","slot":1,"total":812,"at":"2026-09-12T10:30:00.000Z"}`
+	want := `{"counter":"autenticados_por_pon","groupKey":"OLT_A|1","olt":"OLT_A","slot":1,"total":812,"rows":1000,"at":"2026-09-12T10:30:00.000Z"}`
 	if line := linesOfSeries(t, dir)[0]; line != want {
-		t.Errorf("a linha de quem não declara métricas mudou\nesperava: %s\nveio:     %s", want, line)
+		t.Errorf("a linha de quem não declara métricas não é a do contrato\nesperava: %s\nveio:     %s", want, line)
 	}
 }
 

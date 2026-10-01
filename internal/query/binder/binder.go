@@ -74,7 +74,8 @@ type BoundColumn struct {
 	Slot  int    // índice em Slots.IDs
 }
 
-// BoundExpr é selada: só os três tipos abaixo a implementam, então o planner
+// BoundExpr é selada: só os tipos deste pacote a implementam (os quatro abaixo e
+// BoundColumnComparison, em column_comparison.go), então o planner
 // e o executor fazem type switch exaustivo.
 type BoundExpr interface{ isBoundExpr() }
 
@@ -308,6 +309,9 @@ type binder struct {
 	// aparece: mais tarde, a mensagem sairia como "parser inconsistente" e
 	// mandaria o operador procurar um bug que não existe.
 	refusesParams bool
+	// allowsColumnComparison aceita parser.ColumnComparison — só no bind da
+	// condição de alarme (BindConditionWith); ver ConditionOptions.
+	allowsColumnComparison bool
 
 	referenced map[types.FieldID]struct{}
 	arena      []byte
@@ -595,6 +599,9 @@ func (b *binder) leaf(e parser.Expr) (BoundExpr, error) {
 	case *parser.LikeExpr:
 		return b.like(n)
 
+	case *parser.ColumnComparison:
+		return b.columnComparison(n)
+
 	default:
 		// Nó novo na AST tem de falhar ALTO, não ser ignorado.
 		return nil, errInPos("expressão não suportada: %T", e)
@@ -877,6 +884,9 @@ func (b *binder) fillExprSlots(e BoundExpr, s Slots) {
 			n.Slot, _ = s.Index(n.Field.ID)
 		case *BoundLike:
 			n.Slot, _ = s.Index(n.Field.ID)
+		case *BoundColumnComparison:
+			n.LeftSlot, _ = s.Index(n.Left.ID)
+			n.RightSlot, _ = s.Index(n.Right.ID)
 		default:
 			// Nó novo sem case aqui é FALHA SILENCIOSA, e a pior espécie: o
 			// Slot fica em 0, o predicado testa o campo de MENOR FieldID da

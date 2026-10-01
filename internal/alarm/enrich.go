@@ -63,7 +63,7 @@ type Enrichment struct {
 // vê um estado alguns instantes mais novo que o da decisão, e é por isso que o
 // evento carrega os dois instantes — o `since` da sustentação e o `at` do
 // evento.
-func (r *Runner) enrich(ra *runnerAlarm, key, text []byte, total int64) []Enrichment {
+func (r *Runner) enrich(ra *runnerAlarm, key, text []byte, counts groupCounts) []Enrichment {
 	if len(ra.compiled.enrich) == 0 {
 		return nil
 	}
@@ -83,7 +83,7 @@ func (r *Runner) enrich(ra *runnerAlarm, key, text []byte, total int64) []Enrich
 			ra.stats.enrichSkipped.Add(1)
 		default:
 			r.enrichBudget--
-			rows, err := r.runQuery(q, key, text, total)
+			rows, err := r.runQuery(q, key, text, counts)
 			if err != nil {
 				e.Note = "consulta falhou: " + err.Error()
 				ra.stats.enrichFailed.Add(1)
@@ -97,8 +97,8 @@ func (r *Runner) enrich(ra *runnerAlarm, key, text []byte, total int64) []Enrich
 }
 
 // runQuery executa uma consulta e devolve as linhas como array JSON.
-func (r *Runner) runQuery(q *enrichQuery, key, text []byte, total int64) (json.RawMessage, error) {
-	params, err := r.paramsOf(q, key, text, total)
+func (r *Runner) runQuery(q *enrichQuery, key, text []byte, counts groupCounts) (json.RawMessage, error) {
+	params, err := r.paramsOf(q, key, text, counts)
 	if err != nil {
 		return nil, err
 	}
@@ -159,9 +159,10 @@ func appendEnrichRow(dst []byte, row executor.Row) []byte {
 // paramsOf monta os valores ligados aos `?` da consulta, na ordem do bind.
 //
 // Os valores saem da linha do contador: a chave canônica aberta nas colunas do
-// groupBy, o texto do grupo, ou o total. O binder COPIA o que recebe, então
+// groupBy, o texto do grupo, o total ou os rows — os dois últimos do MESMO
+// payload que decidiu o disparo (countsOf). O binder COPIA o que recebe, então
 // apontar para o scratch aqui é seguro.
-func (r *Runner) paramsOf(q *enrichQuery, key, text []byte, total int64) ([]types.Value, error) {
+func (r *Runner) paramsOf(q *enrichQuery, key, text []byte, counts groupCounts) ([]types.Value, error) {
 	if len(q.binds) == 0 {
 		return nil, nil
 	}
@@ -180,7 +181,9 @@ func (r *Runner) paramsOf(q *enrichQuery, key, text []byte, total int64) ([]type
 		case bindGroupKey:
 			params = append(params, types.Value{Type: types.TypeString, Bytes: text})
 		case bindTotal:
-			params = append(params, types.Value{Type: types.TypeInt64, I64: total})
+			params = append(params, types.Value{Type: types.TypeInt64, I64: counts.total})
+		case bindRows:
+			params = append(params, types.Value{Type: types.TypeInt64, I64: counts.rows})
 		default:
 			if b.groupIndex >= len(vals) {
 				return nil, errors.New("alarm: chave do grupo com menos colunas que o groupBy")
