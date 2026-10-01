@@ -43,6 +43,7 @@ E uma quarta que a refutação acrescentou: o par `total`/`rows` tem de ser lido
 | R2. Par consistente numa palavra de 64 bits; teto de linhas por grupo recusado antes de mutar | `TestGroupReadsTotalAndRowsAsOneConsistentPair`, `TestGroupRowsCeilingRefusesTheRowBeforeAnyMutation` |
 | R3. O evento lê `total`/`rows` do payload que decidiu | `TestEventTotalAndRowsAreReadFromTheDecidingPayload` |
 | R4/R14. Scope na descrição das métricas por taxa e na assinatura do alarme | `TestMeasureSourceRestoresAndResetsOnlyWhenItsMeaningChanges`, `TestChangingOnlyTheScopeInvalidatesTheRestoredTimer` |
+| R4. Sem scope, a assinatura do alarme sobre medida e a descrição `.source` são byte a byte as de antes (golden literal, conferido também sobre `origin/main`) | `TestMeasureAlarmFingerprintIsByteForByteTheSameWithoutScope`, `TestMeasureSourceDescriptionIsByteForByteTheSameWithoutScope` |
 | R5. Recusas do scope espelham as do where | `TestCompileRefusesScopeOverASummedField`, `TestValidateRefusesScopeWithoutAnEvaluator`, `TestCompileRefusesColumnComparisonInTheScope` |
 | R6. Transição com scope não aloca, em cada ramo | `TestScopedTransitionInsideTheScopeDoesNotAllocate`, `TestScopedTransitionLeavingTheScopeDoesNotAllocate` |
 | C. Comparação entre colunas não aloca | `TestLinearColumnComparisonDoesNotAllocate` |
@@ -87,6 +88,8 @@ foi revertido, a suíte voltou ao verde. Nenhuma ficou no código.
 | 9 | guarda de scope vazio desligada; `rows` fora das colunas fixas | os dois aceitos |
 | R4/R14 | scope fora da assinatura do alarme | "trocar só o scope restaurou 1 cronômetros, quero 0" |
 | R4 | scope fora do `.source` da métrica por taxa | nenhum `counter_metric.source_changed` |
+| R4 | sem o `omitempty` do Scope no contexto da assinatura (M8) | a assinatura sem scope ganha `,"Scope":""` |
+| R4 | sem o `omitempty` do Scope na descrição `.source` (M9) | a descrição sem scope ganha `,"Scope":""` |
 | — | `bind: [rows]` liga o total; `value: rows` recusado | parâmetro 1, quero 10; recusa na compilação |
 | — | a coluna `scope` de `_meta.counters` recebe o where | "scope = authenticated = true,…" |
 
