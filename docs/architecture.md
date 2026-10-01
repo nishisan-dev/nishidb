@@ -2442,7 +2442,14 @@ grupo → id, append-only com CRC por registro e **fsync antes de devolver o id*
 (cópia do `fielddict`, pela mesma invariante: nenhuma entrada do vetor pode
 apontar para um id que a reabertura não resolva); aposentar um grupo é um
 registro nele. Os totais e os `refs` (quantas linhas apontam para o grupo,
-independente da condição) vivem em heap, atômicos, e **não são persistidos**.
+independente da condição) vivem em heap e **não são persistidos**. Os dois de
+um grupo moram numa **palavra de 64 bits só** — `refs` nos 32 bits baixos,
+`total` nos 32 altos —, mexida com UMA soma atômica por transição e lida com
+UMA carga: o par é lido junto (`total * 10 <= rows` num alarme compara os dois),
+e duas cargas separadas deixavam o leitor ver um rasgo entre elas, até
+`total > rows` (`TestGroupReadsTotalAndRowsAsOneConsistentPair`). O preço é o
+teto de 2³²−1 linhas por grupo, recusado com erro de infra antes de qualquer
+mutação (`TestGroupRowsCeilingRefusesTheRowBeforeAnyMutation`).
 A chave composta nasce no `valuekey`, dono único da chave canônica: `u16
 tamanho | chave simples` por componente, com golden de bytes.
 
@@ -2546,7 +2553,7 @@ e criaria uma segunda maneira de calcular o mesmo fato. Eles são a MESMA dobra
 do vetor que os totais por grupo, acumulada no mesmo laço, então nada de novo
 vai a disco e a consistência através de crash vale para eles inteira. A
 aposentadoria não os toca: ela só aposenta com `refs == 0`, e
-`totais[g] <= refs[g]` por construção, logo o grupo que sai contribuía zero
+`total[g] <= refs[g]` por construção, logo o grupo que sai contribuía zero
 para os dois — o que um teste trava, porque descontar ao aposentar é o
 "conserto" que qualquer um escreveria. Os mesmos dois números saem em
 `/v1/stats`, no `nishidb counters` e nas séries `nishidb_counter_rows` e

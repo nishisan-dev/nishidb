@@ -54,8 +54,10 @@ func TestMeasuresExpireAtBucketBoundariesAndRetainEmptyGroups(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(c.totals) != 0 {
-		t.Fatal("total desativado alocou o vetor de totais")
+	for g, p := range c.pairs {
+		if pairTotal(p) != 0 {
+			t.Fatalf("total desativado escreveu %d na metade alta da palavra do grupo %d", pairTotal(p), g)
+		}
 	}
 	for _, d := range []time.Duration{0, 59 * time.Second, time.Minute - time.Millisecond} {
 		if n := c.MeasureCount(1, 0, at.Add(d).UnixMilli()); n != 70000 {

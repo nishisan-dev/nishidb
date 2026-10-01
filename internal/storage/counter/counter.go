@@ -36,6 +36,33 @@ type Evaluator interface {
 	Evaluate(payload []byte) (bool, error)
 }
 
+// pairRefsMask isola, na palavra de 64 bits de um grupo, a metade baixa — os
+// refs. A metade alta (pairTotalShift) é o total.
+const (
+	pairRefsMask   uint64 = 1<<32 - 1
+	pairTotalShift        = 32
+	pairTotalUnit  uint64 = 1 << pairTotalShift
+)
+
+// MaxGroupRows é o teto de linhas de UM grupo: os refs moram nos 32 bits baixos
+// da palavra do grupo. Ver ErrGroupRowsCeiling.
+const MaxGroupRows = 1<<32 - 1
+
+// ErrGroupRowsCeiling é a linha que levaria um grupo além de MaxGroupRows. É
+// recusada ANTES de qualquer mutação: estourar a metade baixa somaria um no
+// total do grupo, em silêncio.
+//
+// O balde é o de INFRA (§101), nunca o de dado ruim: quatro bilhões de linhas
+// num grupo de um dataset desenhado para milhões de entidades é groupBy
+// declarado errado ou defeito, e pular o evento esconderia os dois. Como todo
+// erro do passo de contadores do applyRecord, ele deixa o record durável e
+// publicado e o contador uma transição atrás; não é sticky.
+var ErrGroupRowsCeiling = errors.New("counter group rows ceiling reached")
+
+// pairRefs e pairTotal abrem a palavra de um grupo.
+func pairRefs(p uint64) int64  { return int64(p & pairRefsMask) }
+func pairTotal(p uint64) int64 { return int64(p >> pairTotalShift) }
+
 // Definition é um contador como declarado no YAML e compilado contra o schema.
 type Definition struct {
 	DisableTotal      bool
@@ -120,8 +147,17 @@ type Counter struct {
 
 	// Por grupo, índice = id (0 reservado). Crescem sob dict.mu quando um id
 	// nasce; os leitores indexam sob RLock e conferem o limite.
-	totals     []int64 // atômicos (atomic.LoadInt64/AddInt64)
-	refs       []int64 // idem
+	//
+	// pairs é o PAR (total, refs) de cada grupo numa palavra só: refs nos 32
+	// bits baixos, total nos 32 altos. Uma palavra, e não dois vetores, porque
+	// o par é lido junto — `total * 10 <= rows` num alarme compara os dois — e
+	// duas cargas atômicas separadas deixavam o leitor ver um rasgo entre elas
+	// ((T, R+1), (T-1, R), até total > refs), que vira resolução espúria de
+	// alarme. Cada transição mexe na palavra de um grupo com UMA soma atômica,
+	// e a leitura é UMA carga. Com total desligado a metade alta fica zero e
+	// não é lida. Atômicos (atomic.LoadUint64/AddUint64); a soma de um delta
+	// negativo é a aritmética modular de uint64.
+	pairs      []uint64
 	lastTouch  []uint64
 	emptySince []int64 // unix ms em que refs chegou a 0; 0 = não está vazio
 	texts      [][]byte
@@ -135,13 +171,14 @@ type Counter struct {
 	// por linha de _meta.counters — num contador por PON são milhares.
 	//
 	// Grupo aposentado não entra na conta e não precisa sair dela: a
-	// aposentadoria exige refs == 0 (retirement.go), e totals[g] <= refs[g]
+	// aposentadoria exige refs == 0 (retirement.go), e total[g] <= refs[g]
 	// por construção — cada linha contribui 1 para refs e 0 ou 1 para totals,
 	// decidido pelo MESMO bit da MESMA entrada. Logo a soma sobre todos os ids
 	// é igual à soma sobre os vivos, em qualquer instante.
 	//
 	// São atomic.Int64 (método, nunca indexação) para que `c.total` não se
-	// confunda com `c.totals[g]` na leitura de quem mexer neste arquivo. O
+	// confunda com a metade alta de `c.pairs[g]` na leitura de quem mexer
+	// neste arquivo. O
 	// preço de mantê-los é uma SEGUNDA fonte para o mesmo fato, e o que a
 	// reconcilia é a auditoria, que os confere contra o recalculado.
 	rows  atomic.Int64
@@ -162,6 +199,10 @@ type Counter struct {
 	textBuf     []byte
 	textScratch []types.Value
 	now         func() time.Time
+	// groupRowsCeiling é o teto de linhas por grupo, MaxGroupRows fora de
+	// teste. É campo, e não só a constante, para que o teste da recusa a
+	// exercite com um limite pequeno em vez de quatro bilhões de linhas.
+	groupRowsCeiling int64
 }
 
 // Open abre (ou cria) o dicionário e o vetor do contador em dir. recreate=true
@@ -194,13 +235,14 @@ func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, 
 		return nil, fmt.Errorf("contador %s: %w", def.Name, err)
 	}
 	c := &Counter{
-		def:    def,
-		dir:    dir,
-		dict:   dict,
-		vector: vector,
-		over:   make(map[types.RowID]uint32),
-		byText: make(map[string]uint32),
-		now:    time.Now,
+		def:              def,
+		dir:              dir,
+		dict:             dict,
+		vector:           vector,
+		over:             make(map[types.RowID]uint32),
+		byText:           make(map[string]uint32),
+		now:              time.Now,
+		groupRowsCeiling: MaxGroupRows,
 	}
 	c.deriv = c.NewDeriver()
 	// Os slices por grupo e os textos nascem do dicionário que já está em
@@ -243,12 +285,9 @@ func (c *Counter) catchUpWithDict() error {
 	c.dict.mu.Lock()
 	defer c.dict.mu.Unlock()
 	limit := len(c.dict.keys) + 1
-	for len(c.refs) < limit {
-		id := uint32(len(c.refs))
-		if !c.def.DisableTotal {
-			c.totals = append(c.totals, 0)
-		}
-		c.refs = append(c.refs, 0)
+	for len(c.pairs) < limit {
+		id := uint32(len(c.pairs))
+		c.pairs = append(c.pairs, 0)
 		c.lastTouch = append(c.lastTouch, 0)
 		c.emptySince = append(c.emptySince, 0)
 		c.texts = append(c.texts, nil)
@@ -434,7 +473,7 @@ func (c *Counter) transition(rowID types.RowID, payload []byte, tombstone, occur
 			case err != nil:
 				return fmt.Errorf("contador %s: internar o grupo da linha %d: %w", c.def.Name, rowID, err)
 			default:
-				if int(id) >= len(c.refs) {
+				if int(id) >= len(c.pairs) {
 					if err := c.catchUpWithDict(); err != nil {
 						return err
 					}
@@ -446,42 +485,80 @@ func (c *Counter) transition(rowID types.RowID, payload []byte, tombstone, occur
 			}
 		}
 	}
+	oldEntry := c.entry(rowID)
+	newGroup, oldGroup := newEntry&^conditionBit, oldEntry&^conditionBit
+	// O teto de linhas do grupo é conferido ANTES de qualquer mutação — das
+	// medidas inclusive: a recusa não pode deixar meia transição aplicada.
+	// Só a ENTRADA num grupo soma um aos refs; trocar o bit no mesmo grupo não.
+	if newGroup != WithoutGroup && newGroup != oldGroup &&
+		pairRefs(atomic.LoadUint64(&c.pairs[newGroup])) >= c.groupRowsCeiling {
+		return fmt.Errorf("%w: counter %s: group %d already holds %d rows, the ceiling of one group; "+
+			"a groupBy this coarse is almost certainly declared by mistake",
+			ErrGroupRowsCeiling, c.def.Name, newGroup, c.groupRowsCeiling)
+	}
 	if occurrence {
 		if err := c.observeMeasures(newEntry, payload); err != nil {
 			return err
 		}
 	}
-	oldEntry := c.entry(rowID)
 	if oldEntry == newEntry {
 		return nil
 	}
 	c.transitions++
+	// A palavra de cada grupo recebe UMA soma por transição — é o que torna o
+	// par (total, refs) atômico para o leitor. Mesmo grupo com o bit trocado é
+	// UMA soma de ±1 na metade alta; grupos diferentes são uma soma em cada.
+	//
 	// O agregado anda COLADO ao grupo, nas duas pontas: cada Add do agregado
-	// fica ao lado do AddInt64 do vetor que ele soma, e DENTRO das mesmas
+	// fica ao lado da soma da palavra que ele acompanha, e DENTRO das mesmas
 	// guardas. O do decremento, em especial, mora dentro do
-	// `int(g) < len(c.refs)`: quando essa guarda é falsa não existe slot e
-	// nenhum grupo desce, então um agregado que descesse ali derivaria da soma
-	// dos grupos em silêncio.
-	if g := newEntry &^ conditionBit; g != WithoutGroup {
-		atomic.AddInt64(&c.refs[g], 1)
+	// `int(oldGroup) < len(c.pairs)`: quando essa guarda é falsa não existe
+	// slot e nenhum grupo desce, então um agregado que descesse ali derivaria
+	// da soma dos grupos em silêncio.
+	newBit := !c.def.DisableTotal && newEntry&conditionBit != 0
+	oldBit := !c.def.DisableTotal && oldEntry&conditionBit != 0
+	if newGroup != WithoutGroup && newGroup == oldGroup {
+		var delta uint64
+		switch {
+		case newBit && !oldBit:
+			delta = pairTotalUnit
+			c.total.Add(1)
+		case oldBit && !newBit:
+			delta = ^pairTotalUnit + 1 // -pairTotalUnit em aritmética modular
+			c.total.Add(-1)
+		}
+		if delta != 0 {
+			atomic.AddUint64(&c.pairs[newGroup], delta)
+		}
+		c.lastTouch[newGroup] = c.transitions
+		c.over[rowID] = newEntry
+		return nil
+	}
+	// O incremento do grupo novo vem ANTES do decremento do antigo: um leitor
+	// somando os grupos no meio da transição vê a linha em dois lugares, nunca
+	// em nenhum — o contador nunca subestima.
+	if newGroup != WithoutGroup {
+		delta := uint64(1)
 		c.rows.Add(1)
-		if !c.def.DisableTotal && newEntry&conditionBit != 0 {
-			atomic.AddInt64(&c.totals[g], 1)
+		if newBit {
+			delta += pairTotalUnit
 			c.total.Add(1)
 		}
-		c.lastTouch[g] = c.transitions
-		c.emptySince[g] = 0
+		atomic.AddUint64(&c.pairs[newGroup], delta)
+		c.lastTouch[newGroup] = c.transitions
+		c.emptySince[newGroup] = 0
 	}
-	if g := oldEntry &^ conditionBit; g != WithoutGroup && int(g) < len(c.refs) {
-		if !c.def.DisableTotal && oldEntry&conditionBit != 0 {
-			atomic.AddInt64(&c.totals[g], -1)
+	if oldGroup != WithoutGroup && int(oldGroup) < len(c.pairs) {
+		delta := uint64(1)
+		if oldBit {
+			delta += pairTotalUnit
 			c.total.Add(-1)
 		}
 		c.rows.Add(-1)
-		if atomic.AddInt64(&c.refs[g], -1) == 0 {
-			c.emptySince[g] = c.now().UnixMilli()
+		if pairRefs(atomic.AddUint64(&c.pairs[oldGroup], -delta)) == 0 {
+			c.emptySince[oldGroup] = c.now().UnixMilli()
 		}
-		c.lastTouch[g] = c.transitions
+		c.lastTouch[oldGroup] = c.transitions
 	}
 	c.over[rowID] = newEntry
 	return nil
@@ -505,11 +582,8 @@ func (c *Counter) Fold() error {
 	c.dict.mu.RLock()
 	live := slices.Clone(c.dict.live)
 	c.dict.mu.RUnlock()
-	for i := range c.refs {
-		if !c.def.DisableTotal {
-			atomic.StoreInt64(&c.totals[i], 0)
-		}
-		atomic.StoreInt64(&c.refs[i], 0)
+	for i := range c.pairs {
+		atomic.StoreUint64(&c.pairs[i], 0)
 	}
 	// Zerar ANTES do laço é o que torna a Fold idempotente; sem isto uma
 	// segunda chamada acumularia sobre a primeira.
@@ -536,18 +610,19 @@ func (c *Counter) Fold() error {
 		}
 		// Depois do continue da órfã, de propósito: a entrada que grupo
 		// nenhum recebe também não pode ser creditada ao agregado.
-		atomic.AddInt64(&c.refs[g], 1)
+		delta := uint64(1)
 		rows++
 		if !c.def.DisableTotal && v&conditionBit != 0 {
-			atomic.AddInt64(&c.totals[g], 1)
+			delta += pairTotalUnit
 			total++
 		}
+		atomic.AddUint64(&c.pairs[g], delta)
 	}
 	c.rows.Store(rows)
 	c.total.Store(total)
 	now := c.now().UnixMilli()
-	for g := 1; g < len(c.refs); g++ {
-		if live[g-1] && atomic.LoadInt64(&c.refs[g]) == 0 {
+	for g := 1; g < len(c.pairs); g++ {
+		if live[g-1] && pairRefs(atomic.LoadUint64(&c.pairs[g])) == 0 {
 			// O reinício só ESTENDE a visibilidade de um grupo vazio: o
 			// instante em que ele esvaziou não é persistido, e o pior caso é
 			// ele viver mais um prazo inteiro.
@@ -565,11 +640,8 @@ func (c *Counter) Clear() error {
 		return err
 	}
 	clear(c.over)
-	for i := range c.refs {
-		if !c.def.DisableTotal {
-			atomic.StoreInt64(&c.totals[i], 0)
-		}
-		atomic.StoreInt64(&c.refs[i], 0)
+	for i := range c.pairs {
+		atomic.StoreUint64(&c.pairs[i], 0)
 		c.emptySince[i] = 0
 	}
 	// Os agregados zeram junto: a reconstrução transiciona de novo cada linha
@@ -637,17 +709,18 @@ func (c *Counter) AuditSnapshot() AuditSnapshot {
 	c.dict.mu.RLock()
 	defer c.dict.mu.RUnlock()
 	snap := AuditSnapshot{
-		Totals: make([]int64, len(c.refs)),
-		Refs:   make([]int64, len(c.refs)),
+		Totals: make([]int64, len(c.pairs)),
+		Refs:   make([]int64, len(c.pairs)),
 		Limit:  uint32(len(c.dict.keys)) + 1,
 		Rows:   c.rows.Load(),
 		Total:  c.total.Load(),
 	}
-	for i := range c.refs {
+	for i := range c.pairs {
+		p := atomic.LoadUint64(&c.pairs[i])
 		if !c.def.DisableTotal {
-			snap.Totals[i] = atomic.LoadInt64(&c.totals[i])
+			snap.Totals[i] = pairTotal(p)
 		}
-		snap.Refs[i] = atomic.LoadInt64(&c.refs[i])
+		snap.Refs[i] = pairRefs(p)
 	}
 	return snap
 }
@@ -660,16 +733,21 @@ func (c *Counter) Limit() uint32 { return c.dict.Limit() }
 // texto são estáveis. Um id que o dicionário já emitiu mas cujos totais ainda
 // não cresceram sai como não vivo — janela de microssegundos entre a internação
 // e o crescimento, e o leitor a vê como "ainda não existe".
+//
+// total e refs saem da MESMA carga atômica (a palavra do grupo), então o par é
+// sempre um estado que o grupo de fato teve: total <= refs vale em toda leitura,
+// e nunca se vê o total de uma transição com os refs de outra.
 func (c *Counter) Group(id uint32) (key, text []byte, total, refs int64, live bool) {
 	c.dict.mu.RLock()
 	defer c.dict.mu.RUnlock()
-	if id < 1 || int(id) > len(c.dict.keys) || int(id) >= len(c.refs) {
+	if id < 1 || int(id) > len(c.dict.keys) || int(id) >= len(c.pairs) {
 		return nil, nil, 0, 0, false
 	}
+	p := atomic.LoadUint64(&c.pairs[id])
 	if !c.def.DisableTotal {
-		total = atomic.LoadInt64(&c.totals[id])
+		total = pairTotal(p)
 	}
-	return c.dict.keys[id-1], c.texts[id], total, atomic.LoadInt64(&c.refs[id]), c.dict.live[id-1]
+	return c.dict.keys[id-1], c.texts[id], total, pairRefs(p), c.dict.live[id-1]
 }
 
 // checkTextCollision recusa uma chave NOVA cujo texto já pertence a um grupo
