@@ -1,6 +1,7 @@
 package dev.nishisan.nishidb.jdbc;
 
 import dev.nishisan.nishidb.jdbc.json.JsonValue;
+import dev.nishisan.nishidb.jdbc.wire.RequestTimeout;
 import dev.nishisan.nishidb.jdbc.wire.SqlStates;
 import dev.nishisan.nishidb.jdbc.wire.Transporte;
 import java.net.URLEncoder;
@@ -18,6 +19,8 @@ import java.sql.SQLClientInfoException;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTimeoutException;
 import java.sql.SQLWarning;
 import java.sql.SQLXML;
 import java.sql.Savepoint;
@@ -42,7 +45,26 @@ import java.util.concurrent.Executor;
  *
  * <p>Não é segura para uso concorrente, como o contrato do JDBC permite. Uma
  * conexão executa uma consulta por vez — é por isso que o transporte fixa
- * HTTP/1.1 e não perde nada com isso.
+ * HTTP/1.1 e não perde nada com isso. As exceções são {@link #abort} e
+ * {@link #isClosed}, que o contrato prevê chamadas de OUTRA thread — a que
+ * destrava uma requisição presa —, e por isso o estado de fechada é volátil.
+ *
+ * <p><b>Os prazos de espera pelo servidor</b> (issue #91), do mais específico
+ * para o mais geral — o específico SUBSTITUI o geral naquela requisição, nos
+ * dois sentidos, maior ou menor:
+ *
+ * <ul>
+ *   <li>{@code isValid(s)}, com {@code s > 0}: a requisição inteira em
+ *       {@code s}; estouro é {@code false}.
+ *   <li>{@code Statement.setQueryTimeout(s)}: o prazo que vai ao servidor mais
+ *       {@link NishiStatement#QUERY_TIMEOUT_GRACE_MS}; estouro é
+ *       {@code SQLTimeoutException} 57014, e a conexão continua utilizável.
+ *   <li>O prazo de rede — {@code socketTimeoutMs} na URL, depois
+ *       {@link #setNetworkTimeout}: toda requisição sem prazo próprio
+ *       (metadata, catálogo, consulta sem queryTimeout, {@code isValid(0)}).
+ *       Estouro FECHA a conexão, que é o contrato do
+ *       {@code setNetworkTimeout}. Zero, o default, é sem prazo.
+ * </ul>
  */
 public final class NishiConnection implements Connection {
 
@@ -53,7 +75,20 @@ public final class NishiConnection implements Connection {
     private final long timeoutMsDoDataset;
     private final List<NishiStatement> abertos = new ArrayList<>();
 
-    private boolean fechado;
+    /**
+     * Volátil: {@link #abort} e o estouro do prazo de rede a ligam de outra
+     * thread, ou no meio de uma leitura.
+     */
+    private volatile boolean fechado;
+    /**
+     * Se o {@link #close()} já fechou os Statement e o cliente HTTP.
+     * Separado de {@link #fechado} porque o abort marca a conexão fechada sem
+     * fechar os Statement — que podem estar em uso na thread presa —, e o
+     * close() que vier depois ainda tem de fazê-lo.
+     */
+    private boolean resourcesReleased;
+    /** O prazo de rede em ms, zero sem prazo; nasce do socketTimeoutMs. */
+    private int networkTimeoutMs;
 
     NishiConnection(ConnectionConfig cfg) throws SQLException {
         this.transporte = new Transporte(
@@ -61,10 +96,11 @@ public final class NishiConnection implements Connection {
                 cfg.base(), cfg.autorizacao());
         this.cfg = cfg;
         this.schema = cfg.schema();
+        this.networkTimeoutMs = cfg.socketTimeoutMs();
 
         JsonValue meta;
         try {
-            meta = transporte.documento(metadataPath(schema));
+            meta = transporte.documento(metadataPath(schema), networkTimeout());
         } catch (SQLException e) {
             transporte.close();
             if (SqlStates.INVALID_SCHEMA_NAME.equals(e.getSQLState())) {
@@ -94,6 +130,35 @@ public final class NishiConnection implements Connection {
 
     Transporte transporte() {
         return transporte;
+    }
+
+    /**
+     * O prazo de rede, para a requisição que não tem prazo próprio.
+     *
+     * <p>O estouro FECHA a conexão: é o contrato do
+     * {@code Connection.setNetworkTimeout} ("the Connection ... will be marked
+     * as closed"), e é o certo — um servidor que ficou o prazo de rede inteiro
+     * sem responder não pode voltar ao pool como se nada tivesse acontecido. A
+     * exceção é {@code SQLRecoverableException} 08006: a classe que diz "abra
+     * outra conexão e repita", a mesma da queda no meio do stream.
+     */
+    RequestTimeout networkTimeout() {
+        int ms = networkTimeoutMs;
+        if (ms == 0) {
+            return RequestTimeout.NONE;
+        }
+        return new RequestTimeout(ms, detail -> {
+            abandon();
+            return new SQLRecoverableException(detail + " (prazo de rede de " + ms
+                    + " ms: socketTimeoutMs ou setNetworkTimeout); a conexao foi fechada, abra outra",
+                    SqlStates.CONEXAO_INTERROMPIDA);
+        });
+    }
+
+    /** Marca fechada e derruba o cliente HTTP sem esperar o servidor. */
+    private void abandon() {
+        fechado = true;
+        transporte.abandon();
     }
 
     ConnectionConfig configuracao() {
@@ -380,12 +445,17 @@ public final class NishiConnection implements Connection {
      * que uma ferramenta trava depois de algumas dezenas de consultas. O
      * transporte usa shutdownNow porque este método é chamado da thread de
      * interface — o close() do HttpClient bloqueia até todo exchange terminar.
+     *
+     * <p>Depois de um {@link #abort} ou de um estouro do prazo de rede, a
+     * conexão já está marcada fechada, mas os Statement ainda não: este
+     * close() os fecha do mesmo jeito.
      */
     @Override
     public void close() throws SQLException {
-        if (fechado) {
+        if (resourcesReleased) {
             return;
         }
+        resourcesReleased = true;
         fechado = true;
         SQLException primeira = null;
         for (NishiStatement st : new ArrayList<>(abertos)) {
@@ -417,6 +487,18 @@ public final class NishiConnection implements Connection {
      * <p>É o que um pool de conexões usa para decidir se devolve uma conexão
      * ociosa a quem a pediu. Responder "não estou fechada" sem falar com o
      * servidor entregaria ao chamador uma conexão cuja outra ponta já morreu.
+     *
+     * <p><b>Volta em {@code segundos}</b>, como manda o contrato: o prazo é da
+     * requisição inteira ao {@code /v1/health}, e o estouro é {@code false},
+     * nunca exceção. É o que o pool (o HikariCP valida com isto) precisa:
+     * sem o prazo, um servidor que aceita e não responde prendia a thread que
+     * pediu a conexão, e o pool esgotava. {@code segundos == 0} é "sem prazo
+     * próprio" pelo contrato, e aí vale o prazo de rede — que, zero, é sem
+     * prazo nenhum.
+     *
+     * <p>O estouro aqui NÃO fecha a conexão, nem quando o prazo é o de rede:
+     * responder {@code false} já entrega a decisão a quem perguntou, e o
+     * contrato permite chamar isValid numa conexão em qualquer estado.
      */
     @Override
     public boolean isValid(int segundos) throws SQLException {
@@ -427,8 +509,11 @@ public final class NishiConnection implements Connection {
         if (fechado) {
             return false;
         }
+        long ms = segundos > 0 ? segundos * 1000L : networkTimeoutMs;
+        RequestTimeout prazo = ms == 0 ? RequestTimeout.NONE
+                : new RequestTimeout(ms, detail -> new SQLTimeoutException(detail, SqlStates.CANCELADO));
         try {
-            return transporte.documento("/v1/health") != null;
+            return transporte.documento("/v1/health", prazo) != null;
         } catch (SQLException e) {
             return false;
         }
@@ -512,25 +597,62 @@ public final class NishiConnection implements Connection {
             "o NishiDB não tem este tipo; as colunas são escalares, texto, binário e json";
 
     /**
-     * Abortar exigiria derrubar o cliente HTTP inteiro, que é compartilhado
-     * pela conexão. Quem precisa limitar a duração de UMA consulta usa
-     * {@code Statement.setQueryTimeout}, que o servidor honra do lado dele.
+     * Derruba a conexão sem esperar o servidor, de qualquer thread.
+     *
+     * <p>Marca a conexão fechada AQUI, antes de voltar — quem chamou abort
+     * pode contar com {@code isClosed()} verdadeiro na linha seguinte — e
+     * derruba o cliente HTTP no {@code executor}, como o contrato pede. A
+     * requisição presa em outra thread sai com {@code SQLException} de conexão
+     * fechada; os Statement não são fechados aqui, porque podem estar em uso
+     * justamente nela, e o {@link #close()} que vier depois os fecha. Chamado
+     * numa conexão já fechada, não faz nada.
+     *
+     * <p>Não consulta {@code SecurityManager} pela permissão
+     * {@code SQLPermission("callAbort")}: o piso do driver é o JDK 21, onde o
+     * SecurityManager está condenado à remoção, e a partir do JDK 24 (JEP 486)
+     * ele não pode mais ser ligado — a checagem seria código morto.
      */
     @Override
     public void abort(Executor executor) throws SQLException {
-        throw naoSuportado("use Statement.setQueryTimeout para limitar uma consulta, ou close()");
+        if (executor == null) {
+            throw new SQLException("abort exige um executor: é nele que o cliente HTTP é derrubado",
+                    SqlStates.CONVERSAO_INVALIDA);
+        }
+        if (fechado) {
+            return;
+        }
+        fechado = true;
+        executor.execute(transporte::abandon);
     }
 
+    /**
+     * Ajusta o prazo de rede — o mesmo que {@code socketTimeoutMs} inicia.
+     *
+     * <p>Vale para toda requisição que não tem prazo próprio, e o estouro fecha
+     * a conexão (ver {@link #networkTimeout()}). O {@code executor} é exigido
+     * pelo contrato, mas não é usado: o prazo é contado pelo relógio do
+     * HttpClient e pelo do driver, e nenhum dos dois precisa de thread de quem
+     * chama.
+     */
     @Override
     public void setNetworkTimeout(Executor executor, int ms) throws SQLException {
-        throw naoSuportado("o prazo de rede é fixado na conexão por connectTimeoutMs; "
-                + "prazo de CONSULTA é Statement.setQueryTimeout");
+        exigeAberta();
+        if (executor == null) {
+            throw new SQLException("setNetworkTimeout exige um executor, pelo contrato do JDBC",
+                    SqlStates.CONVERSAO_INVALIDA);
+        }
+        if (ms < 0) {
+            throw new SQLException("prazo de rede negativo: " + ms + "; 0 é sem prazo",
+                    SqlStates.VALOR_FORA_DE_FAIXA);
+        }
+        networkTimeoutMs = ms;
     }
 
+    /** O prazo de rede em vigor, em ms; zero é sem prazo. */
     @Override
     public int getNetworkTimeout() throws SQLException {
         exigeAberta();
-        return 0;
+        return networkTimeoutMs;
     }
 
     @Override

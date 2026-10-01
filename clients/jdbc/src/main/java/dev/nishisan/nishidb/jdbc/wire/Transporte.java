@@ -7,8 +7,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.sql.SQLNonTransientConnectionException;
@@ -41,6 +43,13 @@ import java.util.Base64;
  *   <li><b>Nenhum trustAll, nem por propriedade.</b> Uma opção "insecure" vira
  *       o modo permanente de operação em três semanas. Quem depura handshake
  *       usa openssl s_client.
+ *   <li><b>Toda requisição declara o seu prazo.</b> {@link #consulta} e
+ *       {@link #documento} exigem um {@link RequestTimeout}, sem sobrecarga
+ *       que o omita: foi a falta de prazo em TODA requisição que deixou um
+ *       servidor que aceita e não responde travar a thread do cliente sem
+ *       limite (issue #91), e um chamador novo não pode esquecê-lo de novo.
+ *       {@link RequestTimeout#NONE} continua existindo, mas tem de ser
+ *       escrito.
  * </ul>
  */
 public final class Transporte implements AutoCloseable {
@@ -51,6 +60,12 @@ public final class Transporte implements AutoCloseable {
     private final HttpClient http;
     private final String base;
     private final String autorizacao;
+
+    /**
+     * Ligado por {@link #abandon()}: a falha de I/O que vier depois é a da
+     * conexão derrubada de propósito, e não do servidor.
+     */
+    private volatile boolean abandoned;
 
     /**
      * @param base URL base, já com esquema — {@code http://host:porta} ou
@@ -97,22 +112,27 @@ public final class Transporte implements AutoCloseable {
      * retorna nos headers e deixa o corpo fluir. {@code ofString} e
      * {@code ofByteArray} bufferizam o resultado inteiro, que é violação direta
      * do §128; {@code ofLines} aloca uma String por linha e destrói os spans.
+     *
+     * <p>O prazo vale para a espera pelos cabeçalhos e para CADA espera por
+     * bytes do corpo, e não para a duração do stream — ver
+     * {@link RequestTimeout}.
      */
-    public InputStream consulta(String corpoJson) throws SQLException {
-        HttpRequest req = requisicao("/v1/query")
+    public InputStream consulta(String corpoJson, RequestTimeout timeout) throws SQLException {
+        HttpRequest req = requisicao("/v1/query", timeout)
                 .header("Content-Type", TIPO_JSON)
                 .POST(HttpRequest.BodyPublishers.ofString(corpoJson, StandardCharsets.UTF_8))
                 .build();
 
-        HttpResponse<InputStream> resp = envia(req, HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<InputStream> resp = envia(req, HttpResponse.BodyHandlers.ofInputStream(), timeout);
+        InputStream body = timed(resp.body(), timeout, null);
         if (resp.statusCode() == 200) {
-            return resp.body();
+            return body;
         }
         // O corpo do erro é pequeno e vem ANTES da primeira linha: fechá-lo
         // aqui, depois de lido, libera a conexão para a próxima consulta. O
         // javadoc do HttpClient é explícito de que um InputStream não
         // consumido nem fechado nunca devolve a conexão ao pool.
-        try (InputStream corpo = resp.body()) {
+        try (InputStream corpo = body) {
             throw falhaDoServidor(resp.statusCode(), corpo);
         } catch (IOException e) {
             throw new SQLRecoverableException("lendo o corpo de erro: " + e.getMessage(),
@@ -120,21 +140,45 @@ public final class Transporte implements AutoCloseable {
         }
     }
 
-    /** GET de um documento pequeno (/v1/metadata, /v1/stats, /v1/health). */
-    public JsonValue documento(String caminho) throws SQLException {
-        HttpRequest req = requisicao(caminho).GET().build();
-        HttpResponse<InputStream> resp = envia(req, HttpResponse.BodyHandlers.ofInputStream());
-        try (InputStream corpo = resp.body()) {
+    /**
+     * GET de um documento pequeno (/v1/metadata, /v1/stats, /v1/health).
+     *
+     * <p>Aqui o prazo é da requisição INTEIRA — cabeçalhos e corpo somados —,
+     * e não de cada espera: o documento é pequeno, e é este o caminho do
+     * {@code isValid(s)}, cujo contrato é voltar em {@code s}.
+     */
+    public JsonValue documento(String caminho, RequestTimeout timeout) throws SQLException {
+        long start = System.nanoTime();
+        HttpRequest req = requisicao(caminho, timeout).GET().build();
+        HttpResponse<InputStream> resp = envia(req, HttpResponse.BodyHandlers.ofInputStream(), timeout);
+        Long deadline = start + Duration.ofMillis(timeout.millis()).toNanos();
+        try (InputStream corpo = timed(resp.body(), timeout, deadline)) {
             if (resp.statusCode() != 200) {
                 throw falhaDoServidor(resp.statusCode(), corpo);
             }
             return JsonParser.le(corpo);
+        } catch (ResponseTimeoutException e) {
+            throw e.failure();
         } catch (JsonException e) {
             throw new SQLRecoverableException(caminho + ": resposta ilegivel: " + e.getMessage(),
                     SqlStates.CONEXAO_INTERROMPIDA);
         } catch (IOException e) {
             throw new SQLRecoverableException(caminho + ": " + e.getMessage(), SqlStates.CONEXAO_INTERROMPIDA);
         }
+    }
+
+    /**
+     * Derruba o cliente HTTP SEM esperar: as requisições em voo, em qualquer
+     * thread, saem com {@code SQLException} de conexão fechada.
+     *
+     * <p>É o caminho do {@code Connection.abort} e do estouro do prazo de
+     * rede. Diferente de {@link #close()}, não chama
+     * {@code awaitTermination}: quem aborta não pode ficar esperando o
+     * servidor que justamente parou de responder.
+     */
+    public void abandon() {
+        abandoned = true;
+        http.shutdownNow();
     }
 
     @Override
@@ -151,10 +195,16 @@ public final class Transporte implements AutoCloseable {
         }
     }
 
-    private HttpRequest.Builder requisicao(String caminho) {
+    private HttpRequest.Builder requisicao(String caminho, RequestTimeout timeout) {
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base + caminho))
                 // Fixo, e não negociado: ver a doutrina na classe.
                 .version(HttpClient.Version.HTTP_1_1);
+        if (timeout.isSet()) {
+            // Cobre a espera até os CABEÇALHOS, e só ela: com ofInputStream o
+            // send volta nos cabeçalhos e o prazo do JDK para de contar. O
+            // corpo fica com o TimedInputStream.
+            b.timeout(Duration.ofMillis(timeout.millis()));
+        }
         if (autorizacao != null) {
             // PREEMPTIVO: sem isto, o primeiro request levaria 401 e só o
             // segundo a credencial. O servidor responde 401 com um atraso
@@ -165,11 +215,34 @@ public final class Transporte implements AutoCloseable {
         return b;
     }
 
-    private <T> HttpResponse<T> envia(HttpRequest req, HttpResponse.BodyHandler<T> handler) throws SQLException {
+    /** O corpo com prazo, ou o próprio corpo quando não há prazo. */
+    private static InputStream timed(InputStream body, RequestTimeout timeout, Long deadlineNanos) {
+        return timeout.isSet() ? new TimedInputStream(body, timeout, deadlineNanos) : body;
+    }
+
+    private <T> HttpResponse<T> envia(HttpRequest req, HttpResponse.BodyHandler<T> handler, RequestTimeout timeout)
+            throws SQLException {
         HttpResponse<T> resp;
         try {
             resp = http.send(req, handler);
+        } catch (HttpConnectTimeoutException e) {
+            // Também é um HttpTimeoutException, mas é o handshake, que tem
+            // prazo próprio (connectTimeoutMs): não é o silêncio de um
+            // servidor que aceitou a requisição.
+            throw new SQLNonTransientConnectionException(
+                    "falando com " + base + ": " + e.getMessage(), SqlStates.CONEXAO_NAO_ESTABELECIDA, e);
+        } catch (HttpTimeoutException e) {
+            SQLException falha = timeout.onExpiry().onExpiry(
+                    "o servidor nao respondeu em " + timeout.millis() + " ms");
+            if (falha.getCause() == null) {
+                falha.initCause(e);
+            }
+            throw falha;
         } catch (IOException e) {
+            if (abandoned) {
+                throw new SQLNonTransientConnectionException("esta conexao foi fechada com a requisicao em voo",
+                        SqlStates.CONEXAO_NAO_ESTABELECIDA, e);
+            }
             throw new SQLNonTransientConnectionException(
                     "falando com " + base + ": " + e.getMessage(), SqlStates.CONEXAO_NAO_ESTABELECIDA, e);
         } catch (InterruptedException e) {
@@ -212,6 +285,8 @@ public final class Transporte implements AutoCloseable {
                 }
                 return SqlStates.excecaoDe(codigo, mensagem);
             }
+        } catch (ResponseTimeoutException e) {
+            return e.failure();
         } catch (JsonException | IOException e) {
             texto = e.getMessage();
         }

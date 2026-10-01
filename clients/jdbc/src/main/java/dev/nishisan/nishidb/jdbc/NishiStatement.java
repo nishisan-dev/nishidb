@@ -2,12 +2,14 @@ package dev.nishisan.nishidb.jdbc;
 
 import dev.nishisan.nishidb.jdbc.json.JsonWriter;
 import dev.nishisan.nishidb.jdbc.wire.LeitorNdjson;
+import dev.nishisan.nishidb.jdbc.wire.RequestTimeout;
 import dev.nishisan.nishidb.jdbc.wire.SqlStates;
 import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLTimeoutException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
 
@@ -22,13 +24,29 @@ import java.sql.Statement;
  * consultar só o que a URL nomeia.
  *
  * <p><b>Três relógios distintos, e confundi-los mata stream legítimo.</b> O
- * {@code connectTimeoutMs} da conexão vale só para o handshake. O
- * {@code HttpRequest.timeout()} NÃO é setado, e é deliberado: ele estoura mesmo
- * com bytes fluindo, o que mataria toda consulta longa que estivesse indo bem.
- * O prazo da CONSULTA é {@link #setQueryTimeout}, que viaja no corpo e é o
- * servidor quem honra — do lado onde a varredura acontece.
+ * {@code connectTimeoutMs} da conexão vale só para o handshake. O prazo da
+ * CONSULTA é {@link #setQueryTimeout}, que viaja no corpo e é o servidor quem
+ * honra — do lado onde a varredura acontece. O terceiro é o prazo de ESPERA do
+ * cliente ({@link RequestTimeout}): ele limita o silêncio do servidor — a
+ * espera pelos cabeçalhos e cada espera por bytes do corpo —, e não a duração
+ * do stream, então uma consulta longa que continua mandando linhas nunca
+ * estoura por ele. Com queryTimeout, esse prazo é o do servidor mais
+ * {@link #QUERY_TIMEOUT_GRACE_MS}; sem, é o prazo de rede da conexão.
  */
 public class NishiStatement implements Statement {
+
+    /**
+     * A folga do prazo do cliente sobre o queryTimeout que vai ao servidor.
+     *
+     * <p>O servidor cancela no prazo e responde com o erro PRÓPRIO
+     * ({@code TIMEOUT}, 57014), que é a resposta mais informativa — e é ela
+     * que a folga deixa chegar. Só quando nem ela vem — servidor parado,
+     * conexão meio-aberta, rede descartando pacotes — o cliente desiste
+     * sozinho. Cinco segundos cobrem o cancelamento cooperativo da varredura e
+     * a viagem da resposta com margem, e são irrelevantes diante de um
+     * servidor que não vai responder nunca.
+     */
+    static final long QUERY_TIMEOUT_GRACE_MS = 5_000;
 
     private final NishiConnection conexao;
 
@@ -87,7 +105,8 @@ public class NishiStatement implements Statement {
             corpo.inteiro("timeoutMs", prazo);
         }
 
-        InputStream stream = conexao.transporte().consulta(corpo.fecha());
+        RequestTimeout espera = prazo != null ? queryWait(prazo) : conexao.networkTimeout();
+        InputStream stream = conexao.transporte().consulta(corpo.fecha(), espera);
         LeitorNdjson leitor = new LeitorNdjson(stream);
         StreamCursor cursor;
         try {
@@ -139,6 +158,29 @@ public class NishiStatement implements Statement {
         long ms = queryTimeoutSegundos * 1000L;
         long teto = conexao.timeoutMsDoDataset();
         return teto > 0 ? Math.min(ms, teto) : ms;
+    }
+
+    /**
+     * O prazo do cliente para a consulta com queryTimeout: o que foi ao
+     * servidor (já clampado contra o teto do dataset) mais a folga.
+     *
+     * <p>Ele SUBSTITUI o prazo de rede nesta requisição, maior ou menor que
+     * ele. Menor: um {@code setQueryTimeout(1)} tem de estourar perto de 1 s,
+     * e não no prazo de rede de um minuto. Maior: quem declarou que esta
+     * consulta pode levar dez minutos não pode vê-la morta no prazo de rede de
+     * trinta segundos, que existe para a requisição que NÃO declarou nada.
+     *
+     * <p>O estouro é {@code SQLTimeoutException} 57014, o mesmo estado do
+     * TIMEOUT do servidor, e a conexão CONTINUA utilizável: o HttpClient
+     * descarta a conexão TCP da requisição abandonada, e a próxima consulta
+     * abre outra.
+     */
+    private static RequestTimeout queryWait(long serverTimeoutMs) {
+        long ms = serverTimeoutMs + QUERY_TIMEOUT_GRACE_MS;
+        return new RequestTimeout(ms, detail -> new SQLTimeoutException(detail
+                + "; a consulta tinha queryTimeout de " + serverTimeoutMs + " ms, e o cliente desistiu "
+                + "depois de mais " + QUERY_TIMEOUT_GRACE_MS + " ms de folga sem resposta do servidor",
+                SqlStates.CANCELADO));
     }
 
     @Override

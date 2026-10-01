@@ -79,7 +79,14 @@ public final class SqlStates {
     private static final String RECURSO_EXCEDIDO = "53400";
     private static final String RECURSO_INSUFICIENTE = "53000";
     private static final String LIMITE_DE_PROGRAMA = "54000";
-    private static final String CANCELADO = "57014";
+    /**
+     * 57014 — a consulta passou do prazo e foi cancelada.
+     *
+     * <p>PÚBLICO porque nasce também no cliente: quando o servidor não
+     * responde até o {@code queryTimeout} mais a folga, o driver desiste com
+     * este MESMO estado, e a aplicação trata os dois estouros da mesma forma.
+     */
+    public static final String CANCELADO = "57014";
     private static final String OBJETO_EM_USO = "55006";
     private static final String AUTENTICACAO = "28000";
     private static final String IO_DO_SISTEMA = "58030";

@@ -666,4 +666,43 @@ class DriverIT {
                     "o driver não entregou todas as linhas ingeridas (soma lida: " + soma + ")");
         }
     }
+
+    /**
+     * Os prazos de espera do cliente (issue #91) contra o fio REAL, que
+     * responde {@code /v1/query} em chunked: o resultado inteiro atravessa um
+     * {@code socketTimeoutMs} de 1 s mesmo com a aplicação parada 1,5 s no
+     * meio dele — o prazo mede o silêncio do servidor, e não a duração — e
+     * {@code isValid(1)} responde {@code true} dentro do próprio prazo.
+     *
+     * <p>Os unitários provam o estouro contra um dublê mudo; este prova que o
+     * prazo ligado não mata o que o servidor de verdade entrega.
+     */
+    @Test
+    void clientTimeoutsDoNotCutTheRealServerStream() throws Exception {
+        long expected = Long.parseLong(System.getenv("NISHIDB_IT_LINHAS")) + 2;
+        Properties p = new Properties();
+        p.setProperty("user", IntegracaoObrigatoriaTest.USUARIO);
+        p.setProperty("password", IntegracaoObrigatoriaTest.SENHA);
+        p.setProperty("socketTimeoutMs", "1000");
+        try (Connection c = DriverManager.getConnection(IntegracaoObrigatoriaTest.URL, p);
+                Statement st = c.createStatement()) {
+            assertEquals(1000, c.getNetworkTimeout());
+            assertTrue(c.isValid(1), "isValid(1) contra o servidor real respondeu false");
+            st.setMaxRows(0);
+            long rows = 0;
+            long start = System.nanoTime();
+            try (ResultSet rs = st.executeQuery("SELECT id, inteiro FROM todos_os_tipos")) {
+                while (rs.next()) {
+                    rows++;
+                    if (rows == 1) {
+                        Thread.sleep(1_500);
+                    }
+                }
+            }
+            long ms = (System.nanoTime() - start) / 1_000_000;
+            assertEquals(expected, rows, "o prazo de rede cortou o stream do servidor real");
+            assertTrue(ms > 1_000, "o stream levou " + ms + " ms: não passou do prazo, e o teste não prova nada");
+            assertFalse(c.isClosed());
+        }
+    }
 }

@@ -275,6 +275,13 @@ public final class LeitorNdjson implements AutoCloseable {
             entradaIni = 0;
             entradaFim = Math.max(n, 0);
             return n > 0;
+        } catch (ResponseTimeoutException e) {
+            // O prazo da requisição estourou no meio do corpo: a exceção é a
+            // que a política do prazo montou (SQLTimeoutException do
+            // queryTimeout, ou a conexão fechada do prazo de rede), e não a
+            // queda de conexão genérica abaixo.
+            acabou = true;
+            throw e.failure();
         } catch (IOException e) {
             acabou = true;
             throw transporte("lendo a resposta: " + e.getMessage());

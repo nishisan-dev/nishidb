@@ -114,7 +114,7 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
     }
 
     private String versaoDoProcesso() throws SQLException {
-        JsonValue stats = conexao.transporte().documento("/v1/stats");
+        JsonValue stats = conexao.transporte().documento("/v1/stats", conexao.networkTimeout());
         JsonValue processo = stats.campo("process");
         return processo == null ? "" : processo.textoOu("version", "");
     }
@@ -1542,7 +1542,9 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
      * o {@code _meta}, que é o que o servidor abre para ela.
      */
     private List<JsonValue> datasets() throws SQLException {
-        return conexao.transporte().documento(NishiConnection.metadataPath(conexao.schema())).itensDe("datasets");
+        return conexao.transporte()
+                .documento(NishiConnection.metadataPath(conexao.schema()), conexao.networkTimeout())
+                .itensDe("datasets");
     }
 
     private ResultSet resultado(List<Molduras.Coluna> colunas, List<Object[]> linhas) {

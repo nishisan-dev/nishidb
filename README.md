@@ -2481,6 +2481,48 @@ IntelliJ funcionarem:
 jdbc:nishidb://db01:9142/telecom?tls=true&tlsCaFile=/etc/nishidb/ca.pem
 ```
 
+As propriedades vão na query string da URL ou nas `Properties` da conexão, e
+as `Properties` vencem. Valor inválido numa propriedade do driver é recusado
+na abertura, nunca lido como default:
+
+| Propriedade | Default | O que é |
+|---|---|---|
+| `user` | — | usuário do Basic; sem ele, a conexão vai sem credencial |
+| `password` | — | senha do Basic; **só nas `Properties`**, nunca na URL |
+| `tls` | `false` | `true` para falar HTTPS |
+| `tlsCaFile` | — | PEM com a CA do servidor; exige `tls=true` |
+| `connectTimeoutMs` | `10000` | prazo do **handshake**; não limita a consulta |
+| `socketTimeoutMs` | `0` (sem prazo) | prazo de **espera pelo servidor** em cada requisição; estourado, fecha a conexão |
+
+**Prazos de espera do cliente (issue #91).** Um servidor que aceita a
+requisição e não responde — processo parado, conexão meio-aberta, firewall
+que descarta pacote em silêncio — não prende mais a thread do cliente sem
+limite. O prazo mede o **silêncio** do servidor: a espera pelos cabeçalhos e
+cada espera por bytes do corpo. Não mede a duração: uma consulta que continua
+mandando linhas nunca estoura, e o tempo que a aplicação gasta processando
+linhas não conta. Do mais específico para o mais geral — o específico
+substitui o geral naquela requisição, seja maior ou menor:
+
+- **`isValid(s)`** volta em `s` segundos (o prazo é da requisição inteira ao
+  `/v1/health`) e o estouro é `false`, nunca exceção — é o que o HikariCP usa
+  para validar a conexão. `isValid(0)` usa o prazo de rede.
+- **`Statement.setQueryTimeout(s)`** continua indo ao servidor como
+  `timeoutMs`, que cancela a consulta e responde `TIMEOUT`. O cliente espera
+  esse prazo **mais 5 s de folga**, para a resposta do servidor chegar
+  primeiro; esgotada a folga, lança `SQLTimeoutException` com o mesmo SQLSTATE
+  `57014` do timeout do servidor, e a conexão **continua utilizável**.
+- **O prazo de rede** — `socketTimeoutMs`, ajustável depois por
+  `Connection.setNetworkTimeout` — vale para toda requisição sem prazo
+  próprio: metadata, catálogo e consulta sem `queryTimeout`. Estourado, a
+  conexão é **fechada**, como manda o contrato do `setNetworkTimeout`, com
+  `SQLRecoverableException` `08006`: abra outra e repita.
+
+`Connection.abort(executor)` derruba a conexão sem esperar o servidor: a
+requisição presa em outra thread sai com `SQLException` de conexão fechada. O
+default de `socketTimeoutMs` é zero de propósito — quem não pediu prazo não
+ganha um —, então ligá-lo é decisão de quem conhece a consulta mais longa que
+a aplicação faz sem `queryTimeout`.
+
 **A URL nomeia o schema da conexão** — o `schemaName` que um dataset declara —,
 e não o dataset. A árvore mostra só esse schema e o `_meta`, e o servidor
 resolve o `FROM` no MESMO escopo: `FROM radius_sessions` é a tabela do schema
