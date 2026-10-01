@@ -2888,9 +2888,19 @@ divergir da primeira. As colunas geradas pelas métricas de janela do contador
 mesmo schema da tabela, e o laço lê os valores pela MESMA fonte que a tabela de
 consulta recebeu — o que o `when` enxerga é o que o SELECT devolve.
 
-**O evento anuncia o par que decidiu.** O `total` e o `rows` do evento são
-lidos do payload que a condição avaliou, e não da leitura da varredura
-(`TestEventTotalAndRowsAreReadFromTheDecidingPayload`).
+**A única forma a mais: comparação linear entre colunas.** O `when` e o
+`qualifyWhen` aceitam `<col> [* k] <op> <col> [* k]` (`total * 10 <= rows`),
+que o `WHERE` do SQL, o `where`/`scope` do contador e o `when` do TTL recusam.
+É uma opção explícita do parse e do bind (`parser.ConditionOptions`,
+`binder.ConditionOptions`) que só `predicate.CompileAlarmCondition` liga, e um
+nó próprio da AST (`ColumnComparison`), para que quem não o conhece caia no
+`default` que falha alto. Só colunas `int64`; a conta é em 128 bits com sinal
+(`math/bits` sobre o módulo, sinal reaplicado), sem float e sem estouro
+(`TestLinearColumnComparisonIsExactBeyondInt64`), e sem alocação por avaliação
+(`TestLinearColumnComparisonDoesNotAllocate`). O par `total`/`rows` que ela
+compara é consistente porque o contador o guarda numa palavra só; e o evento
+anuncia `total` e `rows` lidos do payload que decidiu, e não da leitura da
+varredura (`TestEventTotalAndRowsAreReadFromTheDecidingPayload`).
 
 **Elegibilidade é um terceiro fato, e não parte da condição.** O `qualifyWhen`
 é opcional, fala a mesma linguagem do `when`, compila contra o MESMO schema e

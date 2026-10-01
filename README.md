@@ -1877,6 +1877,31 @@ medidas de taxa (`stop_rate`) e as geradas pelas métricas de janela do contador
 (`auth_5m_avg`, ver acima). O `qualifyWhen` aceita essas mesmas colunas. Um
 nome de coluna errado **derruba a subida**, com a coluna nomeada.
 
+Além do `WHERE`, o `when` e o `qualifyWhen` aceitam uma forma que o SQL não
+tem: a **comparação linear inteira entre duas colunas da mesma linha**,
+`<coluna> [* k] <op> <coluna> [* k]`, com `k` inteiro positivo à direita da
+coluna — é como se escreve uma proporção sem divisão:
+
+```yaml
+    alarms:
+      - name: spl1_auth_drop
+        when: "total * 10 <= rows"    # no máximo 10% dos membros autenticados
+        qualifyWhen: "rows >= 6"      # só grupos com ao menos seis membros
+        sustainedFor: 2m
+```
+
+Ela combina com `AND`/`OR`/parênteses e com os termos de sempre. A conta é
+exata, em inteiro de 128 bits com sinal: nem arredondamento de ponto
+flutuante, nem estouro (`total * 4611686018427387904 <= rows` decide certo).
+Coluna NULL torna o termo falso para qualquer operador. Só colunas `int64`
+entram — `total`, `rows`, colunas `int64` do `groupBy` e `min`/`max` de janela
+sobre `total`; uma coluna `double` (a média, ou qualquer coluna de taxa) ou
+`string` é recusada na subida nomeando a coluna e o tipo. Também são recusados,
+cada um com a sua mensagem: `k * coluna` (o multiplicador vai à direita),
+multiplicador zero, negativo ou fracionário, e multiplicador contra literal
+(`total * 10 <= 100` — escreva `total <= 10`). O `WHERE` do SQL, o `where` e o
+`scope` do contador e o `when` do TTL continuam recusando coluna à direita do
+comparador.
 
 `sustainedFor` é o que separa alarme de rajada: mínimo de 10 s, e `never` é
 recusado (um alarme que nunca dispara não é um alarme). A varredura roda a cada

@@ -189,10 +189,12 @@ func checkAlarmStateText(path, text string) error {
 
 // compileAlarm compila um alarme contra o schema da tabela do contador.
 //
-// O `qualifyWhen` passa pelo MESMO CompileCondition e contra o MESMO schema do
-// `when`: `auth_24h_max > 10` na qualificação significa exatamente o que
-// significaria num WHERE sobre `_counters.<nome>`, NULL comparando falso
-// incluído.
+// O `qualifyWhen` passa pelo MESMO CompileAlarmCondition e contra o MESMO
+// schema do `when`: `auth_24h_max > 10` na qualificação significa exatamente o
+// que significaria num WHERE sobre `_counters.<nome>`, NULL comparando falso
+// incluído. As duas aceitam, além do WHERE, a comparação linear entre duas
+// colunas int64 da linha (`total * 10 <= rows`), em inteiro exato — a única
+// forma que o alarme tem e o SQL não.
 func compileAlarm(label string, as schema.AlarmSpec, def counter.Definition, metrics []schema.CounterMetricSpec,
 	sc *schema.Compiled) (compiledAlarm, error) {
 	a := compiledAlarm{name: as.Name, when: as.When, qualifyWhen: as.QualifyWhen, sustainedFor: as.SustainedFor}
@@ -202,7 +204,7 @@ func compileAlarm(label string, as schema.AlarmSpec, def counter.Definition, met
 	if err := checkAlarmStateText(label+".qualifyWhen", as.QualifyWhen); err != nil {
 		return a, err
 	}
-	prog, slots, err := predicate.CompileCondition(label+".when", as.When, sc)
+	prog, slots, err := predicate.CompileAlarmCondition(label+".when", as.When, sc)
 	if err != nil {
 		return a, err
 	}
@@ -210,7 +212,7 @@ func compileAlarm(label string, as schema.AlarmSpec, def counter.Definition, met
 	a.newEvaluator = func() counter.Evaluator { return predicate.NewAvaliadorOfPayload(prog, ids) }
 	cited := ids
 	if as.QualifyWhen != "" {
-		qualifyProg, qualifySlots, err := predicate.CompileCondition(label+".qualifyWhen", as.QualifyWhen, sc)
+		qualifyProg, qualifySlots, err := predicate.CompileAlarmCondition(label+".qualifyWhen", as.QualifyWhen, sc)
 		if err != nil {
 			return a, err
 		}

@@ -25,10 +25,16 @@ type BoundCondition struct {
 // Parâmetro posicional é recusado: a condição vem do YAML e não há quem o
 // forneça.
 func BindCondition(e parser.Expr, sc *schema.Compiled) (*BoundCondition, error) {
+	return bindCondition(e, sc, ConditionOptions{})
+}
+
+// bindCondition é o corpo comum de BindCondition e BindConditionWith.
+func bindCondition(e parser.Expr, sc *schema.Compiled, opts ConditionOptions) (*BoundCondition, error) {
 	if e == nil || sc == nil {
 		return nil, errInPos("bind de condição sem expressão ou schema")
 	}
-	b := &binder{sc: sc, refusesParams: true, referenced: map[types.FieldID]struct{}{}}
+	b := &binder{sc: sc, refusesParams: true, referenced: map[types.FieldID]struct{}{},
+		allowsColumnComparison: opts.AllowsLinearColumnComparison}
 	expr, err := b.expr(e)
 	if err != nil {
 		return nil, err
