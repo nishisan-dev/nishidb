@@ -1077,3 +1077,14 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | falha de fsync do dicionário (deixa o writer falho) | ErrDictSync | internal/storage/counter |
 | dreno do overlay | drained / drainAvg | internal/storage/counter |
 | limiar de troca do overlay (com histerese contra a média dos drenos) | OverlayShrinkThreshold | internal/storage/counter |
+
+## Emissão de série alinhada e contrapressão no envio a Kafka
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| fronteira (instante UTC múltiplo de `every`, alinhado à época Unix; é o `at` da passada) | FloorBoundary / nextBoundary / `at` | internal/series |
+| fronteira pulada (fronteira que uma passada atrasada não emitiu) | SkippedBoundaries / `nishidb_series_skipped_boundaries_total` / `series.boundaries_skipped` | internal/series, internal/metrics |
+| duração da passada | LastPassDuration / `nishidb_series_pass_seconds` | internal/series, internal/metrics |
+| temporizador do laço (exclusivo de teste) | Options.After | internal/series |
+| espera de admissão (contrapressão: o envio espera vaga em vez de descartar) | AdmissionWaitSeconds / `admissionWaitSeconds` / `nishidb_series_kafka_admission_wait_seconds_total` | internal/seriesdelivery, internal/protocol, internal/metrics |
+| folga do kgo (limite do cliente acima do local, para a contabilidade local valer) | kgoBufferSlack | internal/seriesdelivery |
