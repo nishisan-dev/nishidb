@@ -31,7 +31,7 @@ const (
 	MaxRecords = 10_000
 	MaxBytes   = 16 << 20
 	// Match franz-go's batch limit, including space for Kafka framing.
-	maxRecordBytes = 1_000_012 - 128
+	maxRecordBytes = kafka.MaxProducedRecordBytes
 )
 
 // kgoBufferSlack multiplica os limites locais para formar os do kgo.

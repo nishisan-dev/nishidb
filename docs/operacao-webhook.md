@@ -2,7 +2,9 @@
 
 O webhook publica `alarm.firing` e `alarm.resolved` com os mesmos campos de
 negócio do log. `notify` escolhe destinos nomeados por alarme; sem essa chave,
-o alarme continua saindo apenas no log. Kafka não é um destino nesta versão.
+o alarme continua saindo apenas no log. Para publicar os mesmos eventos num
+tópico Kafka, com a mesma fila durável e o mesmo corpo, veja
+[entrega de alarmes para Kafka](operacao-alarmes-kafka.md).
 
 As condições, o prazo e a escolha do valor publicado estão na
 [referência de alarmes](../README.md#alarme-por-condição-sustentada), incluindo
@@ -34,7 +36,9 @@ alarms:
     notify: [noc]
 ```
 
-Nomes de destino aceitam `[a-z0-9_]+`, até 64 caracteres. Uma lista em `notify`
+Nomes de destino aceitam `[a-z0-9_]+`, até 64 caracteres, e são compartilhados
+com os [destinos Kafka](operacao-alarmes-kafka.md): o mesmo nome nos dois
+blocos é recusado na subida. Uma lista em `notify`
 pode selecionar vários destinos; cada entrega progride independentemente.
 A URL aceita HTTP ou HTTPS, sem usuário/senha embutidos nem fragmento. HTTPS
 usa a validação TLS padrão. Redirecionamentos não são seguidos.
@@ -214,9 +218,10 @@ aparece mais na view está resolvido.
 
 ## Diagnóstico
 
-`/v1/stats` acrescenta `datasets[].alarmDelivery`, uma lista por destino. Os
+`/v1/stats` acrescenta `datasets[].alarmDelivery`, uma lista por destino, com
+`kind` igual a `webhook` ou `kafka` (ausente na fila pausada). Os
 campos vêm da mesma estrutura que alimenta as séries de
-[entrega de alarmes](metricas.md#entrega-de-alarmes-por-webhook). Gauges refletem
+[entrega de alarmes](metricas.md#entrega-de-alarmes). Gauges refletem
 a recuperação; contadores acumulam desde a subida. A idade considera o evento
 durável mais antigo, a partir do seu `at`.
 
@@ -229,7 +234,7 @@ saudável. Estados possíveis no JSON: `ready`, `running`, `paused`, `failed`,
 `closed`. As séries numéricas existem desde a abertura, inclusive com zero.
 
 Logs operacionais: `alarm.delivery.retry` informa o status HTTP (zero para
-falhas de transporte), `alarm.delivery.failed` informa falha local,
+falhas de transporte; num destino Kafka, a classe da falha), `alarm.delivery.failed` informa falha local,
 `alarm.delivery.paused` informa destino removido e `alarm.delivery.dropped`
 resume descartes acumulados. O resumo é emitido pelo gravador a cada cinco
 segundos quando houver mudança e também no encerramento; a varredura não

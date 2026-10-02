@@ -2043,14 +2043,17 @@ problema. O `reason` distingue **`condition_cleared`**
 equipamento removido do inventário não é um equipamento recuperado.
 
 Cada emissão também carrega `eventId`, compartilhado pelo log e pelos destinos
-HTTP. Para receber os eventos por webhook, declare um destino em
-`alarmDelivery.webhooks` no arquivo global e `notify: [nome_do_destino]` no
-alarme. A entrega usa fila durável por dataset/destino, retenta até HTTP 2xx e
+de entrega. Para receber os eventos por webhook ou num tópico Kafka, declare um
+destino em `alarmDelivery.webhooks` ou `alarmDelivery.kafka` no arquivo global
+e `notify: [nome_do_destino]` no alarme. A entrega usa fila durável por
+dataset/destino, retenta até a confirmação (HTTP 2xx ou o ack do Kafka) e
 preserva o corpo e o identificador nas retentativas. O receptor deduplica pelo
 `eventId`. Eventos ainda em memória podem ser perdidos em uma queda. Com o
 buffer de memória cheio, a varredura espera a gravação em disco; com o limite
 de disco atingido, novos eventos são descartados com métrica. Veja [configuração, limites e
-recuperação dos webhooks](docs/operacao-webhook.md).
+recuperação dos webhooks](docs/operacao-webhook.md) e a
+[entrega de alarmes para Kafka](docs/operacao-alarmes-kafka.md) (chave
+`[dataset, counter, groupKey]`, cabeçalhos `eventId` e `event`).
 
 O cronômetro **sobrevive ao reinício**: o "desde quando" é gravado em
 `checkpoint/alarms.state`, e um alarme restaurado dispara com `"restored":true` e
@@ -2160,9 +2163,10 @@ Para qualificar pelo histórico da taxa, adicione uma métrica com
 essa comparação é falsa e o grupo ainda não se qualifica. Uma medida também
 pode ser citada diretamente em `qualifyWhen`.
 
-Sem `notify`, os eventos saem no log. Para recebê-los por HTTP, acrescente
-`notify: [noc]` ao alarme depois de configurar o destino no
-[guia de webhooks](docs/operacao-webhook.md). `emit.target` controla a emissão
+Sem `notify`, os eventos saem no log. Para recebê-los por HTTP ou Kafka,
+acrescente `notify: [noc]` ao alarme depois de configurar o destino no
+[guia de webhooks](docs/operacao-webhook.md) ou na
+[entrega para Kafka](docs/operacao-alarmes-kafka.md). `emit.target` controla a emissão
 periódica dos valores do contador; os destinos dos eventos de alarme são
 selecionados por `notify`.
 

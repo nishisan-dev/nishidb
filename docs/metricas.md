@@ -371,9 +371,11 @@ Números medidos de desempenho não moram aqui — eles ficam nos `aceite-*.md`,
 com a bancada que os produziu.
 
 
-### Entrega de alarmes por webhook
+### Entrega de alarmes
 
-Rótulos `dataset` e `destination`; `dropped_total` acrescenta `reason`, de um
+As séries valem para os dois tipos de destino, [webhook](operacao-webhook.md)
+e [Kafka](operacao-alarmes-kafka.md), com os mesmos nomes: o tipo não é
+rótulo (ele sai como `kind` no `/v1/stats`). Rótulos `dataset` e `destination`; `dropped_total` acrescenta `reason`, de um
 conjunto fechado. As séries existem desde a abertura da fila e vêm da mesma
 estrutura de `datasets[].alarmDelivery` em `/v1/stats`. Contadores reiniciam
 com o processo; gauges de disco são recuperadas dos arquivos. Motivos de
@@ -391,8 +393,8 @@ persistência não têm contagem exata recuperável.
 | `nishidb_alarm_delivery_disk_events` | gauge | eventos duráveis ainda sem remoção confirmada |
 | `nishidb_alarm_delivery_disk_bytes` | gauge | bytes dos arquivos publicados, incluindo cabeçalhos |
 | `nishidb_alarm_delivery_oldest_pending_seconds` | gauge | idade do evento durável mais antigo |
-| `nishidb_alarm_delivery_delivered_total` | counter | entregas HTTP 2xx com remoção durável confirmada |
-| `nishidb_alarm_delivery_failed_attempts_total` | counter | tentativas HTTP malsucedidas |
+| `nishidb_alarm_delivery_delivered_total` | counter | entregas confirmadas (HTTP 2xx ou ack do Kafka) com remoção durável |
+| `nishidb_alarm_delivery_failed_attempts_total` | counter | tentativas de entrega malsucedidas (webhook ou Kafka) |
 | `nishidb_alarm_delivery_persistence_errors_total` | counter | erros locais que suspendem a fila |
 | `nishidb_alarm_delivery_dropped_total` | counter | novos eventos descartados, por motivo |
 | `nishidb_alarm_delivery_last_success_timestamp` | gauge | último sucesso confirmado, em segundos do epoch; zero antes do primeiro |

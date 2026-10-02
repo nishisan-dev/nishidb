@@ -40,20 +40,24 @@ func eventually(t *testing.T, condition func() bool) {
 	}
 	t.Fatal("a condição não se confirmou dentro do prazo")
 }
-func testQueue(t *testing.T, dir string, target *endpoint) *queue {
+
+// testQueue abre a fila com o backoff encurtado; target nil é a fila pausada.
+func testQueue(t *testing.T, dir string, target transport) *queue {
 	t.Helper()
 	q, err := openQueue(dir, "noc", 256<<20, target, logging.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
+	q.initialDelay = time.Millisecond
+	q.maxDelay = 5 * time.Millisecond
 	t.Cleanup(func() { _ = q.close() })
 	return q
 }
-func fastEndpoint(url string) *endpoint {
-	e := newEndpoint(url, "", time.Second)
-	e.initialDelay = time.Millisecond
-	e.maxDelay = 5 * time.Millisecond
-	return e
+
+// fastEndpoint é o webhook dos testes. O nome ficou de quando o backoff curto
+// morava no endpoint; hoje ele vem de testQueue.
+func fastEndpoint(url string) *httpTransport {
+	return newHTTPTransport(url, "", time.Second)
 }
 
 // O bloqueio é no passo real de gravação: nenhum POST pode ultrapassá-lo.
@@ -376,8 +380,8 @@ func TestPostAuthenticationRedirectAndRetryAfter(t *testing.T) {
 	endpoint := fastEndpoint(receiver.URL)
 	endpoint.token = "secret"
 	q := testQueue(t, filepath.Join(t.TempDir(), "noc"), endpoint)
-	ok, status, _ := q.post(context.Background(), eventBody(t, "id"), "id")
-	if ok || status != 307 || reached.Load() {
+	result := q.transport.send(context.Background(), eventBody(t, "id"), eventIdentity{ID: "id"})
+	if result.ok || len(result.diagnostic) != 2 || result.diagnostic[1] != 307 || reached.Load() {
 		t.Fatal("redirect foi seguido ou aceito")
 	}
 	now := time.Now().UTC().Truncate(time.Second)
@@ -450,5 +454,45 @@ func TestCancelledSenderIsNoLongerReportedActive(t *testing.T) {
 	}
 	if q.snapshot().State != "ready" {
 		t.Fatal("remetente parado continua anunciado ativo")
+	}
+}
+
+// closeCounter é um transporte que só conta quantas vezes foi fechado.
+type closeCounter struct{ closes atomic.Int64 }
+
+func (*closeCounter) kind() string         { return kindWebhook }
+func (*closeCounter) reject([]byte) string { return "" }
+func (c *closeCounter) close()             { c.closes.Add(1) }
+func (*closeCounter) send(context.Context, []byte, eventIdentity) attempt {
+	return attempt{}
+}
+
+// openQueue assume o transporte: fecha-o uma vez no close da fila e, se a
+// abertura falhar, ali mesmo — senão o cliente do destino vazaria.
+func TestOpenQueueOwnsTheTransportEvenWhenOpeningFails(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	failed := &closeCounter{}
+	if _, err := openQueue(filepath.Join(blocker, "noc"), "noc", 256<<20, failed, logging.Discard()); !errors.Is(err, ErrQueue) {
+		t.Fatalf("abertura sobre um arquivo não falhou: %v", err)
+	}
+	if n := failed.closes.Load(); n != 1 {
+		t.Fatalf("abertura falha fechou o transporte %d vezes, esperado 1", n)
+	}
+	opened := &closeCounter{}
+	q, err := openQueue(filepath.Join(t.TempDir(), "noc"), "noc", 256<<20, opened, logging.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := opened.closes.Load(); n != 0 {
+		t.Fatalf("abertura bem-sucedida fechou o transporte %d vezes", n)
+	}
+	if err := q.close(); err != nil {
+		t.Fatal(err)
+	}
+	if n := opened.closes.Load(); n != 1 {
+		t.Fatalf("close da fila fechou o transporte %d vezes, esperado 1", n)
 	}
 }

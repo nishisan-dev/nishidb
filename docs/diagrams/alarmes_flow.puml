@@ -160,16 +160,24 @@ partition "Saída" {
     de cada destino, em série, sem I/O de entrega;
     note right
       Buffer de memória cheio: ESPERA o
-      gravador liberar vaga (nunca o HTTP);
+      gravador liberar vaga (nunca a entrega);
       o tempo vai para admission_wait.
-      Disco reservado cheio: descarta o
-      novo e conta o motivo, sem esperar.
+      Disco reservado cheio, ou registro acima
+      do teto do Kafka: descarta o novo e
+      conta o motivo, sem esperar.
       Gravador independente publica arquivo
       (temp -> fsync -> rename -> dirsync).
-      Só então remetente faz POST.
-      HTTP 2xx -> remove arquivo -> dirsync.
+      Só então o remetente tenta, pelo
+      transporte do destino:
+      webhook: POST; confirma com HTTP 2xx.
+      kafka: produz 1 registro (acks=all),
+      chave [dataset, counter, groupKey],
+      cabeçalhos eventId e event;
+      confirma com o ack.
+      Confirmado -> remove arquivo -> dirsync.
       Outros resultados -> retenta em FIFO.
-      Crash após 2xx pode repetir eventId.
+      Crash após a confirmação, ou timeout
+      ambíguo no Kafka, pode repetir eventId.
     end note
   endif
   if (houve transição?) then (sim)
