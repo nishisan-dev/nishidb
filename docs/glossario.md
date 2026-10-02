@@ -1088,3 +1088,17 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | temporizador do laço (exclusivo de teste) | Options.After | internal/series |
 | espera de admissão (contrapressão: o envio espera vaga em vez de descartar) | AdmissionWaitSeconds / `admissionWaitSeconds` / `nishidb_series_kafka_admission_wait_seconds_total` | internal/seriesdelivery, internal/protocol, internal/metrics |
 | folga do kgo (limite do cliente acima do local, para a contabilidade local valer) | kgoBufferSlack | internal/seriesdelivery |
+
+## Entrega de alarmes para Kafka
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| destino Kafka de alarmes | `alarmDelivery.kafka` / AlarmKafkaSpec | internal/config |
+| conexão Kafka de produção (validação comum à série e aos alarmes) | kafkaTarget | internal/config |
+| transporte de entrega (o que a fila usa para tentar: HTTP ou Kafka) | transport / httpTransport / kafkaTransport | internal/alarmdelivery |
+| tentativa de entrega | attempt | internal/alarmdelivery |
+| classe de falha (conjunto fechado no diagnóstico da retentativa Kafka) | `class` / kafkaErrorClass | internal/alarmdelivery |
+| tipo do destino | `kind` (`webhook` / `kafka`) | internal/protocol |
+| chave Kafka do alarme (`[dataset, counter, groupKey]`) | kafkaKey | internal/alarmdelivery |
+| teto do registro produzido | MaxProducedRecordBytes | internal/kafka |
+| timeout ambíguo (o broker pode ter gravado; a nova tentativa duplica com o mesmo `eventId`) | — | internal/alarmdelivery |
