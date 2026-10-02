@@ -17,7 +17,7 @@ func samplesOfAlarmDelivery(dataset string, s alarmdelivery.Stats) []metrics.Sam
 	add(metrics.MetAlarmDeliveryDiskBytes, "bytes dos arquivos pendentes em disco", metrics.TypeGauge, float64(s.DiskBytes))
 	add(metrics.MetAlarmDeliveryOldestPendingSeconds, "idade do evento durável mais antigo, em segundos", metrics.TypeGauge, s.OldestPendingSeconds)
 	add(metrics.MetAlarmDeliveryDeliveredTotal, "entregas confirmadas com remoção durável desde a subida", metrics.TypeCounter, float64(s.Delivered))
-	add(metrics.MetAlarmDeliveryFailedAttemptsTotal, "tentativas HTTP malsucedidas desde a subida", metrics.TypeCounter, float64(s.FailedAttempts))
+	add(metrics.MetAlarmDeliveryFailedAttemptsTotal, "tentativas de entrega malsucedidas (webhook ou Kafka) desde a subida", metrics.TypeCounter, float64(s.FailedAttempts))
 	add(metrics.MetAlarmDeliveryPersistenceErrorsTotal, "falhas de persistência desde a subida", metrics.TypeCounter, float64(s.PersistenceErrors))
 	add(metrics.MetAlarmDeliveryLastSuccessTimestamp, "última entrega confirmada, em segundos do epoch", metrics.TypeGauge, s.LastSuccessTimestamp)
 	add(metrics.MetAlarmDeliveryAdmissionWaitSecondsTotal, "tempo acumulado de espera da varredura por vaga em memória desde a subida, em segundos", metrics.TypeCounter, s.AdmissionWaitSeconds)

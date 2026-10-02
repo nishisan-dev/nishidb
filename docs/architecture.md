@@ -3247,8 +3247,38 @@ quarenta segundos" é informação que só existe antes do disparo.
 quando ele não foi declarado: `WHERE qualifyCondition IS NULL` separa os dois
 tipos de alarme (`TestQualifyConditionColumnIsNullWhenNotDeclared`).
 
-**O que NÃO existe aqui.** O canal é o log estruturado; tópico e webhook entram
-como outro `Sink` sobre o MESMO evento, e o ponto de extensão está pronto. A
+**Entrega de alarmes: uma fila, dois transportes.** Além do log, o evento sai
+pelo `alarmdelivery.Manager`, outro `Sink` sobre o MESMO evento, para os
+destinos nomeados no `notify:`. Cada dataset × destino tem UMA fila durável
+(arquivo por evento, publicado com fsync antes de qualquer tentativa, FIFO,
+backoff com jitter, a mesma identidade em toda tentativa), e o destino é só o
+transporte do remetente: um POST por tentativa no webhook, uma produção
+síncrona de um registro no Kafka. A fila é do NOME, e não do tipo: o corpo
+gravado é o mesmo, então trocar um webhook por um destino Kafka de mesmo nome
+entrega ao tópico o que estava pendente
+(`TestDestinationSwitchedFromWebhookToKafkaDeliversThePendingEvent`).
+
+O transporte Kafka reaproveita a configuração fixa do produtor da série, e
+pelo mesmo motivo de fundo: a retentativa é da fila, então o kgo não retenta,
+não é idempotente e não tem `RecordDeliveryTimeout`. Sem a idempotência
+desligada, o kgo não cancelaria a produção em voo, e o Close esperaria o broker
+(`TestKafkaCloseDoesNotWaitForTheBroker`). O Timestamp do registro fica para o
+kgo carimbar na produção: com o `at` do evento, um evento que esperou a queda
+na fila sairia com horário antigo (`TestOldQueuedEventIsDeliveredAndStampedAtProduction`).
+A chave é `[dataset, counter, groupKey]`, montada do PRÓPRIO corpo no envio, e
+não a chave tipada da série: a fila guarda só o corpo, onde as colunas do grupo
+são texto, e o formato do registro em disco não mudou
+(`TestKafkaKeyIsTheCompactArrayOfDatasetCounterAndGroupKey`). O teto do
+registro do kgo é conferido na ADMISSÃO, por transporte, porque um registro
+que o kgo recusasse em toda tentativa prenderia a fila FIFO para sempre
+(`TestEventTooLargeForKafkaIsDroppedAtAdmissionAndDoesNotBlockTheNext`). Há um
+cliente kgo por fila, criado no Open e fechado com ela, como o `http.Client` do
+webhook. Duplicata no timeout ambíguo é aceita e documentada: o consumidor
+deduplica pelo `eventId`
+(`TestAmbiguousKafkaTimeoutLeavesTwoCopiesWithTheSameEventID`).
+
+**O que NÃO existe aqui.** A entrega não é transacional: é pelo menos uma vez,
+nos dois transportes. A
 condição fala de UM contador: ela cita as colunas dele, inclusive as geradas
 pelas métricas de janela do próprio contador, mas a razão entre dois
 (autenticados ÷ serviços da mesma OLT) não é expressável — é a issue #61. O

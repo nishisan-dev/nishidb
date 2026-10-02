@@ -30,9 +30,20 @@ func encodeRecord(body []byte) []byte {
 	return b
 }
 
+// eventIdentity é o que o remetente lê do corpo gravado, no MESMO
+// json.Unmarshal que confere o registro. ID e At valem para todo transporte
+// e são exigidos aqui; Event, Dataset, Counter e GroupKey só o Kafka usa (o
+// nome do evento vai num cabeçalho, e a chave do registro é montada com os
+// outros três), e quem os exige é o transporte (kafkaRecord). O formato do
+// registro em disco não muda: tudo isto já está no corpo desde a v1.
 type eventIdentity struct {
-	ID string    `json:"eventId"`
-	At time.Time `json:"at"`
+	ID      string    `json:"eventId"`
+	At      time.Time `json:"at"`
+	Event   string    `json:"event"`
+	Dataset string    `json:"dataset"`
+	Counter string    `json:"counter"`
+	// GroupKey é ponteiro para distinguir o campo ausente do texto vazio.
+	GroupKey *string `json:"groupKey"`
 }
 
 func readRecord(path string) ([]byte, eventIdentity, error) {

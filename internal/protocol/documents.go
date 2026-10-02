@@ -656,9 +656,14 @@ type IngestionStats struct {
 	Paused    string `json:"paused,omitempty"`
 }
 
-// AlarmDeliveryStats descreve uma fila de webhook, sem credenciais nem URL.
+// AlarmDeliveryStats descreve a fila de um destino de alarme (webhook ou
+// Kafka), sem credenciais, URL nem bootstrap.
 type AlarmDeliveryStats struct {
-	Destination          string            `json:"destination"`
+	Destination string `json:"destination"`
+	// Kind é o tipo do destino configurado, `webhook` ou `kafka`. Vazio (e
+	// fora do JSON) no destino pausado, que não está mais no config. Não é
+	// rótulo de métrica: as séries de entrega valem para os dois tipos.
+	Kind                 string            `json:"kind,omitempty"`
 	State                string            `json:"state"`
 	MemoryEvents         int               `json:"memoryEvents"`
 	MemoryBytes          int64             `json:"memoryBytes"`
