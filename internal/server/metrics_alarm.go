@@ -141,59 +141,79 @@ func samplesOfAlarms(dataset string, r *alarm.Runner) []metrics.Sample {
 }
 
 func samplesOfSeries(dataset string, es []*series.Emitter) []metrics.Sample {
-	out := make([]metrics.Sample, 0, len(es)*5+1)
-	emitindo := 0.0
+	out := make([]metrics.Sample, 0, len(es)*7+1)
+	emitting := 0.0
 	for _, e := range es {
 		if e.Active() {
-			emitindo = 1
+			emitting = 1
 		}
 		st := e.Stats()
-		if !st.File {
-			continue
-		}
-		rotulo := []metrics.Label{
+		labels := []metrics.Label{
 			{Name: metrics.LabelDataset, Value: dataset},
 			{Name: metrics.LabelCounter, Value: st.Counter},
+		}
+		// As duas do laço saem para TODO emissor, inclusive o só-Kafka: o
+		// laço e as fronteiras são do emissor, e não do arquivo.
+		out = append(out,
+			metrics.Sample{
+				Family: metrics.MetSeriesSkippedBoundariesTotal,
+				Name:   metrics.MetSeriesSkippedBoundariesTotal,
+				Help:   "boundaries skipped since startup because the loop resumed late",
+				Type:   metrics.TypeCounter,
+				Labels: labels,
+				Value:  float64(st.SkippedBoundaries),
+			},
+			metrics.Sample{
+				Family: metrics.MetSeriesPassSeconds,
+				Name:   metrics.MetSeriesPassSeconds,
+				Help:   "duration of the last completed emission pass, in seconds; zero until the first",
+				Type:   metrics.TypeGauge,
+				Labels: labels,
+				Value:  st.LastPassDuration.Seconds(),
+			},
+		)
+		if !st.File {
+			continue
 		}
 		out = append(out,
 			metrics.Sample{
 				Family: metrics.MetSeriesRowsTotal,
 				Name:   metrics.MetSeriesRowsTotal,
-				Help:   "linhas de série escritas desde a subida",
+				Help:   "series lines written since startup",
 				Type:   metrics.TypeCounter,
-				Labels: rotulo,
+				Labels: labels,
 				Value:  float64(st.Rows),
 			},
 			metrics.Sample{
 				Family: metrics.MetSeriesRotationsTotal,
 				Name:   metrics.MetSeriesRotationsTotal,
-				Help:   "rotações do arquivo de série desde a subida; quanto histórico está sendo descartado",
+				Help:   "series file rotations since startup; how much history is being discarded",
 				Type:   metrics.TypeCounter,
-				Labels: rotulo,
+				Labels: labels,
 				Value:  float64(st.Rotations),
 			},
 			metrics.Sample{
 				Family: metrics.MetSeriesErrorsTotal,
 				Name:   metrics.MetSeriesErrorsTotal,
-				Help:   "falhas de escrita da série; diferente de zero significa série incompleta",
+				Help:   "series write failures; non-zero means an incomplete series",
 				Type:   metrics.TypeCounter,
-				Labels: rotulo,
+				Labels: labels,
 				Value:  float64(st.Errors),
 			},
 			metrics.Sample{
 				Family: metrics.MetSeriesBytes,
 				Name:   metrics.MetSeriesBytes,
-				Help:   "tamanho do arquivo de série corrente, em bytes",
+				Help:   "size of the current series file, in bytes",
 				Type:   metrics.TypeGauge,
-				Labels: rotulo,
+				Labels: labels,
 				Value:  float64(st.Bytes),
 			},
 			metrics.Sample{
 				Family: metrics.MetSeriesLastSuccessTimestamp,
 				Name:   metrics.MetSeriesLastSuccessTimestamp,
-				Help:   "instante da última passada que escreveu sem erro, em segundos do epoch; zero até a primeira",
+				Help:   "last pass that wrote without error, in epoch seconds; zero until the first",
 				Type:   metrics.TypeGauge,
-				Labels: rotulo,
+				Labels: labels,
 				Value:  float64(st.LastSuccessUnixMs) / 1000,
 			},
 		)
@@ -201,9 +221,9 @@ func samplesOfSeries(dataset string, es []*series.Emitter) []metrics.Sample {
 	return append(out, metrics.Sample{
 		Family: metrics.MetSeriesEmitting,
 		Name:   metrics.MetSeriesEmitting,
-		Help:   "1 enquanto algum laço de emissão periódica do dataset está de pé",
+		Help:   "1 while any periodic emission loop of the dataset is running",
 		Type:   metrics.TypeGauge,
 		Labels: []metrics.Label{{Name: metrics.LabelDataset, Value: dataset}},
-		Value:  emitindo,
+		Value:  emitting,
 	})
 }

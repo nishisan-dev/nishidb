@@ -8,7 +8,7 @@ import (
 
 func samplesOfSeriesDelivery(dataset string, s protocol.SeriesDeliveryStats) []metrics.Sample {
 	labels := []metrics.Label{{Name: metrics.LabelDataset, Value: dataset}, {Name: metrics.LabelCounter, Value: s.Counter}, {Name: metrics.LabelDestination, Value: s.Destination}}
-	out := make([]metrics.Sample, 0, 4+len(seriesdelivery.DropReasons()))
+	out := make([]metrics.Sample, 0, 5+len(seriesdelivery.DropReasons()))
 	add := func(name, help string, typ metrics.Type, value float64) {
 		out = append(out, metrics.Sample{Family: name, Name: name, Help: help, Type: typ, Labels: labels, Value: value})
 	}
@@ -16,6 +16,7 @@ func samplesOfSeriesDelivery(dataset string, s protocol.SeriesDeliveryStats) []m
 	add(metrics.MetSeriesKafkaPendingRecords, "counter samples awaiting Kafka completion", metrics.TypeGauge, float64(s.PendingRecords))
 	add(metrics.MetSeriesKafkaPendingBytes, "key and value bytes awaiting Kafka completion", metrics.TypeGauge, float64(s.PendingBytes))
 	add(metrics.MetSeriesKafkaLastSuccessTimestamp, "last Kafka acknowledgement in epoch seconds", metrics.TypeGauge, s.LastSuccessTimestamp)
+	add(metrics.MetSeriesKafkaAdmissionWaitSecondsTotal, "time the counter emission waited for room in the destination since startup, in seconds", metrics.TypeCounter, s.AdmissionWaitSeconds)
 	for _, reason := range seriesdelivery.DropReasons() {
 		out = append(out, metrics.Sample{Family: metrics.MetSeriesKafkaDroppedTotal, Name: metrics.MetSeriesKafkaDroppedTotal, Help: "counter samples discarded or not confirmed by Kafka", Type: metrics.TypeCounter,
 			Labels: []metrics.Label{labels[0], labels[1], labels[2], {Name: metrics.LabelReason, Value: reason}}, Value: float64(s.Dropped[reason])})

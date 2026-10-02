@@ -3141,11 +3141,56 @@ esquema de linha fixo. Sem fonte de métrica as colunas continuam saindo, todas
 pelo mesmo argumento que faz o schema da tabela não depender da fonte.
 
 Os dois laços têm cadências próprias: a emissão usa o `every` declarado e o
-amostrador usa `clamp(menor janela ÷ 60, 1s, 10s)`. O `at` é o instante da
-EMISSÃO, e o agregado ao lado dele é o publicado pela última amostra — de até um
-intervalo antes. A linha não carrega um segundo instante: com o `every` mínimo
-de 10 s e a amostragem no máximo a cada 10 s, o desencontro é de no máximo um
-intervalo, e um campo por linha para exprimi-lo custaria mais do que informa.
+amostrador usa `clamp(menor janela ÷ 60, 1s, 10s)`. O `at` é a FRONTEIRA da
+passada — o slot nominal —, e o agregado ao lado dele é o publicado pela última
+amostra lida durante a passada. A linha não carrega um segundo instante: com o
+`every` mínimo de 10 s e a amostragem no máximo a cada 10 s, o desencontro é de
+no máximo um intervalo (mais o atraso da passada, que aparece em
+`nishidb_series_pass_seconds`), e um campo por linha para exprimi-lo custaria
+mais do que informa.
+
+**A emissão é de taxa fixa alinhada à época Unix.** O consumidor da série
+encaixa cada amostra num slot de `every` sem interpolar, então um período de
+`every + duração da passada` e uma fase que muda a cada reinício deixariam
+slots vazios. O laço (`series.Emitter.run`) carimba cada passada com a
+fronteira em que ela começa — múltipla de `every` no `UnixNano`, e não pelo
+`time.Truncate`, que alinha ao ano 1 e diverge para `every` que não divide o
+dia (`TestFloorBoundaryAlignsToTheUnixEpochNotToYearOne`). Não há passada na
+subida: a primeira é na primeira fronteira `>= agora`
+(`TestLoopFirstPassWaitsForTheFirstBoundaryAndCarriesIt`), porque emitir na
+subida repetiria o slot do processo anterior com valores de outro instante. A
+espera é recalculada pelo relógio de parede a cada despertar, e nada acumula
+`Reset(every)` (`TestLoopKeepsAFixedPeriodWhenThePassIsShorterThanEvery`);
+despertar antecipado volta a dormir (`TestLoopNeverStartsAPassBeforeItsBoundary`).
+Passada que termina depois da fronteira seguinte dispara a próxima já, com a
+fronteira mais recente, e as do meio são PULADAS — contadas em
+`nishidb_series_skipped_boundaries_total` e anunciadas por um WARN por
+ocorrência (`TestLoopSkipsTheBoundariesALatePassOverran`); a mesma política se
+reaplica ao acordar de um sono que passou da conta
+(`TestLoopReappliesThePolicyWhenTheSleepOverruns`). O `at` é estritamente
+crescente mesmo com o relógio voltando
+(`TestLoopAtIsStrictlyIncreasingWhenTheClockGoesBack`). O relógio e o
+temporizador são injetáveis (`Options.Now`, `Options.After`), e nenhum teste do
+laço dorme um `every` de verdade.
+
+**O destino Kafka cheio espera, não descarta.** O `seriesDelivery` é um limite
+de MEMÓRIA por destino (10.000 registros, 16 MiB, contando os em voo até o
+callback), e a admissão no `Publish` espera vaga num `sync.Cond` sobre o lock
+do destino, acordado por `Broadcast` no callback que libera, no fechamento e no
+cancelamento do contexto da passada (`context.AfterFunc`, registrado só no
+caminho de espera: o Publish sem espera aloca o mesmo que antes,
+`TestPublishWithoutWaitKeepsItsMeasuredAllocations`). `Broadcast`, e não
+`Signal`, porque com o limite de bytes o único acordado poderia ser quem não
+cabe (`TestWaitersOnTheSameFullDestinationBothProgress`). O limite do kgo tem
+folga de 2× sobre o local: o kgo chama o callback antes de decrementar a
+própria contagem, e com limites iguais o Publish acordado cairia no
+`ErrMaxBuffered` (`TestKgoLimitsLeaveRoomForThePromiseBeforeItsDecrement`). E
+o prazo de entrega conta da admissão, pelo contexto por registro, e não por
+`kgo.RecordDeliveryTimeout`, que o kgo mede a partir do timestamp do registro —
+o `at`, que já está no passado (`TestRecordStampedWithAPastBoundaryIsStillDelivered`).
+Um destino lento atrasa a passada inteira, inclusive o arquivo do mesmo
+contador; o Stop interrompe a espera, e a passada abortada não conta como falha
+(`TestStopWithAPublishWaitingAbortsThePassSilently`).
 
 Linha maior gira o arquivo mais rápido: com `metrics:` e `emit:` no mesmo
 contador, o mesmo `maxBytes × (keep+1)` guarda MENOS histórico. É o preço
@@ -3163,7 +3208,7 @@ dormindo no timer, e com a ordem invertida cinco rodadas passaram verdes. O
 amostrador das métricas de janela obedece à mesma regra, e para depois dos dois
 laços e antes do `closeDatasets` (ver a seção anterior).
 
-**Observabilidade.** Dez séries para o alarme e seis para a emissão (ver
+**Observabilidade.** Dez séries para o alarme e oito para a emissão (ver
 [`metricas.md`](metricas.md)), todas nascendo com zero. Falha e pulo de
 enriquecimento são séries separadas porque pedem ações opostas, e
 `nishidb_alarm_disqualified_total` é SUBCONJUNTO de

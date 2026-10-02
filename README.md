@@ -2174,7 +2174,9 @@ Declare brokers e tópico em `seriesDelivery.kafka` no `nishidb.yaml` e selecion
 `target: metricas_olt` para somente Kafka (removendo `file`, `maxBytes` e `keep`).
 Cada grupo vira uma mensagem JSON com os nomes das colunas, `dataset` e
 `counter`. O envio é assíncrono e falhas descartam a amostra daquele destino,
-sem reenvio. Sem `target`, permanece a emissão em arquivo.
+sem reenvio. Destino com o buffer cheio não descarta: a passada espera espaço,
+e um destino lento atrasa a passada. Sem `target`, permanece a emissão em
+arquivo.
 
 Para alimentar gráfico por equipamento, o contador pode escrever o valor de
 **cada grupo** num arquivo NDJSON, periodicamente:
@@ -2192,7 +2194,18 @@ counters:
 
 O arquivo fica em `<dataset>/series/<file>` — o diretório é fixo, e `file` é só o
 nome. Uma linha por grupo vivo, a cada intervalo, **inclusive os com total zero**
-(o equipamento que apagou por inteiro é justamente a linha que interessa):
+(o equipamento que apagou por inteiro é justamente a linha que interessa).
+
+As passadas acontecem nas **fronteiras** de `every`: os instantes UTC múltiplos
+de `every` contados a partir da época Unix. Com `every: 30s`, as passadas saem
+em :00 e :30 de cada minuto, qualquer que seja o horário da subida. O `at` da
+linha é a fronteira, e não o relógio do início da passada. Não há passada na
+subida: a primeira acontece na primeira fronteira igual ou posterior à subida. Uma passada que termina
+depois da fronteira seguinte faz a próxima começar logo em seguida, e as
+fronteiras intermediárias são puladas. Os detalhes estão em
+[cadência da emissão](docs/operacao-series-kafka.md#cadência-passadas-nas-fronteiras-de-every).
+
+Duas linhas de uma passada:
 
 ```json
 {"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"rows":812,"at":"2026-09-12T03:30:00.000Z"}
@@ -2225,8 +2238,9 @@ declarada — as MESMAS colunas, com os mesmos valores, que um
 A chave sai **sempre**, e `null` é o grupo que a janela ainda não viu — nunca
 zero, que é um valor legítimo do contador. O agregado é o publicado pela última
 passada do amostrador, que tem cadência própria (a menor janela ÷ 60, entre 1 s
-e 10 s): o `at` é o instante da **emissão**, e o agregado pode ser de até um
-intervalo antes dele.
+e 10 s): o `at` é a fronteira da **emissão**, e o agregado é o publicado pelo
+amostrador quando a linha é montada, lido durante a passada, que pode começar
+depois do `at`.
 
 Duas consequências de dimensionamento. A linha fica maior, então o mesmo
 `maxBytes × (keep+1)` guarda **menos** histórico — quem já dimensionou o disco

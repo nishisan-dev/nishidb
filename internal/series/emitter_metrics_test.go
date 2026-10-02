@@ -1,6 +1,7 @@
 package series
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -49,7 +50,7 @@ func windowMetrics(auth5m, auth24h MetricReader) []Metric {
 	}
 }
 
-// emitterWithMetrics é o emitterDeTeste com métricas de janela ligadas.
+// emitterWithMetrics é o newTestEmitter com métricas de janela ligadas.
 func emitterWithMetrics(t *testing.T, f *fakeCounter, metrics []Metric) (*Emitter, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -85,11 +86,11 @@ func linesOfSeries(t *testing.T, dir string) []string {
 }
 
 func TestEmittedLineCarriesTheWindowMetricColumns(t *testing.T) {
-	f := newFakeCounter(t, grupo{olt: "OLT_A", slot: 1, total: 812, live: true})
+	f := newFakeCounter(t, group{olt: "OLT_A", slot: 1, total: 812, live: true})
 	auth5m := &fakeMetricReader{byGroup: map[uint32]fakeAggregate{1: {samples: 12, avg: 807.5}}}
 	auth24h := &fakeMetricReader{byGroup: map[uint32]fakeAggregate{1: {samples: 300, minimum: 780, maximum: 830}}}
 	e, dir := emitterWithMetrics(t, f, windowMetrics(auth5m, auth24h))
-	if err := e.EmitOnce(); err != nil {
+	if err := e.EmitOnce(context.Background(), t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Flush(); err != nil {
@@ -116,11 +117,11 @@ func TestEmittedLineCarriesTheWindowMetricColumns(t *testing.T) {
 }
 
 func TestTheMetricColumnsFollowTheDeclaredOrder(t *testing.T) {
-	f := newFakeCounter(t, grupo{olt: "OLT_A", slot: 1, total: 812, live: true})
+	f := newFakeCounter(t, group{olt: "OLT_A", slot: 1, total: 812, live: true})
 	auth5m := &fakeMetricReader{byGroup: map[uint32]fakeAggregate{1: {samples: 12, avg: 807.5}}}
 	auth24h := &fakeMetricReader{byGroup: map[uint32]fakeAggregate{1: {samples: 300, minimum: 780, maximum: 830}}}
 	e, dir := emitterWithMetrics(t, f, windowMetrics(auth5m, auth24h))
-	if err := e.EmitOnce(); err != nil {
+	if err := e.EmitOnce(context.Background(), t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Flush(); err != nil {
@@ -139,13 +140,13 @@ func TestAGroupWithNoSampleInTheWindowGetsNull(t *testing.T) {
 	// Dois grupos: o primeiro foi amostrado, o segundo nasceu agora e a janela
 	// ainda não o viu.
 	f := newFakeCounter(t,
-		grupo{olt: "OLT_A", slot: 1, total: 812, live: true},
-		grupo{olt: "OLT_B", slot: 2, total: 5, live: true},
+		group{olt: "OLT_A", slot: 1, total: 812, live: true},
+		group{olt: "OLT_B", slot: 2, total: 5, live: true},
 	)
 	auth5m := &fakeMetricReader{byGroup: map[uint32]fakeAggregate{1: {samples: 12, avg: 807.5}}}
 	auth24h := &fakeMetricReader{byGroup: map[uint32]fakeAggregate{1: {samples: 300, minimum: 780, maximum: 830}}}
 	e, dir := emitterWithMetrics(t, f, windowMetrics(auth5m, auth24h))
-	if err := e.EmitOnce(); err != nil {
+	if err := e.EmitOnce(context.Background(), t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Flush(); err != nil {
@@ -173,9 +174,9 @@ func TestAGroupWithNoSampleInTheWindowGetsNull(t *testing.T) {
 
 func TestWithoutAMetricSourceEveryColumnIsNull(t *testing.T) {
 	// Reader nil é o dataset sem amostrador: as colunas continuam na linha.
-	f := newFakeCounter(t, grupo{olt: "OLT_A", slot: 1, total: 812, live: true})
+	f := newFakeCounter(t, group{olt: "OLT_A", slot: 1, total: 812, live: true})
 	e, dir := emitterWithMetrics(t, f, windowMetrics(nil, nil))
-	if err := e.EmitOnce(); err != nil {
+	if err := e.EmitOnce(context.Background(), t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Flush(); err != nil {
@@ -194,9 +195,9 @@ func TestWithoutAMetricSourceEveryColumnIsNull(t *testing.T) {
 // passa a ver a chave nova. rows (1000) é diferente de total (812) para que uma
 // coluna trocada pela outra não passe.
 func TestACounterWithoutMetricsEmitsTheFixedColumnsWithRows(t *testing.T) {
-	f := newFakeCounter(t, grupo{olt: "OLT_A", slot: 1, total: 812, rows: 1000, live: true})
+	f := newFakeCounter(t, group{olt: "OLT_A", slot: 1, total: 812, rows: 1000, live: true})
 	e, dir := emitterWithMetrics(t, f, nil)
-	if err := e.EmitOnce(); err != nil {
+	if err := e.EmitOnce(context.Background(), t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Flush(); err != nil {
@@ -209,7 +210,7 @@ func TestACounterWithoutMetricsEmitsTheFixedColumnsWithRows(t *testing.T) {
 }
 
 func TestAnUnknownAggregateIsRefusedOnConstruction(t *testing.T) {
-	f := newFakeCounter(t, grupo{olt: "OLT_A", slot: 1, total: 1, live: true})
+	f := newFakeCounter(t, group{olt: "OLT_A", slot: 1, total: 1, live: true})
 	_, err := NewEmitter(Options{
 		Counter:  "autenticados_por_pon",
 		Metrics:  []Metric{{Name: "auth_5m", Aggregates: []string{"p99"}}},

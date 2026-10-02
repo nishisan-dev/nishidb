@@ -85,11 +85,22 @@ type Options struct {
 	Log       *logging.Logger
 	// Now é o relógio. Exclusivo de teste, no molde do UsaRelogio do storage.
 	Now func() time.Time
+	// After é o temporizador do laço. Exclusivo de teste, no molde do Now:
+	// nil é time.After. O laço recalcula a espera pelo relógio de parede a
+	// cada despertar, então o teste conduz o laço inteiro com Now e After
+	// falsos, sem dormir o `every` de verdade.
+	After func(time.Duration) <-chan time.Time
 }
 
-// Output accepts a self-contained Kafka record without waiting for network I/O.
+// Output recebe uma amostra autocontida de um destino assíncrono.
+//
+// Publish não espera a rede, mas PODE esperar vaga no destino (contrapressão):
+// devolve erro só quando ctx foi cancelado antes ou durante a espera, e aí a
+// passada é abortada. Falha do destino não é erro do Publish. Os bytes retidos
+// são copiados antes de ele devolver — o emissor reusa os buffers no grupo
+// seguinte.
 type Output interface {
-	Publish(key, body []byte, at time.Time)
+	Publish(ctx context.Context, key, body []byte, at time.Time) error
 }
 
 // Emitter escreve periodicamente a série de um contador: uma linha por grupo
@@ -105,6 +116,7 @@ type Emitter struct {
 	opts                                     Options
 	log                                      *logging.Logger
 	now                                      func() time.Time
+	after                                    func(time.Duration) <-chan time.Time
 	w                                        *Writer
 	fileFailed                               bool
 	kafkaPrefix, kafkaBuf, keyPrefix, keyBuf []byte
@@ -130,6 +142,10 @@ type Emitter struct {
 	rows        atomic.Uint64
 	errs        atomic.Uint64
 	lastSuccess atomic.Int64
+	// skipped são as fronteiras puladas desde a subida, e lastPass a duração
+	// (em nanossegundos) da última passada concluída.
+	skipped  atomic.Uint64
+	lastPass atomic.Int64
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -215,12 +231,15 @@ func NewEmitter(opts Options) (*Emitter, error) {
 	if opts.Every <= 0 {
 		return nil, fmt.Errorf("series: intervalo %v inválido", opts.Every)
 	}
-	e := &Emitter{opts: opts, log: opts.Log, now: opts.Now}
+	e := &Emitter{opts: opts, log: opts.Log, now: opts.Now, after: opts.After}
 	if e.log == nil {
 		e.log = logging.Discard()
 	}
 	if e.now == nil {
 		e.now = time.Now
+	}
+	if e.after == nil {
+		e.after = time.After
 	}
 	e.prefix = append(e.prefix, `{"counter":`...)
 	e.prefix = executor.AppendJSONString(e.prefix, []byte(opts.Counter))
@@ -267,19 +286,30 @@ func NewEmitter(opts Options) (*Emitter, error) {
 	return e, nil
 }
 
-// EmitOnce escreve uma linha por grupo vivo do contador.
+// EmitOnce escreve uma linha por grupo vivo do contador, com o instante at.
 //
 // Público para que o teste o chame direto, em vez de esperar um tique — o mesmo
-// motivo do RetireEmptyGroups no storage.
+// motivo do RetireEmptyGroups no storage. O at vem de quem chama: o laço é o
+// dono da política de fronteiras (ver run), e a passada só o carimba — no
+// campo `at` do arquivo e do Kafka, no Timestamp do record e no instante das
+// medidas. É o slot NOMINAL da série: os valores são lidos DURANTE a passada,
+// que numa passada atrasada corre depois do at.
 //
 // A varredura toma apenas o lock FOLHA do dicionário do contador, e nada do
 // Store: é isso que atende, por construção, a exigência da issue de que a
 // emissão não segure o writer.
-func (e *Emitter) EmitOnce() error {
+//
+// ctx cancelado antes ou durante a espera de vaga num destino (Stop) aborta a
+// passada: o erro de ctx volta, e a passada abortada NÃO conta em Errors e NÃO
+// move o último sucesso nem a duração da última passada. As linhas que já
+// estavam no buffer do arquivo são gravadas pelo Close, então o arquivo pode
+// terminar o encerramento com uma passada parcial daquele at.
+func (e *Emitter) EmitOnce(ctx context.Context, at time.Time) error {
+	start := e.now()
 	// AppendFormat no scratch, e não Format: o segundo devolve uma string
 	// nova, e uma alocação por passada num laço que roda para sempre é lixo
 	// que nunca para de crescer.
-	at := e.now().UTC()
+	at = at.UTC()
 	e.atMillis = at.UnixMilli()
 	e.atBuf = at.AppendFormat(e.atBuf[:0], timeLayout)
 	limit := e.opts.Reader.Limit()
@@ -305,7 +335,9 @@ func (e *Emitter) EmitOnce() error {
 			}
 			e.keyBuf = append(e.keyBuf, ']')
 			for _, output := range e.opts.Outputs {
-				output.Publish(e.keyBuf, e.kafkaBuf, at)
+				if err := output.Publish(ctx, e.keyBuf, e.kafkaBuf, at); err != nil {
+					return err
+				}
 			}
 		}
 		if e.w != nil && !e.fileFailed {
@@ -320,10 +352,14 @@ func (e *Emitter) EmitOnce() error {
 	}
 	if e.w != nil && !e.fileFailed {
 		if err := e.w.Flush(); err != nil {
-			return e.failFile(err)
+			if err := e.failFile(err); err != nil {
+				return err
+			}
+		} else {
+			e.lastSuccess.Store(e.now().UnixMilli())
 		}
-		e.lastSuccess.Store(e.now().UnixMilli())
 	}
+	e.lastPass.Store(int64(max(e.now().Sub(start), 0)))
 	return nil
 }
 
@@ -458,9 +494,12 @@ func (e *Emitter) Close() error {
 
 // Start sobe o laço de emissão. Idempotente.
 //
-// Molde do StartRetention do storage: primeira passada imediata, medidor
-// atômico que sobe FORA da goroutine, cancelamento por contexto, e o Stop
-// cancela e AGUARDA.
+// Molde do StartRetention do storage — medidor atômico que sobe FORA da
+// goroutine, cancelamento por contexto, e o Stop cancela e AGUARDA —, com uma
+// diferença: NÃO há passada imediata na subida. A primeira passada é na
+// primeira fronteira >= agora (ver run): emitir na subida com o at da
+// fronteira anterior duplicaria o slot que o processo anterior já emitiu, com
+// valores de outro instante.
 func (e *Emitter) Start(ctx context.Context) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -494,16 +533,112 @@ func (e *Emitter) Stop() {
 // Active diz se o laço está de pé.
 func (e *Emitter) Active() bool { return e.active.Load() }
 
-func (e *Emitter) run(ctx context.Context) {
-	t := time.NewTimer(0)
-	defer t.Stop()
+// Every é o intervalo declarado entre passadas.
+func (e *Emitter) Every() time.Duration { return e.opts.Every }
+
+// FloorBoundary devolve a fronteira mais recente <= t: o instante UTC cujo
+// UnixNano é múltiplo de every.
+//
+// Alinha à ÉPOCA Unix, e não ao ano 1 do time.Time.Truncate: os dois só
+// coincidem para every que divide o dia, e um `every: 7m` alinhado ao ano 1
+// cairia em instantes que o consumidor — que encaixa a amostra em slots
+// múltiplos de every desde a época — não reconhece.
+func FloorBoundary(t time.Time, every time.Duration) time.Time {
+	n, step := t.UnixNano(), every.Nanoseconds()
+	r := n % step
+	if r < 0 {
+		r += step
+	}
+	return time.Unix(0, n-r).UTC()
+}
+
+// ceilBoundary devolve a primeira fronteira >= t; t sobre uma fronteira é ela.
+func ceilBoundary(t time.Time, every time.Duration) time.Time {
+	f := FloorBoundary(t, every)
+	if f.UnixNano() == t.UnixNano() {
+		return f
+	}
+	return f.Add(every)
+}
+
+// nextBoundary é a política de fronteiras: o at da próxima passada, dado o at
+// da última (last) e o relógio de parede (now).
+//
+// É a fronteira seguinte a last ou — se now já passou dela por uma fronteira
+// inteira ou mais — a fronteira mais recente <= now, e as do meio são puladas.
+// Nunca é <= last, nem com o relógio voltando: com now < last o resultado é
+// last + every, e a espera até ela passa de every.
+func nextBoundary(last, now time.Time, every time.Duration) time.Time {
+	next := last.Add(every)
+	if f := FloorBoundary(now, every); f.After(next) {
+		return f
+	}
+	return next
+}
+
+// waitBoundary dorme até a fronteira da próxima passada e a devolve; false é
+// ctx cancelado, que encerra a espera sem esperar o temporizador.
+//
+// A espera é recalculada pelo relógio de parede a cada despertar, e nada
+// acumula Reset(every): um despertar antecipado (temporizador impreciso)
+// volta a dormir até a fronteira, então a passada NUNCA começa antes do seu
+// at; e um despertar muito atrasado (VM pausada, NTP para frente) reaplica a
+// política — sai a fronteira mais recente, e nunca um at velho.
+func (e *Emitter) waitBoundary(ctx context.Context, last time.Time) (time.Time, bool) {
 	for {
+		if ctx.Err() != nil {
+			return time.Time{}, false
+		}
+		now := e.now()
+		at := nextBoundary(last, now, e.opts.Every)
+		wait := at.Sub(now)
+		if wait <= 0 {
+			return at, true
+		}
 		select {
 		case <-ctx.Done():
-			return
-		case <-t.C:
+			return time.Time{}, false
+		case <-e.after(wait):
 		}
-		if err := e.EmitOnce(); err != nil {
+	}
+}
+
+// run é o laço de emissão em taxa fixa alinhada: cada passada carimba a
+// fronteira em que começa, múltipla de every na época Unix.
+//
+//   - A primeira passada é na primeira fronteira >= agora (não há passada
+//     imediata; ver Start).
+//   - Passada que termina antes da fronteira seguinte dorme até ela: o
+//     período é every, e não every + duração da passada.
+//   - Passada que termina na fronteira seguinte ou depois dispara a próxima
+//     LOGO, com at = a fronteira mais recente <= fim. No máximo uma passada
+//     fica pendente: as fronteiras do meio são PULADAS, somadas em
+//     SkippedBoundaries e anunciadas por UM WARN `series.boundaries_skipped`
+//     por ocorrência. Passada que só atrasa, sem pular, não loga — aparece
+//     na duração da última passada.
+//   - O at é estritamente crescente na vida do emissor, mesmo com o relógio
+//     de parede voltando (NTP): aí a espera pode passar de every.
+func (e *Emitter) run(ctx context.Context) {
+	every := e.opts.Every
+	// last é o at da última passada iniciada. Antes da primeira, é a
+	// fronteira anterior à primeira >= agora: assim a primeira sai pela mesma
+	// política das demais, inclusive se o primeiro sono passar da conta.
+	last := ceilBoundary(e.now(), every).Add(-every)
+	for {
+		at, ok := e.waitBoundary(ctx, last)
+		if !ok {
+			return
+		}
+		if skipped := int64(at.Sub(last)/every) - 1; skipped > 0 {
+			e.skipped.Add(uint64(skipped))
+			e.log.Warn("series.boundaries_skipped",
+				"boundaries were skipped; the loop resumed late",
+				"dataset", e.opts.Dataset, "counter", e.opts.Counter, "skipped", skipped,
+				"at", at.Format(timeLayout), "previous_pass_ms", time.Duration(e.lastPass.Load()).Milliseconds())
+		}
+		last = at
+		if err := e.EmitOnce(ctx, at); err != nil {
+			// Passada abortada pelo Stop: não é falha, e não loga.
 			if ctx.Err() != nil {
 				return
 			}
@@ -516,7 +651,6 @@ func (e *Emitter) run(ctx context.Context) {
 				"dataset", e.opts.Dataset, "counter", e.opts.Counter, "error", err.Error())
 			return
 		}
-		t.Reset(e.opts.Every)
 	}
 }
 
@@ -538,6 +672,13 @@ type Stats struct {
 	// LastSuccessUnixMs é a última passada que escreveu sem erro. É a série
 	// que um alerta de "a emissão parou" observa.
 	LastSuccessUnixMs int64
+	// SkippedBoundaries são as fronteiras puladas desde a subida: passadas
+	// que a série não terá, porque a anterior passou da fronteira seguinte.
+	SkippedBoundaries uint64
+	// LastPassDuration é a duração da última passada concluída; zero até a
+	// primeira. Duration, e não milissegundos: uma passada de menos de um
+	// milissegundo não pode ler como "nunca rodou".
+	LastPassDuration time.Duration
 }
 
 // Stats devolve o retrato corrente.
@@ -549,6 +690,8 @@ func (e *Emitter) Stats() Stats {
 		Rows:              e.rows.Load(),
 		Errors:            e.errs.Load(),
 		LastSuccessUnixMs: e.lastSuccess.Load(),
+		SkippedBoundaries: e.skipped.Load(),
+		LastPassDuration:  time.Duration(e.lastPass.Load()),
 	}
 	if e.w != nil {
 		st.Rotations, st.Bytes = e.w.Rotations(), e.w.Size()

@@ -340,6 +340,9 @@ type SeriesDeliveryStats struct {
 	PendingRecords       int64             `json:"pendingRecords"`
 	PendingBytes         int64             `json:"pendingBytes"`
 	LastSuccessTimestamp float64           `json:"lastSuccessTimestamp"`
+	// AdmissionWaitSeconds acumula, desde a subida, o tempo que a emissão
+	// deste contador esperou vaga no destino (contrapressão). Zero sem espera.
+	AdmissionWaitSeconds float64 `json:"admissionWaitSeconds"`
 }
 
 // CounterStats é o retrato de UM contador mantido na escrita

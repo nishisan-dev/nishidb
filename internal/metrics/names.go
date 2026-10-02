@@ -7,6 +7,10 @@ const (
 	MetSeriesKafkaPendingRecords       = "nishidb_series_kafka_pending_records"
 	MetSeriesKafkaPendingBytes         = "nishidb_series_kafka_pending_bytes"
 	MetSeriesKafkaLastSuccessTimestamp = "nishidb_series_kafka_last_success_timestamp"
+	// MetSeriesKafkaAdmissionWaitSecondsTotal é o tempo acumulado em que a
+	// emissão do contador esperou vaga no destino: o sinal de que o destino
+	// não acompanha a passada e a está atrasando.
+	MetSeriesKafkaAdmissionWaitSecondsTotal = "nishidb_series_kafka_admission_wait_seconds_total"
 )
 
 // Os nomes das métricas do §92, LITERAIS.
@@ -755,6 +759,14 @@ const (
 	// MetSeriesEmitting é 1 enquanto algum laço de emissão do dataset está de
 	// pé.
 	MetSeriesEmitting = "nishidb_series_emitting"
+	// MetSeriesSkippedBoundariesTotal são as fronteiras puladas desde a
+	// subida: slots que a série não terá, porque a passada anterior passou da
+	// fronteira seguinte. Sai para todo emissor, inclusive o só-Kafka.
+	MetSeriesSkippedBoundariesTotal = "nishidb_series_skipped_boundaries_total"
+	// MetSeriesPassSeconds é a duração da última passada concluída. É
+	// medidor, como MetAlarmSweepSeconds: descreve a última, e não acumula.
+	// Acima de `every`, as passadas atrasam e acabam pulando fronteiras.
+	MetSeriesPassSeconds = "nishidb_series_pass_seconds"
 )
 
 // Entrega de alarmes: os labels são destinos declarados e motivos fechados.

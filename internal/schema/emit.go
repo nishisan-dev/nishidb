@@ -25,6 +25,12 @@ import (
 // <dataset>/series/<file>, inclusive a do grupo com total zero — que é
 // justamente a que interessa num gráfico por equipamento.
 //
+// As passadas acontecem nas FRONTEIRAS de `every` — os instantes UTC múltiplos
+// de `every` contados da época Unix —, e o `at` da linha é a fronteira, não o
+// relógio do início da passada. Não há passada na subida: a primeira é na
+// primeira fronteira >= agora. A política de atraso (passada que passa da
+// fronteira seguinte) mora em series.Emitter.run.
+//
 // O `file` é só o NOME do arquivo, nunca um caminho: o diretório é fixo
 // (EmitDirName, ao lado de data/ e spill/), pela mesma razão que o spill tem o
 // seu — o arquivo fica sob o flock exclusivo do dataset, herda a política de
@@ -63,7 +69,8 @@ type EmitSpec struct {
 	// Targets selects file and/or globally named Kafka destinations.
 	// Empty is the legacy file-only default for Go callers.
 	Targets []string
-	// Every é o intervalo entre passadas; sempre >= MinEmitEvery.
+	// Every é o intervalo entre passadas, e as passadas caem nos múltiplos
+	// dele contados da época Unix; sempre >= MinEmitEvery.
 	Every time.Duration
 	// File é o nome do arquivo dentro de <dataset>/series, nunca um caminho.
 	File string
