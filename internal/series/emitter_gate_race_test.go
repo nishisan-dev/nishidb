@@ -11,6 +11,10 @@ func TestAPassWithMeasuresDoesNotAllocatePerGroup(t *testing.T) {
 // Contraparte visível do gate de alocação da emissão sob -race: a
 // instrumentação altera a contagem, e o pulo se anuncia em vez de sumir da
 // rodada (débito 53).
-func TestPassadaNaoAlocaPorGrupo(t *testing.T) {
+func TestAPassDoesNotAllocatePerGroup(t *testing.T) {
+	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+}
+
+func TestAPassWithOutputsDoesNotAllocatePerGroup(t *testing.T) {
 	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
 }

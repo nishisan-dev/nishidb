@@ -274,8 +274,13 @@ responde a segunda pergunta.
 ### Emissão periódica de contador
 
 Só nos datasets que declaram `emit:` dentro de algum contador. As cinco
-primeiras saem por contador com destino `file`, com o rótulo `counter`.
-`nishidb_series_emitting` também considera emissores exclusivamente Kafka.
+primeiras saem por contador com destino `file`, com o rótulo `counter`. As
+duas do laço (`nishidb_series_skipped_boundaries_total` e
+`nishidb_series_pass_seconds`) saem para **todo** contador com `emit:`,
+inclusive os que enviam somente para Kafka. `nishidb_series_emitting` também
+considera emissores exclusivamente Kafka. As passadas acontecem nas fronteiras
+de `every`, alinhadas à época Unix (ver
+[cadência](operacao-series-kafka.md#cadência-passadas-nas-fronteiras-de-every)).
 
 | série | tipo | labels | o que responde |
 |---|---|---|---|
@@ -285,6 +290,8 @@ primeiras saem por contador com destino `file`, com o rótulo `counter`.
 | `nishidb_series_bytes` | gauge | `counter`, `dataset` | tamanho do arquivo corrente. O teto de disco de um contador é `maxBytes × (keep+1)` |
 | `nishidb_series_last_success_timestamp` | gauge | `counter`, `dataset` | epoch segundos da última passada que escreveu sem erro; 0 até a primeira. É a série que um alerta de "a emissão parou" observa |
 | `nishidb_series_emitting` | gauge | `dataset` | 1 enquanto algum laço de emissão do dataset está de pé |
+| `nishidb_series_skipped_boundaries_total` | counter | `counter`, `dataset` | fronteiras de `every` puladas desde a subida: slots que a série não terá, porque a passada anterior terminou depois da fronteira seguinte. Cada ocorrência gera um WARN `series.boundaries_skipped` |
+| `nishidb_series_pass_seconds` | gauge | `counter`, `dataset` | duração da última passada concluída; 0 até a primeira. Passadas mais longas que `every` atrasam as seguintes e acabam pulando fronteiras. Inclui a espera por espaço no buffer dos destinos Kafka |
 
 Destinos Kafka publicam as séries abaixo por `dataset`, `counter` e
 `destination`, inclusive antes da primeira entrega. A origem é a mesma de
@@ -293,10 +300,11 @@ Destinos Kafka publicam as séries abaixo por `dataset`, `counter` e
 | série | tipo | o que responde |
 |---|---|---|
 | `nishidb_series_kafka_delivered_total` | counter | mensagens confirmadas pelo Kafka desde a subida |
-| `nishidb_series_kafka_dropped_total` | counter | mensagens descartadas ou não confirmadas; label adicional `reason`: `buffer_full`, `message_too_large`, `timeout`, `publish_error`, `shutdown` |
+| `nishidb_series_kafka_dropped_total` | counter | mensagens descartadas ou não confirmadas; label adicional `reason`: `buffer_full`, `message_too_large`, `timeout`, `publish_error`, `shutdown`. `buffer_full` nasce em zero e não é mais produzido pela entrada no buffer, que espera em vez de descartar |
 | `nishidb_series_kafka_pending_records` | gauge | mensagens aguardando conclusão, incluindo as em voo |
 | `nishidb_series_kafka_pending_bytes` | gauge | bytes de chave e corpo das mensagens pendentes |
 | `nishidb_series_kafka_last_success_timestamp` | gauge | última confirmação em segundos do epoch; zero até a primeira |
+| `nishidb_series_kafka_admission_wait_seconds_total` | counter | tempo acumulado, em segundos, em que a emissão deste contador esperou espaço no buffer do destino (contrapressão). Subindo, o destino não acompanha a passada e a está atrasando. Mesmo valor de `admissionWaitSeconds` no `/v1/stats` |
 
 Timeout pode ocorrer após o broker armazenar a mensagem. Os descartes medem
 resultados locais, sem afirmar perda exata no tópico. Limites e garantias estão

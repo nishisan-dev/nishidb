@@ -4,6 +4,43 @@ Cada intervalo de `emit` publica uma mensagem JSON por grupo vivo do contador,
 incluindo grupos com total zero. Um contador com 100 grupos emite 100 mensagens
 em cada tópico selecionado. Grupos aposentados deixam de ser emitidos.
 
+## Cadência: passadas nas fronteiras de `every`
+
+As passadas acontecem nas **fronteiras** de `every`: os instantes UTC múltiplos
+de `every` contados a partir da época Unix (1970-01-01T00:00:00Z). Com
+`every: 300s`, as passadas saem às 15:00:00, 15:05:00, 15:10:00, e assim por
+diante, qualquer que seja o horário da subida. Um `every` que não divide o dia
+(`7m`, por exemplo) também se alinha à época, e não à meia-noite.
+
+- **Subida.** Não há passada imediata. A primeira passada acontece na primeira
+  fronteira igual ou posterior à subida. Emitir na subida repetiria o slot que o
+  processo anterior já tinha emitido, com valores de outro instante.
+- **Período fixo.** Uma passada que termina antes da fronteira seguinte não
+  desloca a próxima: o período é `every`, e não `every` mais a duração da
+  passada.
+- **Passada atrasada.** Se a passada termina depois da fronteira seguinte, a
+  próxima começa logo em seguida, com `at` igual à fronteira mais recente já
+  alcançada. Fica no máximo uma passada pendente. As fronteiras intermediárias
+  são **puladas**: não terão amostra. Elas somam em
+  `nishidb_series_skipped_boundaries_total`, e cada ocorrência gera um único
+  log WARN `series.boundaries_skipped`, com `dataset`, `counter`, `skipped`
+  (quantas foram puladas), `at` da passada e `previous_pass_ms` (duração da
+  passada anterior). Uma passada que atrasa sem pular fronteira não gera log; a
+  duração aparece em `nishidb_series_pass_seconds`.
+- **Relógio.** O `at` é estritamente crescente durante a vida do processo,
+  inclusive se o relógio do sistema voltar (correção de NTP). Nesse caso, a
+  espera vai até a fronteira seguinte à última emitida e pode ser maior que
+  `every`. Se o processo ficar parado além da conta (VM pausada, relógio
+  adiantado), a passada usa a fronteira mais recente e as anteriores são
+  contadas como puladas.
+- **Encerramento.** Uma passada interrompida pelo encerramento não é falha:
+  não gera log de parada, não soma em `nishidb_series_errors_total` e não move
+  o último sucesso. As linhas já gravadas no buffer do arquivo são escritas no
+  fechamento, então o arquivo pode terminar com uma passada parcial daquele
+  `at`.
+
+A série em arquivo segue a mesma cadência e o mesmo `at`.
+
 ## Configuração
 
 Declare os destinos no `nishidb.yaml`:
@@ -99,9 +136,14 @@ Com `total: false`, a chave `total` permanece e seu valor é `null`. Por exemplo
 A persistência das ocorrências permite retomar o cálculo após reinício, mas não
 altera a entrega desta série: mensagens de saída perdidas não são reemitidas.
 
-`at` é o instante da passada em UTC, com milissegundos. A passagem pelos
-destinos usa os mesmos valores e timestamp, sem reler o contador por destino.
-O arquivo continua com o formato anterior, sem acrescentar `dataset`.
+`at` é a fronteira da passada em UTC, com milissegundos: sempre um múltiplo de
+`every` contado a partir da época Unix (ver [Cadência](#cadência-passadas-nas-fronteiras-de-every)).
+É o slot **nominal** da amostra. Os valores são lidos durante a passada, que
+numa passada atrasada acontece depois do `at`. O mesmo `at` vai para o campo
+`at` do arquivo e do Kafka, para o timestamp do record Kafka e para o instante
+de cálculo das medidas de taxa. A passagem pelos destinos usa os mesmos valores
+e timestamp, sem reler o contador por destino. O arquivo continua com o formato
+anterior, sem acrescentar `dataset`.
 
 A chave Kafka é o array JSON compacto `[dataset, counter, ...groupBy]`.
 Por exemplo, para `groupBy: [olt, slot]`:
@@ -113,7 +155,9 @@ Por exemplo, para `groupBy: [olt, slot]`:
 Os valores do grupo são tipados e seguem a ordem declarada. A chave independe
 de `keyFormat` e distingue contadores homônimos em datasets diferentes. O
 particionamento usa essa chave; a ordenação é por partição. Mudar o número de
-partições pode mudar o destino de uma chave. Colunas que colidam com campos
+partições pode mudar o destino de uma chave. Por isso, crie o tópico já com o
+número final de partições: aumentar depois remapeia as chaves, e a série de um
+mesmo grupo passa a ser dividida entre duas partições. Colunas que colidam com campos
 fixos (`dataset`, `counter`, `groupKey`, `total`, `rows`, `at`) são recusadas para emissão
 Kafka, evitando JSON ambíguo.
 
@@ -126,41 +170,81 @@ metadados e restabelecer conexões para essas novas publicações.
 
 Por destino global, o buffer de transporte admite até **10.000 registros** e
 **16 MiB de chaves e corpos**, incluindo registros em voo. Estruturas do cliente
-e buffers de rede têm custo adicional. A capacidade é reservada antes de copiar
-a mensagem; buffer cheio descarta o novo registro apenas naquele destino.
+e buffers de rede têm custo adicional. O buffer é um **limite de memória com
+espera** (contrapressão), e não de descarte: quando ele está cheio, a passada
+espera até que um registro em voo seja concluído (confirmado, expirado ou
+recusado) e então continua. Nenhuma amostra é descartada por buffer cheio. A
+capacidade é reservada antes de copiar a mensagem. Vários contadores que usam o
+mesmo destino esperam juntos e todos avançam. O tempo de espera aparece em
+`admissionWaitSeconds` e em `nishidb_series_kafka_admission_wait_seconds_total`.
 Chave mais corpo acima de 999.884 bytes são recusados para reservar espaço no
 lote Kafka de 1.000.012 bytes. Limites menores do broker também podem recusar
 mensagens. Não há truncamento.
 
 `timeout` tem default de 5 segundos e aceita valores positivos até 5 minutos.
-O prazo cobre a espera da mensagem, além de haver limites no dial e nas
-requisições de rede. O cliente verifica cancelamento em pontos de execução;
-a conclusão de uma operação em voo pode acontecer depois do prazo. Há margem
-de rede de 100 ms e pisos de 100 ms para requisição e 1 s para expiração de
-lote, com contexto por mensagem usando o prazo configurado.
+O prazo de cada mensagem começa quando ela entra no buffer, depois de qualquer
+espera por espaço, e não no `at`. Isso é necessário porque o `at` é a fronteira
+da passada, que já ficou no passado. Também há limites no dial e nas
+requisições de rede, com margem de 100 ms e piso de 100 ms por requisição. O
+cliente verifica cancelamento em pontos de execução; a conclusão de uma operação
+em voo pode acontecer depois do prazo.
 
 Erro de publicação, timeout ou mensagem excessiva encerram aquela entrega.
 Um timeout significa **entrega não confirmada**: o broker pode ter armazenado
 a mensagem antes de a resposta se perder. Os descartes não são uma contagem
 exata de mensagens ausentes no Kafka.
 
-Falha de um destino Kafka não interrompe a varredura nem os demais destinos.
+Falha de um destino Kafka não interrompe a passada, mas um destino **lento ou
+que não responde a atrasa**. A passada espera espaço no buffer daquele destino.
+Esse atraso vale para os demais destinos do mesmo contador e para o arquivo
+dele, porque todos recebem os grupos na mesma passada. O efeito depende de como
+o destino falha:
+
+- **Conexão recusada** (o host está de pé e o processo do broker não escuta).
+  O cliente falha os registros logo, sem esperar o `timeout`. O espaço do
+  buffer é liberado na hora, e a passada anda no ritmo normal, descartando as
+  amostras daquele destino como `publish_error`. Numa verificação pontual
+  durante o desenvolvimento, sem teste que a reproduza, as falhas chegaram em
+  milissegundos.
+- **Broker que aceita a conexão e não responde, ou host inalcançável** (o host
+  sumiu ou a rede caiu: a conexão espera até o `timeout` de dial). Os registros
+  em voo só expiram depois de `timeout`, e só então liberam espaço. A passada anda, mas
+  no ritmo do `timeout`: até 10.000 registros por `timeout`. O cliente expira
+  os registros em lote: todo o lote expira quando o primeiro registro atinge o
+  prazo. Num contador com centenas de milhares de grupos e `timeout` alto, uma
+  única passada pode levar horas. Esse tempo não foi medido.
+
+As fronteiras puladas seguem a política de
+[passada atrasada](#cadência-passadas-nas-fronteiras-de-every).
 Falha no arquivo desativa apenas o arquivo até reiniciar; Kafka continua. No
 modo exclusivamente em arquivo, a falha mantém a parada anterior do emissor.
-No encerramento, os emissores param antes dos produtores e do armazenamento;
-pendências Kafka são canceladas sem esperar pela recuperação do broker.
+No encerramento, os emissores param antes dos produtores e do armazenamento.
+Uma passada que estava esperando espaço é interrompida. As pendências Kafka são
+canceladas sem esperar pela recuperação do broker.
 
 ## Observabilidade
 
 `/v1/stats` inclui `datasets[].seriesDelivery`, com uma entrada por contador e
 destino: `counter`, `destination`, `delivered`, `dropped`, `pendingRecords`,
-`pendingBytes` e `lastSuccessTimestamp` (segundos do epoch).
+`pendingBytes`, `lastSuccessTimestamp` (segundos do epoch) e
+`admissionWaitSeconds` (tempo acumulado esperando espaço no buffer do destino).
 Os números nascem em zero e os contadores reiniciam com o processo.
 
 Motivos de descarte: `buffer_full`, `message_too_large`, `timeout`,
-`publish_error` e `shutdown`. Entregas confirmadas são contadas somente após o
+`publish_error` e `shutdown`. `buffer_full` continua no vocabulário, mas a
+entrada no buffer não o produz mais, porque espera em vez de descartar. Ele só
+apareceria se o cliente Kafka recusasse por buffer cheio, e o limite do cliente
+tem folga acima do limite local justamente para evitar isso. `shutdown` também
+conta a mensagem que estava esperando espaço quando o encerramento a
+interrompeu. Entregas confirmadas são contadas somente após o
 callback de sucesso do Kafka. Os mesmos números alimentam as
 [métricas de emissão](metricas.md#emissão-periódica-de-contador).
+
+O andamento das passadas aparece em `nishidb_series_pass_seconds` (duração da
+última passada concluída) e em `nishidb_series_skipped_boundaries_total`
+(fronteiras puladas). As duas existem para todo contador com `emit`, inclusive
+os que enviam somente para Kafka. Passadas mais longas que `every` atrasam as
+seguintes e acabam pulando fronteiras.
 
 O log `series.delivery.dropped` resume mudanças nos descartes a cada cinco
 segundos e no encerramento, identificando dataset, contador, destino e motivos.
