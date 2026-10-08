@@ -183,7 +183,7 @@ inglês correspondente.
 | derivadas (colunas do histórico; e as colunas aninhadas derivadas de `extract`) | derived | internal/materializer/history.go, internal/query/binder, internal/schema |
 | derivar / derivação (reconstruir o logger a partir da raiz; e calcular grupo e condição a partir do payload) | derive / derivation | internal/logging/logging.go, internal/storage/counter, internal/schema |
 | vencimentos | expiries | internal/storage/schedule.go |
-| prazo / prazos (a DURAÇÃO de ociosidade da linha, em millis: por quanto tempo ela pode ficar sem escrita — o TTL) | TTL / TTLs | internal/storage/rowindex |
+| prazo / prazos (o `_expiresIn` da linha, em millis, contado a partir de `_writtenAt`: a duração de ociosidade nas regras `expireAfterWrite`, e o que resta até a âncora + `expireAfter` nas regras ancoradas — o TTL) | TTL / TTLs | internal/storage/rowindex |
 | padrão (valor herdado quando a chave está ausente) | default — `Default` e `default` em nome composto (`DefaultMaxRows`, `defaultTimeout`); `defaultValue` em parâmetro ou local solto, porque `default` é palavra reservada em Go | internal/units |
 | padrão (formato de data, de rota ou de LIKE) | pattern | internal/typeparse/datetime.go, internal/server/auth.go, internal/query/parser/parser.go |
 | entrada (de teste) | input | internal/units/units_test.go |
@@ -252,7 +252,7 @@ inglês correspondente.
 | antes / depois (medição de teste) | before / after | internal/memprof/memprof_test.go, internal/storage/mmap/region_test.go, internal/storage/fielddict/typehint_test.go |
 | antes (o gancho que o dublê roda no instante do fsync, antes de delegar) | before sync | internal/storage/fielddict/typehint_test.go |
 | anterior (o valor anterior) | prev | internal/query/lexer, internal/testutil/radiusgen, internal/buildinfo/buildinfo_internal_test.go |
-| fundo (regra ou duração de fundo: a regra de TTL sem `when`) | fallback | internal/schema/ttl_rule.go, internal/storage/checkpoint/manifest.go |
+| fundo (regra ou duração de fundo: a regra de TTL sem `when` E sem `anchor`) | fallback / IsFallback / HasFallback | internal/schema/ttl_rule.go, internal/storage/checkpoint/manifest.go |
 | coluna | column | internal/counters, internal/storage/checkpoint/manifest.go |
 | índice | index | internal/index, internal/storage/checkpoint/manifest.go |
 | cauda (TLV do manifest) | tail | internal/storage/checkpoint/manifest.go |
@@ -1010,6 +1010,10 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | fila durável de entrega | delivery queue / Manager | internal/alarmdelivery |
 | retrato da entrega por destino | AlarmDeliveryStats | internal/protocol |
 | descarte de evento novo | dropped / `alarm.delivery.dropped` | internal/alarmdelivery |
+| contrapressão na admissão (a varredura espera vaga em memória na fila, em vez de descartar, quando o gravador não acompanha a rajada) | admission backpressure / `queue.offer` + `space` | internal/alarmdelivery |
+| tempo de espera da admissão | `AdmissionWaitSeconds` / `nishidb_alarm_delivery_admission_wait_seconds_total` | internal/alarmdelivery, internal/protocol, internal/metrics |
+| rajada de alarmes (muitos grupos disparando na mesma passada) | burst | internal/alarmdelivery, internal/server |
+| passada interrompida (a varredura abandonada entre grupos pelo Stop, sem a fase dois) | `errSweepAborted` / `evaluate(stop)` | internal/alarm |
 
 ## Medidas de contadores (issue #75)
 
@@ -1021,3 +1025,80 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | numerador da janela | MeasureCount | internal/storage/counter |
 | geração de medidas | `measures.<epoch>.snapshot` / MeasureCounters | internal/storage/counter, internal/storage/checkpoint |
 | identidade da fonte amostrada | `.win.source` / reconcileSource | internal/countermetrics |
+
+## Escopo do contador e comparação linear (issue #61)
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| escopo do contador (o predicado sobre a linha que decide se ela é membro de um grupo; fora dele a linha fica sem grupo) | `scope` / Definition.Scope | internal/schema, internal/storage/counter, internal/counters |
+| avaliador do escopo (instância própria por Deriver, da mesma fábrica) | NewScopeEvaluator | internal/storage/counter, internal/counters |
+| membros do grupo (as linhas no grupo, dentro do escopo e com o groupBy completo — não as linhas do dataset) | `rows` / CounterRowsColumn | internal/schema, internal/counters, internal/alarm, internal/series |
+| identidade do contador (o texto gravado no manifest que decide adotar ou reconstruir o vetor) | identityOf / identitySeparator / splitIdentity | internal/storage |
+| palavra do grupo (total e membros numa única palavra de 64 bits, lida e somada de uma vez) | pairs / MaxGroupRows / ErrGroupRowsCeiling | internal/storage/counter |
+| comparação linear entre colunas (`<col> [* k] <op> <col> [* k]`, só na condição de alarme) | ColumnComparison / ColumnTerm / BoundColumnComparison / CompileAlarmCondition | internal/query/parser, internal/query/binder, internal/predicate, internal/alarm |
+| opções da condição (o que o parse e o bind aceitam além da gramática do WHERE) | ConditionOptions / ParseConditionWith / BindConditionWith | internal/query/parser, internal/query/binder |
+| par do evento (total e membros lidos do payload que decidiu o alarme) | groupCounts / countsOf | internal/alarm |
+
+## TTL ancorado num campo do documento
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| âncora (o campo temporal do documento a partir do qual a regra conta o prazo) | `anchor` / TTLRule.Anchor | internal/schema, internal/materializer |
+| prazo contado da âncora | `expireAfter` / TTLRule.ExpireAfter | internal/schema |
+| menor prazo mortal (o `_expiresIn` de quem já nasce vencido; 1 é o sentinela de imortal) | MinMortalTTL | internal/storage/rowindex |
+| vencida na escrita (a linha cuja âncora + `expireAfter` já passou quando ela é gravada) | ExpiredOnWrite / `ttlExpiredOnWrite` | internal/materializer, internal/protocol, internal/metrics |
+| âncora no futuro (limitada ao instante da escrita) | AnchorInFuture / `ttlAnchorInFuture` | internal/materializer, internal/protocol, internal/metrics |
+| âncora ausente (a regra ancorada que não casou porque o campo não está no documento) | AnchorAbsent / `anchorAbsent` | internal/materializer, internal/protocol, internal/metrics |
+| carimbo do prazo (a decisão do prazo sobre o payload final, gravada no lugar) | stampTTL / OverwriteInt64 | internal/materializer, internal/storage/encoding |
+
+## Prazo de requisição no driver JDBC (issue #91)
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| prazo de espera (do cliente, por requisição) | RequestTimeout | clients/jdbc |
+| prazo de rede (o silêncio máximo do servidor numa consulta; duração inteira nos documentos pequenos) | `socketTimeoutMs` / networkTimeout | clients/jdbc |
+| folga do queryTimeout (o que o cliente espera além do prazo do servidor) | QUERY_TIMEOUT_GRACE_MS | clients/jdbc |
+| corpo com prazo (o stream da resposta que se fecha quando uma leitura não volta a tempo) | TimedInputStream | clients/jdbc |
+| corpo atento ao abandono | AbandonAwareInputStream | clients/jdbc |
+| falha de leitura já montada | ResponseFailureException | clients/jdbc |
+| abandonar a conexão (derrubar sem esperar o servidor) | abandon / `abort` | clients/jdbc |
+| conexão inexistente (o SQLSTATE de toda operação em conexão fechada) | CONNECTION_DOES_NOT_EXIST / 08003 | clients/jdbc |
+
+## Fsync do dicionário de grupos no checkpoint (débito 108, issue #88)
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| piso de durabilidade (o tamanho do `grupos.dict` já sincronizado, gravado no manifest; dicionário menor que ele reconstrói o contador) | DictValidBytes / SyncedBytes / validBytes | internal/storage/counter, internal/storage/checkpoint |
+| dicionário abaixo do piso | ErrDictBelowFloor / `counter.dict_below_durable_floor` | internal/storage/counter, internal/storage |
+| abertura sincronizada (o fsync da cauda herdada do page cache ao abrir o dicionário) | synced open | internal/storage/counter |
+| marcador de construção (arquivo que impede a reabertura de adotar um vetor de construção interrompida) | `building` / MarkBuilding / BuildingMarked | internal/storage/counter, internal/storage |
+| fila de adoção (os contadores construídos que esperam o checkpoint que os adota) | countersAwaitingAdoption | internal/storage |
+| passo de fsync (o fsync do dicionário dentro do `ApplyOverlay`, antes do primeiro `Set`) | SyncStep / `syncDictContadores` | internal/storage/counter, internal/storage |
+| falha de fsync do dicionário (deixa o writer falho) | ErrDictSync | internal/storage/counter |
+| dreno do overlay | drained / drainAvg | internal/storage/counter |
+| limiar de troca do overlay (com histerese contra a média dos drenos) | OverlayShrinkThreshold | internal/storage/counter |
+
+## Emissão de série alinhada e contrapressão no envio a Kafka
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| fronteira (instante UTC múltiplo de `every`, alinhado à época Unix; é o `at` da passada) | FloorBoundary / nextBoundary / `at` | internal/series |
+| fronteira pulada (fronteira que uma passada atrasada não emitiu) | SkippedBoundaries / `nishidb_series_skipped_boundaries_total` / `series.boundaries_skipped` | internal/series, internal/metrics |
+| duração da passada | LastPassDuration / `nishidb_series_pass_seconds` | internal/series, internal/metrics |
+| temporizador do laço (exclusivo de teste) | Options.After | internal/series |
+| espera de admissão (contrapressão: o envio espera vaga em vez de descartar) | AdmissionWaitSeconds / `admissionWaitSeconds` / `nishidb_series_kafka_admission_wait_seconds_total` | internal/seriesdelivery, internal/protocol, internal/metrics |
+| folga do kgo (limite do cliente acima do local, para a contabilidade local valer) | kgoBufferSlack | internal/seriesdelivery |
+
+## Entrega de alarmes para Kafka
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| destino Kafka de alarmes | `alarmDelivery.kafka` / AlarmKafkaSpec | internal/config |
+| conexão Kafka de produção (validação comum à série e aos alarmes) | kafkaTarget | internal/config |
+| transporte de entrega (o que a fila usa para tentar: HTTP ou Kafka) | transport / httpTransport / kafkaTransport | internal/alarmdelivery |
+| tentativa de entrega | attempt | internal/alarmdelivery |
+| classe de falha (conjunto fechado no diagnóstico da retentativa Kafka) | `class` / kafkaErrorClass | internal/alarmdelivery |
+| tipo do destino | `kind` (`webhook` / `kafka`) | internal/protocol |
+| chave Kafka do alarme (`[dataset, counter, groupKey]`) | kafkaKey | internal/alarmdelivery |
+| teto do registro produzido | MaxProducedRecordBytes | internal/kafka |
+| timeout ambíguo (o broker pode ter gravado; a nova tentativa duplica com o mesmo `eventId`) | — | internal/alarmdelivery |

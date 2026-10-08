@@ -19,9 +19,9 @@ import (
 )
 
 // WithoutGroup é a entrada do vetor de uma linha que não está em grupo nenhum:
-// nunca vista, tombstonada, sem alguma coluna do groupBy, ou recusada pelo
-// teto. É zero porque zero é o que o fallocate deixa no arquivo — "nunca
-// gravada" e "sem grupo" são deliberadamente a mesma coisa.
+// nunca vista, tombstonada, sem alguma coluna do groupBy, fora do `scope`, ou
+// recusada pelo teto. É zero porque zero é o que o fallocate deixa no arquivo —
+// "nunca gravada" e "sem grupo" são deliberadamente a mesma coisa.
 const WithoutGroup uint32 = 0
 
 // conditionBit marca, na entrada do vetor, que a linha satisfazia o `where`
@@ -29,12 +29,70 @@ const WithoutGroup uint32 = 0
 // teto físico de grupos é 2^31-1.
 const conditionBit uint32 = 1 << 31
 
-// Evaluator é o `where` compilado: diz se o payload (o estado INTEIRO da
-// linha, pós-merge) satisfaz a condição. Quem o implementa é o predicado; este
-// pacote só conhece a interface, para que o storage não importe o binder.
+// Evaluator é o `where` (ou o `scope`) compilado: diz se o payload (o estado
+// INTEIRO da linha, pós-merge) satisfaz a condição. Quem o implementa é o
+// predicado; este pacote só conhece a interface, para que o storage não importe
+// o binder.
 type Evaluator interface {
 	Evaluate(payload []byte) (bool, error)
 }
+
+// pairRefsMask isola, na palavra de 64 bits de um grupo, a metade baixa — os
+// refs. A metade alta (pairTotalShift) é o total.
+const (
+	pairRefsMask   uint64 = 1<<32 - 1
+	pairTotalShift        = 32
+	pairTotalUnit  uint64 = 1 << pairTotalShift
+)
+
+// OverlayShrinkThreshold é o tamanho, em entradas drenadas, a partir do qual
+// um ApplyOverlay pode trocar o mapa do overlay por um novo em vez de só
+// esvaziá-lo (issue #88).
+//
+// O mapa do Go NÃO encolhe: nem `delete` entrada por entrada nem `clear`
+// devolvem a capacidade alcançada no pico. Na construção de um contador, toda
+// linha viva do dataset passa pelo overlay antes do primeiro checkpoint — no
+// piloto, ~7M de entradas e ~319 MB de heap presos até o restart, por contador
+// construído. Trocar o mapa devolve isso ao GC.
+//
+// 65.536 entradas são ~1-2 MB de mapa (chave de 8 bytes, valor de 4 e a
+// sobra da tabela): abaixo disso a capacidade presa não importa, e a troca só
+// faria o mapa crescer de novo a cada intervalo. O limiar também mantém os
+// gates de alocação do caminho quente — que medem linhas já presentes num
+// overlay de poucos milhares de entradas — longe da troca.
+const OverlayShrinkThreshold = 1 << 16
+
+// overlayShrinkFactor e overlayDrainSmoothing são a HISTERESE da troca. Acima
+// do limiar, o mapa só é trocado quando o dreno é maior que overlayShrinkFactor
+// vezes a média móvel dos drenos anteriores (peso 1/overlayDrainSmoothing para
+// o dreno novo). Num dataset em que cada intervalo entre checkpoints toca mais
+// que o limiar em regime, trocar a cada checkpoint seria só churn: o mapa novo
+// cresceria até o mesmo tamanho no intervalo seguinte. A média sobe para o
+// regime em um ou dois checkpoints, e daí em diante só o PICO — a construção, a
+// reconstrução, a ingestão fria de um backlog — passa de 4 vezes ela.
+const (
+	overlayShrinkFactor   = 4
+	overlayDrainSmoothing = 4
+)
+
+// MaxGroupRows é o teto de linhas de UM grupo: os refs moram nos 32 bits baixos
+// da palavra do grupo. Ver ErrGroupRowsCeiling.
+const MaxGroupRows = 1<<32 - 1
+
+// ErrGroupRowsCeiling é a linha que levaria um grupo além de MaxGroupRows. É
+// recusada ANTES de qualquer mutação: estourar a metade baixa somaria um no
+// total do grupo, em silêncio.
+//
+// O balde é o de INFRA (§101), nunca o de dado ruim: quatro bilhões de linhas
+// num grupo de um dataset desenhado para milhões de entidades é groupBy
+// declarado errado ou defeito, e pular o evento esconderia os dois. Como todo
+// erro do passo de contadores do applyRecord, ele deixa o record durável e
+// publicado e o contador uma transição atrás; não é sticky.
+var ErrGroupRowsCeiling = errors.New("counter group rows ceiling reached")
+
+// pairRefs e pairTotal abrem a palavra de um grupo.
+func pairRefs(p uint64) int64  { return int64(p & pairRefsMask) }
+func pairTotal(p uint64) int64 { return int64(p >> pairTotalShift) }
 
 // Definition é um contador como declarado no YAML e compilado contra o schema.
 type Definition struct {
@@ -55,6 +113,15 @@ type Definition struct {
 	// não instância, porque o writer e a auditoria avaliam em goroutines
 	// diferentes e o scratch é de um dono só.
 	NewEvaluator func() Evaluator
+	// Scope é o texto normalizado do filtro de MEMBRO; "" é "sem escopo", e
+	// nesse caso NewScopeEvaluator é nil e toda linha com o groupBy completo é
+	// membro. A linha fora do escopo é WithoutGroup — não interna grupo e não
+	// conta nem nos refs nem no total, exatamente como a linha sem alguma
+	// coluna do groupBy.
+	Scope string
+	// NewScopeEvaluator é a fábrica do avaliador do Scope, pela mesma razão de
+	// NewEvaluator: cada Deriver tem o seu.
+	NewScopeEvaluator func() Evaluator
 	// MaxGroups é o teto de grupos VIVOS.
 	MaxGroups uint32
 	// RetainEmptyGroups é quanto tempo um grupo com refs == 0 continua
@@ -99,6 +166,12 @@ const (
 // (rowindex.Locations), pelo mesmo motivo: uma página descarregada pelo kernel
 // antes do crash não pode descrever um record que não existe.
 //
+// O dicionário de grupos segue a mesma régua pelo outro lado: o grupo novo é
+// só um append, e o fsync dele é a primeira coisa do ApplyOverlay. Assim o
+// vetor nunca recebe um id além do prefixo já fsyncado do grupos.dict, e um
+// crash que leve a cauda não sincronizada do dicionário não deixa nenhum
+// artefato durável apontando para ela (ver o godoc do Dict).
+//
 // # Concorrência
 //
 // Transition, Fold, Clear, ApplyOverlay, RecordCoveredTouches e
@@ -117,11 +190,34 @@ type Counter struct {
 	// over é o overlay: transições ainda não aplicadas ao mmap. Writer-only —
 	// ninguém lê o vetor além do writer, então não precisa de lock.
 	over map[types.RowID]uint32
+	// drainAvg é a média móvel dos drenos do overlay (entradas por
+	// ApplyOverlay bem-sucedido), a régua da histerese da troca do mapa.
+	// overlayShrinkThreshold é OverlayShrinkThreshold fora de teste — campo,
+	// como groupRowsCeiling, para que o teste da histerese não precise de
+	// centenas de milhares de transições por checkpoint. Writer-only.
+	drainAvg               int
+	overlayShrinkThreshold int
+	// drainedSinceEmpty conta as entradas drenadas desde o último ApplyOverlay
+	// que esvaziou o overlay — inclusive por tentativas que falharam no meio. É
+	// o tamanho do dreno que a troca do mapa julga: um dreno grande que
+	// falha depois de apagar a maior parte e termina numa nova tentativa
+	// pequena ainda deixou o mapa no tamanho do pico, e só esta contagem o
+	// enxerga. Writer-only.
+	drainedSinceEmpty int
 
 	// Por grupo, índice = id (0 reservado). Crescem sob dict.mu quando um id
 	// nasce; os leitores indexam sob RLock e conferem o limite.
-	totals     []int64 // atômicos (atomic.LoadInt64/AddInt64)
-	refs       []int64 // idem
+	//
+	// pairs é o PAR (total, refs) de cada grupo numa palavra só: refs nos 32
+	// bits baixos, total nos 32 altos. Uma palavra, e não dois vetores, porque
+	// o par é lido junto — `total * 10 <= rows` num alarme compara os dois — e
+	// duas cargas atômicas separadas deixavam o leitor ver um rasgo entre elas
+	// ((T, R+1), (T-1, R), até total > refs), que vira resolução espúria de
+	// alarme. Cada transição mexe na palavra de um grupo com UMA soma atômica,
+	// e a leitura é UMA carga. Com total desligado a metade alta fica zero e
+	// não é lida. Atômicos (atomic.LoadUint64/AddUint64); a soma de um delta
+	// negativo é a aritmética modular de uint64.
+	pairs      []uint64
 	lastTouch  []uint64
 	emptySince []int64 // unix ms em que refs chegou a 0; 0 = não está vazio
 	texts      [][]byte
@@ -135,13 +231,14 @@ type Counter struct {
 	// por linha de _meta.counters — num contador por PON são milhares.
 	//
 	// Grupo aposentado não entra na conta e não precisa sair dela: a
-	// aposentadoria exige refs == 0 (retirement.go), e totals[g] <= refs[g]
+	// aposentadoria exige refs == 0 (retirement.go), e total[g] <= refs[g]
 	// por construção — cada linha contribui 1 para refs e 0 ou 1 para totals,
 	// decidido pelo MESMO bit da MESMA entrada. Logo a soma sobre todos os ids
 	// é igual à soma sobre os vivos, em qualquer instante.
 	//
 	// São atomic.Int64 (método, nunca indexação) para que `c.total` não se
-	// confunda com `c.totals[g]` na leitura de quem mexer neste arquivo. O
+	// confunda com a metade alta de `c.pairs[g]` na leitura de quem mexer
+	// neste arquivo. O
 	// preço de mantê-los é uma SEGUNDA fonte para o mesmo fato, e o que a
 	// reconcilia é a auditoria, que os confere contra o recalculado.
 	rows  atomic.Int64
@@ -162,6 +259,10 @@ type Counter struct {
 	textBuf     []byte
 	textScratch []types.Value
 	now         func() time.Time
+	// groupRowsCeiling é o teto de linhas por grupo, MaxGroupRows fora de
+	// teste. É campo, e não só a constante, para que o teste da recusa a
+	// exercite com um limite pequeno em vez de quatro bilhões de linhas.
+	groupRowsCeiling int64
 }
 
 // Open abre (ou cria) o dicionário e o vetor do contador em dir. recreate=true
@@ -169,7 +270,17 @@ type Counter struct {
 // por divergência de parâmetros, decidida pelo Store a partir do manifest
 // ANTES da recovery; RemoveOld remove os renomeados quando a reconstrução
 // terminar.
-func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, error) {
+//
+// Com recreate, o marcador de construção em curso (building.go) é gravado
+// ANTES de qualquer arquivo ser posto de lado: quem o remove é o Store, depois
+// do checkpoint que adota a construção.
+//
+// dictFloor é o piso de durabilidade do dicionário que o manifest gravou
+// (zero: sem piso). Um dicionário que perdeu dado abaixo dele faz o Open
+// devolver ErrDictBelowFloor sem tocar em arquivo nenhum, e quem chama abre de
+// novo com recreate. Com recreate o piso não se aplica: os arquivos antigos
+// vão para o lado.
+func Open(dir string, def Definition, minRows uint64, recreate bool, dictFloor int64) (*Counter, error) {
 	if err := validateDefinition(def); err != nil {
 		return nil, err
 	}
@@ -177,6 +288,9 @@ func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, 
 		return nil, fmt.Errorf("contador %s: criar %s: %w", def.Name, dir, err)
 	}
 	if recreate {
+		if err := markBuilding(dir); err != nil {
+			return nil, fmt.Errorf("contador %s: %w", def.Name, err)
+		}
 		for _, name := range []string{dictFileName, vectorFileName} {
 			from := filepath.Join(dir, name)
 			if err := os.Rename(from, from+oldSuffix); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -184,7 +298,10 @@ func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, 
 			}
 		}
 	}
-	dict, err := OpenDict(filepath.Join(dir, dictFileName), def.MaxGroups)
+	if recreate {
+		dictFloor = 0
+	}
+	dict, err := OpenDict(filepath.Join(dir, dictFileName), def.MaxGroups, dictFloor)
 	if err != nil {
 		return nil, fmt.Errorf("contador %s: %w", def.Name, err)
 	}
@@ -194,13 +311,16 @@ func Open(dir string, def Definition, minRows uint64, recreate bool) (*Counter, 
 		return nil, fmt.Errorf("contador %s: %w", def.Name, err)
 	}
 	c := &Counter{
-		def:    def,
-		dir:    dir,
-		dict:   dict,
-		vector: vector,
-		over:   make(map[types.RowID]uint32),
-		byText: make(map[string]uint32),
-		now:    time.Now,
+		def:              def,
+		dir:              dir,
+		dict:             dict,
+		vector:           vector,
+		over:             make(map[types.RowID]uint32),
+		byText:           make(map[string]uint32),
+		now:              time.Now,
+		groupRowsCeiling: MaxGroupRows,
+
+		overlayShrinkThreshold: OverlayShrinkThreshold,
 	}
 	c.deriv = c.NewDeriver()
 	// Os slices por grupo e os textos nascem do dicionário que já está em
@@ -228,6 +348,8 @@ func validateDefinition(def Definition) error {
 		return fmt.Errorf("contador %s: maxGroups %d fora de [1, %d]", def.Name, def.MaxGroups, conditionBit-1)
 	case def.Where != "" && def.NewEvaluator == nil:
 		return fmt.Errorf("contador %s: where declarado sem avaliador", def.Name)
+	case def.Scope != "" && def.NewScopeEvaluator == nil:
+		return fmt.Errorf("counter %s: scope declared without an evaluator", def.Name)
 	case def.Format == nil:
 		return fmt.Errorf("contador %s: sem molde de groupKey — quem monta a Definition tem de passar o declarado ou o keyformat.Default", def.Name)
 	case def.Format.Len() != len(def.Columns):
@@ -243,12 +365,9 @@ func (c *Counter) catchUpWithDict() error {
 	c.dict.mu.Lock()
 	defer c.dict.mu.Unlock()
 	limit := len(c.dict.keys) + 1
-	for len(c.refs) < limit {
-		id := uint32(len(c.refs))
-		if !c.def.DisableTotal {
-			c.totals = append(c.totals, 0)
-		}
-		c.refs = append(c.refs, 0)
+	for len(c.pairs) < limit {
+		id := uint32(len(c.pairs))
+		c.pairs = append(c.pairs, 0)
 		c.lastTouch = append(c.lastTouch, 0)
 		c.emptySince = append(c.emptySince, 0)
 		c.texts = append(c.texts, nil)
@@ -291,6 +410,7 @@ func (c *Counter) OnRefuse(fn func()) { c.onRefuse = fn }
 type Deriver struct {
 	c          *Counter
 	eval       Evaluator
+	scope      Evaluator
 	fr         encoding.FieldReader
 	vals       []types.Value // na ordem DECLARADA do groupBy
 	order      []int         // posição declarada da i-ésima coluna em ordem crescente de id
@@ -299,11 +419,17 @@ type Deriver struct {
 	keyBuf     []byte
 }
 
-// NewDeriver instancia um derivador com avaliador e scratch próprios.
+// NewDeriver instancia um derivador com avaliadores e scratch próprios. Os
+// avaliadores do `where` e do `scope` saem das MESMAS fábricas da Definition,
+// numa instância por Deriver: o scratch de um avaliador é de um dono só, e o
+// writer e a auditoria derivam em goroutines diferentes.
 func (c *Counter) NewDeriver() *Deriver {
 	d := &Deriver{c: c, vals: make([]types.Value, len(c.def.Columns))}
 	if c.def.NewEvaluator != nil {
 		d.eval = c.def.NewEvaluator()
+	}
+	if c.def.NewScopeEvaluator != nil {
+		d.scope = c.def.NewScopeEvaluator()
 	}
 	// O payload é ordenado por FieldID; o groupBy não. A leitura casa os dois
 	// por merge linear sobre a ordem crescente e devolve cada valor à posição
@@ -327,7 +453,9 @@ func (c *Counter) NewDeriver() *Deriver {
 
 // Derive lê o payload UMA vez e devolve a chave composta do grupo e a condição.
 // hasGroup=false quando alguma coluna do groupBy está ausente (NULL é ausência)
-// ou com tipo diferente do declarado — a linha não é contada. A chave é válida
+// ou com tipo diferente do declarado, ou quando a linha está fora do `scope` —
+// nos três casos a linha não é contada. O payload é o estado pós-merge, então
+// o scope e o where enxergam a linha inteira, e não o patch. A chave é válida
 // até a próxima chamada. Não aloca.
 func (d *Deriver) Derive(payload []byte) (key []byte, cond, hasGroup bool, err error) {
 	d.foundCount = 0
@@ -356,6 +484,18 @@ func (d *Deriver) Derive(payload []byte) (key []byte, cond, hasGroup bool, err e
 	}
 	if d.foundCount != len(d.ids) {
 		return nil, false, false, nil
+	}
+	// O scope vem ANTES da chave e do where: a linha fora do escopo não é
+	// membro de grupo nenhum, e montar a chave ou avaliar a condição dela seria
+	// trabalho jogado fora.
+	if d.scope != nil {
+		member, err := d.scope.Evaluate(payload)
+		if err != nil {
+			return nil, false, false, err
+		}
+		if !member {
+			return nil, false, false, nil
+		}
 	}
 	d.keyBuf, err = valuekey.AppendComposite(d.keyBuf[:0], d.vals)
 	if err != nil {
@@ -410,10 +550,10 @@ func (c *Counter) transition(rowID types.RowID, payload []byte, tombstone, occur
 		}
 		if hasGroup {
 			// A colisão é conferida ANTES do Intern, e não depois: o Intern
-			// fsynca a chave antes de o id existir em memória, e id de grupo
-			// nunca é reemitido — uma chave colidente que chegasse ao disco
-			// faria TODA abertura seguinte falhar, deixando o dataset
-			// impossível de abrir. Só no caminho de grupo novo: com grupo
+			// grava a chave no arquivo, e o próximo checkpoint (ou o fsync de
+			// uma aposentadoria) a torna durável — uma chave colidente que
+			// chegasse ao disco faria TODA abertura seguinte falhar, deixando o
+			// dataset impossível de abrir. Só no caminho de grupo novo: com grupo
 			// conhecido o ByKey devolve na hora e nada é renderizado, que é o
 			// que mantém o caminho quente sem alocação.
 			if _, known := c.dict.ByKey(key); !known {
@@ -434,7 +574,7 @@ func (c *Counter) transition(rowID types.RowID, payload []byte, tombstone, occur
 			case err != nil:
 				return fmt.Errorf("contador %s: internar o grupo da linha %d: %w", c.def.Name, rowID, err)
 			default:
-				if int(id) >= len(c.refs) {
+				if int(id) >= len(c.pairs) {
 					if err := c.catchUpWithDict(); err != nil {
 						return err
 					}
@@ -446,42 +586,80 @@ func (c *Counter) transition(rowID types.RowID, payload []byte, tombstone, occur
 			}
 		}
 	}
+	oldEntry := c.entry(rowID)
+	newGroup, oldGroup := newEntry&^conditionBit, oldEntry&^conditionBit
+	// O teto de linhas do grupo é conferido ANTES de qualquer mutação — das
+	// medidas inclusive: a recusa não pode deixar meia transição aplicada.
+	// Só a ENTRADA num grupo soma um aos refs; trocar o bit no mesmo grupo não.
+	if newGroup != WithoutGroup && newGroup != oldGroup &&
+		pairRefs(atomic.LoadUint64(&c.pairs[newGroup])) >= c.groupRowsCeiling {
+		return fmt.Errorf("%w: counter %s: group %d already holds %d rows, the ceiling of one group; "+
+			"a groupBy this coarse is almost certainly declared by mistake",
+			ErrGroupRowsCeiling, c.def.Name, newGroup, c.groupRowsCeiling)
+	}
 	if occurrence {
 		if err := c.observeMeasures(newEntry, payload); err != nil {
 			return err
 		}
 	}
-	oldEntry := c.entry(rowID)
 	if oldEntry == newEntry {
 		return nil
 	}
 	c.transitions++
+	// A palavra de cada grupo recebe UMA soma por transição — é o que torna o
+	// par (total, refs) atômico para o leitor. Mesmo grupo com o bit trocado é
+	// UMA soma de ±1 na metade alta; grupos diferentes são uma soma em cada.
+	//
 	// O agregado anda COLADO ao grupo, nas duas pontas: cada Add do agregado
-	// fica ao lado do AddInt64 do vetor que ele soma, e DENTRO das mesmas
+	// fica ao lado da soma da palavra que ele acompanha, e DENTRO das mesmas
 	// guardas. O do decremento, em especial, mora dentro do
-	// `int(g) < len(c.refs)`: quando essa guarda é falsa não existe slot e
-	// nenhum grupo desce, então um agregado que descesse ali derivaria da soma
-	// dos grupos em silêncio.
-	if g := newEntry &^ conditionBit; g != WithoutGroup {
-		atomic.AddInt64(&c.refs[g], 1)
+	// `int(oldGroup) < len(c.pairs)`: quando essa guarda é falsa não existe
+	// slot e nenhum grupo desce, então um agregado que descesse ali derivaria
+	// da soma dos grupos em silêncio.
+	newBit := !c.def.DisableTotal && newEntry&conditionBit != 0
+	oldBit := !c.def.DisableTotal && oldEntry&conditionBit != 0
+	if newGroup != WithoutGroup && newGroup == oldGroup {
+		var delta uint64
+		switch {
+		case newBit && !oldBit:
+			delta = pairTotalUnit
+			c.total.Add(1)
+		case oldBit && !newBit:
+			delta = ^pairTotalUnit + 1 // -pairTotalUnit em aritmética modular
+			c.total.Add(-1)
+		}
+		if delta != 0 {
+			atomic.AddUint64(&c.pairs[newGroup], delta)
+		}
+		c.lastTouch[newGroup] = c.transitions
+		c.over[rowID] = newEntry
+		return nil
+	}
+	// O incremento do grupo novo vem ANTES do decremento do antigo: um leitor
+	// somando os grupos no meio da transição vê a linha em dois lugares, nunca
+	// em nenhum — o contador nunca subestima.
+	if newGroup != WithoutGroup {
+		delta := uint64(1)
 		c.rows.Add(1)
-		if !c.def.DisableTotal && newEntry&conditionBit != 0 {
-			atomic.AddInt64(&c.totals[g], 1)
+		if newBit {
+			delta += pairTotalUnit
 			c.total.Add(1)
 		}
-		c.lastTouch[g] = c.transitions
-		c.emptySince[g] = 0
+		atomic.AddUint64(&c.pairs[newGroup], delta)
+		c.lastTouch[newGroup] = c.transitions
+		c.emptySince[newGroup] = 0
 	}
-	if g := oldEntry &^ conditionBit; g != WithoutGroup && int(g) < len(c.refs) {
-		if !c.def.DisableTotal && oldEntry&conditionBit != 0 {
-			atomic.AddInt64(&c.totals[g], -1)
+	if oldGroup != WithoutGroup && int(oldGroup) < len(c.pairs) {
+		delta := uint64(1)
+		if oldBit {
+			delta += pairTotalUnit
 			c.total.Add(-1)
 		}
 		c.rows.Add(-1)
-		if atomic.AddInt64(&c.refs[g], -1) == 0 {
-			c.emptySince[g] = c.now().UnixMilli()
+		if pairRefs(atomic.AddUint64(&c.pairs[oldGroup], -delta)) == 0 {
+			c.emptySince[oldGroup] = c.now().UnixMilli()
 		}
-		c.lastTouch[g] = c.transitions
+		c.lastTouch[oldGroup] = c.transitions
 	}
 	c.over[rowID] = newEntry
 	return nil
@@ -505,11 +683,8 @@ func (c *Counter) Fold() error {
 	c.dict.mu.RLock()
 	live := slices.Clone(c.dict.live)
 	c.dict.mu.RUnlock()
-	for i := range c.refs {
-		if !c.def.DisableTotal {
-			atomic.StoreInt64(&c.totals[i], 0)
-		}
-		atomic.StoreInt64(&c.refs[i], 0)
+	for i := range c.pairs {
+		atomic.StoreUint64(&c.pairs[i], 0)
 	}
 	// Zerar ANTES do laço é o que torna a Fold idempotente; sem isto uma
 	// segunda chamada acumularia sobre a primeira.
@@ -536,18 +711,19 @@ func (c *Counter) Fold() error {
 		}
 		// Depois do continue da órfã, de propósito: a entrada que grupo
 		// nenhum recebe também não pode ser creditada ao agregado.
-		atomic.AddInt64(&c.refs[g], 1)
+		delta := uint64(1)
 		rows++
 		if !c.def.DisableTotal && v&conditionBit != 0 {
-			atomic.AddInt64(&c.totals[g], 1)
+			delta += pairTotalUnit
 			total++
 		}
+		atomic.AddUint64(&c.pairs[g], delta)
 	}
 	c.rows.Store(rows)
 	c.total.Store(total)
 	now := c.now().UnixMilli()
-	for g := 1; g < len(c.refs); g++ {
-		if live[g-1] && atomic.LoadInt64(&c.refs[g]) == 0 {
+	for g := 1; g < len(c.pairs); g++ {
+		if live[g-1] && pairRefs(atomic.LoadUint64(&c.pairs[g])) == 0 {
 			// O reinício só ESTENDE a visibilidade de um grupo vazio: o
 			// instante em que ele esvaziou não é persistido, e o pior caso é
 			// ele viver mais um prazo inteiro.
@@ -560,16 +736,22 @@ func (c *Counter) Fold() error {
 // Clear apaga o vetor, o overlay e os totais; o dicionário fica, porque os ids
 // são estáveis. É o começo de uma reconstrução: o Store transiciona de novo
 // cada linha viva.
+//
+// O overlay é esvaziado com clear, que NÃO devolve a capacidade do mapa — e
+// não precisa: a reconstrução o enche de novo com todas as linhas vivas, e é o
+// ApplyOverlay do checkpoint seguinte que troca o mapa depois do dreno grande.
+//
+// O vetor é zerado IN PLACE, num mmap compartilhado: as páginas zeradas podem
+// chegar ao disco antes do checkpoint. Por isso quem chama grava antes o
+// marcador de construção em curso (MarkBuilding) — sem ele, um crash entre o
+// Clear e o checkpoint deixaria a reabertura adotar o vetor zerado.
 func (c *Counter) Clear() error {
 	if err := c.vector.Clear(); err != nil {
 		return err
 	}
 	clear(c.over)
-	for i := range c.refs {
-		if !c.def.DisableTotal {
-			atomic.StoreInt64(&c.totals[i], 0)
-		}
-		atomic.StoreInt64(&c.refs[i], 0)
+	for i := range c.pairs {
+		atomic.StoreUint64(&c.pairs[i], 0)
 		c.emptySince[i] = 0
 	}
 	// Os agregados zeram junto: a reconstrução transiciona de novo cada linha
@@ -582,15 +764,38 @@ func (c *Counter) Clear() error {
 
 // ApplyOverlay leva o overlay ao mmap e o esvazia. SÓ no checkpoint, DEPOIS
 // do fdatasync dos segmentos: é isso que garante que nenhuma página do vetor
-// descreve transição de record não durável. Erro no meio deixa o restante no
-// overlay para o próximo checkpoint.
-func (c *Counter) ApplyOverlay() error {
+// descreve transição de record não durável. Erro de Set no meio deixa o
+// restante no overlay para o próximo checkpoint (retentável).
+//
+// A PRIMEIRA coisa que ele faz é o fsync do dicionário de grupos (Dict.Sync,
+// pelo passo step). É aqui, e não num passo separado do checkpoint, porque
+// este é o ÚNICO caminho que grava id de grupo no vetor: com o fsync dentro
+// dele, nenhum chamador — o checkpoint, um seam de teste, um caminho futuro —
+// consegue levar ao vetor um id que o dicionário em disco não resolve. Falha
+// do fsync volta como ErrDictSync, sem nenhum Set: é falha de durabilidade, e
+// quem chama deixa o writer falho em vez de tentar de novo.
+//
+// Depois de drenar TUDO com sucesso, um dreno grande troca o mapa por um novo
+// (OverlayShrinkThreshold e a histerese ao lado dele): é o que devolve ao GC a
+// memória que a construção de um contador prendia até o restart. Falha no meio
+// não troca nada — o que sobrou continua no mapa para o próximo checkpoint.
+func (c *Counter) ApplyOverlay(step SyncStep) error {
+	if err := c.dict.Sync(step); err != nil {
+		return fmt.Errorf("counter %s: %w", c.def.Name, err)
+	}
 	for r, v := range c.over {
 		if err := c.vector.Set(r, v); err != nil {
 			return err
 		}
 		delete(c.over, r)
+		c.drainedSinceEmpty++
 	}
+	drained := c.drainedSinceEmpty
+	c.drainedSinceEmpty = 0
+	if drained > c.overlayShrinkThreshold && drained > overlayShrinkFactor*c.drainAvg {
+		c.over = make(map[types.RowID]uint32)
+	}
+	c.drainAvg += (drained - c.drainAvg) / overlayDrainSmoothing
 	return nil
 }
 
@@ -637,17 +842,18 @@ func (c *Counter) AuditSnapshot() AuditSnapshot {
 	c.dict.mu.RLock()
 	defer c.dict.mu.RUnlock()
 	snap := AuditSnapshot{
-		Totals: make([]int64, len(c.refs)),
-		Refs:   make([]int64, len(c.refs)),
+		Totals: make([]int64, len(c.pairs)),
+		Refs:   make([]int64, len(c.pairs)),
 		Limit:  uint32(len(c.dict.keys)) + 1,
 		Rows:   c.rows.Load(),
 		Total:  c.total.Load(),
 	}
-	for i := range c.refs {
+	for i := range c.pairs {
+		p := atomic.LoadUint64(&c.pairs[i])
 		if !c.def.DisableTotal {
-			snap.Totals[i] = atomic.LoadInt64(&c.totals[i])
+			snap.Totals[i] = pairTotal(p)
 		}
-		snap.Refs[i] = atomic.LoadInt64(&c.refs[i])
+		snap.Refs[i] = pairRefs(p)
 	}
 	return snap
 }
@@ -660,16 +866,21 @@ func (c *Counter) Limit() uint32 { return c.dict.Limit() }
 // texto são estáveis. Um id que o dicionário já emitiu mas cujos totais ainda
 // não cresceram sai como não vivo — janela de microssegundos entre a internação
 // e o crescimento, e o leitor a vê como "ainda não existe".
+//
+// total e refs saem da MESMA carga atômica (a palavra do grupo), então o par é
+// sempre um estado que o grupo de fato teve: total <= refs vale em toda leitura,
+// e nunca se vê o total de uma transição com os refs de outra.
 func (c *Counter) Group(id uint32) (key, text []byte, total, refs int64, live bool) {
 	c.dict.mu.RLock()
 	defer c.dict.mu.RUnlock()
-	if id < 1 || int(id) > len(c.dict.keys) || int(id) >= len(c.refs) {
+	if id < 1 || int(id) > len(c.dict.keys) || int(id) >= len(c.pairs) {
 		return nil, nil, 0, 0, false
 	}
+	p := atomic.LoadUint64(&c.pairs[id])
 	if !c.def.DisableTotal {
-		total = atomic.LoadInt64(&c.totals[id])
+		total = pairTotal(p)
 	}
-	return c.dict.keys[id-1], c.texts[id], total, atomic.LoadInt64(&c.refs[id]), c.dict.live[id-1]
+	return c.dict.keys[id-1], c.texts[id], total, pairRefs(p), c.dict.live[id-1]
 }
 
 // checkTextCollision recusa uma chave NOVA cujo texto já pertence a um grupo
@@ -747,7 +958,8 @@ type Stats struct {
 	Bytes         int64  // vetor + dicionário + mmap e snapshot das medidas
 	// Rows é quantas linhas vivas apontam para algum grupo — a soma dos refs.
 	// Menor que o rows do dataset é diagnóstico direto: são as linhas SEM
-	// alguma coluna do groupBy, que o contador não conta por desenho.
+	// alguma coluna do groupBy e, quando o contador declara `scope`, as fora
+	// do escopo — o contador não conta nenhuma das duas, por desenho.
 	Rows int64
 	// Total é quantas linhas satisfazem a condição no dataset inteiro — a soma
 	// dos totais dos grupos. Sem `where`, é igual a Rows.
@@ -786,6 +998,12 @@ func (c *Counter) RecordAudit(divergences int, when time.Time) {
 	c.auditDivergences.Store(int64(divergences))
 	c.auditLast.Store(when.Unix())
 }
+
+// DictSyncedBytes é o prefixo do dicionário de grupos que um fsync tornou
+// durável: o piso que o checkpoint grava no manifest. Lido sob o wmu, logo
+// depois do fsync do ApplyOverlay, ele é exatamente o tamanho no instante do
+// fsync.
+func (c *Counter) DictSyncedBytes() int64 { return c.dict.SyncedBytes() }
 
 // Msync força as páginas sujas do vetor para disco.
 func (c *Counter) Msync() error { return c.vector.Msync() }

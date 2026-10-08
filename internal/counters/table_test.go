@@ -94,7 +94,7 @@ func payloadOfServico(t *testing.T, olt string, slot, port int64, auth bool) []b
 
 func openCounter(t *testing.T, def counter.Definition) *counter.Counter {
 	t.Helper()
-	c, err := counter.Open(t.TempDir(), def, 1024, false)
+	c, err := counter.Open(t.TempDir(), def, 1024, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

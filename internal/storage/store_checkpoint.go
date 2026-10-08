@@ -1,11 +1,13 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/segment"
 )
 
@@ -27,11 +29,20 @@ import (
 // (ApplyOverlay, ex.: ENOSPC no grow do índice) é retentável: o manifest
 // anterior permanece autoritativo.
 //
-// Os dicionários (fields.dict/values.dict) NÃO participam do checkpoint:
-// a durabilidade deles é por entrada, no momento da criação
-// (fsync-before-first-use, design §4/§8, travada por teste nos dois
-// pacotes). Nenhum batching de Sync de dicionário pode ser introduzido
-// aqui — quebraria o replay do tail de forma silenciosa.
+// O dicionário de campos (fields.dict) NÃO participa do checkpoint: a
+// durabilidade dele é por entrada, no momento da criação (fsync-before-first-
+// use, design §4/§8, travada por teste no pacote). Nenhum batching de Sync
+// dele pode ser introduzido aqui — quebraria o replay do tail de forma
+// silenciosa, porque os RECORDS carregam fieldIDs: um record durável cujo
+// fieldID se perdesse do dicionário seria ilegível.
+//
+// O dicionário de GRUPOS dos contadores é a assimetria deliberada: nenhum
+// record carrega id de grupo, e os únicos referenciadores duráveis do id (o
+// vetor e o snapshot das medidas) só são gravados aqui. Por isso o fsync dele
+// É do checkpoint — a primeira coisa de cada Counter.ApplyOverlay, antes do
+// primeiro Set do vetor e antes do SaveMeasures — e um id interno perdido
+// num crash é re-internado pelo replay sem que nada durável apontasse para
+// ele. Falha desse fsync é de durabilidade e é sticky, como a do segSync.
 func (s *Store) Checkpoint() error {
 	start := time.Now()
 	err := s.checkpoint()
@@ -93,10 +104,22 @@ func (s *Store) checkpoint() error {
 	}
 	// O overlay dos contadores vai ao mmap DEPOIS do segSync, pela mesma
 	// invariante das locations: nenhuma página do vetor de grupos descreve
-	// transição de record que não ficou durável. Erro é lógico e retentável —
-	// o que não foi aplicado fica no overlay para o próximo checkpoint.
+	// transição de record que não ficou durável. Erro de Set é lógico e
+	// retentável — o que não foi aplicado fica no overlay para o próximo
+	// checkpoint.
+	//
+	// Dentro de cada ApplyOverlay, ANTES de qualquer Set, vem o fsync do
+	// dicionário de grupos (passo syncDictContadores): o vetor só recebe id que
+	// o dicionário em disco resolve. A falha DESSE fsync não é retentável — é
+	// durabilidade, e vai para o failWriter como a do segSync (fsyncgate).
 	for _, c := range s.counters {
-		if err := s.traceStep("applyOverlayContadores", c.ApplyOverlay); err != nil {
+		err := s.traceStep("applyOverlayContadores", func() error {
+			return c.ApplyOverlay(s.counterDictSyncStep(c, "syncDictContadores"))
+		})
+		if errors.Is(err, counter.ErrDictSync) {
+			return s.failWriter(err)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -135,8 +158,11 @@ func (s *Store) checkpoint() error {
 			return err
 		}
 	}
-	// Os contadores seguem a agenda: derivados, reconstruíveis, erro não
-	// sticky. Depois do msync, cada contador registra que toda transição até
+	// Os contadores seguem a agenda: erro não sticky. A justificativa
+	// "derivados, reconstruíveis" NÃO vale para o vetor deles — uma página
+	// perdida num EIO seguida de um msync "bem-sucedido" deixa o vetor velho
+	// adotado, e nada na abertura dispara a reconstrução (débito 138).
+	// Depois do msync, cada contador registra que toda transição até
 	// aqui está durável em record E em página — é essa cobertura que autoriza
 	// a aposentadoria de um grupo vazio (counter.RetireEmptyGroups).
 	for _, c := range s.counters {
@@ -290,6 +316,11 @@ func (s *Store) checkpoint() error {
 			return s.failWriter(err)
 		}
 	}
+	// Por último, e só no sucesso: a construção de um contador está adotada
+	// quando o checkpoint que levou o vetor completo ao disco terminou. Antes
+	// disso o marcador de construção em curso é o que impede a reabertura de
+	// adotar um vetor zerado ou parcial.
+	s.clearAdoptedBuildingMarks()
 	return nil
 }
 
@@ -380,6 +411,25 @@ func (s *Store) SourceOffsets() (checkpoint.SourceOffsets, bool, error) {
 // offsetsPath é o caminho do kafka.offsets (§50, §83).
 func (s *Store) offsetsPath() string {
 	return filepath.Join(s.opts.Dir, "checkpoint", checkpoint.OffsetsFileName)
+}
+
+// counterDictSyncStep é o passo por onde passa o fsync do dicionário de grupos
+// do contador c: o seam de falha dos testes (dictSyncHook) e, quando traceName
+// não é vazio, o trace de ordem do checkpoint. O passo roda mesmo com o
+// dicionário limpo — o trace descreve a POSIÇÃO do passo no protocolo, e o
+// dicionário decide sozinho se há o que sincronizar.
+func (s *Store) counterDictSyncStep(c *counter.Counter, traceName string) counter.SyncStep {
+	return func(sync func() error) error {
+		op := sync
+		if hook := s.dictSyncHook; hook != nil {
+			name := c.Def().Name
+			op = func() error { return hook(name, sync) }
+		}
+		if traceName == "" {
+			return op()
+		}
+		return s.traceStep(traceName, op)
+	}
 }
 
 // traceStep executa a operação e, em sucesso, emite o evento no seam de

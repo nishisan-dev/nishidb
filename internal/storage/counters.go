@@ -20,11 +20,11 @@ import (
 // o seu, pelo nome declarado.
 const diretorioOfCounters = "contadores"
 
-// pendenciaOfCounter é um contador que a abertura decidiu RECONSTRUIR: a
+// pendingCounterRebuild é um contador que a abertura decidiu RECONSTRUIR: a
 // varredura roda depois do ramo de recovery, e o motivo vai para o log.
-type pendenciaOfCounter struct {
+type pendingCounterRebuild struct {
 	c      *counter.Counter
-	motivo string
+	reason string
 }
 
 // openCounters compila as definições pelo callback, abre os arquivos de cada
@@ -39,7 +39,8 @@ type pendenciaOfCounter struct {
 // # Adotar ou reconstruir
 //
 // A decisão vem do manifest, que grava por contador os parâmetros que decidem
-// o conteúdo do vetor (nome, colunas, where). Divergiu, ou não estava lá, ou o
+// o conteúdo do vetor (nome, colunas, e a identidade de where e scope — ver
+// identityOf). Divergiu, ou não estava lá, ou o
 // vetor não descreve as linhas do dataset: reconstrói — recriando os DOIS
 // arquivos, porque chaves de outras colunas não podem poluir um dicionário
 // cujos ids nunca são reemitidos. Mudar o teto não reconstrói: ele não muda o
@@ -55,19 +56,19 @@ type pendenciaOfCounter struct {
 // enquanto o Put anda, e a divergência só apareceria na auditoria — é a guarda
 // que pega o chamador de storage.Open que esqueceu de ligar os contadores.
 func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string, minRows uint64) error {
-	var declarados []checkpoint.CounterInfo
+	var declared []checkpoint.CounterInfo
 	if m != nil {
-		declarados = m.Counters
+		declared = m.Counters
 	}
 	if opts.CompileCountersCallbackFunction == nil {
-		if len(declarados) > 0 {
-			nomes := make([]string, 0, len(declarados))
-			for _, d := range declarados {
-				nomes = append(nomes, d.Name)
+		if len(declared) > 0 {
+			names := make([]string, 0, len(declared))
+			for _, d := range declared {
+				names = append(names, d.Name)
 			}
 			return fmt.Errorf("%w: o dataset %s declara os contadores %v no manifest e esta abertura não forneceu CompilaContadores; "+
 				"abrir sem as definições deixaria o contador parado enquanto o Put anda",
-				ErrInvalidArgument, opts.Dir, nomes)
+				ErrInvalidArgument, opts.Dir, names)
 		}
 		return nil
 	}
@@ -75,7 +76,7 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 	if err != nil {
 		return fmt.Errorf("storage: compilar os contadores de %s: %w", opts.Dir, err)
 	}
-	if len(defs) == 0 && len(declarados) == 0 {
+	if len(defs) == 0 && len(declared) == 0 {
 		return nil
 	}
 	if len(defs) > 0 && opts.Mode == HistoryMode {
@@ -85,30 +86,62 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 		return fmt.Errorf("%w: ModoHistorico não aceita counters: a tabela histórica não tem estado corrente a contar", ErrInvalidArgument)
 	}
 	dir := filepath.Join(idxDir, diretorioOfCounters)
-	byNome := make(map[string]checkpoint.CounterInfo, len(declarados))
-	for _, info := range declarados {
-		byNome[info.Name] = info
+	byName := make(map[string]checkpoint.CounterInfo, len(declared))
+	for _, info := range declared {
+		byName[info.Name] = info
 	}
-	vistos := make(map[string]struct{}, len(defs))
+	seen := make(map[string]struct{}, len(defs))
 	for _, def := range defs {
-		if _, dup := vistos[def.Name]; dup {
+		if _, dup := seen[def.Name]; dup {
 			return fmt.Errorf("%w: contador %q declarado duas vezes", ErrInvalidArgument, def.Name)
 		}
-		vistos[def.Name] = struct{}{}
-		info, tinha := byNome[def.Name]
-		delete(byNome, def.Name)
+		seen[def.Name] = struct{}{}
+		info, had := byName[def.Name]
+		delete(byName, def.Name)
 
-		recria, motivo := false, ""
+		counterDir := filepath.Join(dir, def.Name)
+		building, err := counter.BuildingMarked(counterDir)
+		if err != nil {
+			return fmt.Errorf("storage: abrir o contador %q de %s: %w", def.Name, opts.Dir, err)
+		}
+		recreate, reason := false, ""
 		switch {
+		case building:
+			// Vem ANTES de tudo: o marcador diz que o vetor em disco é de uma
+			// construção que não chegou ao checkpoint que a adota — zerado ou
+			// parcial —, e nem parâmetros iguais no manifest nem um vetor que
+			// cobre as linhas dizem nada sobre o conteúdo dele.
+			recreate, reason = true, "a construção anterior do contador não chegou ao checkpoint que a adota"
 		case m == nil:
 			// Dataset novo: não há o que reconstruir, o vetor nasce vazio.
-		case !tinha:
-			recria, motivo = true, "o dataset não tinha este contador"
+		case !had:
+			recreate, reason = true, "o dataset não tinha este contador"
 		case !sameDefinition(info, def):
-			recria, motivo = true, fmt.Sprintf("os parâmetros mudaram (groupBy %v → %v, where %q → %q)",
-				info.Columns, columnsOf(def), info.Where, def.Where)
+			oldWhere, oldScope := splitIdentity(info.Where)
+			recreate, reason = true, fmt.Sprintf("os parâmetros mudaram (groupBy %v → %v, where %q → %q, scope %q → %q)",
+				info.Columns, columnsOf(def), oldWhere, def.Where, oldScope, def.Scope)
 		}
-		c, err := counter.Open(filepath.Join(dir, def.Name), def, minRows, recria)
+		// O piso de durabilidade do dicionário (seção 0x0002 do manifest) só
+		// vale para o contador que vai ser ADOTADO: com recreate os arquivos
+		// vão para o lado de qualquer jeito.
+		var dictFloor int64
+		if had && !recreate {
+			dictFloor = info.DictValidBytes
+		}
+		c, err := counter.Open(counterDir, def, minRows, recreate, dictFloor)
+		if errors.Is(err, counter.ErrDictBelowFloor) {
+			// O dicionário perdeu dado que um checkpoint declarou durável.
+			// Adotá-lo deixaria o vetor apontando para ids que ele não tem, e
+			// a dobra os zeraria como órfãos: contagem baixa sem erro. A
+			// resposta é reconstruir, e é decidida AQUI — antes do
+			// OpenMeasures, que com reset não confere os ids do snapshot das
+			// medidas contra um dicionário que encolheu.
+			s.opts.Log.Warn("counter.dict_below_durable_floor",
+				"the group dictionary lost bytes that a checkpoint had recorded as durable; the counter is rebuilt from the live rows",
+				"counter", def.Name, "durable_floor_bytes", dictFloor, "error", err.Error())
+			recreate, reason = true, "o dicionário de grupos perdeu dado abaixo do piso de durabilidade do último checkpoint"
+			c, err = counter.Open(counterDir, def, minRows, true, 0)
+		}
 		if err != nil {
 			return fmt.Errorf("storage: abrir o contador %q de %s: %w", def.Name, opts.Dir, err)
 		}
@@ -119,7 +152,7 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 			measureEpoch = m.Epoch
 			persistedMeasures = slices.Contains(m.MeasureCounters, def.Name)
 		}
-		if err := c.OpenMeasures(measureEpoch, persistedMeasures, recria); err != nil {
+		if err := c.OpenMeasures(measureEpoch, persistedMeasures, recreate); err != nil {
 			if errors.Is(err, counter.ErrMeasureSnapshotCorrupt) {
 				return fmt.Errorf("%w: %w", ErrDatasetCorrupt, err)
 			}
@@ -128,10 +161,16 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 		for _, measure := range c.MeasureResetNames() {
 			s.opts.Log.Info("counter_measure.reset", "measure starts a new window without backfill", "counter", def.Name, "measure", measure)
 		}
-		if !recria && m != nil && ((c.Born() && m.NextRowID > 0) || !c.Covers(types.RowID(m.NextRowID))) {
+		if !recreate && m != nil && ((c.Born() && m.NextRowID > 0) || !c.Covers(types.RowID(m.NextRowID))) {
 			// O manifest declara os parâmetros, não a existência dos arquivos —
 			// a mesma pergunta que a agenda faz com NeedsRebuild.
-			recria, motivo = true, "os arquivos do contador não descrevem as linhas do dataset"
+			recreate, reason = true, "os arquivos do contador não descrevem as linhas do dataset"
+			// O marcador vem ANTES do Clear: o vetor é zerado in place, e a
+			// partir daqui o conteúdo dele só volta a valer depois do
+			// checkpoint que adota a construção.
+			if err := c.MarkBuilding(); err != nil {
+				return err
+			}
 			if err := c.Clear(); err != nil {
 				return err
 			}
@@ -146,26 +185,26 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 				"um grupo novo foi recusado pelo teto de maxGroups; a linha entrou, mas não é contada até o contador ser reconstruído com teto maior",
 				"contador", name, "maxGroups", def.MaxGroups)
 		})
-		if recria {
-			s.countersARecriar = append(s.countersARecriar, pendenciaOfCounter{c: c, motivo: motivo})
+		if recreate {
+			s.countersToRebuild = append(s.countersToRebuild, pendingCounterRebuild{c: c, reason: reason})
 			continue
 		}
 		if err := c.Fold(); err != nil {
 			return fmt.Errorf("storage: dobrar o contador %q de %s: %w", def.Name, opts.Dir, err)
 		}
-		if orfas := c.Stats().Orphans; orfas > 0 {
+		if orphans := c.Stats().Orphans; orphans > 0 {
 			s.opts.Log.Warn("counter.orfas",
 				"entradas do vetor apontavam para grupos aposentados ou inexistentes e foram zeradas; não é esperado fora de uma janela de crash",
-				"contador", name, "orfas", orfas)
+				"contador", name, "orfas", orphans)
 		}
 	}
 	// Sobras do manifest: contadores que o YAML já não declara.
-	sobras := make([]string, 0, len(byNome))
-	for name := range byNome {
-		sobras = append(sobras, name)
+	leftovers := make([]string, 0, len(byName))
+	for name := range byName {
+		leftovers = append(leftovers, name)
 	}
-	slices.Sort(sobras)
-	for _, name := range sobras {
+	slices.Sort(leftovers)
+	for _, name := range leftovers {
 		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
 			return fmt.Errorf("storage: apagar o contador %q removido da configuração: %w", name, err)
 		}
@@ -177,14 +216,49 @@ func (s *Store) openCounters(opts Options, m *checkpoint.Manifest, idxDir string
 }
 
 // sameDefinition compara os parâmetros que decidem o conteúdo: nome, colunas
-// (na ordem) e where.
+// (na ordem) e a identidade de where e scope (identityOf).
 //
 // O molde do groupKey NÃO entra, pelo mesmo critério do maxGroups: ele decide
 // como o grupo é ESCRITO, não o que foi contado. O texto é derivado da chave em
 // toda abertura, então trocá-lo re-renderiza e não custa uma varredura. Quem
 // avisa que ele mudou é o log de subida, que sai com o molde efetivo.
 func sameDefinition(info checkpoint.CounterInfo, def counter.Definition) bool {
-	return info.Name == def.Name && info.Where == def.Where && slices.Equal(info.Columns, columnsOf(def))
+	return info.Name == def.Name && info.Where == identityOf(def) && slices.Equal(info.Columns, columnsOf(def))
+}
+
+// identitySeparator separa where e scope no texto de identidade gravado em
+// checkpoint.CounterInfo.Where. É `\n` porque nenhum dos dois o contém: os dois
+// chegam aqui normalizados por strings.Fields, que come todo espaço em branco,
+// quebra de linha inclusive — a não-colisão sai da normalização, e não de um
+// escape.
+const identitySeparator = "\n"
+
+// identityOf é a função ÚNICA do texto que decide adotar ou reconstruir o vetor
+// a partir de where e scope, e é usada SÓ por infoOfCounters (o que vai ao
+// manifest) e por sameDefinition (o que se compara com ele).
+//
+// Sem scope é def.Where byte a byte: um dataset gravado antes do scope existir
+// abre sem reconstruir. Com scope é `<where>\n<scope>` — `\n<scope>` quando não
+// há where, nunca "" —, um texto que nenhum where normalizado sozinho produz.
+// É isso que faz o ROLLBACK reconstruir: o binário antigo compara o texto
+// combinado com o seu where, não casa, e reconstrói em vez de adotar um vetor
+// cujo conteúdo o scope decidiu.
+//
+// def.Where continua intocado, e é ele — não esta identidade — que alimenta a
+// coluna `condition` de _meta.counters, o log de subida e a impressão digital
+// de contexto do alarme.
+func identityOf(def counter.Definition) string {
+	if def.Scope == "" {
+		return def.Where
+	}
+	return def.Where + identitySeparator + def.Scope
+}
+
+// splitIdentity é o inverso de identityOf, para a mensagem de reconstrução
+// nomear o where e o scope que o manifest gravou.
+func splitIdentity(identity string) (where, scope string) {
+	where, scope, _ = strings.Cut(identity, identitySeparator)
+	return where, scope
 }
 
 func columnsOf(def counter.Definition) []uint16 {
@@ -197,6 +271,11 @@ func columnsOf(def counter.Definition) []uint16 {
 
 // infoOfCounters é a seção do manifest, na ordem em que os contadores
 // foram declarados.
+//
+// DictValidBytes é o piso de durabilidade do dicionário de cada contador: o
+// prefixo que um fsync tornou durável. Lido sob o wmu, DEPOIS do fsync que é a
+// primeira coisa do ApplyOverlay de cada contador neste mesmo checkpoint — é o
+// tamanho no instante desse fsync, e nada interna grupo entre os dois.
 func (s *Store) infoOfCounters() []checkpoint.CounterInfo {
 	if len(s.counters) == 0 {
 		return nil
@@ -204,18 +283,21 @@ func (s *Store) infoOfCounters() []checkpoint.CounterInfo {
 	out := make([]checkpoint.CounterInfo, 0, len(s.counters))
 	for _, c := range s.counters {
 		def := c.Def()
-		out = append(out, checkpoint.CounterInfo{Name: def.Name, Columns: columnsOf(def), Where: def.Where})
+		out = append(out, checkpoint.CounterInfo{
+			Name: def.Name, Columns: columnsOf(def), Where: identityOf(def),
+			DictValidBytes: c.DictSyncedBytes(),
+		})
 	}
 	return out
 }
 
-// reconstroiCountersPendentes varre as linhas vivas para cada contador que
+// rebuildPendingCounters varre as linhas vivas para cada contador que
 // a abertura decidiu reconstruir. Roda DEPOIS do ramo de recovery: as
 // locations já estão publicadas, e o que o replay já transicionou no contador
 // recém-nascido é idempotente com a varredura (o delta é contra a entrada
 // corrente do vetor).
-func (s *Store) reconstroiCountersPendentes() error {
-	for _, p := range s.countersARecriar {
+func (s *Store) rebuildPendingCounters() error {
+	for _, p := range s.countersToRebuild {
 		start := time.Now()
 		rows, err := s.varreRowsVivasInCounter(context.Background(), p.c, false)
 		if err != nil {
@@ -224,23 +306,60 @@ func (s *Store) reconstroiCountersPendentes() error {
 		if err := p.c.RemoveOld(); err != nil {
 			return err
 		}
-		s.countersConstruidos++
+		// O marcador gravado pela abertura com recreate (ou antes do Clear)
+		// só sai depois do checkpoint do fim do Open, que é o que leva o vetor
+		// completo ao disco.
+		s.awaitAdoption(p.c)
+		s.countersBuilt++
 		// O log nomeia o custo pela mesma razão do da agenda: é a única coisa
 		// que o operador precisa decidir — segundos numa subida são aceitáveis,
 		// minutos num dataset grande mudam a janela de manutenção.
 		s.opts.Log.Info("counter.construido",
 			"o contador foi construído varrendo as linhas vivas do dataset",
-			"contador", p.c.Def().Name, "motivo", p.motivo, "linhas", rows,
+			"contador", p.c.Def().Name, "motivo", p.reason, "linhas", rows,
 			"grupos", p.c.Stats().Groups, "duracao", time.Since(start).String())
 	}
-	s.countersARecriar = nil
+	s.countersToRebuild = nil
 	return nil
+}
+
+// awaitAdoption põe um contador recém-construído na fila dos que esperam o
+// checkpoint que os adota (countersAwaitingAdoption). Writer-only.
+func (s *Store) awaitAdoption(c *counter.Counter) {
+	if !slices.Contains(s.countersAwaitingAdoption, c) {
+		s.countersAwaitingAdoption = append(s.countersAwaitingAdoption, c)
+	}
+}
+
+// clearAdoptedBuildingMarks remove o marcador de construção de cada contador
+// da fila. Roda no FIM de um checkpoint bem-sucedido, sob o wmu: o manifest e
+// os msyncs que vieram antes levaram o vetor completo ao disco, e só a partir
+// daí ele pode ser adotado por uma reabertura.
+//
+// Falha ao remover não derruba o checkpoint — os dados já estão duráveis — e
+// o contador fica na fila para a próxima tentativa. O pior caso de um marcador
+// que sobra é uma reconstrução desnecessária na próxima abertura, que é custo e
+// não erro; por isso é WARN, com o nome do contador.
+func (s *Store) clearAdoptedBuildingMarks() {
+	if len(s.countersAwaitingAdoption) == 0 {
+		return
+	}
+	kept := s.countersAwaitingAdoption[:0]
+	for _, c := range s.countersAwaitingAdoption {
+		if err := c.ClearBuildingMark(); err != nil {
+			s.opts.Log.Warn("counter.building_mark_not_removed",
+				"the counter was built and checkpointed, but its building marker could not be removed; the next open rebuilds it again",
+				"counter", c.Def().Name, "error", err.Error())
+			kept = append(kept, c)
+		}
+	}
+	s.countersAwaitingAdoption = kept
 }
 
 // varreRowsVivasInCounter transiciona, no contador, toda linha com
 // location e sem lápide, lendo o record de cada uma. sobAposMu diz se a
 // leitura precisa da proteção contra a aposentadoria de segmento — na
-// abertura não há concorrência; em operação (ReconstroiCounters) o writer
+// abertura não há concorrência; em operação (RebuildCounters) o writer
 // já segura o wmu e a leitura do par (location, bytes) entra no aposMu, que é
 // o lock mais interno.
 func (s *Store) varreRowsVivasInCounter(ctx context.Context, c *counter.Counter, sobAposMu bool) (uint64, error) {
@@ -497,12 +616,22 @@ func (s *Store) AuditaCounters(ctx context.Context) ([]counter.Report, error) {
 	return out, nil
 }
 
-// ReconstroiCounters zera cada contador e o refaz varrendo as linhas vivas,
+// RebuildCounters zera cada contador e o refaz varrendo as linhas vivas,
 // SOB o wmu: a ingestão para pela varredura inteira. É o remédio para uma
 // deriva que a auditoria apontou — explícito, caro e raro —, e o custo é
 // dito no godoc e na documentação em vez de escondido atrás de um caminho
 // "sem lock" que deixaria o contador inconsistente enquanto o Put anda.
-func (s *Store) ReconstroiCounters(ctx context.Context) ([]counter.Rebuild, error) {
+//
+// O Clear zera o vetor in place, num mmap compartilhado, e por isso o marcador
+// de construção em curso é gravado ANTES dele e só sai no fim do primeiro
+// checkpoint bem-sucedido DEPOIS da varredura (awaitAdoption). Um processo que
+// morra nesse meio reabre reconstruindo, em vez de adotar o vetor zerado.
+// Cada construção tira o contador da fila de adoção antes do MarkBuilding — a
+// fila pode guardar o contador de uma reconstrução anterior ainda não
+// checkpointada —, e ele só volta à fila quando a varredura termina. Uma
+// varredura que falha deixa o marcador no lugar e o contador fora da fila: o
+// checkpoint seguinte não remove o marcador, e a reabertura reconstrói.
+func (s *Store) RebuildCounters(ctx context.Context) ([]counter.Rebuild, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
 	}
@@ -521,6 +650,16 @@ func (s *Store) ReconstroiCounters(ctx context.Context) ([]counter.Rebuild, erro
 	out := make([]counter.Rebuild, 0, len(s.counters))
 	for _, c := range s.counters {
 		start := time.Now()
+		// Uma reconstrução ANTERIOR bem-sucedida pode ter deixado o contador
+		// na fila de adoção sem checkpoint no meio. Esta nova construção
+		// invalida aquela: o contador sai da fila ANTES de o vetor ser zerado,
+		// e só volta se a varredura terminar. Sem isto, uma varredura que
+		// falha agora deixaria o checkpoint seguinte remover o marcador de
+		// uma construção incompleta.
+		s.countersAwaitingAdoption = slices.DeleteFunc(s.countersAwaitingAdoption, func(x *counter.Counter) bool { return x == c })
+		if err := c.MarkBuilding(); err != nil {
+			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Name, err)
+		}
 		if err := c.Clear(); err != nil {
 			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Name, err)
 		}
@@ -528,6 +667,7 @@ func (s *Store) ReconstroiCounters(ctx context.Context) ([]counter.Rebuild, erro
 		if err != nil {
 			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Name, err)
 		}
+		s.awaitAdoption(c)
 		out = append(out, counter.Rebuild{
 			Name: c.Def().Name, Rows: rows, Groups: c.Stats().Groups, Duration: time.Since(start),
 		})
@@ -558,9 +698,15 @@ func (s *Store) hasCounterWithRetention() bool {
 	return false
 }
 
-// AposentaGroupsVazios roda UMA passada de aposentadoria em todos os
+// RetireEmptyGroups roda UMA passada de aposentadoria em todos os
 // contadores, sob o wmu. Devolve quantos grupos saíram.
-func (s *Store) AposentaGroupsVazios() (int, error) {
+//
+// O registro de aposentadoria é fsyncado na hora, e a falha desse fsync deixa
+// o writer FALHO (ErrDictSync → failWriter), como a do checkpoint: depois de
+// um EIO de writeback as páginas perdidas saem do cache como limpas, e o
+// próximo fsync — o do checkpoint — "passaria" com os grupos pendentes fora do
+// disco. Só parar o laço deixaria essa porta do fsyncgate aberta.
+func (s *Store) RetireEmptyGroups() (int, error) {
 	if err := s.entra(); err != nil {
 		return 0, err
 	}
@@ -572,8 +718,11 @@ func (s *Store) AposentaGroupsVazios() (int, error) {
 	}
 	total := 0
 	for _, c := range s.counters {
-		n, err := c.RetireEmptyGroups(s.now())
+		n, err := c.RetireEmptyGroups(s.now(), s.counterDictSyncStep(c, ""))
 		total += n
+		if errors.Is(err, counter.ErrDictSync) {
+			return total, s.failWriter(fmt.Errorf("storage: aposentar grupos do contador %q: %w", c.Def().Name, err))
+		}
 		if err != nil {
 			return total, fmt.Errorf("storage: aposentar grupos do contador %q: %w", c.Def().Name, err)
 		}
@@ -626,7 +775,7 @@ func (s *Store) runRetirement(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		n, err := s.AposentaGroupsVazios()
+		n, err := s.RetireEmptyGroups()
 		if err != nil {
 			// Erro aqui é do writer (sticky) ou do store fechando; insistir
 			// só produz log em laço.
@@ -652,6 +801,9 @@ func describeCounters(cs []*counter.Counter) string {
 		}
 		def := c.Def()
 		fmt.Fprintf(&sb, "%s groupBy=%v keyFormat=%q", def.Name, def.Names, def.Format)
+		if def.Scope != "" {
+			fmt.Fprintf(&sb, " scope=%q", def.Scope)
+		}
 		if def.Where != "" {
 			fmt.Fprintf(&sb, " where=%q", def.Where)
 		}

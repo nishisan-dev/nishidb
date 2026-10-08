@@ -82,7 +82,8 @@ type ColumnRef struct {
 	Pos  int
 }
 
-// Expr é selada: só os três nós deste pacote a implementam, então um type
+// Expr é selada: só os nós deste pacote a implementam (LogicalExpr, Comparison,
+// NullCheck, LikeExpr e ColumnComparison), então um type
 // switch exaustivo no binder e no planner é suficiente e à prova de futuro.
 type Expr interface{ isExpr() }
 

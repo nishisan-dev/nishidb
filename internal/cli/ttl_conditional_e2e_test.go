@@ -191,10 +191,12 @@ schema:
 // A renovação empurra o prazo: alarme que recebe update a cada minuto nunca
 // expira, mesmo com a condição valendo o tempo todo.
 //
-// Isto NÃO é bug — é a decisão de desenho registrada como risco R1 da spec, e
-// este teste existe com este nome para impedir que alguém a "conserte" por
-// engano. Um teto de idade absoluta por regra é a feature que faltaria, e ela
-// ficou de fora de propósito.
+// Isto NÃO é bug — é a decisão de desenho registrada como risco R1 da spec
+// para as regras com `expireAfterWrite`, e este teste existe com este nome
+// para impedir que alguém a "conserte" por engano. Quem quer teto de idade
+// absoluta declara a regra com `anchor` sobre uma congelada `@writeTime`
+// (TestAnchorOnFrozenWriteTimeExpiresDespiteWrites); o teto contado de quando
+// a CONDIÇÃO passou a valer continua de fora (débito 84).
 func TestCicloRenovacaoEmpurraOPrazo(t *testing.T) {
 	b := newBenchTTL(t, ttlCondicionalYAML)
 	b.ingere(`{"id":"a","tipo":2}`)

@@ -271,7 +271,7 @@ func TestReconstruirZeraADeriva(t *testing.T) {
 	if err := c.Transition(ultima, payloadServico(t, s, "x", "B", true, rel.agora()), false); err != nil {
 		t.Fatal(err)
 	}
-	recs, err := s.ReconstroiCounters(context.Background())
+	recs, err := s.RebuildCounters(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestAuditoriaRespeitaOContexto(t *testing.T) {
 	if _, err := s.AuditaCounters(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("contexto cancelado tem de interromper a auditoria: %v", err)
 	}
-	if _, err := s.ReconstroiCounters(ctx); !errors.Is(err, context.Canceled) {
+	if _, err := s.RebuildCounters(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("contexto cancelado tem de interromper a reconstrução: %v", err)
 	}
 }

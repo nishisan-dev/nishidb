@@ -130,7 +130,10 @@ type runnerCounter struct {
 	// com o FieldID que a tabela PRÓPRIA do laço lhes deu — é o payload dela
 	// que o evento lê.
 	metricColumns []metricColumn
-	alarms        []*runnerAlarm
+	// totalID e rowsID são os FieldIDs de `total` e `rows` na tabela PRÓPRIA do
+	// laço: o evento lê os dois do payload que decidiu (ver countsOf).
+	totalID, rowsID types.FieldID
+	alarms          []*runnerAlarm
 }
 
 // metricColumn é uma coluna gerada por métrica de janela na linha do contador.
@@ -192,6 +195,16 @@ func New(defs []Definition, readers map[string]counters.Reader, opts Options) (*
 		rc.store = store
 		if rc.metricColumns, err = metricColumnsOf(sc, d.metrics, d.def.Measures...); err != nil {
 			return nil, fmt.Errorf("alarm: counter %q: %w", d.Counter, err)
+		}
+		for _, c := range []struct {
+			name string
+			id   *types.FieldID
+		}{{schema.CounterTotalColumn, &rc.totalID}, {schema.CounterRowsColumn, &rc.rowsID}} {
+			f, ok := sc.FieldByName([]byte(c.name))
+			if !ok {
+				return nil, fmt.Errorf("alarm: counter %q: column %q has no FieldID in the counter table", d.Counter, c.name)
+			}
+			*c.id = f.ID
 		}
 		rc.names, rc.format = d.def.Names, d.def.Format
 		for i := range d.alarms {
@@ -310,11 +323,41 @@ func (r *Runner) findAlarm(counterName, alarmName string) *runnerAlarm {
 	return nil
 }
 
+// errSweepAborted é a passada interrompida pelo Stop. Não é falha: o laço
+// sai calado, e o Stop grava o estado como a interrupção o deixou.
+var errSweepAborted = errors.New("alarm: sweep aborted by stop")
+
 // EvaluateOnce faz UMA passada por todos os alarmes de todos os contadores.
 //
 // É público para que o teste a chame direto, em vez de esperar um tique — é o
-// mesmo motivo do AposentaGroupsVazios no storage.
-func (r *Runner) EvaluateOnce() error {
+// mesmo motivo do RetireEmptyGroups no storage. Não é interrompível: a
+// interrupção é do laço, que passa o cancelamento do Stop a evaluate.
+func (r *Runner) EvaluateOnce() error { return r.evaluate(nil) }
+
+// evaluate é a passada; stop fechado a interrompe ENTRE duas decisões.
+//
+// A interrupção existe pela contrapressão da entrega de alarmes: numa rajada,
+// cada disparo ou resolução espera uma gravação durável por destino, e um Stop
+// que aguardasse a passada inteira passaria do prazo do encerramento do
+// serviço — o processo morreria sem gravar o estado, e a subida seguinte
+// reanunciaria os disparos com identidade nova.
+//
+// O cancelamento é observado antes de cada grupo da fase um e antes de cada
+// tracker da fase dois, então o Stop espera só o que está em curso: na fase
+// um, as decisões do grupo corrente (um evento por alarme do contador, cada
+// um oferecido a todos os destinos); na fase dois, uma resolução. O que sobra
+// da passada é abandonado: os contadores seguintes não rodam, e uma
+// interrupção na fase um pula também a fase dois, que resolveria como
+// ausentes os grupos que só não foram visitados. Os trackers já decididos
+// ficam como a decisão os deixou, coerentes com o que foi emitido (o
+// resolvido na fase dois já saiu e foi apagado). O Stop grava esse estado, e
+// os que ficaram sem decisão voltam na subida com o cronômetro que tinham.
+//
+// O arquivo de estado guarda só o cronômetro, não a fase: o grupo disparado
+// volta pendente na subida. Se ele continuar ausente, a passada seguinte o
+// descarta sem evento de resolução, como acontece com todo grupo disparado
+// que some com o processo parado.
+func (r *Runner) evaluate(stop <-chan struct{}) error {
 	inicio := time.Now()
 	defer func() { r.lastSweep.Store(int64(time.Since(inicio))) }()
 	now := r.now()
@@ -322,7 +365,12 @@ func (r *Runner) EvaluateOnce() error {
 	r.dirty = false
 	r.enrichBudget = maxEnrichmentsPerSweep
 	for _, rc := range r.counters {
-		if err := r.sweep(rc, now); err != nil {
+		if err := r.sweep(rc, now, stop); err != nil {
+			if errors.Is(err, errSweepAborted) && r.dirty {
+				// A view acompanha o que já foi emitido; o arquivo fica com o
+				// Stop, que grava em seguida.
+				r.publishSnapshot()
+			}
 			return err
 		}
 	}
@@ -338,11 +386,22 @@ func (r *Runner) EvaluateOnce() error {
 // Duas fases, e a segunda é o que impede alarme eterno: a varredura só enxerga
 // grupo VIVO, então um grupo aposentado simplesmente não aparece. É a ausência
 // dele na passada — e não um evento do storage — que resolve o alarme.
-func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
+//
+// stop fechado interrompe a varredura antes do próximo grupo ou do próximo
+// tracker da fase dois (ver evaluate). nil nunca interrompe.
+func (r *Runner) sweep(rc *runnerCounter, now time.Time, stop <-chan struct{}) error {
 	snap := rc.store.OpenSnapshot()
 	snap.Instant = now
 	for id := types.RowID(1); id <= snap.LimitRowID; id++ {
-		key, text, total, _, live := rc.reader.Group(uint32(id))
+		select {
+		case <-stop:
+			return errSweepAborted
+		default:
+		}
+		// Só a chave, o texto e o vivo vêm daqui. total e rows saem do
+		// payload que a condição avaliou (countsOf): esta leitura e a que
+		// montou a linha são duas, e entre elas o grupo pode ter mudado.
+		key, text, _, _, live := rc.reader.Group(uint32(id))
 		if !live {
 			continue
 		}
@@ -394,7 +453,7 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
 				ra.stats.tracked.Add(1)
 			}
 			tr.seen = r.pass
-			r.decide(rc, ra, tr, key, text, total, rec.Payload,
+			r.decide(rc, ra, tr, key, text, rec.Payload,
 				observation{present: true, conditionHolds: holds, qualified: qualified}, now)
 		}
 	}
@@ -406,7 +465,12 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
 			if tr.seen == r.pass {
 				continue
 			}
-			r.decide(rc, ra, tr, []byte(k), nil, 0, nil, observation{}, now)
+			select {
+			case <-stop:
+				return errSweepAborted
+			default:
+			}
+			r.decide(rc, ra, tr, []byte(k), nil, nil, observation{}, now)
 		}
 	}
 	return nil
@@ -419,7 +483,7 @@ func (r *Runner) sweep(rc *runnerCounter, now time.Time) error {
 //
 // payload é a linha do grupo que a observação avaliou; nil para o grupo que a
 // varredura não viu.
-func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, text []byte, total int64,
+func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, text []byte,
 	payload []byte, o observation, now time.Time) {
 	before := tr.phase
 	d := tr.evaluate(o, ra.compiled.sustainedFor, now)
@@ -463,7 +527,8 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 		ra.stats.disqualified.Add(1)
 		ra.stats.firing.Add(-1)
 	}
-	e := r.event(rc, ra, key, text, total, payload, d, now)
+	counts := rc.countsOf(payload)
+	e := r.event(rc, ra, key, text, counts, payload, d, now)
 	// Só o DISPARO enriquece e carrega o valor capturado. O enriquecimento
 	// existe para dar contexto ao problema; na resolução o fato relevante é
 	// que ele passou, e executar as consultas outra vez dobraria o custo
@@ -473,20 +538,21 @@ func (r *Runner) decide(rc *runnerCounter, ra *runnerAlarm, tr *tracker, key, te
 		e.ValueColumn = ra.compiled.valueColumn
 		e.FiringValue = tr.firingValue
 		e.HasFiringValue = tr.hasFiringValue
-		e.Enrichment = r.enrich(ra, key, text, total)
+		e.Enrichment = r.enrich(ra, key, text, counts)
 	}
 	r.sink.Emit(e)
 }
 
 // event monta o evento de uma decisão.
-func (r *Runner) event(rc *runnerCounter, ra *runnerAlarm, key, text []byte, total int64,
+func (r *Runner) event(rc *runnerCounter, ra *runnerAlarm, key, text []byte, counts groupCounts,
 	payload []byte, d decision, now time.Time) Event {
 	e := Event{
 		ID: fmt.Sprintf("%x", randomEventID()), Dataset: rc.def.Dataset,
 		Counter:          rc.def.Counter,
 		Alarm:            ra.compiled.name,
 		GroupKey:         string(text),
-		Total:            total,
+		Total:            counts.total,
+		Rows:             counts.rows,
 		TotalDisabled:    rc.def.def.DisableTotal,
 		Condition:        ra.compiled.when,
 		SustainedFor:     ra.compiled.sustainedFor,
@@ -573,6 +639,35 @@ func (r *Runner) metricsOf(rc *runnerCounter, payload []byte) []Column {
 	for i, c := range rc.metricColumns {
 		if present[i] {
 			out = append(out, Column{Name: c.name, Value: values[i]})
+		}
+	}
+	return out
+}
+
+// groupCounts é o par (total, rows) de um grupo como o evento o anuncia.
+type groupCounts struct{ total, rows int64 }
+
+// countsOf lê total e rows do MESMO payload que a decisão avaliou — o molde de
+// firedValueOf. Não da leitura do Group que a varredura fez antes: aquela e a
+// que montou a linha (counters/table.go, (*source).record) são duas cargas, e
+// entre elas o grupo pode ter mudado; o evento anunciaria um par que não foi o
+// que decidiu. payload nil — o grupo aposentado, que a varredura não viu — dá
+// zero e zero. Coluna ausente (total com `total: false`) fica zero.
+//
+// Só roda quando há evento a emitir, nunca no caminho saudável.
+func (rc *runnerCounter) countsOf(payload []byte) groupCounts {
+	var out groupCounts
+	if payload == nil {
+		return out
+	}
+	var fr encoding.FieldReader
+	fr.Reset(payload)
+	for id, v, ok := fr.Next(); ok; id, v, ok = fr.Next() {
+		switch id {
+		case rc.totalID:
+			out.total = v.I64
+		case rc.rowsID:
+			out.rows = v.I64
 		}
 	}
 	return out

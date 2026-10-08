@@ -29,13 +29,13 @@ func TestAposentadoriaDeGruposNoStore(t *testing.T) {
 	exigeTotal(t, s, "aut", "X", 0, 0)
 	rel.advance(2 * time.Hour)
 	// Sem checkpoint, a saída não está coberta: nada sai.
-	if n, err := s.AposentaGroupsVazios(); err != nil || n != 0 {
+	if n, err := s.RetireEmptyGroups(); err != nil || n != 0 {
 		t.Fatalf("antes do checkpoint: %d, %v", n, err)
 	}
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := s.AposentaGroupsVazios(); err != nil || n != 1 {
+	if n, err := s.RetireEmptyGroups(); err != nil || n != 1 {
 		t.Fatalf("depois do checkpoint: %d, %v", n, err)
 	}
 	ct := counterChamado(t, s, "aut")

@@ -2,6 +2,7 @@ package series
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -16,12 +17,13 @@ type capturedSample struct {
 }
 type capturingOutput struct{ samples []capturedSample }
 
-func (o *capturingOutput) Publish(key, body []byte, at time.Time) {
+func (o *capturingOutput) Publish(_ context.Context, key, body []byte, at time.Time) error {
 	o.samples = append(o.samples, capturedSample{bytes.Clone(key), bytes.Clone(body), at})
+	return nil
 }
 
 func TestOneReadingFeedsFileAndAllKafkaOutputs(t *testing.T) {
-	f := newFakeCounter(t, grupo{"A", 1, 0, true}, grupo{"B", 2, 7, true}, grupo{"old", 3, 8, false})
+	f := newFakeCounter(t, group{"A", 1, 0, true, 0}, group{"B", 2, 7, true, 9}, group{"old", 3, 8, false, 0})
 	a, b := &capturingOutput{}, &capturingOutput{}
 	dir := t.TempDir()
 	e, err := NewEmitter(Options{Dataset: "services", Counter: "by_olt", Columns: []string{"olt", "slot"}, Reader: f,
@@ -30,13 +32,13 @@ func TestOneReadingFeedsFileAndAllKafkaOutputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = e.Close() })
-	if err := e.EmitOnce(); err != nil {
+	if err := e.EmitOnce(context.Background(), t0); err != nil {
 		t.Fatal(err)
 	}
 	if len(a.samples) != 2 || !reflect.DeepEqual(a.samples, b.samples) {
 		t.Fatalf("fanout mismatch: %+v %+v", a, b)
 	}
-	rows := linhas(t, dir, "samples.ndjson")
+	rows := readRows(t, dir, "samples.ndjson")
 	for i, sample := range a.samples {
 		var row map[string]any
 		if err := json.Unmarshal(sample.body, &row); err != nil {
@@ -59,14 +61,23 @@ func TestOneReadingFeedsFileAndAllKafkaOutputs(t *testing.T) {
 	if rows[0]["total"] != float64(0) {
 		t.Fatal("zero group missing")
 	}
+	// `rows` vai nas DUAS saídas, arquivo e Kafka, com o valor dos membros e
+	// não o do total (7 contra 9).
+	var kafkaRow map[string]any
+	if err := json.Unmarshal(a.samples[1].body, &kafkaRow); err != nil {
+		t.Fatal(err)
+	}
+	if kafkaRow["rows"] != float64(9) || kafkaRow["total"] != float64(7) || rows[1]["rows"] != float64(9) {
+		t.Fatalf("rows do grupo B: Kafka %v, arquivo %v; quero 9 nos dois (total 7)", kafkaRow, rows[1])
+	}
 	// Fail the file after the first sweep. Both Kafka outputs must continue.
 	if err := e.w.f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.EmitOnce(); err != nil {
+	if err := e.EmitOnce(context.Background(), t0); err != nil {
 		t.Fatalf("file failure stopped Kafka: %v", err)
 	}
-	if err := e.EmitOnce(); err != nil {
+	if err := e.EmitOnce(context.Background(), t0); err != nil {
 		t.Fatal(err)
 	}
 	if len(a.samples) != 6 || !e.fileFailed || e.Stats().Errors != 1 {
@@ -75,7 +86,7 @@ func TestOneReadingFeedsFileAndAllKafkaOutputs(t *testing.T) {
 }
 
 func TestKafkaOnlyCreatesNoDirectoryAndKeyDoesNotUseDisplayText(t *testing.T) {
-	f := newFakeCounter(t, grupo{"A|B", 1, 1, true}, grupo{"A", 2, 2, true})
+	f := newFakeCounter(t, group{"A|B", 1, 1, true, 0}, group{"A", 2, 2, true, 0})
 	f.texts[0], f.texts[1] = []byte("same display"), []byte("same display")
 	o := &capturingOutput{}
 	dir := filepath.Join(t.TempDir(), "series")
@@ -86,7 +97,7 @@ func TestKafkaOnlyCreatesNoDirectoryAndKeyDoesNotUseDisplayText(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := e.EmitOnce(); err != nil {
+		if err := e.EmitOnce(context.Background(), t0); err != nil {
 			t.Fatal(err)
 		}
 		if err := e.Close(); err != nil {

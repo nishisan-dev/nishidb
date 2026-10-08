@@ -47,7 +47,7 @@ func compile(t *testing.T, yaml string) *schema.Compiled {
 
 func TestCompilaRegrasProduzProgramaEFundo(t *testing.T) {
 	c := compile(t, dsYAML)
-	regras, err := predicate.CompileRegras(c.TTLRules, c)
+	regras, err := predicate.CompileRules(c.TTLRules, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestCompilaRegrasRecusaWhenSobreCampoDeSistema(t *testing.T) {
 	for _, field := range []string{schema.WriteInstantFieldName, schema.TTLFieldName} {
 		yaml := strings.Replace(dsYAML, `"tipo = 2"`, `"`+field+` = 2"`, 1)
 		c := compile(t, yaml)
-		_, err := predicate.CompileRegras(c.TTLRules, c)
+		_, err := predicate.CompileRules(c.TTLRules, c)
 		if err == nil {
 			t.Fatalf("condição sobre %q foi aceita", field)
 		}
@@ -94,21 +94,21 @@ func TestCompilaRegrasRecusaWhenSobreCampoDeSistema(t *testing.T) {
 
 func TestCompilaRegrasRecusaWhenQueNaoCompila(t *testing.T) {
 	c := compile(t, strings.Replace(dsYAML, `"tipo = 2"`, `"tipo ==== 2"`, 1))
-	if _, err := predicate.CompileRegras(c.TTLRules, c); err == nil {
+	if _, err := predicate.CompileRules(c.TTLRules, c); err == nil {
 		t.Fatal("condição com sintaxe inválida foi aceita")
 	}
 }
 
 func TestCompilaRegrasRecusaWhenSobreColunaInexistente(t *testing.T) {
 	c := compile(t, strings.Replace(dsYAML, `"tipo = 2"`, `"naoExiste = 2"`, 1))
-	if _, err := predicate.CompileRegras(c.TTLRules, c); err == nil {
+	if _, err := predicate.CompileRules(c.TTLRules, c); err == nil {
 		t.Fatal("condição sobre coluna inexistente foi aceita")
 	}
 }
 
 func TestCompilaRegrasRecusaWhenComParametro(t *testing.T) {
 	c := compile(t, strings.Replace(dsYAML, `"tipo = 2"`, `"tipo = ?"`, 1))
-	_, err := predicate.CompileRegras(c.TTLRules, c)
+	_, err := predicate.CompileRules(c.TTLRules, c)
 	if err == nil {
 		t.Fatal("parâmetro posicional foi aceito numa regra")
 	}

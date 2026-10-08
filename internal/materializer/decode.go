@@ -191,8 +191,7 @@ func (m *Materializer) AoReprocessar(fn func(seguidos int64, columns int)) { m.a
 // A busca é BINÁRIA, e não uma varredura. Quando o Parse retorna, as entries
 // já estão ordenadas por FieldID e sem duplicatas, e um documento do piloto
 // traz ~1.650 delas: varrer todas para achar uma ou duas seria pagar uma
-// passada inteira por evento no caminho quente. É a mesma escolha que o
-// `slotOf` do prazo já faz, e pela mesma razão.
+// passada inteira por evento no caminho quente.
 func (d *Decodificado) carimbaRelogio(c *schema.Compiled, agoraMs int64) {
 	if c.WriteInstantField != nil {
 		d.carimba(c.WriteInstantField.ID, agoraMs)

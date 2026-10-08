@@ -71,8 +71,9 @@ func TestAberturaRecusaDoisGruposComOMesmoTexto(t *testing.T) {
 }
 
 // TestColisaoRecusaAntesDeAChaveIrAoDisco é a invariante que separa um erro de
-// um dataset perdido: o Intern fsynca a chave ANTES de o id existir em memória,
-// e id de grupo nunca é reemitido. Uma chave colidente que chegasse ao disco
+// um dataset perdido: o Intern grava a chave no arquivo, o próximo checkpoint a
+// torna durável, e id durável nunca é reemitido. Uma chave colidente que
+// chegasse ao disco
 // faria TODA abertura seguinte falhar na mesma colisão, sem remédio que não
 // fosse apagar o contador.
 func TestColisaoRecusaAntesDeAChaveIrAoDisco(t *testing.T) {

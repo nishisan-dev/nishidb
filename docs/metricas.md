@@ -179,6 +179,9 @@ TTL: o que venceu, o que foi preservado pela carência e o coletor.
 | `nishidb_expired_total` | counter | `dataset` | entidades que ganharam lápide por inatividade, pelas duas rotas: o coletor e a descoberta oportunista da compaction |
 | `nishidb_ttl_rule_matched_total` | counter | `dataset`, `rule` | escritas decididas por cada regra de ttl; o rótulo é o ÍNDICE no YAML, porque é a ordem que decide qual vence |
 | `nishidb_ttl_unmatched_total` | counter | `dataset` | escritas que não casaram com regra de ttl nenhuma; só acontece em dataset sem regra de fundo |
+| `nishidb_ttl_anchor_absent_total` | counter | `dataset`, `rule` | só para regras com `anchor`: escritas em que a regra teria decidido (o `when` casou, ou não existe) e o campo âncora faltava no documento, e a próxima regra foi tentada |
+| `nishidb_ttl_anchor_in_future_total` | counter | `dataset` | âncoras posteriores ao instante da escrita, limitadas a ele (o prazo vira `expireAfter` contado da escrita); sobe com origem de relógio adiantado |
+| `nishidb_ttl_expired_on_write_total` | counter | `dataset` | documentos gravados já vencidos (âncora + `expireAfter` no passado); somem da consulta logo após a escrita e o coletor dá a lápide. Backlog relido é a causa típica |
 | `nishidb_expiry_grace_total` | counter | `dataset` | carências dadas a entidades sem instante de escrita; é o que sobe nos primeiros minutos depois de ligar a expiração num dataset já materializado, quando ainda não há nada a expirar |
 | `nishidb_expiry_scanned_total` | counter | `dataset` | entradas do índice de escritas examinadas pelo coletor; comparada com o total de rows, diz se o cursor dá a volta ou empaca |
 
@@ -214,7 +217,7 @@ Dez por contador declarado no bloco `counters:`, com o rótulo `counter`.
 | `nishidb_counter_groups_retired_total` | counter | `counter`, `dataset` | grupos aposentados por ficarem sem linha há mais que retainEmptyGroups, desde a criação do contador |
 | `nishidb_counter_orphan_entries` | gauge | `counter`, `dataset` | entradas do vetor apontando para grupo aposentado ou inexistente, zeradas na dobra da abertura; não é esperado fora de uma janela de crash |
 | `nishidb_counter_bytes` | gauge | `counter`, `dataset` | bytes em disco do contador: vetor de grupos mais dicionário |
-| `nishidb_counter_rows` | gauge | `counter`, `dataset` | linhas vivas que apontam para algum grupo deste contador; abaixo do rows do dataset são as linhas sem alguma coluna do groupBy, que o contador não conta por desenho |
+| `nishidb_counter_rows` | gauge | `counter`, `dataset` | linhas vivas que apontam para algum grupo deste contador (os membros); abaixo do rows do dataset são as linhas sem alguma coluna do groupBy ou fora do scope, que o contador não conta por desenho |
 | `nishidb_counter_counted_rows` | gauge | `counter`, `dataset` | linhas que satisfazem a condição deste contador no dataset inteiro; sem `where`, igual ao rows do contador |
 | `nishidb_counter_audit_divergent_groups` | gauge | `counter`, `dataset` | divergências na última auditoria conclusiva — grupos, linhas sem grupo internado e os dois agregados; 0 até a primeira (ver o timestamp ao lado) |
 | `nishidb_counter_audit_last_success_timestamp` | gauge | `counter`, `dataset` | Unix timestamp da última auditoria conclusiva do contador; 0 até a primeira |
@@ -275,8 +278,13 @@ responde a segunda pergunta.
 ### Emissão periódica de contador
 
 Só nos datasets que declaram `emit:` dentro de algum contador. As cinco
-primeiras saem por contador com destino `file`, com o rótulo `counter`.
-`nishidb_series_emitting` também considera emissores exclusivamente Kafka.
+primeiras saem por contador com destino `file`, com o rótulo `counter`. As
+duas do laço (`nishidb_series_skipped_boundaries_total` e
+`nishidb_series_pass_seconds`) saem para **todo** contador com `emit:`,
+inclusive os que enviam somente para Kafka. `nishidb_series_emitting` também
+considera emissores exclusivamente Kafka. As passadas acontecem nas fronteiras
+de `every`, alinhadas à época Unix (ver
+[cadência](operacao-series-kafka.md#cadência-passadas-nas-fronteiras-de-every)).
 
 | série | tipo | labels | o que responde |
 |---|---|---|---|
@@ -286,6 +294,8 @@ primeiras saem por contador com destino `file`, com o rótulo `counter`.
 | `nishidb_series_bytes` | gauge | `counter`, `dataset` | tamanho do arquivo corrente. O teto de disco de um contador é `maxBytes × (keep+1)` |
 | `nishidb_series_last_success_timestamp` | gauge | `counter`, `dataset` | epoch segundos da última passada que escreveu sem erro; 0 até a primeira. É a série que um alerta de "a emissão parou" observa |
 | `nishidb_series_emitting` | gauge | `dataset` | 1 enquanto algum laço de emissão do dataset está de pé |
+| `nishidb_series_skipped_boundaries_total` | counter | `counter`, `dataset` | fronteiras de `every` puladas desde a subida: slots que a série não terá, porque a passada anterior terminou depois da fronteira seguinte. Cada ocorrência gera um WARN `series.boundaries_skipped` |
+| `nishidb_series_pass_seconds` | gauge | `counter`, `dataset` | duração da última passada concluída; 0 até a primeira. Passadas mais longas que `every` atrasam as seguintes e acabam pulando fronteiras. Inclui a espera por espaço no buffer dos destinos Kafka |
 
 Destinos Kafka publicam as séries abaixo por `dataset`, `counter` e
 `destination`, inclusive antes da primeira entrega. A origem é a mesma de
@@ -294,10 +304,11 @@ Destinos Kafka publicam as séries abaixo por `dataset`, `counter` e
 | série | tipo | o que responde |
 |---|---|---|
 | `nishidb_series_kafka_delivered_total` | counter | mensagens confirmadas pelo Kafka desde a subida |
-| `nishidb_series_kafka_dropped_total` | counter | mensagens descartadas ou não confirmadas; label adicional `reason`: `buffer_full`, `message_too_large`, `timeout`, `publish_error`, `shutdown` |
+| `nishidb_series_kafka_dropped_total` | counter | mensagens descartadas ou não confirmadas; label adicional `reason`: `buffer_full`, `message_too_large`, `timeout`, `publish_error`, `shutdown`. `buffer_full` nasce em zero e não é mais produzido pela entrada no buffer, que espera em vez de descartar |
 | `nishidb_series_kafka_pending_records` | gauge | mensagens aguardando conclusão, incluindo as em voo |
 | `nishidb_series_kafka_pending_bytes` | gauge | bytes de chave e corpo das mensagens pendentes |
 | `nishidb_series_kafka_last_success_timestamp` | gauge | última confirmação em segundos do epoch; zero até a primeira |
+| `nishidb_series_kafka_admission_wait_seconds_total` | counter | tempo acumulado, em segundos, em que a emissão deste contador esperou espaço no buffer do destino (contrapressão). Subindo, o destino não acompanha a passada e a está atrasando. Mesmo valor de `admissionWaitSeconds` no `/v1/stats` |
 
 Timeout pode ocorrer após o broker armazenar a mensagem. Os descartes medem
 resultados locais, sem afirmar perda exata no tópico. Limites e garantias estão
@@ -364,14 +375,19 @@ Números medidos de desempenho não moram aqui — eles ficam nos `aceite-*.md`,
 com a bancada que os produziu.
 
 
-### Entrega de alarmes por webhook
+### Entrega de alarmes
 
-Rótulos `dataset` e `destination`; `dropped_total` acrescenta `reason`, de um
+As séries valem para os dois tipos de destino, [webhook](operacao-webhook.md)
+e [Kafka](operacao-alarmes-kafka.md), com os mesmos nomes: o tipo não é
+rótulo (ele sai como `kind` no `/v1/stats`). Rótulos `dataset` e `destination`; `dropped_total` acrescenta `reason`, de um
 conjunto fechado. As séries existem desde a abertura da fila e vêm da mesma
 estrutura de `datasets[].alarmDelivery` em `/v1/stats`. Contadores reiniciam
 com o processo; gauges de disco são recuperadas dos arquivos. Motivos de
 descarte: `memory_full`, `disk_full` (bytes ou quantidade), `event_too_large`,
-`encoding_error`, `destination_failed`, `closed`. Perdas numa queda antes da
+`encoding_error`, `destination_failed`, `closed`. `memory_full` não é mais
+emitido: com o buffer de memória cheio a admissão espera o gravador (o tempo
+aparece em `admission_wait_seconds_total`). A série é mantida, sempre em zero,
+para não quebrar painéis e alertas. Perdas numa queda antes da
 persistência não têm contagem exata recuperável.
 
 | Métrica | Tipo | Significado |
@@ -381,11 +397,12 @@ persistência não têm contagem exata recuperável.
 | `nishidb_alarm_delivery_disk_events` | gauge | eventos duráveis ainda sem remoção confirmada |
 | `nishidb_alarm_delivery_disk_bytes` | gauge | bytes dos arquivos publicados, incluindo cabeçalhos |
 | `nishidb_alarm_delivery_oldest_pending_seconds` | gauge | idade do evento durável mais antigo |
-| `nishidb_alarm_delivery_delivered_total` | counter | entregas HTTP 2xx com remoção durável confirmada |
-| `nishidb_alarm_delivery_failed_attempts_total` | counter | tentativas HTTP malsucedidas |
+| `nishidb_alarm_delivery_delivered_total` | counter | entregas confirmadas (HTTP 2xx ou ack do Kafka) com remoção durável |
+| `nishidb_alarm_delivery_failed_attempts_total` | counter | tentativas de entrega malsucedidas (webhook ou Kafka) |
 | `nishidb_alarm_delivery_persistence_errors_total` | counter | erros locais que suspendem a fila |
 | `nishidb_alarm_delivery_dropped_total` | counter | novos eventos descartados, por motivo |
 | `nishidb_alarm_delivery_last_success_timestamp` | gauge | último sucesso confirmado, em segundos do epoch; zero antes do primeiro |
 | `nishidb_alarm_delivery_active` | gauge | 1 enquanto o remetente está ligado, inclusive durante retentativa |
 | `nishidb_alarm_delivery_failed` | gauge | 1 após falha local que exige intervenção e reinício |
 | `nishidb_alarm_delivery_paused` | gauge | 1 quando o destino foi removido e a fila foi preservada |
+| `nishidb_alarm_delivery_admission_wait_seconds_total` | counter | segundos que a varredura esperou vaga no buffer de memória porque a gravação em disco não acompanhou a rajada; acumulado ao fim de cada espera |

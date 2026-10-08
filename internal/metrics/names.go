@@ -7,6 +7,10 @@ const (
 	MetSeriesKafkaPendingRecords       = "nishidb_series_kafka_pending_records"
 	MetSeriesKafkaPendingBytes         = "nishidb_series_kafka_pending_bytes"
 	MetSeriesKafkaLastSuccessTimestamp = "nishidb_series_kafka_last_success_timestamp"
+	// MetSeriesKafkaAdmissionWaitSecondsTotal é o tempo acumulado em que a
+	// emissão do contador esperou vaga no destino: o sinal de que o destino
+	// não acompanha a passada e a está atrasando.
+	MetSeriesKafkaAdmissionWaitSecondsTotal = "nishidb_series_kafka_admission_wait_seconds_total"
 )
 
 // Os nomes das métricas do §92, LITERAIS.
@@ -151,6 +155,16 @@ const (
 	// porque é a ordem que decide qual vence.
 	MetTTLRuleMatched = "nishidb_ttl_rule_matched_total"
 	MetTTLUnmatched   = "nishidb_ttl_unmatched_total"
+	// MetTTLAnchorAbsent tem o mesmo rótulo `rule` e só existe para as regras
+	// com `anchor`: escritas em que a regra teria decidido e a âncora faltava
+	// no record, e a próxima regra foi tentada.
+	MetTTLAnchorAbsent = "nishidb_ttl_anchor_absent_total"
+	// MetTTLAnchorInFuture são as âncoras posteriores à escrita, limitadas a
+	// ela — o sinal de uma origem com relógio adiantado.
+	MetTTLAnchorInFuture = "nishidb_ttl_anchor_in_future_total"
+	// MetTTLExpiredOnWrite são os records gravados já vencidos: a âncora mais
+	// o prazo ficou no passado. Backlog relido é a causa típica.
+	MetTTLExpiredOnWrite = "nishidb_ttl_expired_on_write_total"
 
 	// Séries da tabela histórica, publicadas no rótulo do dataset BASE — é
 	// nele que o operador declarou o bloco, e é nele que vai procurar.
@@ -580,10 +594,11 @@ const (
 //
 // Rows e CountedRows são os agregados do contador inteiro, e existem para que
 // o denominador e o numerador do alarme saiam do scrape sem uma consulta e sem
-// somar os grupos: Rows é quantas linhas apontam para algum grupo,
-// CountedRows quantas satisfazem a condição. Rows abaixo do
+// somar os grupos: Rows é quantas linhas apontam para algum grupo (os
+// membros), CountedRows quantas satisfazem a condição. Rows abaixo do
 // nishidb_rows do dataset é a diferença que ninguém enxergava sem varrer — as
-// linhas sem alguma coluna do groupBy, que o contador não conta por desenho.
+// linhas sem alguma coluna do groupBy e, com `scope`, as fora do escopo, que o
+// contador não conta por desenho.
 //
 // CountedRows, e não `nishidb_counter_total`: os dois são MEDIDORES — descem
 // quando uma linha é lapidada ou vence — e o sufixo _total é reservado a
@@ -744,6 +759,14 @@ const (
 	// MetSeriesEmitting é 1 enquanto algum laço de emissão do dataset está de
 	// pé.
 	MetSeriesEmitting = "nishidb_series_emitting"
+	// MetSeriesSkippedBoundariesTotal são as fronteiras puladas desde a
+	// subida: slots que a série não terá, porque a passada anterior passou da
+	// fronteira seguinte. Sai para todo emissor, inclusive o só-Kafka.
+	MetSeriesSkippedBoundariesTotal = "nishidb_series_skipped_boundaries_total"
+	// MetSeriesPassSeconds é a duração da última passada concluída. É
+	// medidor, como MetAlarmSweepSeconds: descreve a última, e não acumula.
+	// Acima de `every`, as passadas atrasam e acabam pulando fronteiras.
+	MetSeriesPassSeconds = "nishidb_series_pass_seconds"
 )
 
 // Entrega de alarmes: os labels são destinos declarados e motivos fechados.
@@ -762,6 +785,10 @@ const (
 	MetAlarmDeliveryActive                 = "nishidb_alarm_delivery_active"
 	MetAlarmDeliveryFailed                 = "nishidb_alarm_delivery_failed"
 	MetAlarmDeliveryPaused                 = "nishidb_alarm_delivery_paused"
+	// MetAlarmDeliveryAdmissionWaitSecondsTotal é o tempo acumulado em que a
+	// varredura esperou vaga em memória na fila do destino: o sinal de que o
+	// disco do alarme não acompanha a rajada.
+	MetAlarmDeliveryAdmissionWaitSecondsTotal = "nishidb_alarm_delivery_admission_wait_seconds_total"
 )
 
 // Temporal segment pruning is independent of history.index.window.

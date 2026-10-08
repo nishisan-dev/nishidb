@@ -568,11 +568,21 @@ counters:
   - name: autenticados_por_pon
     groupBy: [olt, slot]
     keyFormat: "{olt}.{slot:02}"   # opcional; BR_SPOAM_OLT.08
+
+  # Proporção por splitter: quem é MEMBRO do grupo (scope -> rows) e, entre
+  # os membros, quem CONTA (where -> total).
+  - name: spl1
+    groupBy: [olt, idPrimary]
+    keyFormat: "OLT_SPL_1.{olt}.{idPrimary}"
+    scope: "eligible = true AND authenticated IS NOT NULL"   # opcional
+    where: "authenticated = true"
 ```
 
 `groupBy` aceita colunas declaradas de tipo `string`, `int64` ou `boolean`
-(de topo ou extraídas), nunca a key nem a sequence; `where` tem a gramática do
-WHERE e não pode tocar campo com `merge: sum` nem campo de sistema;
+(de topo ou extraídas), nunca a key nem a sequence; `where` e `scope` têm a
+gramática do WHERE e não podem tocar campo com `merge: sum` nem campo de
+sistema; `scope` decide quem é membro de um grupo — a linha fora dele não conta
+em lugar nenhum, como a linha sem alguma coluna do `groupBy`;
 `keyFormat` é o molde do `groupKey`, descrito com as regras em "O formato do
 `groupKey`". Como se
 lê, o que custa e como se audita está em "Contadores mantidos na escrita",
@@ -764,8 +774,7 @@ esta e a congelada são políticas de escrita opostas do mesmo campo.
 #### Expiração: regras de TTL condicionais
 
 O bloco `ttl:` é uma **lista de regras**. Cada evento é avaliado contra elas na
-ordem do arquivo, e a **primeira que casa** decide por quanto tempo a entidade
-pode ficar sem receber escrita:
+ordem do arquivo, e a **primeira que casa** decide quando a entidade vence:
 
 ```yaml
 materialization:
@@ -776,23 +785,74 @@ materialization:
       expireAfterWrite: 3m
     - when: "kind = 'audit'"
       expireAfterWrite: never     # casou e decidiu que não expira
-    # Regra sem `when` é a de FUNDO: casa com tudo, e só pode ser a última.
+    # Regra sem `when` e sem `anchor` é a de FUNDO: casa com tudo, e só pode
+    # ser a última.
     - expireAfterWrite: 7d
 ```
+
+`expireAfterWrite` conta o prazo a partir da **escrita**: toda escrita que
+casa com a regra o renova. Para contar a partir de um **campo do documento**,
+a regra declara `anchor` e `expireAfter`:
+
+```yaml
+materialization:
+  ttl:
+    - when: "lastAuthAt IS NULL"
+      expireAfterWrite: 1h        # sem autenticação: 1h, renovada a cada escrita
+    - anchor: lastAuthAt
+      expireAfter: 48h            # autenticado: vence 48h depois da última autenticação
+```
+
+A entidade vence em `min(âncora, escrita) + expireAfter`, e uma escrita que
+**não muda** a âncora **não renova** o prazo — um evento que só traz o estado
+do equipamento não mantém vivo um serviço que parou de autenticar.
+
+- **A regra ancorada só casa com a âncora PRESENTE** no documento pós-merge.
+  Ausente, a próxima regra é tentada, e `nishidb_ttl_anchor_absent_total{rule}`
+  conta. `anchor` combina com `when`: valem as duas condições.
+- **A âncora precisa ser `timestamp` ou `datetime` declarado** — inclusive uma
+  congelada (`frozenFrom: "@writeTime"` é timestamp) ou uma coluna derivada de
+  `extract:` com esse tipo. `auto`, campo de sistema, campo excluído e campo
+  inexistente são recusados na subida, cada um com a sua mensagem. Uma âncora
+  `datetime` cujo `format` não traz fuso é lida no fuso local do processo:
+  um host com o fuso mal configurado desloca o prazo de todas as linhas.
+- **`expireAfter` e `expireAfterWrite` são exclusivos**, e `expireAfter` exige
+  `anchor`. `anchor` com `never` é recusado: imortal não tem prazo a contar da
+  âncora. O piso de 1 minuto vale igual.
+- **Âncora no futuro é limitada ao instante da escrita** (prazo =
+  `expireAfter` contado da escrita), e
+  `nishidb_ttl_anchor_in_future_total` conta. Consequência: enquanto a âncora
+  estiver no futuro, TODA escrita conta o prazo a partir de si mesma —
+  inclusive um patch que nem traz o campo âncora —, e a regra se comporta como
+  `expireAfterWrite` até o relógio alcançar a âncora. A reentrega do mesmo
+  evento pelo Kafka é o caso típico: ela empurra o prazo para frente.
+- **Âncora já vencida faz a entidade nascer vencida.** Um backlog relido grava
+  a linha, ela some da consulta logo após a escrita
+  (`nishidb_ttl_expired_on_write_total` sobe) e o coletor lhe dá a lápide na
+  passada seguinte. Até a lápide, o contador mantido na escrita ainda a conta
+  — para ele, viva é linha sem lápide. A escrita seguinte da mesma chave a
+  encontra expirada e parte do vazio, como em toda expiração.
+- **Com `anchor` sobre `frozenFrom: "@writeTime"` há teto de idade absoluta**,
+  contado do nascimento da entidade: nenhuma escrita o move.
 
 O que precisa estar claro antes de escrever a lista:
 
 - **A ordem é semântica.** Primeira que casa vence, então reordenar as regras
   muda o comportamento. Uma regra de fundo antes de uma condicional tornaria a
   condicional inalcançável, e por isso é recusada no load.
-- **A condição vê o estado PÓS-MERGE.** O valor de cada campo é o que o evento
+- **A condição vê o estado PÓS-MERGE.** Ela é avaliada sobre o próprio
+  documento que a escrita grava: o valor de cada campo é o que o evento
   trouxe; se ele não mencionar o campo, vale o que já estava no estado; `null`
   explícito apaga. É por isso que um evento parcial não muda o prazo por
-  acidente.
+  acidente. Pelo mesmo motivo, uma coluna congelada é vista pelo valor
+  congelado, uma `merge: sum` pela soma, e em `mode: replace` — ou sobre uma
+  entidade já vencida, que renasce do vazio — só existe o que o evento trouxe.
 - **O prazo é reavaliado a cada escrita, e isso é o cancelamento.** Um alarme
   que fecha ganha 3 minutos; se reabrir em 90 segundos, a escrita nova o
   devolve para os 7 dias. O prazo escolhido é gravado no documento como o campo
-  de sistema `_expiresIn` (uma duração em millis, fora do `SELECT *`).
+  de sistema `_expiresIn`: os millis, contados a partir de `_writtenAt`, até o
+  vencimento (fora do `SELECT *`). Numa regra sem `anchor` ele é a própria
+  duração; numa com `anchor`, o que resta até `âncora + expireAfter`.
 - **`never` não é `0`.** `never` declara imortalidade e vence a regra de fundo;
   `0` é recusado, porque parece esquecimento.
 - **A duração mínima é 1 minuto** — a resolução do coletor. Abaixo dela o
@@ -801,11 +861,15 @@ O que precisa estar claro antes de escrever a lista:
 - **Adotar as regras num dataset já populado não exige reprocessar.** As
   entidades materializadas antes não têm `_expiresIn`, e caem no prazo da regra
   de fundo até a primeira escrita seguinte. Sem regra de fundo, elas não
-  expiram.
-- **Renovar empurra o prazo indefinidamente.** Uma entidade que casa com uma
-  regra de 3 minutos mas recebe evento a cada 60 segundos nunca expira. É o
-  comportamento escolhido (não há teto de idade absoluta), e ele está fixado em
-  teste.
+  expiram — e uma regra com `anchor` na última posição **não** é fundo.
+- **Trocar um YAML que tinha regra de fundo por um sem fundo** zera a duração
+  de fundo: a agenda de vencimentos é reconstruída na subida, e as entidades
+  sem `_expiresIn` passam a não expirar até a primeira escrita seguinte. Um
+  dataset novo não tem linha nessa situação.
+- **Com `expireAfterWrite`, renovar empurra o prazo indefinidamente.** Uma
+  entidade que casa com uma regra de 3 minutos mas recebe evento a cada 60
+  segundos nunca expira. É o comportamento escolhido para o idle timeout, e ele
+  está fixado em teste; quem quer teto declara a regra com `anchor`.
 
 A forma antiga — `ttl:` como bloco único com `expireAfterWrite`, ou com
 `field`/`type` — é **recusada na subida**, com a mensagem apontando a lista.
@@ -1516,7 +1580,13 @@ nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT 
 
 Cada tabela tem `groupKey` (o texto do grupo — a própria OLT num `groupBy` de
 uma coluna, `olt|slot|port` num composto), as colunas do `groupBy` **abertas e
-tipadas**, e `total`. `groupKey`
+tipadas**, `total` e `rows`. `total` é quantas linhas do grupo satisfazem o
+`where`; `rows` é quantas linhas **o grupo tem** — os membros, satisfaçam ou
+não o `where` — e não as linhas do dataset. `rows` nunca é NULL, nem com
+`total: false`, e os dois são lidos juntos, de uma vez: um par que o grupo de
+fato teve, nunca o total de um instante com o rows de outro. `rows` é nome
+reservado: um `groupBy`, uma medida ou uma métrica chamados `rows` são
+recusados na subida. `groupKey`
 é a key da tabela: `WHERE groupKey = '…'` é busca direta; as outras colunas
 varrem os grupos (milhares, não milhões de linhas). **Um grupo que chega a
 zero permanece na tabela com `total: 0`** — o equipamento que apagou por
@@ -1526,6 +1596,39 @@ um grupo com 500 linhas não autenticadas tem total zero e 500 linhas). Linha
 sem alguma coluna do `groupBy` (ausente ou nula) não é contada. Os totais são
 lidos no **presente**: eles não entram no snapshot de leitura da consulta — o
 que a consulta congela é o conjunto de grupos.
+
+#### O escopo do contador: quem é membro
+
+`scope` é um filtro de **membro**, irmão do `where`: o `where` decide quem
+conta no `total`, o `scope` decide quem existe no grupo. A linha fora do escopo
+é tratada exatamente como a linha sem alguma coluna do `groupBy` — não cria
+grupo, não conta em `rows` nem em `total`, e sai do grupo (as duas colunas
+descem na mesma transição) quando um evento a torna inelegível, ou quando ela
+vence ou é apagada:
+
+```yaml
+counters:
+  - name: spl1
+    groupBy: [olt, idPrimary]
+    keyFormat: "OLT_SPL_1.{olt}.{idPrimary}"
+    scope: "eligible = true AND authenticated IS NOT NULL"
+    where: "authenticated = true"
+```
+
+```bash
+nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT groupKey, total, rows FROM _counters.spl1 ORDER BY rows DESC LIMIT 5"
+```
+
+O `scope` é avaliado sobre o **estado inteiro** da linha depois do merge, como
+o `where`: um patch que não traz `authenticated` não tira do escopo um serviço
+que já o tinha. Ele também restringe as medidas de taxa (`measures`): a linha
+fora do escopo não registra ocorrência. Mudar o `scope` **reconstrói o
+contador** na abertura, como mudar o `where`, zera as medidas, recomeça a
+história das métricas de janela por taxa (`counter_metric.source_changed`) e
+invalida o cronômetro salvo dos alarmes daquele contador. Voltar a um binário
+anterior ao `scope` também reconstrói: ele não adota um vetor que o escopo
+montou. `_meta.counters` mostra o escopo na coluna `scope`, ao lado de
+`condition` (NULL quando não foi declarado).
 
 #### O formato do `groupKey`
 
@@ -1559,7 +1662,7 @@ do nome seria escapado.
 declarou vê o default já expandido (`{olt}|{slot}`), e nunca precisa adivinhar
 por qual texto consultar.
 
-Mudar `groupBy` ou `where` de um contador, ou declarar um contador novo num
+Mudar `groupBy`, `where` ou `scope` de um contador, ou declarar um contador novo num
 dataset que já tem linhas, **reconstrói o contador na abertura** varrendo as
 linhas vivas (o log `counter.construido` diz o motivo e quanto custou — a
 ordem de grandeza de uma varredura completa). Mudar `maxGroups` não
@@ -1582,18 +1685,20 @@ Quais contadores um dataset tem, e como estão, também sai por SQL — a tabela
 nishidb query --server 127.0.0.1:9142 --schema <schemaName de servicos> "SELECT name, rows, total, groups, maxGroups, refused, auditDivergent, auditAt FROM _meta.counters"
 ```
 
-`rows` é quantas linhas vivas apontam para algum grupo do contador e `total`
-quantas satisfazem a condição, no dataset inteiro — o denominador e o
-numerador do alarme, em tempo constante, sem somar os grupos no cliente e sem
-varrer. `rows` **menor** que o `rows` do dataset (`/v1/stats`) é diagnóstico
-direto: são as linhas sem alguma coluna do `groupBy` (o serviço sem `olt`),
-que o contador não conta por desenho e que antes ninguém enxergava sem uma
-varredura. Sem `where`, `total` é igual a `rows`.
+`rows` é quantas linhas vivas apontam para algum grupo do contador (os
+membros) e `total` quantas satisfazem a condição, no dataset inteiro — o
+denominador e o numerador do alarme, em tempo constante, sem somar os grupos no
+cliente e sem varrer. `rows` **menor** que o `rows` do dataset (`/v1/stats`) é
+diagnóstico direto: são as linhas sem alguma coluna do `groupBy` (o serviço sem
+`olt`) e, com `scope`, as fora do escopo, que o contador não conta por desenho
+e que antes ninguém enxergava sem uma varredura. Sem `where`, `total` é igual a
+`rows`.
 
 `groupBy` é a lista das colunas de agrupamento na ordem declarada, junta por
 `|`, e `keyFormat` é o molde efetivo da key (os dois são independentes: o
 molde escolhe o separador dele e pode reordenar); `condition`
-é o `where` do YAML (NULL no denominador, que não tem condição); `retired`,
+é o `where` do YAML (NULL no denominador, que não tem condição); `scope` é o
+`scope` do YAML (NULL quando não foi declarado); `retired`,
 `refused` e `orphans` são os mesmos números do `nishidb counters`;
 `auditDivergent` e `auditAt` são NULL até a primeira auditoria conclusiva
 desde a subida — zero divergências e "nunca auditado" são afirmações
@@ -1670,6 +1775,8 @@ O destino `metricas_olt` deve existir em `seriesDelivery.kafka`, conforme o
 [guia de emissão Kafka](docs/operacao-series-kafka.md). `emit` e `metrics` são
 opcionais: a medida pode ser consultada diretamente em
 `_counters.stops_by_olt`, sem amostrador ou emissão.
+Para configurar somente o alarme, veja o
+[exemplo de alarme por taxa](#alarme-por-taxa-de-eventos-measures).
 
 A taxa é `ocorrências na janela × duração da unidade ÷ duração da janela`.
 Assim, 1.800 eventos em `1m`, com `unit: second`, produzem `30.0`. O divisor é
@@ -1754,9 +1861,11 @@ counters:
 ```
 
 Cada agregado vira uma coluna `<name>_<aggregate>` em `_counters.<nome>`,
-depois de `total` e na ordem declarada: `auth_5m_avg`, `auth_24h_max`,
-`auth_24h_min`. `avg` é `double`; `min` e `max` são `int64`, porque são valores
-que o `total` de fato teve. É o mesmo nome no SELECT e na condição de um
+depois de `total` e das medidas, na ordem declarada: `auth_5m_avg`,
+`auth_24h_max`, `auth_24h_min`. Com `source: total`, `avg` é `double` e
+`min`/`max` são `int64`. O `source` também aceita o nome de uma medida, como
+`stop_rate`: nesse caso, os três agregados são `double` e descrevem as amostras
+da taxa na janela histórica. É o mesmo nome no SELECT e na condição de um
 alarme:
 
 ```bash
@@ -1768,7 +1877,7 @@ projeção descritas em "SQL suportado": `SELECT groupKey, auth_5m_avg,
 auth_5m_avg AS x, auth_5m_avg FROM _counters.autenticados_por_olt` devolve as
 colunas `groupKey`, `auth_5m_avg`, `x` e `auth_5m_avg_1`.
 
-O servidor amostra o `total` de cada grupo vivo a cada `menor janela ÷ 60`,
+O servidor amostra a fonte declarada de cada grupo vivo a cada `menor janela ÷ 60`,
 entre 1 s e 10 s (5 s com a janela de `5m`), e cada janela é dividida em 60
 baldes, então ela desliza no passo de um balde. Uma janela ainda incompleta — a
 OLT que apareceu há dois minutos — responde com o agregado das amostras que
@@ -1855,9 +1964,36 @@ counters:
 ```
 
 O `when` fala a **mesma linguagem do `WHERE`** — é o mesmo avaliador — sobre as
-colunas da tabela do contador: `groupKey`, as do `groupBy`, `total` e as geradas
-pelas métricas de janela do contador (`auth_5m_avg`, ver acima). Um nome de
-coluna errado **derruba a subida**, com a coluna nomeada.
+colunas da tabela do contador: `groupKey`, as do `groupBy`, `total`, `rows`, as
+medidas de taxa (`stop_rate`) e as geradas pelas métricas de janela do contador
+(`auth_5m_avg`, ver acima). O `qualifyWhen` aceita essas mesmas colunas. Um
+nome de coluna errado **derruba a subida**, com a coluna nomeada.
+
+Além do `WHERE`, o `when` e o `qualifyWhen` aceitam uma forma que o SQL não
+tem: a **comparação linear inteira entre duas colunas da mesma linha**,
+`<coluna> [* k] <op> <coluna> [* k]`, com `k` inteiro positivo à direita da
+coluna — é como se escreve uma proporção sem divisão:
+
+```yaml
+    alarms:
+      - name: spl1_auth_drop
+        when: "total * 10 <= rows"    # no máximo 10% dos membros autenticados
+        qualifyWhen: "rows >= 6"      # só grupos com ao menos seis membros
+        sustainedFor: 2m
+```
+
+Ela combina com `AND`/`OR`/parênteses e com os termos de sempre. A conta é
+exata, em inteiro de 128 bits com sinal: nem arredondamento de ponto
+flutuante, nem estouro (`total * 4611686018427387904 <= rows` decide certo).
+Coluna NULL torna o termo falso para qualquer operador. Só colunas `int64`
+entram — `total`, `rows`, colunas `int64` do `groupBy` e `min`/`max` de janela
+sobre `total`; uma coluna `double` (a média, ou qualquer coluna de taxa) ou
+`string` é recusada na subida nomeando a coluna e o tipo. Também são recusados,
+cada um com a sua mensagem: `k * coluna` (o multiplicador vai à direita),
+multiplicador zero, negativo ou fracionário, e multiplicador contra literal
+(`total * 10 <= 100` — escreva `total <= 10`). O `WHERE` do SQL, o `where` e o
+`scope` do contador e o `when` do TTL continuam recusando coluna à direita do
+comparador.
 
 `sustainedFor` é o que separa alarme de rajada: mínimo de 10 s, e `never` é
 recusado (um alarme que nunca dispara não é um alarme). A varredura roda a cada
@@ -1865,9 +2001,13 @@ recusado (um alarme que nunca dispara não é um alarme). A varredura roda a cad
 
 `value` é opcional e diz **qual número** o alarme sustentou: a coluna cujo
 valor, lido na mesma linha que decidiu o disparo, vira o `firingValue` do
-alarme. Ausente, vale `total`. Só são aceitas `total` e as colunas das métricas
-de janela do contador (`value: auth_5m_avg`); `groupKey`, as colunas do
-`groupBy` e nome inexistente derrubam a subida, com as colunas aceitas listadas.
+alarme. Ausente, vale `total`. São aceitas `total`, `rows`, as medidas de taxa
+(`value: stop_rate`) e as colunas das métricas de janela do contador
+(`value: auth_5m_avg`); `groupKey`, as colunas do `groupBy` e nome inexistente
+derrubam a subida, com as colunas aceitas listadas. Com `total: false`, declare
+`value` explicitamente para registrar a taxa no disparo: o padrão continua
+sendo `total`, que nesse caso é NULL. Comparações como `total > 0` também
+avaliam falso quando o total está desativado.
 Mudar o `value` **não** zera o cronômetro: ele não muda a decisão, só o que se
 mostra dela.
 
@@ -1899,9 +2039,11 @@ antigo sai no log como `alarm.state_unreadable`, e os alarmes em curso recomeça
 a contar o prazo, uma vez.
 
 O `enrich` acompanha o evento com o resultado de consultas parametrizadas pelo
-grupo que alarmou — `bind` liga cada `?` a uma coluna do contador (`total` e
-`groupKey` incluídos; as colunas das métricas de janela **não** são ligáveis, e a
-subida as recusa). O valor vai como **parâmetro**, nunca concatenado: um nome
+grupo que alarmou — `bind` liga cada `?` a `groupKey`, `total`, `rows` ou uma
+coluna do `groupBy`. Medidas de taxa e colunas de métricas de janela **não** são ligáveis
+em `enrich.bind`, e a subida as recusa, embora possam ser usadas em `when`,
+`qualifyWhen` e `value`. Com `total: false`, `bind: [total]` liga NULL.
+O valor vai como **parâmetro**, nunca concatenado: um nome
 de OLT com apóstrofo não reescreve a consulta. `LIMIT` é obrigatório, no máximo
 100. Cada consulta precisa de `name`, que é como o bloco é identificado no
 evento.
@@ -1914,37 +2056,55 @@ O disparo é um `WARN` e a resolução um `INFO`:
 
 ```json
 {"event":"alarm.firing","counter":"autenticados_por_olt","alarm":"olt_down",
- "groupKey":"BR_SPOAM_OLT_14","total":42,"condition":"total < 100",
+ "groupKey":"BR_SPOAM_OLT_14","total":42,"rows":910,"condition":"total < 100",
  "valueColumn":"total","firingValue":42,
  "sustainedFor":"2m0s","since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:16:00.000Z",
  "olt":"BR_SPOAM_OLT_14",
  "enrichment":{"servicos_afetados":{"rows":[{"customerId":"cli-4471","ip":"10.0.0.9"}]}}}
 {"event":"alarm.resolved","reason":"condition_cleared","groupKey":"BR_SPOAM_OLT_14",
- "total":812,"since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:25:00.000Z"}
+ "total":812,"rows":910,"since":"2026-09-12T03:14:00.000Z","at":"2026-09-12T03:25:00.000Z"}
 ```
 
+`total` e `rows` saem no disparo **e** na resolução, lidos da mesma linha que
+decidiu: o par que a condição de fato viu. Para o grupo aposentado os dois são
+zero. `rows` é campo reservado do evento: uma coluna do `groupBy` com esse nome
+seria recusada mesmo sem a reserva da tabela.
+
 `valueColumn` e `firingValue` só vêm no disparo; `firingValue` fica de fora
-quando a coluna não tinha amostra naquele instante. `at − since` é a duração do
+quando a coluna é NULL naquele instante, inclusive `total` desativado.
+O campo `metrics` reúne as medidas de taxa e os agregados de janela disponíveis
+na linha que gerou o evento, com valores textuais (por exemplo,
+`"metrics":{"stop_rate":"30"}`). O campo `total` sai como `null` quando
+desativado, mesmo em um alarme disparado por taxa. `at − since` é a duração do
 problema. O `reason` distingue **`condition_cleared`**
 (o problema passou) de **`group_retired`** (o grupo saiu do contador) — um
 equipamento removido do inventário não é um equipamento recuperado.
 
 Cada emissão também carrega `eventId`, compartilhado pelo log e pelos destinos
-HTTP. Para receber os eventos por webhook, declare um destino em
-`alarmDelivery.webhooks` no arquivo global e `notify: [nome_do_destino]` no
-alarme. A entrega usa fila durável por dataset/destino, retenta até HTTP 2xx e
+de entrega. Para receber os eventos por webhook ou num tópico Kafka, declare um
+destino em `alarmDelivery.webhooks` ou `alarmDelivery.kafka` no arquivo global
+e `notify: [nome_do_destino]` no alarme. A entrega usa fila durável por
+dataset/destino, retenta até a confirmação (HTTP 2xx ou o ack do Kafka) e
 preserva o corpo e o identificador nas retentativas. O receptor deduplica pelo
-`eventId`. Eventos ainda em memória podem ser perdidos em uma queda, e fila
-cheia descarta novos eventos com métrica. Veja [configuração, limites e
-recuperação dos webhooks](docs/operacao-webhook.md).
+`eventId`. Eventos ainda em memória podem ser perdidos em uma queda. Com o
+buffer de memória cheio, a varredura espera a gravação em disco; com o limite
+de disco atingido, novos eventos são descartados com métrica. Veja [configuração, limites e
+recuperação dos webhooks](docs/operacao-webhook.md) e a
+[entrega de alarmes para Kafka](docs/operacao-alarmes-kafka.md) (chave
+`[dataset, counter, groupKey]`, cabeçalhos `eventId` e `event`).
 
 O cronômetro **sobrevive ao reinício**: o "desde quando" é gravado em
 `checkpoint/alarms.state`, e um alarme restaurado dispara com `"restored":true` e
 `"downtimeMs"`. Num encerramento gracioso esse número é o tempo de parada; num
 crash é "desde quando não há registro", que é maior — a lacuna real é
 desconhecida, e um número grande é a resposta honesta. Mudar o `when`, o
-`qualifyWhen`, o `sustainedFor` ou a janela de uma métrica citada no YAML
-invalida o cronômetro salvo daquele alarme.
+`qualifyWhen`, o `sustainedFor`, a fonte ou a janela de uma métrica citada nas
+condições invalida o cronômetro salvo daquele alarme, e mudar o `scope` do
+contador invalida o de todos os alarmes dele. Quando uma condição usa
+uma medida, diretamente ou por uma métrica histórica, mudar a janela ou a
+unidade dessa medida, ou o `groupBy`/`where` do contador, também reinicia o
+prazo. Mudar uma medida que só aparece em `value` não altera a condição nem
+reinicia o prazo.
 
 Para inspecionar o que está em curso, sem ler log, consulte a **view de
 alarmes**. Ela deriva dos contadores e mora ao lado deles, no schema do
@@ -1984,6 +2144,70 @@ dataset ou tabela histórica com esse nome são recusados na subida.
 > não existe mais; troque por `alarms` (conexão por schema),
 > `<schemaName>.alarms` ou `_counters.alarms`.
 
+#### Alarme por taxa de eventos (`measures`)
+
+Disponível desde a v0.11.0. No YAML do dataset, declare a medida e o alarme
+no **mesmo contador**. Neste exemplo, `olt` e `status` são campos `string`
+do schema do dataset:
+
+```yaml
+counters:
+  - name: stops_by_olt
+    groupBy: [olt]
+    where: "status = 'Stop'"
+    total: false
+    measures:
+      - name: stop_rate
+        window: 1m
+        unit: second
+    alarms:
+      - name: stop_burst
+        when: "stop_rate > 25"
+        value: stop_rate
+        sustainedFor: 30s
+```
+
+`stop_rate` mede eventos aceitos por segundo, calculados sobre a janela de um
+minuto. O alarme dispara quando a taxa permanece acima de 25 nas avaliações
+por pelo menos 30 segundos, contados desde a primeira observação da condição.
+`window` define a janela da taxa; `sustainedFor` define o prazo do alarme.
+O limiar usa a unidade de `unit`: com `second`, `25` significa 25 eventos/s;
+com `minute`, significaria 25 eventos/min. Cada atualização aceita cujo estado
+resultante é `Stop` conta, mesmo que a entidade já estivesse em `Stop`.
+Veja a [semântica e os limites das medidas](#taxas-de-eventos-do-contador).
+
+Com o servidor em execução, o alarme avalia a medida sem exigir `metrics` ou
+`emit`. A taxa decai com a expiração dos baldes mesmo sem novos eventos; na
+primeira avaliação em que ela fica em 25 ou menos, um alarme já disparado
+resolve com `condition_cleared`. Se isso ocorrer antes do disparo, o prazo é
+cancelado sem emitir resolução.
+
+O evento registra `valueColumn: stop_rate` e a taxa do instante do disparo em
+`firingValue`. Para acompanhar a taxa atual e os alarmes pendentes/disparados,
+execute estas consultas na conexão do schema do dataset:
+
+```sql
+SELECT groupKey, stop_rate FROM _counters.stops_by_olt
+ORDER BY stop_rate DESC LIMIT 10;
+
+SELECT groupKey, state, since, valueColumn, firingValue FROM alarms
+WHERE counter = 'stops_by_olt' AND alarm = 'stop_burst';
+```
+
+Para qualificar pelo histórico da taxa, adicione uma métrica com
+`source: stop_rate` e use sua coluna em `qualifyWhen`, por exemplo
+`qualifyWhen: "stops_24h_max > 25"` com a métrica `stops_24h` do
+[exemplo completo](#taxas-de-eventos-do-contador). Sem amostras históricas,
+essa comparação é falsa e o grupo ainda não se qualifica. Uma medida também
+pode ser citada diretamente em `qualifyWhen`.
+
+Sem `notify`, os eventos saem no log. Para recebê-los por HTTP ou Kafka,
+acrescente `notify: [noc]` ao alarme depois de configurar o destino no
+[guia de webhooks](docs/operacao-webhook.md) ou na
+[entrega para Kafka](docs/operacao-alarmes-kafka.md). `emit.target` controla a emissão
+periódica dos valores do contador; os destinos dos eventos de alarme são
+selecionados por `notify`.
+
 ### Emissão periódica: a série de cada grupo
 
 A emissão também suporta [destinos Kafka nomeados](docs/operacao-series-kafka.md).
@@ -1992,7 +2216,9 @@ Declare brokers e tópico em `seriesDelivery.kafka` no `nishidb.yaml` e selecion
 `target: metricas_olt` para somente Kafka (removendo `file`, `maxBytes` e `keep`).
 Cada grupo vira uma mensagem JSON com os nomes das colunas, `dataset` e
 `counter`. O envio é assíncrono e falhas descartam a amostra daquele destino,
-sem reenvio. Sem `target`, permanece a emissão em arquivo.
+sem reenvio. Destino com o buffer cheio não descarta: a passada espera espaço,
+e um destino lento atrasa a passada. Sem `target`, permanece a emissão em
+arquivo.
 
 Para alimentar gráfico por equipamento, o contador pode escrever o valor de
 **cada grupo** num arquivo NDJSON, periodicamente:
@@ -2010,14 +2236,30 @@ counters:
 
 O arquivo fica em `<dataset>/series/<file>` — o diretório é fixo, e `file` é só o
 nome. Uma linha por grupo vivo, a cada intervalo, **inclusive os com total zero**
-(o equipamento que apagou por inteiro é justamente a linha que interessa):
+(o equipamento que apagou por inteiro é justamente a linha que interessa).
+
+As passadas acontecem nas **fronteiras** de `every`: os instantes UTC múltiplos
+de `every` contados a partir da época Unix. Com `every: 30s`, as passadas saem
+em :00 e :30 de cada minuto, qualquer que seja o horário da subida. O `at` da
+linha é a fronteira, e não o relógio do início da passada. Não há passada na
+subida: a primeira acontece na primeira fronteira igual ou posterior à subida. Uma passada que termina
+depois da fronteira seguinte faz a próxima começar logo em seguida, e as
+fronteiras intermediárias são puladas. Os detalhes estão em
+[cadência da emissão](docs/operacao-series-kafka.md#cadência-passadas-nas-fronteiras-de-every).
+
+Duas linhas de uma passada:
 
 ```json
-{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"at":"2026-09-12T03:30:00.000Z"}
-{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_09","olt":"BR_SPOAM_OLT_09","total":0,"at":"2026-09-12T03:30:00.000Z"}
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"rows":812,"at":"2026-09-12T03:30:00.000Z"}
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_09","olt":"BR_SPOAM_OLT_09","total":0,"rows":0,"at":"2026-09-12T03:30:00.000Z"}
 ```
 
-Os valores são **tipados**: `total` e as colunas `int64` saem como número, não
+`rows` sai em toda linha, logo depois de `total` (é a ordem do
+`SELECT * FROM _counters.<nome>`), e nunca é `null`. Ele entrou na linha de
+todo contador — quem compara a linha inteira passa a ver a chave nova; quem lê
+por nome não muda nada.
+
+Os valores são **tipados**: `total`, `rows` e as colunas `int64` saem como número, não
 como texto. A rotação é por tamanho, com o sufixo crescendo para o passado
 (`file`, `file.1`, …) — o teto de disco é `maxBytes × (keep+1)`. Não há fsync:
 é telemetria, e um crash perde a cauda da série, que é o desfecho certo.
@@ -2026,20 +2268,21 @@ Grupo aposentado deixa de ser emitido. Baixar o `keep` devolve o disco na subida
 seguinte.
 
 **Se o contador declara [`metrics:`](#métricas-de-janela-do-contador)**, a linha
-leva também as colunas geradas por elas, entre o `total` e o `at`, na ordem
+leva também as colunas geradas por elas, entre o `rows` e o `at`, na ordem
 declarada — as MESMAS colunas, com os mesmos valores, que um
 `SELECT * FROM _counters.<nome>` devolve para aquele grupo:
 
 ```json
-{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"auth_5m_avg":807.5,"auth_24h_max":830,"at":"2026-09-12T03:30:00.000Z"}
-{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_09","olt":"BR_SPOAM_OLT_09","total":0,"auth_5m_avg":null,"auth_24h_max":null,"at":"2026-09-12T03:30:00.000Z"}
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_14","olt":"BR_SPOAM_OLT_14","total":812,"rows":812,"auth_5m_avg":807.5,"auth_24h_max":830,"at":"2026-09-12T03:30:00.000Z"}
+{"counter":"autenticados_por_olt","groupKey":"BR_SPOAM_OLT_09","olt":"BR_SPOAM_OLT_09","total":0,"rows":0,"auth_5m_avg":null,"auth_24h_max":null,"at":"2026-09-12T03:30:00.000Z"}
 ```
 
 A chave sai **sempre**, e `null` é o grupo que a janela ainda não viu — nunca
 zero, que é um valor legítimo do contador. O agregado é o publicado pela última
 passada do amostrador, que tem cadência própria (a menor janela ÷ 60, entre 1 s
-e 10 s): o `at` é o instante da **emissão**, e o agregado pode ser de até um
-intervalo antes dele.
+e 10 s): o `at` é a fronteira da **emissão**, e o agregado é o publicado pelo
+amostrador quando a linha é montada, lido durante a passada, que pode começar
+depois do `at`.
 
 Duas consequências de dimensionamento. A linha fica maior, então o mesmo
 `maxBytes × (keep+1)` guarda **menos** histórico — quem já dimensionou o disco
@@ -2436,6 +2679,58 @@ IntelliJ funcionarem:
 ```
 jdbc:nishidb://db01:9142/telecom?tls=true&tlsCaFile=/etc/nishidb/ca.pem
 ```
+
+As propriedades vão na query string da URL ou nas `Properties` da conexão, e
+as `Properties` vencem. Valor inválido numa propriedade do driver é recusado
+na abertura, nunca lido como default:
+
+| Propriedade | Default | O que é |
+|---|---|---|
+| `user` | — | usuário do Basic; sem ele, a conexão vai sem credencial |
+| `password` | — | senha do Basic; **só nas `Properties`**, nunca na URL |
+| `tls` | `false` | `true` para falar HTTPS |
+| `tlsCaFile` | — | PEM com a CA do servidor; exige `tls=true` |
+| `connectTimeoutMs` | `10000` | prazo do **handshake**; não limita a consulta |
+| `socketTimeoutMs` | `0` (sem prazo) | **prazo de rede** da requisição sem prazo próprio (ver abaixo); estourado, fecha a conexão |
+
+**Prazos de espera do cliente (issue #91).** Um servidor que aceita a
+requisição e não responde — processo parado, conexão meio-aberta, firewall
+que descarta pacote em silêncio — não prende mais a thread do cliente sem
+limite. Na **consulta**, o prazo mede o **silêncio** do servidor: a espera
+pelos cabeçalhos e cada espera por bytes do stream. Ali ele não mede a
+duração: uma consulta que continua mandando linhas nunca estoura, e o tempo
+que a aplicação gasta processando linhas não conta. Nos **documentos
+pequenos** — o `/v1/health` do `isValid`, a metadata, o catálogo e o
+`/v1/stats` —, o prazo é da **requisição inteira**, cabeçalhos e corpo
+somados: um servidor que pinga um byte por vez estoura do mesmo jeito. Do
+mais específico para o mais geral — o específico substitui o geral naquela
+requisição, seja maior ou menor:
+
+- **`isValid(s)`** volta em `s` segundos (o prazo é da requisição inteira ao
+  `/v1/health`) e o estouro é `false`, nunca exceção — é o que o HikariCP usa
+  para validar a conexão. `isValid(0)` usa o prazo de rede.
+- **`Statement.setQueryTimeout(s)`** continua indo ao servidor como
+  `timeoutMs`, que cancela a consulta e responde `TIMEOUT`. O cliente espera
+  esse prazo **mais 5 s de folga**, para a resposta do servidor chegar
+  primeiro; esgotada a folga, lança `SQLTimeoutException` com o mesmo SQLSTATE
+  `57014` do timeout do servidor, e a conexão **continua utilizável**.
+- **O prazo de rede** — `socketTimeoutMs`, ajustável depois por
+  `Connection.setNetworkTimeout` — vale para toda requisição sem prazo
+  próprio: metadata, catálogo e `/v1/stats` (requisição inteira) e consulta
+  sem `queryTimeout` (cada espera do stream). Estourado, a
+  conexão é **fechada**, como manda o contrato do `setNetworkTimeout`, com
+  `SQLRecoverableException` `08006`: abra outra e repita.
+
+`Connection.abort(executor)` derruba a conexão sem esperar o servidor: a
+requisição presa em outra thread — esperando os cabeçalhos ou lendo o corpo —
+sai com `SQLException` `08003` de conexão fechada, e os `Statement` da conexão
+passam a recusar execução com o mesmo `08003`. É o código de conexão fechada
+em todo o driver: operação numa conexão fechada por `close`, `abort` ou
+estouro do prazo de rede responde `08003`, e o `08001` fica só para a falha
+ao conectar (URL, CA, handshake, servidor inalcançável). O
+default de `socketTimeoutMs` é zero de propósito — quem não pediu prazo não
+ganha um —, então ligá-lo é decisão de quem conhece a consulta mais longa que
+a aplicação faz sem `queryTimeout`.
 
 **A URL nomeia o schema da conexão** — o `schemaName` que um dataset declara —,
 e não o dataset. A árvore mostra só esse schema e o `_meta`, e o servidor

@@ -406,11 +406,20 @@ func (e *LastWrites) Close() error { return e.dense.region.Close() }
 // o prazo de fundo, e o alarme que o operador mandou nunca expirar sairia
 // sozinho.
 //
-// Não há colisão possível com uma duração real: a menor declarável é um
-// minuto, 60000 ms.
+// A duração declarável mínima é um minuto, mas o prazo gravado NÃO é sempre a
+// declarada: numa regra com `anchor` ele é o que resta até o vencimento, e
+// pode ser de poucos millis — ou nenhum. Por isso o materializer nunca grava
+// menos que MinMortalTTL: 1 aqui seria lido como imortal, e uma linha cuja
+// âncora já venceu viveria para sempre.
 const ImmortalTTL uint64 = 1
 
-// TTLs é o índice rowId→duração de ociosidade, em millis.
+// MinMortalTTL é o menor prazo gravável que SIGNIFICA prazo: o sentinela de
+// imortal mais um. É o valor que o materializer grava para a linha que nasce
+// vencida — invisível a partir de `_writtenAt + 2 ms` e recolhida pelo coletor
+// como qualquer outra.
+const MinMortalTTL = ImmortalTTL + 1
+
+// TTLs é o índice rowId→prazo contado a partir da escrita, em millis.
 //
 // É DERIVADO, como o LastWrites: a fonte da verdade é o campo de sistema no
 // payload, e o replay do tail o reconstrói pelo mesmo applyRecord que o Put

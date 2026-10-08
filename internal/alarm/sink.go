@@ -7,10 +7,12 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/logging"
 )
 
-// Eventos de log dos alarmes. São CONTRATO: um alarme externo casa a string.
+// Eventos de log dos alarmes. São CONTRATO: um alarme externo casa a string,
+// e o mesmo nome vai no campo `event` do corpo e no cabeçalho `event` do
+// registro Kafka (internal/alarmdelivery).
 const (
-	eventFiring   = "alarm.firing"
-	eventResolved = "alarm.resolved"
+	EventFiring   = "alarm.firing"
+	EventResolved = "alarm.resolved"
 )
 
 // logSink publica o evento como uma linha de log estruturada.
@@ -48,6 +50,7 @@ func eventArguments(e Event) []any {
 		"alarm", e.Alarm,
 		"groupKey", e.GroupKey,
 		"total", total,
+		"rows", e.Rows,
 		"condition", e.Condition,
 		"sustainedFor", e.SustainedFor.String(),
 		"since", e.Since.UTC().Format(logTimeLayout),
@@ -98,9 +101,9 @@ func (s *logSink) Emit(e Event) {
 	log := s.log.Dataset(e.Dataset)
 	switch e.State {
 	case StateFiring:
-		log.Warn(eventFiring, "a condição do alarme se sustentou pelo prazo declarado", args...)
+		log.Warn(EventFiring, "a condição do alarme se sustentou pelo prazo declarado", args...)
 	case StateResolved:
-		log.Info(eventResolved, "o alarme deixou de valer", args...)
+		log.Info(EventResolved, "o alarme deixou de valer", args...)
 	}
 }
 
@@ -110,9 +113,9 @@ func (e Event) MarshalJSON() ([]byte, error) {
 	fields := map[string]any{"dataset": e.Dataset}
 	switch e.State {
 	case StateFiring:
-		fields["event"] = eventFiring
+		fields["event"] = EventFiring
 	case StateResolved:
-		fields["event"] = eventResolved
+		fields["event"] = EventResolved
 	}
 	var record slog.Record
 	record.Add(eventArguments(e)...)
@@ -137,7 +140,7 @@ func eventAttributeValue(a slog.Attr) any {
 // ReservedEventKey impede JSON ambíguo nos alarmes que habilitam push.
 func ReservedEventKey(key string) bool {
 	switch key {
-	case "eventId", "event", "dataset", "counter", "alarm", "groupKey", "total",
+	case "eventId", "event", "dataset", "counter", "alarm", "groupKey", "total", "rows",
 		"condition", "sustainedFor", "since", "at", "reason", "qualifyCondition",
 		"valueColumn", "firingValue", "restored", "downtimeMs", "metrics", "enrichment",
 		"timestamp", "level", "component", "message", "time", "msg":

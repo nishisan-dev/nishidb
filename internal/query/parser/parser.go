@@ -27,6 +27,10 @@ type parser struct {
 	depth        int // profundidade de parênteses corrente
 	terms        int // termos do WHERE já emitidos (teto de recurso, MaxWhereTerms)
 	params       int // próximo ParamIdx a atribuir
+	// allowsColumnComparison liga a comparação linear entre colunas
+	// (ColumnComparison). Só ParseConditionWith o liga, e só para a condição
+	// de alarme; o WHERE de uma consulta nunca.
+	allowsColumnComparison bool
 }
 
 // Parse converte SQL v1 em AST. É pura e segura para uso concorrente; a AST
@@ -489,6 +493,9 @@ func (p *parser) parsePredicate() (Expr, error) {
 	if p.terms > MaxWhereTerms {
 		return nil, p.errAt(p.cur.Pos, "WHERE com mais de "+itoa(MaxWhereTerms)+" termos")
 	}
+	if err := p.refuseLeadingMultiplier(); err != nil {
+		return nil, err
+	}
 	col, pos, ok := p.identifier()
 	if !ok {
 		switch p.cur.Type {
@@ -582,12 +589,29 @@ func (p *parser) parsePredicate() (Expr, error) {
 			Column:    col, ColumnPos: pos, Not: not, Pattern: pattern}, nil
 	}
 
+	left := ColumnTerm{Column: col, ColumnPos: pos, Multiplier: 1}
+	if p.allowsColumnComparison && p.cur.Type == lexer.TokenStar {
+		if qualifier != "" {
+			return nil, p.errAt(p.cur.Pos, "a column comparison accepts only plain columns, without a nested path")
+		}
+		k, err := p.parseMultiplier()
+		if err != nil {
+			return nil, err
+		}
+		left.Multiplier = k
+	}
 	op, ok := cmpOp(p.cur.Type)
 	if !ok {
 		return nil, p.errAt(p.cur.Pos, "esperado comparador, LIKE, IS NULL ou IS NOT NULL")
 	}
 	if err := p.advance(); err != nil {
 		return nil, err
+	}
+	if p.allowsColumnComparison && qualifier == "" {
+		e, err := p.parseColumnComparisonRest(left, op)
+		if err != nil || e != nil {
+			return e, err
+		}
 	}
 	operand, err := p.parseOperand()
 	if err != nil {

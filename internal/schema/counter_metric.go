@@ -106,7 +106,7 @@ func (m CounterMetricSpec) Columns() []string {
 type CounterColumn struct {
 	Name string
 	// Origin é o caminho, relativo ao item de `counters[]`, do trecho que
-	// produz a coluna: vazio para as colunas fixas (groupKey e total),
+	// produz a coluna: vazio para as colunas fixas (groupKey, total e rows),
 	// "groupBy" para as do agrupamento e "metrics[i]" para as geradas pela
 	// i-ésima métrica. É o que deixa a recusa nomear as DUAS pontas de uma
 	// colisão, e não só a que chegou por último.
@@ -137,16 +137,17 @@ func (c CounterColumn) String() string {
 // segunda relação de "colunas fixas" para esquecer de atualizar.
 //
 // A ordem é a de PRECEDÊNCIA da recusa, e não a de projeção da tabela (lá
-// `total` vem depois do groupBy): as fixas vêm primeiro para que, numa
+// `total` e `rows` vêm depois do groupBy): as fixas vêm primeiro para que, numa
 // colisão, a coluna apontada como culpada seja sempre a declarada pelo
 // operador, que é a que ele pode renomear.
 func CounterColumns(groupBy []string, metrics []CounterMetricSpec, measures ...CounterMeasureSpec) []CounterColumn {
-	n := 2 + len(groupBy)
+	n := 3 + len(groupBy) + len(measures)
 	for _, m := range metrics {
 		n += len(m.Aggregates)
 	}
 	out := make([]CounterColumn, 0, n)
-	out = append(out, CounterColumn{Name: CounterKeyColumn}, CounterColumn{Name: CounterTotalColumn})
+	out = append(out, CounterColumn{Name: CounterKeyColumn}, CounterColumn{Name: CounterTotalColumn},
+		CounterColumn{Name: CounterRowsColumn})
 	for _, g := range groupBy {
 		out = append(out, CounterColumn{Name: g, Origin: counterColumnOriginGroupBy})
 	}

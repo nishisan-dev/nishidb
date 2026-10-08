@@ -226,7 +226,7 @@ func Open(opts Options) (*Sampler, error) {
 		}
 	}
 	for _, in := range opts.Counters {
-		c := &counterState{name: in.Spec.Name, reader: in.Reader, next: 1, measures: in.Spec.Measures, groupBy: in.Spec.GroupBy, where: in.Spec.Where}
+		c := &counterState{name: in.Spec.Name, reader: in.Reader, next: 1, measures: in.Spec.Measures, groupBy: in.Spec.GroupBy, where: in.Spec.Where, scope: in.Spec.Scope}
 		for _, spec := range in.Spec.Metrics {
 			m, err := s.openMetric(c, spec)
 			if err != nil {

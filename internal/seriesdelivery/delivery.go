@@ -1,5 +1,8 @@
-// Package seriesdelivery publishes best-effort counter samples to named Kafka
-// destinations. Capacity includes records in flight and their callbacks.
+// Package seriesdelivery publica as amostras dos contadores, sem garantia de
+// entrega, em destinos Kafka nomeados. A capacidade de cada destino conta os
+// registros em voo até o callback deles, e o Publish ESPERA vaga quando ela
+// acaba (contrapressão): a memória continua limitada por MaxRecords e
+// MaxBytes, e a varredura anda no ritmo do destino em vez de descartar.
 package seriesdelivery
 
 import (
@@ -21,13 +24,30 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// Transport limits apply per global destination, across all its counters.
+// Os limites de transporte valem por destino global, somando todos os
+// contadores que o usam. São a contabilidade LOCAL, que é o limite que vale:
+// o do kgo é configurado com folga acima deles (ver kgoBufferSlack).
 const (
 	MaxRecords = 10_000
 	MaxBytes   = 16 << 20
 	// Match franz-go's batch limit, including space for Kafka framing.
-	maxRecordBytes = 1_000_012 - 128
+	maxRecordBytes = kafka.MaxProducedRecordBytes
 )
+
+// kgoBufferSlack multiplica os limites locais para formar os do kgo.
+//
+// O kgo chama o callback do usuário ANTES de decrementar o próprio contador de
+// registros e bytes (franz-go v1.21.6, producer.go:854 chama a promessa e só
+// em :865-866 decrementa bufferedRecords/bufferedBytes). Com limites
+// idênticos, o Publish que o callback acorda pela vaga local chegaria ao
+// TryProduce com o kgo ainda contando o registro que acabou de sair, e o kgo
+// recusaria com ErrMaxBuffered — o `buffer_full` voltaria escondido atrás da
+// contrapressão. As promessas correm num worker ÚNICO por cliente
+// (producer.go:745-761, `first` da promiseBatch), registro a registro, então
+// o kgo conta no máximo UM registro além da contabilidade local; dobrar o
+// limite é folga de sobra, e a contabilidade local continua sendo o teto de
+// memória.
+const kgoBufferSlack = 2
 
 var dropReasons = [...]string{"buffer_full", "message_too_large", "timeout", "publish_error", "shutdown"}
 
@@ -42,16 +62,35 @@ type producer interface {
 }
 
 type destination struct {
-	client         producer
-	topic          string
-	timeout        time.Duration
-	ctx            context.Context
-	cancel         context.CancelFunc
-	mu             sync.Mutex
+	client  producer
+	topic   string
+	timeout time.Duration
+	ctx     context.Context
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	// space acorda quem espera vaga. É um sync.Cond sobre mu, e não um canal
+	// de geração, porque a condição já mora sob mu (records, bytes, closed) e
+	// a espera precisa reavaliá-la inteira a cada despertar. Todo despertar é
+	// Broadcast, nunca Signal: com o limite de bytes e tamanhos mistos, o
+	// único acordado por um Signal pode ser quem ainda não cabe, e quem
+	// caberia dormiria até a próxima liberação — ou para sempre, se ela não
+	// vier. Justiça não é exigida; progresso é.
+	space          sync.Cond
 	closed         bool
 	records, bytes int64
 	offers         sync.WaitGroup
 	completions    sync.WaitGroup
+	// waitHook é chamado, sob mu, a cada vez que uma admissão vai dormir.
+	// Exclusivo de teste: conta despertares sem depender de prazo.
+	waitHook func()
+}
+
+// newDestination monta o destino com a espera ligada ao seu lock.
+func newDestination(client producer, topic string, timeout time.Duration) *destination {
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &destination{client: client, topic: topic, timeout: timeout, ctx: ctx, cancel: cancel}
+	d.space.L = &d.mu
+	return d
 }
 
 type output struct {
@@ -130,13 +169,23 @@ func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging
 		if err != nil {
 			return fail(err)
 		}
+		// Sem kgo.RecordDeliveryTimeout, de propósito: o kgo mede esse prazo
+		// a partir do Timestamp do PRIMEIRO registro do lote
+		// (franz-go v1.21.6, sink.go:2013-2017), conferido na montagem de cada
+		// requisição (tryAddBatch, sink.go:2143) e na retentativa de um lote
+		// (handleRetryBatches, sink.go:1368). O Timestamp é o at da passada —
+		// a fronteira, que fica no passado durante toda a passada e mais ainda
+		// na passada atrasada —, então todo registro publicado mais de
+		// `timeout` depois do at expiraria antes de sair. O prazo vale pelo
+		// contexto por registro do Publish, criado na ADMISSÃO, que o kgo
+		// confere antes (maybeFailErr, sink.go:1921-1930) e também na espera de
+		// metadado de tópico desconhecido.
 		opts := []kgo.Opt{
 			kgo.SeedBrokers(k.BootstrapServers...), kgo.DefaultProduceTopic(k.Topic),
 			kgo.RequiredAcks(kgo.AllISRAcks()), kgo.DisableIdempotentWrite(),
 			kgo.RecordRetries(0), kgo.UnknownTopicRetries(0),
-			kgo.MaxBufferedRecords(MaxRecords), kgo.MaxBufferedBytes(MaxBytes),
+			kgo.MaxBufferedRecords(kgoBufferSlack * MaxRecords), kgo.MaxBufferedBytes(kgoBufferSlack * MaxBytes),
 			kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
-			kgo.RecordDeliveryTimeout(max(timeout, time.Second)),
 			kgo.ProduceRequestTimeout(max(timeout, 100*time.Millisecond)),
 			kgo.RequestTimeoutOverhead(100 * time.Millisecond), kgo.DialTimeout(timeout),
 		}
@@ -150,8 +199,7 @@ func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging
 		if err != nil {
 			return fail(fmt.Errorf("%w: destination %q: %v", config.ErrSeriesDelivery, k.Name, err))
 		}
-		ctx, cancel := context.WithCancel(context.Background())
-		d := &destination{client: client, topic: k.Topic, timeout: timeout, ctx: ctx, cancel: cancel}
+		d := newDestination(client, k.Topic, timeout)
 		m.destinations = append(m.destinations, d)
 		byName[k.Name] = d
 	}
@@ -190,24 +238,64 @@ func (m *Manager) Outputs(dataset, counter string) []series.Output {
 	return m.routes[route{dataset, counter}]
 }
 
-func (o *output) Publish(key, body []byte, at time.Time) {
+// Publish admite uma amostra no destino.
+//
+// Destino fechado (`shutdown`) e registro maior que o lote do Kafka
+// (`message_too_large`) descartam na hora. Capacidade cheia — registros OU
+// bytes, contando os em voo até o callback — ESPERA: a espera termina pela
+// vaga liberada por um callback, pelo fechamento do destino (`shutdown`) ou
+// pelo cancelamento de ctx (`shutdown`, e o erro de ctx é devolvido para o
+// chamador abortar a passada). A cada despertar todas as condições são
+// reavaliadas. O ctx é conferido também na ENTRADA: cancelado não admite mais
+// nada, nem com vaga.
+//
+// Devolve erro SÓ no cancelamento de ctx. Falha do Kafka não é erro do
+// Publish: ela aparece no callback, como descarte contado.
+//
+// O tempo esperado acumula em AdmissionWaitSeconds da saída. O
+// context.AfterFunc que acorda a espera no cancelamento só é registrado no
+// caminho de espera: no caminho sem espera ele seria uma alocação por
+// registro (TestPublishWithoutWaitKeepsItsMeasuredAllocations).
+func (o *output) Publish(ctx context.Context, key, body []byte, at time.Time) error {
 	d := o.d
 	n := int64(len(key)) + int64(len(body))
 	d.mu.Lock()
-	reason := ""
-	switch {
-	case d.closed:
-		reason = "shutdown"
-	case n > maxRecordBytes:
-		reason = "message_too_large"
-	case d.records >= MaxRecords || n > MaxBytes-d.bytes:
-		reason = "buffer_full"
+	var waitStart time.Time
+	var stopWake func() bool
+	for {
+		reason := ""
+		switch {
+		case d.closed, ctx.Err() != nil:
+			reason = "shutdown"
+		case n > maxRecordBytes:
+			reason = "message_too_large"
+		}
+		if reason != "" {
+			o.endWaitLocked(waitStart)
+			o.stats.Dropped[reason]++
+			d.mu.Unlock()
+			if stopWake != nil {
+				stopWake()
+			}
+			return ctx.Err()
+		}
+		if d.records < MaxRecords && n <= MaxBytes-d.bytes {
+			break
+		}
+		if waitStart.IsZero() {
+			waitStart = time.Now()
+			stopWake = context.AfterFunc(ctx, func() {
+				d.mu.Lock()
+				d.space.Broadcast()
+				d.mu.Unlock()
+			})
+		}
+		if d.waitHook != nil {
+			d.waitHook()
+		}
+		d.space.Wait()
 	}
-	if reason != "" {
-		o.stats.Dropped[reason]++
-		d.mu.Unlock()
-		return
-	}
+	o.endWaitLocked(waitStart)
 	d.records++
 	d.bytes += n
 	o.stats.PendingRecords++
@@ -215,11 +303,15 @@ func (o *output) Publish(key, body []byte, at time.Time) {
 	d.offers.Add(1)
 	d.completions.Add(1)
 	d.mu.Unlock()
+	if stopWake != nil {
+		stopWake()
+	}
 	defer d.offers.Done()
-	// Admission precedes allocation. No callback retains the emitter's scratch.
-	ctx, cancel := context.WithTimeout(d.ctx, d.timeout)
+	// A admissão vem antes da alocação. Nenhum callback retém o scratch do
+	// emissor: chave e corpo são copiados aqui.
+	rctx, cancel := context.WithTimeout(d.ctx, d.timeout)
 	r := &kgo.Record{Topic: d.topic, Key: append([]byte(nil), key...), Value: append([]byte(nil), body...), Timestamp: at}
-	d.client.TryProduce(ctx, r, func(_ *kgo.Record, err error) {
+	d.client.TryProduce(rctx, r, func(_ *kgo.Record, err error) {
 		defer d.completions.Done()
 		cancel()
 		d.mu.Lock()
@@ -228,6 +320,7 @@ func (o *output) Publish(key, body []byte, at time.Time) {
 		d.bytes -= n
 		o.stats.PendingRecords--
 		o.stats.PendingBytes -= n
+		d.space.Broadcast()
 		if err == nil {
 			o.stats.Delivered++
 			o.stats.LastSuccessTimestamp = float64(time.Now().UnixMilli()) / 1000
@@ -235,8 +328,22 @@ func (o *output) Publish(key, body []byte, at time.Time) {
 		}
 		o.stats.Dropped[dropReason(err)]++
 	})
+	return nil
 }
 
+// endWaitLocked acumula a espera por vaga; waitStart zero é admissão sem
+// espera, e não soma nada.
+func (o *output) endWaitLocked(waitStart time.Time) {
+	if !waitStart.IsZero() {
+		o.stats.AdmissionWaitSeconds += time.Since(waitStart).Seconds()
+	}
+}
+
+// dropReason traduz a falha de um registro no motivo do descarte.
+//
+// `buffer_full` não sai mais da admissão, que espera em vez de descartar; só
+// o ErrMaxBuffered do kgo ainda o produz, e com a folga de kgoBufferSlack ele
+// não deveria acontecer. Continua no vocabulário porque é contrato de rótulo.
 func dropReason(err error) string {
 	var networkError net.Error
 	switch {
@@ -319,6 +426,10 @@ func (m *Manager) Close() {
 		for _, d := range m.destinations {
 			d.mu.Lock()
 			d.closed = true
+			// O fechamento acorda quem espera vaga: sem isto, um Publish em
+			// espera só sairia pelo callback de um registro em voo, e o
+			// destino sem nada em voo o deixaria dormindo para sempre.
+			d.space.Broadcast()
 			d.mu.Unlock()
 			d.cancel()
 		}

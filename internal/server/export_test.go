@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
+	"github.com/nishisan-dev/nishidb/internal/series"
 )
 
 // StopSamplingAndAlarmsForTest para o laço do amostrador das métricas de janela
@@ -121,6 +123,9 @@ func (s *Server) StopEmittersForTest(dataset string) {
 // EmitOnceForTest faz uma passada da emissão de cada contador do dataset e
 // esvazia o buffer, para que a linha esteja no arquivo quando o teste o ler.
 // Só depois de StopEmittersForTest.
+//
+// O at é a fronteira mais recente do relógio do servidor (floor(now, every)),
+// o mesmo carimbo que o laço daria a uma passada naquela fronteira.
 func (s *Server) EmitOnceForTest(dataset string) error {
 	d := s.byNome[dataset]
 	if d == nil {
@@ -129,8 +134,12 @@ func (s *Server) EmitOnceForTest(dataset string) error {
 	if len(d.emitters) == 0 {
 		return fmt.Errorf("dataset %q has no emitter", dataset)
 	}
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
 	for _, e := range d.emitters {
-		if err := e.EmitOnce(); err != nil {
+		if err := e.EmitOnce(context.Background(), series.FloorBoundary(now(), e.Every())); err != nil {
 			return err
 		}
 		if err := e.Flush(); err != nil {
