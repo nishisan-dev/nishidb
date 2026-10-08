@@ -446,6 +446,7 @@ type IndexStats struct {
 // descartadas somam os eventos que passaram; Degraded diz se ela parou de
 // receber.
 type HistoryStats struct {
+	TimePruning *HistoryTimePruningStats `json:"timePruning,omitempty"`
 	// Table é o nome da tabela irmã — o mesmo que vai no FROM.
 	Table string `json:"table"`
 	// Rows são as linhas gravadas e Dropped os eventos que não viraram linha
@@ -678,4 +679,12 @@ type AlarmDeliveryStats struct {
 	// AdmissionWaitSeconds acumula, desde a subida, o tempo que a varredura
 	// esperou vaga em memória porque o gravador não acompanhou a rajada.
 	AdmissionWaitSeconds float64 `json:"admissionWaitSeconds"`
+}
+
+// HistoryTimePruningStats describes derived time bounds independently of indexes.
+type HistoryTimePruningStats struct {
+	SegmentsSkipped int64 `json:"segmentsSkipped"`
+	Pending         int64 `json:"pending"`
+	Rebuilt         int64 `json:"rebuilt"`
+	RebuildRunning  bool  `json:"rebuildRunning"`
 }

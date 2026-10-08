@@ -96,6 +96,9 @@ func registerMetricsOfDataset(reg *metrics.Registry, s *Server) {
 			// pela mesma porta. Elas vêm de uma leitura própria porque a
 			// EstatisticasOfRetention não vale fora do histórico.
 			out = append(out, samplesOfIndex(d.nome, d.st.EstatisticasOfIndex())...)
+			if d.ehHistorico {
+				out = append(out, samplesOfHistoryTime(d.nome, d.st.HistoryTimeStats())...)
+			}
 			out = append(out, samplesOfIsolamento(d.nome, d.st)...)
 			out = append(out, samplesOfCounters(d.nome, d.st.EstatisticasOfCounters())...)
 			rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: d.nome}}

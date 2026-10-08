@@ -790,3 +790,11 @@ const (
 	// disco do alarme não acompanha a rajada.
 	MetAlarmDeliveryAdmissionWaitSecondsTotal = "nishidb_alarm_delivery_admission_wait_seconds_total"
 )
+
+// Temporal segment pruning is independent of history.index.window.
+const (
+	MetHistoryTimeSegmentsSkipped = "nishidb_history_time_segments_skipped_total"
+	MetHistoryTimeBoundsPending   = "nishidb_history_time_bounds_pending"
+	MetHistoryTimeBoundsActive    = "nishidb_history_time_bounds_rebuild_active"
+	MetHistoryTimeBoundsRebuilt   = "nishidb_history_time_bounds_rebuilt_total"
+)

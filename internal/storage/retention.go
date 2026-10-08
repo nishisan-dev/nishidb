@@ -550,7 +550,7 @@ func (s *Store) EstatisticasOfRetention() EstatisticasOfRetention {
 	// razão — o espaço de nomes é daquele pacote.
 	e.IndexBytes = blocosOfDiretorio(filepath.Join(s.opts.Dir, "indexes")) +
 		blocosOfDiretorio(filepath.Join(s.opts.Dir, "checkpoint")) +
-		s.bytesOfIndexBySegment()
+		s.bytesOfIndexBySegment() + s.bytesOfHistoryTimeBounds()
 	if ms, ok := s.instantMaisAntigo(); ok {
 		e.InstantMaisAntigo = ms
 	}

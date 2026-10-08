@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -85,6 +86,10 @@ func (s *Store) lookupIndexed(field types.FieldID, v types.Value) (types.RowIDIt
 // falso negativo, a única coisa que a revalidação do §44 não sabe consertar:
 // ela só descarta candidato a mais.
 func (s *Store) fontesOfField(field types.FieldID, h uint64) ([]segindex.Source, error) {
+	return s.fontesOfFieldHistoryRange(context.Background(), field, h, nil, nil)
+}
+
+func (s *Store) fontesOfFieldHistoryRange(ctx context.Context, field types.FieldID, h uint64, excluded map[uint32]bool, snap *types.Snapshot) ([]segindex.Source, error) {
 	refs, err := s.listaSegmentos()
 	if err != nil {
 		return nil, err
@@ -106,7 +111,14 @@ func (s *Store) fontesOfField(field types.FieldID, h uint64) ([]segindex.Source,
 	// medição pré-ciclo do piloto encontrou consumindo 64% do CPU. Duas somas por
 	// consulta não aparecem em gate nenhum — os gates medem por LINHA varrida.
 	var byIndice, byEnumeracao int64
+	var enumerated map[uint32]bool
 	for i, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return desiste(err)
+		}
+		if excluded[ref.ID] {
+			continue
+		}
 		if f, ok := s.sourceIndexada(ref.ID, current, field, h); ok {
 			sources = append(sources, f)
 			byIndice++
@@ -138,6 +150,16 @@ func (s *Store) fontesOfField(field types.FieldID, h uint64) ([]segindex.Source,
 			s.segByEnumeracao.Add(int64(len(refs)))
 			return []segindex.Source{s.sourceOfTodasAsLocations()}, nil
 		}
+		if snap != nil {
+			// A single locations walk covers all missing indexes. Boundary
+			// preads must not read the first record of an excluded neighbor.
+			if enumerated == nil {
+				enumerated = make(map[uint32]bool)
+			}
+			enumerated[ref.ID] = true
+			byEnumeracao++
+			continue
+		}
 		f, err := s.sourceOfFaixa(refs, i)
 		if err != nil {
 			return desiste(err)
@@ -149,6 +171,9 @@ func (s *Store) fontesOfField(field types.FieldID, h uint64) ([]segindex.Source,
 	// retorna antes, e o que ele desfaz são as fontes, não o trabalho de decidir
 	// por qual caminho cada segmento responderia. Contar uma montagem abortada
 	// diria que houve consulta onde não houve.
+	if enumerated != nil {
+		sources = append(sources, &historyLocationsSource{liveIterator: &liveIterator{s: s, snap: *snap, next: snap.BaseRowID, limit: snap.LimitRowID, ctx: ctx, included: enumerated}})
+	}
 	s.segByIndice.Add(byIndice)
 	s.segByEnumeracao.Add(byEnumeracao)
 	return sources, nil
@@ -633,4 +658,40 @@ func (f *sourceLocations) MaxRowID() types.RowID {
 		return 0
 	}
 	return f.end - 1
+}
+
+// lookupIndexedHistoryRange prunes sources before touching their .sidx/.dat.
+func (s *Store) lookupIndexedHistoryRange(ctx context.Context, snap types.Snapshot, field types.FieldID, v types.Value, excluded map[uint32]bool, empty bool) (types.RowIDIterator, error) {
+	if !slices.Contains(s.fieldsIndexados, field) {
+		return nil, fmt.Errorf("%w: campo %d não tem índice por segmento", ErrInvalidArgument, field)
+	}
+	if empty {
+		return &liveIterator{s: s, snap: snap, next: snap.BaseRowID, limit: snap.BaseRowID}, nil
+	}
+	key, err := valuekey.Append(nil, v)
+	if err != nil {
+		return nil, err
+	}
+	sources, err := s.fontesOfFieldHistoryRange(ctx, field, primary.HashKey(key), excluded, &snap)
+	if err != nil {
+		return nil, err
+	}
+	return &hashIterator{s: s, it: segindex.Union(sources)}, nil
+}
+
+// Broad row-ID bounds force the union to merge this memory-only enumeration
+// with index sources safely, even when replicated row IDs arrive out of order.
+type historyLocationsSource struct{ *liveIterator }
+
+func (s *historyLocationsSource) MinRowID() types.RowID {
+	if s.snap.BaseRowID >= s.snap.LimitRowID {
+		return math.MaxUint64
+	}
+	return s.snap.BaseRowID
+}
+func (s *historyLocationsSource) MaxRowID() types.RowID {
+	if s.snap.BaseRowID >= s.snap.LimitRowID {
+		return 0
+	}
+	return s.snap.LimitRowID - 1
 }
