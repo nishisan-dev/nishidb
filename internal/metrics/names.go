@@ -763,3 +763,11 @@ const (
 	MetAlarmDeliveryFailed                 = "nishidb_alarm_delivery_failed"
 	MetAlarmDeliveryPaused                 = "nishidb_alarm_delivery_paused"
 )
+
+// Temporal segment pruning is independent of history.index.window.
+const (
+	MetHistoryTimeSegmentsSkipped = "nishidb_history_time_segments_skipped_total"
+	MetHistoryTimeBoundsPending   = "nishidb_history_time_bounds_pending"
+	MetHistoryTimeBoundsActive    = "nishidb_history_time_bounds_rebuild_active"
+	MetHistoryTimeBoundsRebuilt   = "nishidb_history_time_bounds_rebuilt_total"
+)

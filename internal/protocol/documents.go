@@ -442,6 +442,7 @@ type IndexStats struct {
 // descartadas somam os eventos que passaram; Degraded diz se ela parou de
 // receber.
 type HistoryStats struct {
+	TimePruning *HistoryTimePruningStats `json:"timePruning,omitempty"`
 	// Table é o nome da tabela irmã — o mesmo que vai no FROM.
 	Table string `json:"table"`
 	// Rows são as linhas gravadas e Dropped os eventos que não viraram linha
@@ -652,4 +653,12 @@ type AlarmDeliveryStats struct {
 	PersistenceErrors    uint64            `json:"persistenceErrors"`
 	Dropped              map[string]uint64 `json:"dropped"`
 	LastSuccessTimestamp float64           `json:"lastSuccessTimestamp"`
+}
+
+// HistoryTimePruningStats describes derived time bounds independently of indexes.
+type HistoryTimePruningStats struct {
+	SegmentsSkipped int64 `json:"segmentsSkipped"`
+	Pending         int64 `json:"pending"`
+	Rebuilt         int64 `json:"rebuilt"`
+	RebuildRunning  bool  `json:"rebuildRunning"`
 }

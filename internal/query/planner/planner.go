@@ -52,7 +52,7 @@ func New(store Store, m *Metrics) *Planner {
 	return &Planner{store: store, metrics: m}
 }
 
-// Plan escolhe a fonte de candidatos. NUNCA devolve nil, NUNCA devolve erro,
+// basePlan escolhe a fonte de candidatos antes da restrição temporal. NUNCA devolve nil, NUNCA devolve erro,
 // NUNCA entra em panic: toda incerteza vira FullScan, que é sempre correto —
 // só mais lento — porque o executor revalida o WHERE inteiro (§44).
 //
@@ -73,7 +73,7 @@ func New(store Store, m *Metrics) *Planner {
 // Os rótulos ficam porque é por eles que a suíte e os comentários deste ciclo
 // nomeiam as regras; quem for reconciliar as duas numerações mexe nos dois
 // lados de uma vez, nunca só num.
-func (p *Planner) Plan(bq *binder.BoundQuery) Plan {
+func (p *Planner) basePlan(bq *binder.BoundQuery) Plan {
 	if bq == nil || bq.Where == nil {
 		return p.count(FullScan())
 	}
@@ -254,7 +254,12 @@ func (p *Planner) count(pl Plan) Plan {
 	if p.metrics == nil {
 		return pl
 	}
-	switch pl.(type) {
+	switch r := pl.(type) {
+	case *HistoryTimeRangePlan:
+		p.metrics.HistoryTimeRange.Add(1)
+		if _, full := r.Source.(*FullScanPlan); !full {
+			p.count(r.Source)
+		}
 	case *FullScanPlan:
 		p.metrics.FullScan.Add(1)
 	case *PointLookupPlan:

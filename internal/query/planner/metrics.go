@@ -22,9 +22,10 @@ import "sync/atomic"
 // existe índice hash". IndexScan conta o que BitmapScan contava — nenhuma
 // config produzia plano de hash desde a D5, então a série não muda de valor.
 type Metrics struct {
-	FullScan       atomic.Int64 // §64 — query.full_scan
-	PointLookup    atomic.Int64
-	IndexScan      atomic.Int64
-	IndexIntersect atomic.Int64
-	IndexUnion     atomic.Int64
+	HistoryTimeRange atomic.Int64
+	FullScan         atomic.Int64 // §64 — query.full_scan
+	PointLookup      atomic.Int64
+	IndexScan        atomic.Int64
+	IndexIntersect   atomic.Int64
+	IndexUnion       atomic.Int64
 }

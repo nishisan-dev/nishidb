@@ -206,7 +206,11 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 	// Máscara da cadência de ctx: 0 no full scan (checa a cada candidato),
 	// BatchSize-1 nos planos indexados.
 	it.mask = int64(potenciaOfDois(opts.BatchSize) - 1)
-	if _, full := plan.(*planner.FullScanPlan); full {
+	cadencePlan := plan
+	if ranged, ok := plan.(*planner.HistoryTimeRangePlan); ok {
+		cadencePlan = ranged.Source
+	}
+	if _, full := cadencePlan.(*planner.FullScanPlan); full {
 		it.mask = 0
 	}
 
@@ -234,7 +238,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 
 	// A fonte é aberta POR ÚLTIMO: qualquer erro acima não pode deixar
 	// iteradores de índice abertos e sem dono.
-	src, err := sourceOfPlano(plan, opts.Store, opts.Metrics, snap)
+	src, err := sourceOfPlanoContext(it.ctx, plan, opts.Store, opts.Metrics, snap)
 	if err != nil {
 		it.cancel()
 		// O Open que falha DEPOIS de abrir o snapshot é o único caminho em

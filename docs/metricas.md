@@ -195,6 +195,10 @@ Só existem em dataset que declara `history:`.
 | `nishidb_history_index_bytes` ⚠️ | gauge | — | Blocos alocados pelos índices da tabela histórica; a purga também os devolve, porque o .sidx sai no mesmo passo que remove o .dat. O número é da tabela IRMÃ, publicado no rótulo do dataset BASE; a parcela por segmento dele é nishidb_index_bytes{dataset=\ |
 | `nishidb_history_oldest_written_at` ⚠️ | gauge | — | Instante da linha mais antiga ainda visível, em millis. Mostra o maxBytes engolindo o prazo declarado. |
 | `nishidb_history_index_window_seconds` ⚠️ | gauge | — | Intervalo realmente coberto pelos segmentos indexados. Compare com history.index.window: menor significa que o teto do índice assumiu o comando. |
+| `nishidb_history_time_segments_skipped_total` | counter | `dataset` (tabela histórica) | Fragmentos fechados excluídos por `_writtenAt`, por fonte de consulta; inclui varreduras e lookups indexados. |
+| `nishidb_history_time_bounds_pending` | gauge | `dataset` (tabela histórica) | Fragmentos fechados sem metadados temporais completos na última passada; diminui durante a reconstrução. |
+| `nishidb_history_time_bounds_rebuild_active` | gauge | `dataset` (tabela histórica) | 1 enquanto o trabalhador temporal está de pé, inclusive sem índices de campos e em réplicas. |
+| `nishidb_history_time_bounds_rebuilt_total` | counter | `dataset` (tabela histórica) | Metadados `.tidx` publicados após leitura integral desde a abertura. |
 | `nishidb_history_segments_purged_total` ⚠️ | counter | — | Segmentos aposentados pela retenção da tabela histórica. |
 | `nishidb_history_retention_running` ⚠️ | gauge | `dataset` | 1 quando o motor de retenção está de pé. Ele para de vez na primeira falha. |
 
@@ -314,7 +318,7 @@ acontecendo — e as três razões pedem remédios diferentes.
 
 ### 1. Depende de uma feature que o dataset não declara
 
-As nove `nishidb_history_*` só existem em dataset com bloco `history:`; as de
+As métricas `nishidb_history_*` só existem em dataset com bloco `history:`; as de
 autenticação e TLS, só com `server.authentication` / `server.tls`. Nada a
 fazer: o dataset não tem tabela histórica, então não há retenção para medir.
 

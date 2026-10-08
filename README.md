@@ -897,6 +897,44 @@ histórico sem retenção é disco que cresce para sempre. Os dois convivem, e v
 o primeiro a bater — a série `nishidb_history_oldest_written_at` é a que mostra
 o teto de tamanho engolindo o prazo declarado.
 
+##### Consultas por período de escrita
+
+Filtros obrigatórios de `_writtenAt` (`=`, `>`, `>=`, `<`, `<=`, combinados
+por `AND`) permitem descartar os segmentos fechados que não intersectam o
+período. A otimização é automática, com ou sem índice de `node`, e funciona
+inclusive fora de `history.index.window`:
+
+```sql
+SELECT * FROM events_history
+WHERE node = 'BR_PIARG_OLT01'
+  AND _writtenAt >= '2026-10-07T00:21:00-03:00'
+  AND _writtenAt <  '2026-10-07T00:22:00-03:00';
+```
+
+Cada segmento fechado ganha um pequeno arquivo `.tidx` com mínimo e máximo
+reais de `_writtenAt`. Os limites consideram todos os registros, inclusive
+fora de ordem. Arquivos ausentes, incompatíveis ou corrompidos, e segmentos
+com timestamps ausentes ou de tipo inesperado, mantêm a leitura conservadora.
+O segmento ativo sempre participa; a varredura ainda percorre as localizações
+em memória antes de decidir quais registros buscar em disco. O `WHERE`
+completo continua sendo aplicado a cada candidato lido.
+
+O servidor reconstrói os limites em segundo plano, também em réplicas e
+históricos sem índices. A primeira passada começa imediatamente e novas
+pendências são verificadas a cada minuto. Até a reconstrução concluir, os
+segmentos sem limites continuam sendo lidos. Não há migração dos arquivos de
+dados nem configuração adicional; a retenção remove os `.tidx` junto dos dados.
+Os limites temporais não são extraídos de dentro de `OR`, mas um limite
+obrigatório externo pode restringir a consulta inteira.
+
+`/v1/stats` publica `history.timePruning` no dataset base. Em `/metrics`, as
+séries usam o nome da tabela histórica: `nishidb_history_time_segments_skipped_total`
+conta exclusões por fonte de consulta; `nishidb_history_time_bounds_pending`
+mostra as pendências da última passada; `nishidb_history_time_bounds_rebuild_active`
+indica o trabalhador ativo; `nishidb_history_time_bounds_rebuilt_total` conta
+metadados publicados. Os `.tidx` entram em `history.indexBytes` e
+`nishidb_history_index_bytes`, mas não no teto de `history.index.maxBytes`.
+
 ##### A janela de indexação: `history.index`
 
 O bloco `index` declara **quanto do histórico vale indexar**. Fora da janela a
@@ -924,7 +962,7 @@ progressiva.
 
 **A série de disco e o teto NÃO medem a mesma coisa**, e vale saber antes de
 dimensionar: `nishidb_history_index_bytes` soma *todo* o índice do dataset — os
-`.sidx` selados, os temporários, os `.widx` do segmento corrente, mais `indexes/`
+`.sidx` selados, os temporários, os `.widx` do segmento corrente, os `.tidx`, mais `indexes/`
 e `checkpoint/` —, enquanto `history.index.maxBytes` governa **só os `.sidx`
 selados**, que é a única parcela que a expulsão sabe devolver. Ver a série
 permanentemente acima do teto é o esperado, não defeito: é o mesmo princípio que

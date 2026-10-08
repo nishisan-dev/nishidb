@@ -168,6 +168,9 @@ func TestStatsRespondeComATabelaIrma(t *testing.T) {
 	if base.History == nil {
 		t.Fatal("o dataset base não publica o bloco history")
 	}
+	if base.History.TimePruning == nil || !base.History.TimePruning.RebuildRunning {
+		t.Fatal("o histórico não publica o trabalhador de limites temporais ativo")
+	}
 	if base.History.Table != "eventos_history" {
 		t.Errorf("History.Table = %q", base.History.Table)
 	}
