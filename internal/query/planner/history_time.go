@@ -38,6 +38,7 @@ func (p *HistoryTimeRangePlan) String() string {
 	return "HistoryTimeRange(_writtenAt=" + left + lo + "," + hi + right + ", " + p.Source.String() + ")"
 }
 
+// Plan chooses the access path and applies mandatory history time restrictions.
 func (p *Planner) Plan(bq *binder.BoundQuery) Plan {
 	// Choose once without counting intermediate plans.
 	base := (&Planner{store: p.store}).basePlan(bq)

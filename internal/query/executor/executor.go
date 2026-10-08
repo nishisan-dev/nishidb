@@ -238,7 +238,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 
 	// A fonte é aberta POR ÚLTIMO: qualquer erro acima não pode deixar
 	// iteradores de índice abertos e sem dono.
-	src, err := sourceOfPlanoContext(it.ctx, plan, opts.Store, opts.Metrics, snap)
+	src, err := sourceOfPlano(it.ctx, plan, opts.Store, opts.Metrics, snap)
 	if err != nil {
 		it.cancel()
 		// O Open que falha DEPOIS de abrir o snapshot é o único caminho em

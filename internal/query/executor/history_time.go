@@ -37,7 +37,7 @@ func (emptyHistoryIterator) Close() error       { return nil }
 func sourceOfHistoryTimeRange(ctx context.Context, p *planner.HistoryTimeRangePlan, st Store, m *Metrics, snap types.Snapshot) (rowSource, error) {
 	ranged, ok := st.(HistoryTimeStore)
 	if !ok || !ranged.CanPruneHistoryTime(p.Range.Field) {
-		return sourceOfPlanoContext(ctx, p.Source, st, m, snap)
+		return sourceOfPlano(ctx, p.Source, st, m, snap)
 	}
 	countSource(m, func(m *Metrics) *atomic.Int64 { return &m.SourceHistoryTimeRange })
 	if p.Range.Empty() {
@@ -50,5 +50,5 @@ func sourceOfHistoryTimeRange(ctx context.Context, p *planner.HistoryTimeRangePl
 		}
 		return &candidateSource{it: it, st: st, snap: snap}, nil
 	}
-	return sourceOfPlanoContext(ctx, p.Source, &historyRangeStore{Store: st, ranged: ranged, ctx: ctx, snap: snap, bounds: p.Range}, m, snap)
+	return sourceOfPlano(ctx, p.Source, &historyRangeStore{Store: st, ranged: ranged, ctx: ctx, snap: snap, bounds: p.Range}, m, snap)
 }

@@ -9,6 +9,7 @@ type HistoryTimeRange struct {
 	LowerInclusive, UpperInclusive bool
 }
 
+// Empty reports whether no epoch millisecond can satisfy the interval.
 func (r HistoryTimeRange) Empty() bool {
 	if r.HasLower && !r.LowerInclusive && r.Lower == int64(1<<63-1) {
 		return true

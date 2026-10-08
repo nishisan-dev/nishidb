@@ -81,7 +81,7 @@ func readHistoryTimeBounds(path string, sec uint32, field types.FieldID, size in
 	if err != nil {
 		return historyTimeBounds{}, false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil || info.Size() != historyTimeBoundsSize {
 		return historyTimeBounds{}, false
@@ -101,6 +101,7 @@ func readHistoryTimeBounds(path string, sec uint32, field types.FieldID, size in
 	return b, b.segment == sec && b.field == field && b.size == size && (!b.known || b.minimum <= b.maximum)
 }
 
+// CanPruneHistoryTime reports whether field is this history's write timestamp.
 func (s *Store) CanPruneHistoryTime(field types.FieldID) bool {
 	return s.EhHistory() && field != 0 && field == s.writeFieldID
 }
@@ -174,6 +175,7 @@ func (s *Store) excludedHistorySegments(ctx context.Context, r types.HistoryTime
 	return excluded, nil
 }
 
+// ScanHistoryTimeRange skips excluded segments before fetching any record.
 func (s *Store) ScanHistoryTimeRange(ctx context.Context, snap types.Snapshot, r types.HistoryTimeRange) (types.RowIDIterator, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
@@ -190,6 +192,7 @@ func (s *Store) ScanHistoryTimeRange(ctx context.Context, snap types.Snapshot, r
 	return &liveIterator{s: s, snap: snap, next: snap.BaseRowID, limit: limit, ctx: ctx, excluded: excluded}, nil
 }
 
+// LookupHistoryTimeRange restricts index and fallback sources to the query period.
 func (s *Store) LookupHistoryTimeRange(ctx context.Context, snap types.Snapshot, field types.FieldID, v types.Value, r types.HistoryTimeRange) (types.RowIDIterator, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
@@ -239,6 +242,7 @@ func (s *Store) StartHistoryTimeBounds(ctx context.Context) {
 	}()
 }
 
+// ForHistoryTimeBounds cancels and joins the temporal metadata worker.
 func (s *Store) ForHistoryTimeBounds() {
 	h := &s.historyTime
 	h.workerMu.Lock()
@@ -344,14 +348,16 @@ func (s *Store) buildHistoryTimeBounds(ctx context.Context, ref segment.Ref) err
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
+	defer func() {
+		if err := os.Remove(f.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.opts.Log.Warn("historico.limites_temporais_orfaos", "arquivo temporário será removido na próxima abertura", "arquivo", f.Name(), "erro", err.Error())
+		}
+	}()
 	if _, err := f.Write(b.marshal()); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err := f.Close(); err != nil {
 		return err
@@ -387,11 +393,13 @@ func (s *Store) removeHistoryTimeBounds(sec uint32) {
 	}
 }
 
+// HistoryTimeStats reports pruning and temporal metadata reconstruction activity.
 type HistoryTimeStats struct {
 	Skipped, Pending, Rebuilt int64
 	Active                    bool
 }
 
+// HistoryTimeStats returns the current temporal metadata counters.
 func (s *Store) HistoryTimeStats() HistoryTimeStats {
 	h := &s.historyTime
 	return HistoryTimeStats{Skipped: h.skipped.Load(), Pending: h.pending.Load(), Rebuilt: h.rebuilt.Load(), Active: h.active.Load()}

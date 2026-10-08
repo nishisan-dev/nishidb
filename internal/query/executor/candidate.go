@@ -81,11 +81,7 @@ func (s *keySource) close() error { return nil }
 
 // sourceOfPlano traduz o plano na fonte de candidatos. Nenhuma leitura de dado
 // acontece aqui além de abrir iteradores.
-func sourceOfPlano(plan planner.Plan, st Store, m *Metrics, snap types.Snapshot) (rowSource, error) {
-	return sourceOfPlanoContext(context.Background(), plan, st, m, snap)
-}
-
-func sourceOfPlanoContext(ctx context.Context, plan planner.Plan, st Store, m *Metrics, snap types.Snapshot) (rowSource, error) {
+func sourceOfPlano(ctx context.Context, plan planner.Plan, st Store, m *Metrics, snap types.Snapshot) (rowSource, error) {
 	switch p := plan.(type) {
 	case *planner.HistoryTimeRangePlan:
 		return sourceOfHistoryTimeRange(ctx, p, st, m, snap)

@@ -124,7 +124,11 @@ func temporalQuery(t testing.TB, c *schema.Compiled, st query.Store, sql string,
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer it.Close()
+	defer func() {
+		if err := it.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	var out []string
 	for it.Next() {
 		row := it.Row()
@@ -318,7 +322,9 @@ func TestHistoryTimeUnknownAndIncompleteRecords(t *testing.T) {
 	if _, err := f.Write([]byte("bad tail")); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 	refs, _ = s.listaSegmentos()
 	if err := s.buildHistoryTimeBounds(context.Background(), refs[0]); !errors.Is(err, ErrDatasetCorrupt) {
 		t.Fatalf("partial scan err=%v", err)
@@ -456,7 +462,9 @@ func TestHistoryTimeActiveSegmentAndSkippedWalkCancel(t *testing.T) {
 	if it.Next() || !errors.Is(it.Err(), context.Canceled) {
 		t.Fatalf("canceled walk err=%v", it.Err())
 	}
-	it.Close()
+	if err := it.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestHistoryTimeRebuildConcurrentWithRetention(t *testing.T) {
@@ -499,7 +507,9 @@ func TestHistoryTimeRebuildConcurrentWithRetention(t *testing.T) {
 		if err := it.Err(); err != nil {
 			t.Error(err)
 		}
-		it.Close()
+		if err := it.Close(); err != nil {
+			t.Error(err)
+		}
 		s.CloseSnapshot(snap)
 	}
 	wg.Wait()
