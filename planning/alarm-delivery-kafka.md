@@ -42,11 +42,11 @@ alarmDelivery:
 - O nome compartilha o ESPAÇO de nomes com `webhooks` (mesma validação
   `ValidDestinationName`); nome repetido entre os dois é recusado na subida. `notify:`
   aceita qualquer um dos dois tipos.
-- Validação na subida no mesmo molde de `ValidateSeriesDelivery` (tópico pela mesma regex,
+- Validação na subida no mesmo molde de `ValidateKafkaTargets` (tópico pela mesma regex,
   bootstrap por `schema.ValidateKafkaBootstrap`, timeout, segurança resolvida, credencial
   local ausente recusa). Broker indisponível NÃO impede a subida. Chave desconhecida no
   bloco é recusada (`knownKeys`), como hoje no `webhooks`.
-- Reaproveitar o tipo/validação do `SeriesKafkaSpec` onde der sem acoplar os dois blocos
+- Reaproveitar o tipo/validação do `KafkaTargetSpec` onde der sem acoplar os dois blocos
   (ex.: struct de conexão comum); não duplicar a regex nem a validação de bootstrap.
 - O tópico tem de existir; o produtor não pede criação automática (igual à série).
 
