@@ -61,9 +61,17 @@ type Event struct {
 	// uma delas, e repartir o texto do grupo exigiria conhecer o keyFormat.
 	Columns []Column
 	// Total é o valor observado no instante da decisão — não o do disparo
-	// original, quando o evento é uma resolução.
+	// original, quando o evento é uma resolução. Lido do MESMO payload que a
+	// condição avaliou, junto com Rows: os dois são um par que o grupo de fato
+	// teve. Zero para o grupo aposentado.
 	Total         int64
 	TotalDisabled bool
+	// Rows são os membros do grupo no instante da decisão — as linhas com o
+	// groupBy completo e dentro do `scope`, satisfaçam ou não o `where`. É o
+	// denominador de uma condição como `total * 10 <= rows`, e sem ele o
+	// evento não diria de quantos o total é fração. Nunca é nulo, nem com
+	// `total: false`; zero para o grupo aposentado.
+	Rows int64
 	// ValueColumn é a coluna de `_counters.<contador>` cujo valor decidiu o
 	// disparo — `total` por padrão, ou a coluna declarada em `value:` do
 	// alarme. Vai SÓ no disparo (vazia na resolução): a resolução não

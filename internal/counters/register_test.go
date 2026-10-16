@@ -74,7 +74,7 @@ func TestRegisterPublishesCounterMetricColumnsAndMetaTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	names, _, _ := columnsOf(t, eng, "SELECT * FROM _counters.por_olt")
-	sameColumnSet(t, names, "groupKey,olt,total,auth_5m_avg")
+	sameColumnSet(t, names, "groupKey,olt,total,rows,auth_5m_avg")
 	rows := consulta(t, eng, "SELECT id, columns, groups FROM _meta.counter_metrics")
 	if len(rows) != 1 || rows[0]["id"] != "por_olt|auth_5m" || rows[0]["columns"] != "auth_5m_avg" || rows[0]["groups"] != "<null>" {
 		t.Fatalf("_meta.counter_metrics = %v", rows)

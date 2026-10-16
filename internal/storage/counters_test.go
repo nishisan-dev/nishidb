@@ -44,6 +44,10 @@ type counterOfTest struct {
 	ceiling   uint32
 	retention time.Duration
 	keyFormat string
+	// scope é o TEXTO do scope; vazio é sem scope. O avaliador é sempre
+	// `eligible = true` — o texto é o que entra na identidade, e é ele que os
+	// testes de adotar/reconstruir variam.
+	scope string
 }
 
 // callbackOfCounters é o CompilaContadores dos testes: resolve os nomes pelo
@@ -78,6 +82,14 @@ func callbackOfCounters(cs ...counterOfTest) func(*fielddict.Dict) ([]counter.De
 				}
 				def.Where = "authenticated = true"
 				def.NewEvaluator = func() counter.Evaluator { return &avaliadorByID{field: auth} }
+			}
+			if c.scope != "" {
+				eligible, err := dict.LookupOrCreate([]byte("eligible"))
+				if err != nil {
+					return nil, err
+				}
+				def.Scope = c.scope
+				def.NewScopeEvaluator = func() counter.Evaluator { return &avaliadorByID{field: eligible} }
 			}
 			cols := keyformat.Columns(def.Names, def.Types)
 			if c.keyFormat == "" {
@@ -280,7 +292,7 @@ func TestContadorSobreviveAoCheckpointEReabertura(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2 := openStore(t, optionsWithCounters(dir, byOLT("aut", true)))
-	if s2.CountersConstruidosForTest() != 0 {
+	if s2.CountersBuiltForTest() != 0 {
 		t.Fatal("reabertura com os mesmos parâmetros tem de ADOTAR, não reconstruir")
 	}
 	exigeTotal(t, s2, "aut", "A", 33, 66)
@@ -339,7 +351,7 @@ func TestContadorRecuperaDoTailSemCheckpoint(t *testing.T) {
 				t.Fatal(err)
 			}
 			s2 := openStore(t, optionsWithCounters(dir, byOLT("aut", true)))
-			if s2.CountersConstruidosForTest() != 0 {
+			if s2.CountersBuiltForTest() != 0 {
 				t.Fatal("a recovery tem de chegar lá por dobra + replay, sem reconstrução")
 			}
 			exigeTotal(t, s2, "aut", "A", totA, refsA)
@@ -362,8 +374,8 @@ func TestContadorNovoEhConstruidoNaAbertura(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2 := openStore(t, optionsWithCounters(dir, byOLT("aut", true)))
-	if s2.CountersConstruidosForTest() != 1 {
-		t.Fatalf("contador novo num dataset com linhas tem de ser construído; construídos = %d", s2.CountersConstruidosForTest())
+	if s2.CountersBuiltForTest() != 1 {
+		t.Fatalf("contador novo num dataset com linhas tem de ser construído; construídos = %d", s2.CountersBuiltForTest())
 	}
 	exigeTotal(t, s2, "aut", "A", 50, 100)
 }
@@ -381,7 +393,7 @@ func TestContadorComWhereDiferenteEhReconstruido(t *testing.T) {
 	}
 	// Mesmo nome, sem where: outro contador.
 	s2 := openStore(t, optionsWithCounters(dir, byOLT("x", false)))
-	if s2.CountersConstruidosForTest() != 1 {
+	if s2.CountersBuiltForTest() != 1 {
 		t.Fatal("where diferente tem de reconstruir")
 	}
 	exigeTotal(t, s2, "x", "A", 10, 10)
@@ -462,7 +474,7 @@ func TestMudarMaxGroupsNaoReconstroi(t *testing.T) {
 	}
 	c.ceiling = 20
 	s2 := openStore(t, optionsWithCounters(dir, c))
-	if s2.CountersConstruidosForTest() != 0 {
+	if s2.CountersBuiltForTest() != 0 {
 		t.Fatal("mudar o teto não muda o conteúdo: não reconstrói")
 	}
 	if counterChamado(t, s2, "aut").Stats().Ceiling != 20 {
@@ -527,7 +539,7 @@ func TestMudarOMoldeNaoReconstroiEReRenderizaOTexto(t *testing.T) {
 
 	c.keyFormat = "[{olt}]"
 	s2 := openStore(t, optionsWithCounters(dir, c))
-	if n := s2.CountersConstruidosForTest(); n != 0 {
+	if n := s2.CountersBuiltForTest(); n != 0 {
 		t.Errorf("%d contadores reconstruídos; o molde não decide o conteúdo do vetor e não pode custar uma reconstrução", n)
 	}
 	// exigeTotal resolve o grupo PELO TEXTO, então esta linha diz as duas

@@ -30,7 +30,7 @@ const publisherCloseBudget = 10 * time.Second
 // com o mesmo sentinela (config.ErrKafkaTarget, exit de uso) da conferência do
 // `emit.target` dos contadores.
 //
-// Cinco recusas, cada uma com a própria mensagem:
+// Recusas, cada uma com a própria mensagem:
 //   - destino que não existe em `kafkaTargets:`;
 //   - destino que também é `emit.target` de algum contador: o tópico levaria
 //     dois formatos de envelope, e o consumidor de um leria o outro como lixo;
@@ -64,9 +64,15 @@ func validateReplicationTargets(cfg *config.Config, specs map[string]*schema.Dat
 	// mesma em duas subidas com a mesma configuração.
 	sort.Strings(names)
 	type counterUse struct{ dataset, counter string }
+	alarmTargets := make(map[string]bool)
 	counterTargets := make(map[string]counterUse)
 	for _, name := range names {
 		for _, c := range specs[name].Counters {
+			for _, alarm := range c.Alarms {
+				for _, target := range alarm.Notify {
+					alarmTargets[target] = true
+				}
+			}
 			if c.Emit == nil {
 				continue
 			}
@@ -117,6 +123,13 @@ func validateReplicationTargets(cfg *config.Config, specs map[string]*schema.Dat
 	sort.Strings(others)
 	for _, r := range replicated {
 		spec := targets[r.target]
+		// Alarm delivery has its own configuration block and envelope.
+		for _, alarm := range cfg.AlarmDelivery.Kafka {
+			if alarmTargets[alarm.Name] && alarm.Topic == spec.Topic && sameCluster(spec.BootstrapServers, alarm.BootstrapServers) {
+				return fmt.Errorf("%w: dataset %q replication target %q writes to topic %q on the same cluster as alarm Kafka target %q; a topic carries a single envelope format",
+					config.ErrKafkaTarget, r.dataset, r.target, spec.Topic, alarm.Name)
+			}
+		}
 		for _, other := range others {
 			o := targets[other]
 			if other == r.target || o.Topic != spec.Topic || !sameCluster(spec.BootstrapServers, o.BootstrapServers) {

@@ -54,6 +54,12 @@ type instr struct {
 	// inteiro, e o que permite compartilhá-lo sem cópia.
 	like *binder.LikePattern
 
+	// Comparação linear entre colunas (opTest com columns): slot é a coluna da
+	// esquerda, slot2 a da direita, e leftMul/rightMul os multiplicadores (>= 1).
+	columns           bool
+	slot2             int32
+	leftMul, rightMul uint64
+
 	// Salto (opJumpIfFalse/opJumpIfTrue).
 	target int32
 }
@@ -96,6 +102,9 @@ func (p *Programa) Evaluate(slots []Slot, mismatches *int64) bool {
 }
 
 func (in *instr) testa(slots []Slot, mismatches *int64) bool {
+	if in.columns {
+		return in.testColumns(slots, mismatches)
+	}
 	s := &slots[in.slot]
 	if in.isNull {
 		// IS NULL é ausência; IS NOT NULL é presença. Vale para qualquer tipo,
@@ -298,6 +307,9 @@ func (p *Programa) emite(e binder.BoundExpr, nSlots int, pilha *[]tarefa) error 
 		}
 		p.prog = append(p.prog, instr{op: opTest, slot: int32(n.Slot), isNull: true, not: n.Not})
 		return nil
+
+	case *binder.BoundColumnComparison:
+		return p.emitColumnComparison(n, nSlots)
 
 	case *binder.BoundLike:
 		if n.Field == nil {

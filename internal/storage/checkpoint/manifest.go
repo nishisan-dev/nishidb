@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"math"
 	"os"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/atomicfile"
@@ -142,6 +143,17 @@ const (
 	// ignorável do formato, e por isso a menor: sai antes de todas as críticas
 	// na cauda em ordem crescente.
 	tagCounters = 0x0001
+	// tagCounterDictValidBytes é a seção do PISO DE DURABILIDADE do dicionário
+	// de grupos de cada contador: o tamanho do grupos.dict que o checkpoint
+	// sabe fsyncado (CounterInfo.DictValidBytes). Por contador,
+	// `lenNome u16 | nome | validBytes u64`, precedidos de `n u16`.
+	//
+	// Seção PRÓPRIA, e não um campo a mais na 0x0001: o decode da 0x0001 exige
+	// o tamanho exato, e um binário anterior recusaria o manifest inteiro — o
+	// rollback quebraria. IGNORÁVEL pela mesma razão da 0x0001: um binário que
+	// não a conhece pula os bytes e abre como antes, sem piso, e o manifest que
+	// ele regrava sai sem ela. "Sem piso" é exatamente o comportamento anterior.
+	tagCounterDictValidBytes = 0x0002
 	// tagCounterMeasures exige manutenção das janelas de ocorrência em todo checkpoint.
 	tagCounterMeasures = 0x8005
 
@@ -236,16 +248,35 @@ type ScheduleInfo struct {
 // CounterInfo descreve um contador mantido na escrita gravado no dataset.
 //
 // Os três campos são os que decidem o CONTEÚDO do vetor de grupos: outras
-// colunas ou outro where dão outro contador, e a abertura que encontrar
-// divergência reconstrói em vez de adotar. O teto (maxGroups) NÃO viaja:
-// mudá-lo não muda o que já foi contado — só é recusado quando menor que os
-// grupos em uso.
+// colunas, outro where ou outro scope dão outro contador, e a abertura que
+// encontrar divergência reconstrói em vez de adotar. O teto (maxGroups) NÃO
+// viaja: mudá-lo não muda o que já foi contado — só é recusado quando menor que
+// os grupos em uso.
 type CounterInfo struct {
 	Name string
 	// Columns são os FieldIDs do groupBy, na ordem declarada.
 	Columns []uint16
-	// Where é o texto normalizado da condição; vazio é "sem condição".
+	// Where é o texto de IDENTIDADE das duas condições do contador, montado
+	// pelo storage (identityOf em internal/storage/counters.go):
+	//
+	//   - sem scope: o where normalizado, byte a byte o que este campo sempre
+	//     gravou — vazio é "sem condição". Um dataset anterior ao scope abre
+	//     sem reconstruir;
+	//   - com scope: `<where>\n<scope>` (`\n<scope>` sem where). Where e scope
+	//     chegam normalizados por strings.Fields, então nenhum dos dois contém
+	//     `\n`, e nenhum where sozinho produz este texto.
+	//
+	// O nome do campo e o formato em disco ficaram os de antes de propósito: o
+	// binário que não conhece scope lê o texto combinado, compara com o seu
+	// where, não casa, e RECONSTRÓI — o rollback nunca adota um vetor cujo
+	// conteúdo um scope decidiu.
 	Where string
+	// DictValidBytes é o piso de durabilidade do grupos.dict do contador: o
+	// tamanho que o checkpoint sabia fsyncado (seção 0x0002, à parte da
+	// 0x0001). Zero é "sem piso" — o manifest de um binário anterior. NÃO
+	// entra na decisão de adotar ou reconstruir pelos parâmetros: é o que a
+	// abertura confere contra o prefixo que o dicionário tem de fato.
+	DictValidBytes int64
 }
 
 // Manifest é o estado amarrado por um checkpoint.
@@ -302,6 +333,9 @@ func TLVTailSize(m *Manifest) int {
 	if len(m.Counters) > 0 {
 		n += tlvHeaderSize + countersSectionSize(m.Counters)
 	}
+	if size, ok := dictValidBytesSectionSize(m.Counters); ok {
+		n += tlvHeaderSize + size
+	}
 	if len(m.MeasureCounters) > 0 {
 		n += tlvHeaderSize + 2
 		for _, name := range m.MeasureCounters {
@@ -319,6 +353,20 @@ func countersSectionSize(cs []CounterInfo) int {
 		n += 2 + len(c.Name) + 2 + 2*len(c.Columns) + 4 + len(c.Where)
 	}
 	return n
+}
+
+// dictValidBytesSectionSize é o payload da seção 0x0002 — `n u16 | por
+// contador com piso: lenNome u16 | nome | validBytes u64` — e se ela é
+// emitida: só quando algum contador tem piso.
+func dictValidBytesSectionSize(cs []CounterInfo) (int, bool) {
+	n, emit := 2, false
+	for _, c := range cs {
+		if c.DictValidBytes > 0 {
+			n += 2 + len(c.Name) + 8
+			emit = true
+		}
+	}
+	return n, emit
 }
 
 // version decide o byte 4, e a resposta é SEMPRE v3.
@@ -384,6 +432,25 @@ func (m *Manifest) appendTLVTail(b []byte) []byte {
 			}
 			b = binary.LittleEndian.AppendUint32(b, uint32(len(c.Where)))
 			b = append(b, c.Where...)
+		}
+	}
+	if size, ok := dictValidBytesSectionSize(m.Counters); ok {
+		b = binary.LittleEndian.AppendUint16(b, tagCounterDictValidBytes)
+		b = binary.LittleEndian.AppendUint32(b, uint32(size))
+		count := 0
+		for _, c := range m.Counters {
+			if c.DictValidBytes > 0 {
+				count++
+			}
+		}
+		b = binary.LittleEndian.AppendUint16(b, uint16(count))
+		for _, c := range m.Counters {
+			if c.DictValidBytes <= 0 {
+				continue
+			}
+			b = binary.LittleEndian.AppendUint16(b, uint16(len(c.Name)))
+			b = append(b, c.Name...)
+			b = binary.LittleEndian.AppendUint64(b, uint64(c.DictValidBytes))
 		}
 	}
 	if m.hasHistory() {
@@ -521,6 +588,10 @@ func decode(raw []byte) (*Manifest, error) {
 // aquele tanto, e um manifest corrompido não pode custar mais que a leitura
 // dos bytes que ele de fato tem.
 func decodeTLVTail(r *reader, m *Manifest) error {
+	// O piso por contador (0x0002) é lido à parte e só aplicado no fim: ele se
+	// refere a contadores da 0x0001 pelo NOME, e a decodificação não pode
+	// depender da ordem das seções.
+	var floors map[string]int64
 	for r.pos < len(r.b) && !r.bad {
 		tag := r.u16()
 		n := r.u32()
@@ -547,6 +618,14 @@ func decodeTLVTail(r *reader, m *Manifest) error {
 			}
 		case tag == tagCounters:
 			if err := decodeCounters(payload, m); err != nil {
+				return err
+			}
+		case tag == tagCounterDictValidBytes:
+			if floors != nil {
+				return fmt.Errorf("%w: duplicate counter dictionary floor section", ErrCorruptManifest)
+			}
+			var err error
+			if floors, err = decodeCounterDictValidBytes(payload); err != nil {
 				return err
 			}
 		case tag == tagCounterMeasures:
@@ -579,7 +658,43 @@ func decodeTLVTail(r *reader, m *Manifest) error {
 		}
 		// Tag ignorável desconhecida: os bytes já foram pulados acima.
 	}
+	// O piso de um contador que a 0x0001 não declara é ignorado: ele não tem a
+	// quem se aplicar neste manifest.
+	for i := range m.Counters {
+		m.Counters[i].DictValidBytes = floors[m.Counters[i].Name]
+	}
 	return nil
+}
+
+// decodeCounterDictValidBytes lê a seção 0x0002, com tamanho EXATO como a
+// 0x0001. Um nome repetido é manifest corrompido: dois pisos para o mesmo
+// dicionário não têm leitura certa, e escolher um deles em silêncio poderia
+// adotar um dicionário que perdeu dado durável.
+func decodeCounterDictValidBytes(payload []byte) (map[string]int64, error) {
+	fr := &reader{b: payload}
+	n := int(fr.u16())
+	if fr.bad {
+		return nil, fmt.Errorf("%w: counter dictionary floor section truncated", ErrCorruptManifest)
+	}
+	out := make(map[string]int64, n)
+	for i := 0; i < n && !fr.bad; i++ {
+		name := string(fr.take(int(fr.u16())))
+		valid := fr.u64()
+		if fr.bad {
+			break
+		}
+		if _, dup := out[name]; dup {
+			return nil, fmt.Errorf("%w: counter dictionary floor section repeats counter %q", ErrCorruptManifest, name)
+		}
+		if valid > math.MaxInt64 {
+			return nil, fmt.Errorf("%w: counter dictionary floor of %q out of range", ErrCorruptManifest, name)
+		}
+		out[name] = int64(valid)
+	}
+	if fr.bad || fr.pos != len(payload) {
+		return nil, fmt.Errorf("%w: counter dictionary floor section declares %d entries in %d bytes", ErrCorruptManifest, n, len(payload))
+	}
+	return out, nil
 }
 
 // decodeCounters lê a seção 0x0001.

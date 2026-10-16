@@ -72,7 +72,8 @@ class NishiDriverTest {
             assertNotNull(p.description, p.name);
         }
         String todos = nomes.toString();
-        for (String exigida : new String[] {"user", "password", "tls", "tlsCaFile", "connectTimeoutMs"}) {
+        for (String exigida : new String[] {"user", "password", "tls", "tlsCaFile", "connectTimeoutMs",
+            "socketTimeoutMs"}) {
             assertTrue(todos.contains(exigida), todos);
         }
     }

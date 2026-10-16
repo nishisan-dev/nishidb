@@ -1127,6 +1127,20 @@ em que o proxy corporativo respondia 403 e o operador culpava o servidor),
 caminho para desligar a verificação de certificado, e senha que nunca é
 argumento de processo.
 
+**Prazo de espera do cliente, por enquanto só no JDBC** (issue #91). O
+`queryTimeout` vai ao servidor, que cancela a varredura do lado dela; mas um
+servidor que aceita a requisição e não responde prendia a thread do cliente
+sem limite, e o pool que valida com `isValid` esgotava. O driver passou a
+limitar a espera: na consulta, o SILÊNCIO do servidor — a espera pelos
+cabeçalhos e cada espera por bytes do stream, nunca a duração dele —; nos
+documentos pequenos (health, metadata, catálogo, stats), a requisição
+inteira. São três prazos, do mais
+específico ao mais geral: `isValid(s)`, o `queryTimeout` mais 5 s de folga, e
+o prazo de rede (`socketTimeoutMs` / `setNetworkTimeout`, default zero = sem
+prazo), cujo estouro fecha a conexão como o contrato do JDBC pede. O detalhe
+está no README, na seção do driver; o client Python ainda não tem o
+equivalente.
+
 E a mesma divisão de prova: os unitários de cada um falam com um servidor HTTP
 da própria plataforma, com respostas escritas à mão — eles provam que o client
 faz o que quem o escreveu ACHA que o servidor emite. A outra metade é
@@ -1688,6 +1702,9 @@ nas séries correspondentes do `/metrics`:
 | `nishidb_merge_sum_saturated_total` | o teto foi alcançado — a partir daí a coluna não cresce mais |
 | `nishidb_ttl_rule_matched_total{rule}` | qual regra está decidindo o quê, pelo índice no YAML |
 | `nishidb_ttl_unmatched_total` | escritas sem regra nenhuma (só em dataset sem regra de fundo) |
+| `nishidb_ttl_anchor_absent_total{rule}` | a regra ancorada teria decidido e a âncora faltava; a próxima foi tentada |
+| `nishidb_ttl_anchor_in_future_total` | âncoras posteriores à escrita, limitadas a ela |
+| `nishidb_ttl_expired_on_write_total` | documentos gravados já vencidos (âncora + prazo no passado) |
 
 Os dois lados saem da MESMA leitura do snapshot do materializer: dois
 contadores para o mesmo fato divergem no dia em que um caminho de erro esquece
@@ -1702,24 +1719,39 @@ campos crus e tocar poucos.
 ## Expiração por inatividade
 
 `materialization.ttl` é uma **lista de regras**: cada uma tem uma condição
-(`when`, com a gramática do WHERE) e um idle timeout, e a **primeira que casa**
-decide o prazo da entidade. A regra sem `when` é a de fundo e só pode ser a
-última. Cada escrita renova o prazo — entidade ativa nunca expira, entidade
-abandonada sai sozinha —, e é isso que impede o estado vivo de crescer com o
-espaço de chaves; a compaction não segura isso, porque ela recupera versões
-superadas, não entidades inteiras.
+(`when`, com a gramática do WHERE) e um prazo, e a **primeira que casa**
+decide o prazo da entidade. O prazo é um idle timeout (`expireAfterWrite`,
+contado da escrita) ou é contado de um campo temporal do documento (`anchor` +
+`expireAfter`). A regra sem `when` e sem `anchor` é a de fundo e só pode ser a
+última (`TTLRule.IsFallback` é o predicado único). Com `expireAfterWrite`, cada
+escrita renova o prazo — entidade ativa nunca expira, entidade abandonada sai
+sozinha —, e é isso que impede o estado vivo de crescer com o espaço de
+chaves; a compaction não segura isso, porque ela recupera versões superadas,
+não entidades inteiras.
 
 São DOIS campos de sistema no payload, e a divisão é deliberada:
 
 | Campo | Tipo | O que guarda |
 |---|---|---|
 | `_writtenAt` | timestamp | o instante da última escrita — um **fato** |
-| `_expiresIn` | int64 (millis) | a **duração** que a regra escolheu para esta entidade |
+| `_expiresIn` | int64 (millis) | o **prazo** que a regra escolheu, contado a partir de `_writtenAt` |
 
-A duração é gravada em vez do prazo absoluto por duas razões. A primeira é
-composição: com o instante ao lado, mudar a regra no YAML vale na hora para as
-linhas existentes. A segunda é ordem: reordenar as regras no arquivo não muda o
-significado do que já está gravado.
+O storage vence a linha em `_writtenAt + _expiresIn` e não conhece campo de
+negócio. Numa regra com `expireAfterWrite`, `_expiresIn` é a própria duração.
+Numa regra com `anchor`, o materializer o resolve sobre o record como
+`min(âncora, _writtenAt) + expireAfter − _writtenAt`: a âncora no futuro é
+limitada ao instante da escrita, e a escrita que não muda a âncora grava um
+prazo menor que leva ao MESMO vencimento — é isso que faz o dying gasp não
+renovar. Os dois termos vêm do próprio record (o `_writtenAt` é carimbado nele
+na ingestão), então o replay e a reconstrução da agenda chegam ao mesmo
+vencimento sem ler relógio nenhum.
+
+A âncora já vencida daria `_expiresIn ≤ 0`, que o índice de prazos grava como
+imortal; o materializer grava `rowindex.MinMortalTTL` (2 ms) no lugar — o
+sentinela de imortal é 1. A linha some da consulta a partir de
+`_writtenAt + 2 ms` e o coletor a recolhe como qualquer outra. A conta é por
+comparação (`âncora ≤ _writtenAt − expireAfter`), sem somar a âncora a nada: a
+âncora vem do dado e pode ser qualquer int64.
 
 `_expiresIn` é emitido em **toda** escrita, e não só quando o valor muda. O
 merge preserva campo que o evento não menciona, então uma emissão condicional
@@ -1727,7 +1759,18 @@ deixaria o prazo curto de quando a condição valia sobreviver ao evento que a
 quebra — e a entidade morreria logo depois de o alarme reabrir. São 8 bytes por
 versão de record para tornar impossível a única falha que arruinaria a feature.
 
-O índice `prazos.idx` (rowId→duração) é DERIVADO do campo, como o de escritas:
+O prazo é decidido sobre o **payload final** da escrita — o mesmo que vai ao
+`Put` —, e só sobre ele. A entry de `_expiresIn` entra no patch com valor
+provisório, o merge (ou o replace, ou o create) monta o payload, as regras são
+avaliadas sobre esse payload e o valor decidido substitui os 8 bytes do int64
+no lugar. Assim a política de escrita inteira já foi aplicada quando a regra
+olha: a congelada aparece pelo valor congelado, a `merge: sum` pela soma, e em
+`mode: replace` ou sobre a linha vencida (que renasce do vazio) o estado
+anterior simplesmente não está lá. Uma versão anterior avaliava sobre "o
+estado anterior com o patch por cima", e divergia do record exatamente nesses
+quatro casos.
+
+O índice `prazos.idx` (rowId→prazo) é DERIVADO do campo, como o de escritas:
 o replay do tail o reconstrói pelo mesmo `applyRecord`. Zero nele significa
 **desconhecido**, e por isso a entidade imortal — a que casou com uma regra
 `never` — é gravada com um sentinela (`rowindex.ImmortalTTL`). Sem essa
@@ -1855,7 +1898,11 @@ reprocessar nada, e o que impede essas entidades de ficarem imortais.
 
 Já a entidade que tem instante mas não tem `_expiresIn` — a materializada antes
 das REGRAS — cai na duração da regra de **fundo**. Sem regra de fundo, ela não
-expira até a primeira escrita seguinte, que lhe grava um prazo.
+expira até a primeira escrita seguinte, que lhe grava um prazo. Uma regra com
+`anchor` na última posição não é fundo: a âncora nunca foi avaliada para essa
+linha, e dar-lhe o prazo dela seria inventar um vencimento. Pelo mesmo motivo,
+trocar um YAML com fundo por um sem fundo muda a duração de fundo gravada no
+manifest, a agenda é reconstruída na subida e essas linhas deixam de expirar.
 
 O que **não** volta é a chave: a lápide é copiada para frente enquanto a
 primary nomear a key, e esquecê-la exige `tombstoneRetention`, que ainda não
@@ -2438,11 +2485,16 @@ que houve mudança.
 grupo` — quatro bytes por linha (`rowindex.Dense32`, o primeiro vetor de 32
 bits do produto: 32 MB por 8M linhas, e o contador pode existir várias vezes
 sobre o mesmo dataset). O dicionário `grupos.dict` interna a chave composta do
-grupo → id, append-only com CRC por registro e **fsync antes de devolver o id**
-(cópia do `fielddict`, pela mesma invariante: nenhuma entrada do vetor pode
-apontar para um id que a reabertura não resolva); aposentar um grupo é um
-registro nele. Os totais e os `refs` (quantas linhas apontam para o grupo,
-independente da condição) vivem em heap, atômicos, e **não são persistidos**.
+grupo → id, append-only com CRC por registro; aposentar um grupo é um registro
+nele (com fsync próprio). Os totais e os `refs` (quantas linhas apontam para o grupo,
+independente da condição) vivem em heap e **não são persistidos**. Os dois de
+um grupo moram numa **palavra de 64 bits só** — `refs` nos 32 bits baixos,
+`total` nos 32 altos —, mexida com UMA soma atômica por transição e lida com
+UMA carga: o par é lido junto (`total * 10 <= rows` num alarme compara os dois),
+e duas cargas separadas deixavam o leitor ver um rasgo entre elas, até
+`total > rows` (`TestGroupReadsTotalAndRowsAsOneConsistentPair`). O preço é o
+teto de 2³²−1 linhas por grupo, recusado com erro de infra antes de qualquer
+mutação (`TestGroupRowsCeilingRefusesTheRowBeforeAnyMutation`).
 A chave composta nasce no `valuekey`, dono único da chave canônica: `u16
 tamanho | chave simples` por componente, com golden de bytes.
 
@@ -2463,7 +2515,43 @@ descreveria um record que o crash levou. `escritas`, `prazos` e a agenda
 aceitam essa classe de resíduo porque ela é benigna na leitura; no contador
 seria número publicado errado. Então a transição vai para um overlay em heap,
 e só o `ApplyOverlay` do checkpoint, **depois do fdatasync dos segmentos**, a
-leva ao mmap — a mesma invariante das locations.
+leva ao mmap — a mesma invariante das locations. O mapa do overlay não encolhe
+sozinho (nem `delete` nem `clear` devolvem a capacidade do pico), e por isso um
+dreno acima de 65.536 entradas e de 4 vezes a média móvel dos drenos anteriores
+troca o mapa por um novo: a construção de um contador deixava o pico preso até
+o restart (~319 MB por contador no piloto, issue #88); no gate de heap,
+`TestOverlayDrainAfterABuildReturnsTheHeap`, 600 mil linhas crescem o heap em
+~22 MB e o checkpoint o devolve a menos de 20 KB do patamar anterior.
+
+**Por que o dicionário de grupos é fsyncado no checkpoint.** Nenhum record
+carrega id de grupo: os únicos artefatos duráveis que o referenciam são o
+vetor (que só recebe id no `ApplyOverlay`) e o snapshot das medidas (gravado
+depois dele no mesmo checkpoint). Então o grupo novo é só um append no
+`grupos.dict`, e o fsync de todos os appends pendentes é a **primeira coisa do
+`ApplyOverlay`** de cada contador — antes do primeiro `Set` do vetor e antes do
+`SaveMeasures`. A invariante é: nenhum artefato durável referencia id de grupo
+além do prefixo já fsyncado do dicionário. Um id em memória antes do
+checkpoint é como a location no overlay — visível, não durável —, e um crash
+que o leve faz o replay re-internar a chave, talvez com outro id, sem que nada
+durável apontasse para ele. É a assimetria com o `fields.dict`, cujos ids os
+records carregam e que por isso continua com fsync por entrada. Três peças
+fecham as bordas: a abertura sincroniza a cauda que herdou (o page cache
+sobrevive à morte do processo, e sem isso o vetor passaria a apontar para ids
+que só existem no cache); a falha desse fsync — e a do registro de
+aposentadoria, que leva junto os appends pendentes — deixa o writer falho, como
+a do `segSync`; e o checkpoint grava no manifest, numa seção ignorável própria
+(0x0002), o piso de durabilidade de cada dicionário: a abertura que encontra
+um prefixo válido menor reconstrói o contador, em vez de adotá-lo com as
+entradas do vetor zeradas como órfãs. Detalhes, provas e números em
+[`aceite-fsync-do-dicionario-de-grupos.md`](aceite-fsync-do-dicionario-de-grupos.md).
+
+**Por que existe o marcador de construção.** A reconstrução em operação zera o
+vetor in place (mmap compartilhado), e a construção na abertura só o completa
+no checkpoint do fim do `Open`. Um processo que morresse no meio deixava, com
+os mesmos parâmetros no manifest, um vetor zerado ou parcial que a reabertura
+adotava. O arquivo `building` no diretório do contador é gravado (com fsync)
+antes de zerar ou construir e removido só depois do checkpoint que adota a
+construção; presente na abertura, ele força a reconstrução.
 
 **Os quatro momentos.** Um evento chega: passo 7c do `applyRecord`, depois do
 commit da location e ao lado da agenda, nos dois modos (write e replay). Uma
@@ -2477,8 +2565,14 @@ novo: dobra, replay, e o contador está no ponto certo.
 
 **Adotar ou reconstruir.** O manifest grava por contador, numa seção
 **ignorável** (`0x0001`), o que decide o conteúdo do vetor: nome, colunas e o
-texto do `where`. Seção ausente, colunas ou `where` diferentes, ou vetor que
-não cobre as linhas: reconstrói, recriando os **dois** arquivos — chaves de
+texto de identidade das condições. Sem `scope`, esse texto é o `where`
+normalizado, byte a byte o que o campo sempre gravou; com `scope`, é
+`<where>\n<scope>` — e como os dois chegam normalizados por `strings.Fields`,
+nenhum contém `\n` e nenhum `where` sozinho produz esse texto
+(`TestCountersManifestSectionBytesAreLiteral` trava os bytes à mão). É o que
+faz o rollback para um binário sem `scope` reconstruir em vez de adotar
+(`TestScopeIdentityDecidesAdoptOrRebuild`). Seção ausente, colunas ou
+identidade diferentes, ou vetor que não cobre as linhas: reconstrói, recriando os **dois** arquivos — chaves de
 outras colunas não podem poluir um dicionário cujos ids nunca são reemitidos.
 A reconstrução é uma varredura das linhas vivas, logada com motivo e duração,
 e é o que faz "declarar um contador num dataset povoado" ser um reinício e não
@@ -2499,18 +2593,32 @@ nesse caso o estado durável ainda diz "a linha está aqui". Aposentar é regist
 durável, o id nunca é reemitido, e o reinício só estende a visibilidade (o
 instante em que o grupo esvaziou não é persistido).
 
+**O escopo: quem é membro.** O `scope` é um segundo filtro, avaliado pelo
+MESMO `Deriver` e sobre o MESMO payload pós-merge do `where`, antes da chave e
+da condição: a linha fora dele sai `WithoutGroup`, idêntica à linha sem alguma
+coluna do `groupBy` — não interna grupo, não conta em `refs` nem no total, e
+desce do grupo antigo pelo mesmo caminho de decremento, `emptySince` e
+aposentadoria. O vetor de 4 bytes não muda; o que muda é quem chega a ter
+entrada nele. A auditoria instancia o seu avaliador do scope pela mesma
+fábrica (o scratch é de um dono só), e por isso a recuperação e a auditoria
+de um contador com scope chegam aos mesmos números
+(`TestScopedCounterRecoversToTheContinuousStateAndAuditsClean`). O scope entra
+também na descrição das métricas de janela por taxa e na assinatura dos alarmes
+do contador: trocá-lo zera a história e invalida os cronômetros salvos.
+
 **A tabela virtual.** `_counters.<nome>` é um schema sintético compilado do
 mesmo YAML de um dataset de verdade, como o `_meta`, com a key `groupKey` (o
 texto do grupo — a key da v1 é uma coluna string única, e um
 `groupBy` composto não tem coluna que identifique a linha), as colunas do
-`groupBy` abertas e tipadas, e `total`. Diferente do `_meta`, ela é
+`groupBy` abertas e tipadas, `total` e `rows` — o `refs` do grupo, os membros,
+lido na MESMA carga que dá o `total`. Diferente do `_meta`, ela é
 **registrada no motor** sob o dataset e corre pelo pipeline inteiro — planner
 com métricas, top-N, orçamento —, porque `ORDER BY total ASC LIMIT 5` sobre
 milhares de grupos é exatamente a consulta do caso de uso. Os totais são lidos
 no presente; o que o snapshot congela é o conjunto de grupos. A lista dos
 contadores sai pelo mesmo caminho: `_meta.counters` é uma tabela virtual
 registrada sob o dataset — uma linha por contador, com a definição (`name`,
-`groupBy`, `condition`) e o retrato vivo de `EstatisticasOfCounters`
+`groupBy`, `condition`, `scope`) e o retrato vivo de `EstatisticasOfCounters`
 (`rows`, `total`, `groups`, `maxGroups`, `retired`, `refused`, `orphans`,
 `bytes`, `auditDivergent`, `auditAt`, os dois últimos NULL até a primeira
 auditoria), mais `keyFormat`, o molde efetivo da key.
@@ -2530,9 +2638,9 @@ marcadores colados, nenhum dígito ou `-` logo depois de um `int64`, nenhum
 `\` em literal) mais o escape do primeiro caractere do literal seguinte fazem
 o texto ter uma leitura única da esquerda para a direita. Embaixo disso há uma
 rede: um texto que colidisse com o de outro grupo vivo é recusado ANTES do
-`Intern`, porque o dicionário fsynca a chave antes de devolver o id e o id
-nunca é reemitido — uma chave colidente que chegasse ao disco faria toda
-abertura seguinte falhar.
+`Intern`, porque o `Intern` grava a chave no dicionário, o próximo checkpoint
+a torna durável, e id durável nunca é reemitido — uma chave colidente que
+chegasse ao disco faria toda abertura seguinte falhar.
 Ela mora em `internal/counters`, não no pacote `meta`, porque o `meta`
 descreve o dataset pela definição estática e não conhece o storage; o motor
 manda `_meta.fields` para o `meta` e qualquer outra tabela do `_meta` para o
@@ -2546,7 +2654,7 @@ e criaria uma segunda maneira de calcular o mesmo fato. Eles são a MESMA dobra
 do vetor que os totais por grupo, acumulada no mesmo laço, então nada de novo
 vai a disco e a consistência através de crash vale para eles inteira. A
 aposentadoria não os toca: ela só aposenta com `refs == 0`, e
-`totais[g] <= refs[g]` por construção, logo o grupo que sai contribuía zero
+`total[g] <= refs[g]` por construção, logo o grupo que sai contribuía zero
 para os dois — o que um teste trava, porque descontar ao aposentar é o
 "conserto" que qualquer um escreveria. Os mesmos dois números saem em
 `/v1/stats`, no `nishidb counters` e nas séries `nishidb_counter_rows` e
@@ -2575,19 +2683,26 @@ segura o writer pela varredura, e o custo é dito.
 Em regime — grupos internados, linha no overlay — dois contadores custam
 **+0,5 µs por evento** (3,99 → 4,51 µs, +13 %, n = 6), com **zero alocação**
 nos dois lados; o gate `TestPutNaoAlocaMaisComContadores` trava que o `Put`
-real não aloca mais com contadores do que sem (1,0 nos dois). A carga fria é
-outro número: cada grupo novo paga o fsync do dicionário, ≈ 0,6 ms — 600
-grupos em 366 ms na bancada. A dobra de um milhão de linhas custa **38–52 ms**
-e fica no caminho do `Open`; a reconstrução em operação varre um milhão de
-linhas vivas em **0,8 s por contador** com o writer parado, e a reconstrução
-por mudança de parâmetro recria o dicionário e paga o fsync por grupo de novo
-(265 grupos em 299 ms no ponta a ponta).
+real não aloca mais com contadores do que sem (1,0 nos dois). A carga fria era
+outro número naquela bancada: cada grupo novo pagava o fsync do dicionário,
+≈ 0,6 ms — 600 grupos em 366 ms. Desde 01/10/2026 o fsync é do checkpoint, e
+o grupo novo custa **4,4–9,2 µs** até o checkpoint que o torna durável (contra
+1,40–1,71 ms com o fsync por grupo, no mesmo disco), e a construção a frio de
+4.096 grupos cai de 5,5–6,5 s para ~0,1 s — medidas na
+[`aceite-fsync-do-dicionario-de-grupos.md`](aceite-fsync-do-dicionario-de-grupos.md),
+saída crua em
+[`counter-dict-fsync-20261001.txt`](../benchmark/baselines/counter-dict-fsync-20261001.txt).
+A dobra de um milhão de linhas custa **38–52 ms** e fica no caminho do `Open`;
+a reconstrução em operação varre um milhão de linhas vivas em **0,8 s por
+contador** com o writer parado.
 
-**Limites conhecidos.** O fsync por grupo novo é bounded pelo inventário, mas
-no nível de PON ou splitter (10⁵ a 10⁶ grupos) o custo da carga inicial não
-foi medido (débito 108). `_counters` fica fora do isolamento de snapshot
+**Limites conhecidos.** `_counters` fica fora do isolamento de snapshot
 (débito 109), e `WHERE olt = …` num contador composto varre os grupos em vez
-de usar índice (débito 110).
+de usar índice (débito 110). A construção a frio ainda passa todas as linhas
+pelo overlay antes do primeiro checkpoint, e esse é o pico de memória da
+abertura (débito 135); uma reconstrução em operação que falha no meio deixa o
+contador parcial até a reabertura (débito 136); o `msync` do vetor não deixa
+o writer falho (débito 138).
 
 ## Métricas de janela do contador
 
@@ -2861,6 +2976,20 @@ divergir da primeira. As colunas geradas pelas métricas de janela do contador
 mesmo schema da tabela, e o laço lê os valores pela MESMA fonte que a tabela de
 consulta recebeu — o que o `when` enxerga é o que o SELECT devolve.
 
+**A única forma a mais: comparação linear entre colunas.** O `when` e o
+`qualifyWhen` aceitam `<col> [* k] <op> <col> [* k]` (`total * 10 <= rows`),
+que o `WHERE` do SQL, o `where`/`scope` do contador e o `when` do TTL recusam.
+É uma opção explícita do parse e do bind (`parser.ConditionOptions`,
+`binder.ConditionOptions`) que só `predicate.CompileAlarmCondition` liga, e um
+nó próprio da AST (`ColumnComparison`), para que quem não o conhece caia no
+`default` que falha alto. Só colunas `int64`; a conta é em 128 bits com sinal
+(`math/bits` sobre o módulo, sinal reaplicado), sem float e sem estouro
+(`TestLinearColumnComparisonIsExactBeyondInt64`), e sem alocação por avaliação
+(`TestLinearColumnComparisonDoesNotAllocate`). O par `total`/`rows` que ela
+compara é consistente porque o contador o guarda numa palavra só; e o evento
+anuncia `total` e `rows` lidos do payload que decidiu, e não da leitura da
+varredura (`TestEventTotalAndRowsAreReadFromTheDecidingPayload`).
+
 **Elegibilidade é um terceiro fato, e não parte da condição.** O `qualifyWhen`
 é opcional, fala a mesma linguagem do `when`, compila contra o MESMO schema e
 responde se o grupo é assunto do alarme:
@@ -3012,11 +3141,56 @@ esquema de linha fixo. Sem fonte de métrica as colunas continuam saindo, todas
 pelo mesmo argumento que faz o schema da tabela não depender da fonte.
 
 Os dois laços têm cadências próprias: a emissão usa o `every` declarado e o
-amostrador usa `clamp(menor janela ÷ 60, 1s, 10s)`. O `at` é o instante da
-EMISSÃO, e o agregado ao lado dele é o publicado pela última amostra — de até um
-intervalo antes. A linha não carrega um segundo instante: com o `every` mínimo
-de 10 s e a amostragem no máximo a cada 10 s, o desencontro é de no máximo um
-intervalo, e um campo por linha para exprimi-lo custaria mais do que informa.
+amostrador usa `clamp(menor janela ÷ 60, 1s, 10s)`. O `at` é a FRONTEIRA da
+passada — o slot nominal —, e o agregado ao lado dele é o publicado pela última
+amostra lida durante a passada. A linha não carrega um segundo instante: com o
+`every` mínimo de 10 s e a amostragem no máximo a cada 10 s, o desencontro é de
+no máximo um intervalo (mais o atraso da passada, que aparece em
+`nishidb_series_pass_seconds`), e um campo por linha para exprimi-lo custaria
+mais do que informa.
+
+**A emissão é de taxa fixa alinhada à época Unix.** O consumidor da série
+encaixa cada amostra num slot de `every` sem interpolar, então um período de
+`every + duração da passada` e uma fase que muda a cada reinício deixariam
+slots vazios. O laço (`series.Emitter.run`) carimba cada passada com a
+fronteira em que ela começa — múltipla de `every` no `UnixNano`, e não pelo
+`time.Truncate`, que alinha ao ano 1 e diverge para `every` que não divide o
+dia (`TestFloorBoundaryAlignsToTheUnixEpochNotToYearOne`). Não há passada na
+subida: a primeira é na primeira fronteira `>= agora`
+(`TestLoopFirstPassWaitsForTheFirstBoundaryAndCarriesIt`), porque emitir na
+subida repetiria o slot do processo anterior com valores de outro instante. A
+espera é recalculada pelo relógio de parede a cada despertar, e nada acumula
+`Reset(every)` (`TestLoopKeepsAFixedPeriodWhenThePassIsShorterThanEvery`);
+despertar antecipado volta a dormir (`TestLoopNeverStartsAPassBeforeItsBoundary`).
+Passada que termina depois da fronteira seguinte dispara a próxima já, com a
+fronteira mais recente, e as do meio são PULADAS — contadas em
+`nishidb_series_skipped_boundaries_total` e anunciadas por um WARN por
+ocorrência (`TestLoopSkipsTheBoundariesALatePassOverran`); a mesma política se
+reaplica ao acordar de um sono que passou da conta
+(`TestLoopReappliesThePolicyWhenTheSleepOverruns`). O `at` é estritamente
+crescente mesmo com o relógio voltando
+(`TestLoopAtIsStrictlyIncreasingWhenTheClockGoesBack`). O relógio e o
+temporizador são injetáveis (`Options.Now`, `Options.After`), e nenhum teste do
+laço dorme um `every` de verdade.
+
+**O destino Kafka cheio espera, não descarta.** O `seriesDelivery` é um limite
+de MEMÓRIA por destino (10.000 registros, 16 MiB, contando os em voo até o
+callback), e a admissão no `Publish` espera vaga num `sync.Cond` sobre o lock
+do destino, acordado por `Broadcast` no callback que libera, no fechamento e no
+cancelamento do contexto da passada (`context.AfterFunc`, registrado só no
+caminho de espera: o Publish sem espera aloca o mesmo que antes,
+`TestPublishWithoutWaitKeepsItsMeasuredAllocations`). `Broadcast`, e não
+`Signal`, porque com o limite de bytes o único acordado poderia ser quem não
+cabe (`TestWaitersOnTheSameFullDestinationBothProgress`). O limite do kgo tem
+folga de 2× sobre o local: o kgo chama o callback antes de decrementar a
+própria contagem, e com limites iguais o Publish acordado cairia no
+`ErrMaxBuffered` (`TestKgoLimitsLeaveRoomForThePromiseBeforeItsDecrement`). E
+o prazo de entrega conta da admissão, pelo contexto por registro, e não por
+`kgo.RecordDeliveryTimeout`, que o kgo mede a partir do timestamp do registro —
+o `at`, que já está no passado (`TestRecordStampedWithAPastBoundaryIsStillDelivered`).
+Um destino lento atrasa a passada inteira, inclusive o arquivo do mesmo
+contador; o Stop interrompe a espera, e a passada abortada não conta como falha
+(`TestStopWithAPublishWaitingAbortsThePassSilently`).
 
 Linha maior gira o arquivo mais rápido: com `metrics:` e `emit:` no mesmo
 contador, o mesmo `maxBytes × (keep+1)` guarda MENOS histórico. É o preço
@@ -3034,7 +3208,7 @@ dormindo no timer, e com a ordem invertida cinco rodadas passaram verdes. O
 amostrador das métricas de janela obedece à mesma regra, e para depois dos dois
 laços e antes do `closeDatasets` (ver a seção anterior).
 
-**Observabilidade.** Dez séries para o alarme e seis para a emissão (ver
+**Observabilidade.** Dez séries para o alarme e oito para a emissão (ver
 [`metricas.md`](metricas.md)), todas nascendo com zero. Falha e pulo de
 enriquecimento são séries separadas porque pedem ações opostas, e
 `nishidb_alarm_disqualified_total` é SUBCONJUNTO de
@@ -3058,7 +3232,9 @@ Até a v0.9.1 ela era `_meta.alarms`, removida sem período de convivência.
 `firedAt` e `firingValue` são gravados no tracker SÓ na transição para o
 disparo, lidos do MESMO payload que decidiu — inclusive quando a coluna é
 `total`, porque o total que a varredura tem em mãos vem de outra leitura do
-contador e pode divergir (`TestFiringValueIsReadFromTheDecidingPayload`). A
+contador e pode divergir (`TestEventTotalAndRowsAreReadFromTheDecidingPayload`).
+Pela mesma razão o `total` e o `rows` do evento — no disparo e na resolução —
+também saem desse payload, e não da leitura da varredura. A
 coluna vem da chave `value:` do alarme (default `total`), aceita só entre
 `total` e as colunas das métricas de janela. Enquanto o alarme dispara os dois
 ficam congelados (`TestFiringValueAndFiredAtStayFrozenWhileFiring`). O
@@ -3071,8 +3247,38 @@ quarenta segundos" é informação que só existe antes do disparo.
 quando ele não foi declarado: `WHERE qualifyCondition IS NULL` separa os dois
 tipos de alarme (`TestQualifyConditionColumnIsNullWhenNotDeclared`).
 
-**O que NÃO existe aqui.** O canal é o log estruturado; tópico e webhook entram
-como outro `Sink` sobre o MESMO evento, e o ponto de extensão está pronto. A
+**Entrega de alarmes: uma fila, dois transportes.** Além do log, o evento sai
+pelo `alarmdelivery.Manager`, outro `Sink` sobre o MESMO evento, para os
+destinos nomeados no `notify:`. Cada dataset × destino tem UMA fila durável
+(arquivo por evento, publicado com fsync antes de qualquer tentativa, FIFO,
+backoff com jitter, a mesma identidade em toda tentativa), e o destino é só o
+transporte do remetente: um POST por tentativa no webhook, uma produção
+síncrona de um registro no Kafka. A fila é do NOME, e não do tipo: o corpo
+gravado é o mesmo, então trocar um webhook por um destino Kafka de mesmo nome
+entrega ao tópico o que estava pendente
+(`TestDestinationSwitchedFromWebhookToKafkaDeliversThePendingEvent`).
+
+O transporte Kafka reaproveita a configuração fixa do produtor da série, e
+pelo mesmo motivo de fundo: a retentativa é da fila, então o kgo não retenta,
+não é idempotente e não tem `RecordDeliveryTimeout`. Sem a idempotência
+desligada, o kgo não cancelaria a produção em voo, e o Close esperaria o broker
+(`TestKafkaCloseDoesNotWaitForTheBroker`). O Timestamp do registro fica para o
+kgo carimbar na produção: com o `at` do evento, um evento que esperou a queda
+na fila sairia com horário antigo (`TestOldQueuedEventIsDeliveredAndStampedAtProduction`).
+A chave é `[dataset, counter, groupKey]`, montada do PRÓPRIO corpo no envio, e
+não a chave tipada da série: a fila guarda só o corpo, onde as colunas do grupo
+são texto, e o formato do registro em disco não mudou
+(`TestKafkaKeyIsTheCompactArrayOfDatasetCounterAndGroupKey`). O teto do
+registro do kgo é conferido na ADMISSÃO, por transporte, porque um registro
+que o kgo recusasse em toda tentativa prenderia a fila FIFO para sempre
+(`TestEventTooLargeForKafkaIsDroppedAtAdmissionAndDoesNotBlockTheNext`). Há um
+cliente kgo por fila, criado no Open e fechado com ela, como o `http.Client` do
+webhook. Duplicata no timeout ambíguo é aceita e documentada: o consumidor
+deduplica pelo `eventId`
+(`TestAmbiguousKafkaTimeoutLeavesTwoCopiesWithTheSameEventID`).
+
+**O que NÃO existe aqui.** A entrega não é transacional: é pelo menos uma vez,
+nos dois transportes. A
 condição fala de UM contador: ela cita as colunas dele, inclusive as geradas
 pelas métricas de janela do próprio contador, mas a razão entre dois
 (autenticados ÷ serviços da mesma OLT) não é expressável — é a issue #61. O

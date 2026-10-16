@@ -107,6 +107,8 @@ O follower também não publica nada em Kafka: `targets` só vale no master.
 
 ## Publicação em Kafka
 
+Destinos de replicação também não podem usar o tópico de um destino Kafka de alarmes em uso (`alarmDelivery.kafka`) no mesmo cluster. A subida recusa a mistura dos envelopes.
+
 O master pode publicar o mesmo feed num tópico Kafka, em JSON, além de servi-lo
 aos followers por HTTP. O publicador funciona como um follower interno: lê os
 mesmos lotes, na mesma ordem, e escreve um registro Kafka por entrada (o

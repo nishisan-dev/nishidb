@@ -854,7 +854,7 @@ func BindCondition(e parser.Expr, sc *schema.Compiled) (*BoundCondition, error) 
 }
 ```
 
-`fillExprSlots` é o percurso com pilha explícita que hoje vive dentro de `preencheSlots` (`binder.go:794`). **Extraia-o** para que os dois chamadores usem o mesmo código:
+`fillExprSlots` é o percurso com pilha explícita que hoje vive dentro de `fillSlots` (`binder.go:794`). **Extraia-o** para que os dois chamadores usem o mesmo código:
 
 ```go
 func (b *binder) fillExprSlots(e BoundExpr, s Slots) {
@@ -862,11 +862,11 @@ func (b *binder) fillExprSlots(e BoundExpr, s Slots) {
 		return
 	}
 	pilha := []BoundExpr{e}
-	// ... corpo idêntico ao que está em preencheSlots hoje ...
+	// ... corpo idêntico ao que está em fillSlots hoje ...
 }
 ```
 
-e `preencheSlots` passa a chamá-lo depois de resolver `Columns` e `OrderBy`.
+e `fillSlots` passa a chamá-lo depois de resolver `Columns` e `OrderBy`.
 
 Atenção: `b.stmt` fica nil em `BindCondition`. Confira que `b.expr` e `b.folha` não o tocam — se tocarem (para posição de erro), passe um `stmt` vazio não-nil em vez de nil.
 
@@ -1068,18 +1068,18 @@ git commit -m "Troca o bloco ttl por uma lista de regras condicionais"
   TTLField     *CompiledField // o _expiresIn; nil sem regras
 
   // internal/predicate — a forma COMPILADA
-  type RegraCompilada struct {
+  type CompiledRule struct {
       Prog    *Programa // nil na regra de fundo (casa com tudo)
       Slots   binder.Slots
       Duration time.Duration
   }
-  func CompileRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompilada, error)
+  func CompileRules(regras []schema.TTLRule, sc *schema.Compiled) ([]CompiledRule, error)
   ```
 
 **Por que a regra compilada NÃO mora em `schema`:** compilar exige o `binder`, e o
 `binder` importa `schema` — o ciclo seria imediato. `internal/predicate` é o único ponto
 da árvore que pode importar os dois. O `Compiled` fica com a forma validada em texto, e
-quem chama `CompileRegras` é o **materializer**, no construtor, que importa os três sem
+quem chama `CompileRules` é o **materializer**, no construtor, que importa os três sem
 problema.
 
 - [ ] **Passo 1: escrever os testes**
@@ -1133,19 +1133,19 @@ E no laço, ao lado do ramo do `_writtenAt` (`compile.go:503`):
 
 Tire `IsTTL` de `CompiledField` (`compile.go:115`), a atribuição em `:501`, o uso em `:559` e a asserção em `compile_test.go:127`. Confirmado: não há consumidor fora do próprio `schema`.
 
-- [ ] **Passo 5: `predicado.CompileRegras`**
+- [ ] **Passo 5: `predicate.CompileRules`**
 
 ```go
-// CompileRegras transforma as regras validadas em programas avaliáveis.
+// CompileRules transforma as regras validadas em programas avaliáveis.
 //
 // Mora AQUI, e não em schema, porque compilar exige o binder — e o binder
 // importa schema. Este pacote é o único lugar da árvore que pode importar os
 // dois sem fechar ciclo.
-func CompileRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompilada, error) {
-	out := make([]RegraCompilada, 0, len(regras))
+func CompileRules(regras []schema.TTLRule, sc *schema.Compiled) ([]CompiledRule, error) {
+	out := make([]CompiledRule, 0, len(regras))
 	for i, r := range regras {
 		if r.When == "" {
-			out = append(out, RegraCompilada{Duration: r.Duration})
+			out = append(out, CompiledRule{Duration: r.Duration})
 			continue
 		}
 		e, err := parser.ParseCondition(r.When)
@@ -1168,7 +1168,7 @@ func CompileRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompila
 		if err != nil {
 			return nil, fmt.Errorf("ttl[%d]: condição %q: %w", i, r.When, err)
 		}
-		out = append(out, RegraCompilada{Prog: prog, Slots: bc.Slots, Duration: r.Duration})
+		out = append(out, CompiledRule{Prog: prog, Slots: bc.Slots, Duration: r.Duration})
 	}
 	return out, nil
 }
@@ -1196,7 +1196,7 @@ git commit -m "Compila as regras de ttl e registra o campo de prazo"
 - Modify: `internal/materializer/patch.go`, `internal/materializer/materializer.go`
 
 **Interfaces:**
-- Consumes: `predicado.RegraCompilada`, `predicado.CompileRegras` (Task 9)
+- Consumes: `predicate.CompiledRule`, `predicate.CompileRules` (Task 9)
 - Produces: `func (m *Materializer) durationOf(prevPayload []byte, entries []patchEntry) time.Duration`
 
 - [ ] **Passo 1: escrever os testes**
@@ -1253,7 +1253,7 @@ func (m *Materializer) durationOf(prevPayload []byte, entries []patchEntry) (tim
 			return r.Duration, nil // regra de fundo: casa com tudo
 		}
 		slots := m.slots[i]
-		if err := m.preencheSlots(slots, prevPayload, entries); err != nil {
+		if err := m.fillSlots(slots, prevPayload, entries); err != nil {
 			return 0, err
 		}
 		if r.Prog.Evaluate(slots, nil) {
@@ -1263,9 +1263,9 @@ func (m *Materializer) durationOf(prevPayload []byte, entries []patchEntry) (tim
 	return 0, nil
 }
 
-// preencheSlots resolve o valor pós-merge de cada slot: o patch tem prioridade
+// fillSlots resolve o valor pós-merge de cada slot: o patch tem prioridade
 // e o null explícito apaga, senão vale o estado anterior.
-func (m *Materializer) preencheSlots(slots []predicado.Slot, prevPayload []byte, entries []patchEntry) error {
+func (m *Materializer) fillSlots(slots []predicado.Slot, prevPayload []byte, entries []patchEntry) error {
 	for i := range slots {
 		slots[i].Present = false
 	}
@@ -1325,14 +1325,14 @@ Em `patch.go`, o bloco do `_writtenAt` ganha um irmão. Como a duração depende
 		// sobreviver ao evento que a quebra — e a entidade morreria logo
 		// depois de o alarme reabrir. São 8 bytes por versão de record para
 		// tornar impossível a única falha que arruinaria a feature.
-		m.patch.emitePrazo(m.schema.TTLField, d)
+		m.patch.emitTTL(m.schema.TTLField, d)
 	}
 ```
 
-`emitePrazo` acrescenta a entry e **reordena**, porque o sort do `Parse` já rodou:
+`emitTTL` acrescenta a entry e **reordena**, porque o sort do `Parse` já rodou:
 
 ```go
-func (b *PatchBuffer) emitePrazo(cf *schema.CompiledField, d time.Duration) {
+func (b *PatchBuffer) emitTTL(cf *schema.CompiledField, d time.Duration) {
 	b.entries = append(b.entries, patchEntry{
 		field: cf,
 		val:   types.Value{Type: types.TypeInt64, I64: d.Milliseconds()},
@@ -1771,7 +1771,7 @@ git commit -m "Poupa o lock de escrita pulando linha já tombstonada na varredur
 ```go
 func TestContadoresDeRegraContamPorRegra(t *testing.T) {
 	// 3 eventos: dois casam a regra 0, um cai no fundo
-	// m.Stats(): regra[0]=2, regra[1]=1, withoutRegra=0
+	// m.Stats(): regra[0]=2, regra[1]=1, ttlUnmatched=0
 }
 func TestContadorDeCongeladaSeparaCapturaDePreservacao(t *testing.T) {}
 ```

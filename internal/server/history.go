@@ -221,6 +221,10 @@ func (s *Server) turnonRetention(ctx context.Context) {
 // que subisse antes gastaria varredura em segmentos que a primeira passada de
 // retenção vai aposentar em seguida.
 func (s *Server) turnonRebuild(ctx context.Context) {
+	// Temporal metadata also applies to replicas and histories without indexes.
+	for _, d := range s.datasets {
+		d.st.StartHistoryTimeBounds(ctx)
+	}
 	var withRebuild []string
 	for _, d := range s.datasets {
 		if d.follower != nil {
@@ -289,7 +293,9 @@ func historyStats(base *dataset) *protocol.HistoryStats {
 	h := base.spec.History
 	snap := base.mat.Metrics()
 	e := base.irma.st.EstatisticasOfRetention()
+	timeStats := base.irma.st.HistoryTimeStats()
 	out := &protocol.HistoryStats{
+		TimePruning:     &protocol.HistoryTimePruningStats{SegmentsSkipped: timeStats.Skipped, Pending: timeStats.Pending, Rebuilt: timeStats.Rebuilt, RebuildRunning: timeStats.Active},
 		Table:           base.irma.nome,
 		Rows:            snap.HistoricoRows,
 		Dropped:         snap.HistoryDescartadas,

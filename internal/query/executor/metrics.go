@@ -9,6 +9,7 @@ import "sync/atomic"
 // atômico no estado terminal: 8 milhões de incrementos atômicos custam caro e
 // não trazem informação nenhuma a mais.
 type Metrics struct {
+	SourceHistoryTimeRange atomic.Int64
 	// SourceFullScan conta fontes de full scan ABERTAS por este executor.
 	//
 	// NÃO é a métrica normativa `query.full_scan` da spec §64 — essa é contada

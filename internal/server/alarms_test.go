@@ -168,48 +168,53 @@ counters:
       keep: 2
 `
 
-// TestEmissaoDeclaradaEscreveAserie é a costura ponta a ponta da parte 2: o
+// TestDeclaredEmitWritesTheSeries é a costura ponta a ponta da parte 2: o
 // YAML declara, o laço sobe, e o arquivo aparece no diretório do dataset com
-// uma linha por grupo.
-func TestEmissaoDeclaradaEscreveAserie(t *testing.T) {
+// uma linha por grupo, carimbada com a fronteira de `every`.
+//
+// O relógio do servidor fica PARADO no meio de um intervalo: o laço espera a
+// primeira fronteira, acorda pelo temporizador real, vê o relógio ainda antes
+// dela e volta a dormir — nunca emite sozinho. A passada é a do teste
+// (EmitOnceForTest), e o teste não depende de uma fronteira real cair dentro
+// de um prazo.
+func TestDeclaredEmitWritesTheSeries(t *testing.T) {
 	a := newEnvWithStorage(t, blockPadrao, "")
 	a.writeDataset("servicos", fmt.Sprintf(specServicesComEmissao, "servicos"))
 	seedServices(t, a, "servicos", 24)
 	cfg := a.load()
-	srv, err := server.Novo(cfg, server.Options{})
+	srv, err := server.Novo(cfg, server.Options{Now: newTestClock(time.Date(2026, 9, 15, 12, 0, 3, 0, time.UTC)).Now})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
 	run(t, srv)
+	// Só retorna com o laço de pé — o "o laço sobe" da costura.
+	stopEmittersOnceUp(t, srv, "servicos")
+	if err := srv.EmitOnceForTest("servicos"); err != nil {
+		t.Fatalf("emissão: %v", err)
+	}
 
 	path := filepath.Join(cfg.DatasetRootDir("servicos"), schema.EmitDirName, "autenticados_por_olt.ndjson")
-	var linhas []string
-	for i := 0; i < 400; i++ {
-		if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
-			linhas = strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("lendo %s: %v", path, err)
 	}
-	if len(linhas) == 0 {
-		t.Fatalf("nada escrito em %s", path)
-	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 	// 24 serviços: 6 na OLT14 e 18 na G1M10, dois grupos no total.
-	if len(linhas) != 2 {
-		t.Fatalf("%d linhas na primeira passada, quero uma por grupo:\n%s", len(linhas), strings.Join(linhas, "\n"))
+	if len(lines) != 2 {
+		t.Fatalf("%d linhas na passada, quero uma por grupo:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
 	var l map[string]any
-	if err := json.Unmarshal([]byte(linhas[0]), &l); err != nil {
-		t.Fatalf("a linha não é JSON: %v\n%s", err, linhas[0])
+	if err := json.Unmarshal([]byte(lines[0]), &l); err != nil {
+		t.Fatalf("a linha não é JSON: %v\n%s", err, lines[0])
 	}
 	if l["counter"] != "autenticados_por_olt" {
 		t.Errorf("counter = %v", l["counter"])
 	}
-	if l["groupKey"] == nil || l["olt"] == nil || l["total"] == nil || l["at"] == nil {
+	if l["groupKey"] == nil || l["olt"] == nil || l["total"] == nil {
 		t.Errorf("a linha não traz os campos da série: %+v", l)
 	}
-	if !srv.EmitActive("servicos") {
-		t.Error("o laço de emissão devia estar de pé")
+	if l["at"] != "2026-09-15T12:00:00.000Z" {
+		t.Errorf("at = %v, quero a fronteira de 10s mais recente do relógio do servidor", l["at"])
 	}
 }
 
@@ -277,10 +282,10 @@ func TestMetricasDeAlarmeNascemComZero(t *testing.T) {
 	}
 }
 
-// TestMetricasDeSerieNascemPublicadas: mesma doutrina para a emissão. O
-// timestamp do último sucesso é o único que pode nascer diferente de zero, se a
-// primeira passada já correu.
-func TestMetricasDeSerieSaoPublicadas(t *testing.T) {
+// TestSeriesMetricsArePublished: mesma doutrina para a emissão. O
+// timestamp do último sucesso e a duração da passada são os únicos que podem
+// nascer diferentes de zero, se a primeira passada já correu.
+func TestSeriesMetricsArePublished(t *testing.T) {
 	a := newEnvWithStorage(t, blockPadrao, "")
 	a.writeDataset("servicos", fmt.Sprintf(specServicesComEmissao, "servicos"))
 	seedServices(t, a, "servicos", 8)
@@ -290,23 +295,24 @@ func TestMetricasDeSerieSaoPublicadas(t *testing.T) {
 	}
 	run(t, srv)
 	samples := coletaSamples(t, srv)
-	for _, nome := range []string{
+	for _, name := range []string{
 		metrics.MetSeriesRowsTotal, metrics.MetSeriesRotationsTotal,
 		metrics.MetSeriesErrorsTotal, metrics.MetSeriesBytes,
 		metrics.MetSeriesLastSuccessTimestamp, metrics.MetSeriesEmitting,
+		metrics.MetSeriesSkippedBoundariesTotal, metrics.MetSeriesPassSeconds,
 	} {
-		var achou bool
+		var found bool
 		for _, s := range samples {
-			if s.Name == nome && s.Labels[metrics.LabelDataset] == "servicos" {
-				achou = true
+			if s.Name == name && s.Labels[metrics.LabelDataset] == "servicos" {
+				found = true
 			}
 		}
-		if !achou {
-			t.Errorf("a série %s não foi publicada", nome)
+		if !found {
+			t.Errorf("a série %s não foi publicada", name)
 		}
 	}
 	for _, s := range samples {
-		if s.Name == metrics.MetSeriesErrorsTotal && s.Value != 0 {
+		if (s.Name == metrics.MetSeriesErrorsTotal || s.Name == metrics.MetSeriesSkippedBoundariesTotal) && s.Value != 0 {
 			t.Errorf("%s = %v num dataset saudável", s.Name, s.Value)
 		}
 	}

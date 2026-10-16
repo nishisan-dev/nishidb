@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -48,11 +47,7 @@ type KafkaTargetSpec struct {
 
 // DeliveryTimeout resolve o prazo limitado de entrega e de rede.
 func (k KafkaTargetSpec) DeliveryTimeout() (time.Duration, error) {
-	d, err := units.Duration(k.Timeout, 5*time.Second)
-	if err != nil || d <= 0 || d > 5*time.Minute {
-		return 0, fmt.Errorf("%w: destination %q timeout must be in (0, 5m]", ErrKafkaTarget, k.Name)
-	}
-	return d, nil
+	return deliveryTimeout(ErrKafkaTarget, k.Name, k.Timeout)
 }
 
 // MessageBytes resolve o teto de bytes de uma mensagem (e do lote do produtor)
@@ -67,8 +62,6 @@ func (k KafkaTargetSpec) MessageBytes() (int64, error) {
 	return k.MaxMessageBytes, nil
 }
 
-var kafkaTopicName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,249}$`)
-
 // ValidateKafkaTargets também valida o Config montado diretamente por um
 // chamador Go, que não passa pelo Load.
 func (c *Config) ValidateKafkaTargets() error {
@@ -79,24 +72,15 @@ func (c *Config) ValidateKafkaTargets() error {
 			return fmt.Errorf("%w: %s invalid, reserved or duplicate name %q", ErrKafkaTarget, path, k.Name)
 		}
 		seen[k.Name] = true
-		if !kafkaTopicName.MatchString(k.Topic) || k.Topic == "." || k.Topic == ".." {
-			return fmt.Errorf("%w: %s.topic is invalid", ErrKafkaTarget, path)
-		}
-		if err := schema.ValidateKafkaBootstrap(k.BootstrapServers, path+".bootstrapServers"); err != nil {
-			return fmt.Errorf("%w: %v", ErrKafkaTarget, err)
+		target := kafkaTarget{path: path, topic: k.Topic, bootstrap: k.BootstrapServers, security: k.Security}
+		if err := target.validate(ErrKafkaTarget); err != nil {
+			return err
 		}
 		if _, err := k.DeliveryTimeout(); err != nil {
 			return err
 		}
 		if _, err := k.MessageBytes(); err != nil {
 			return err
-		}
-		var node yaml.Node
-		if err := node.Encode(k.Security); err != nil {
-			return fmt.Errorf("%w: %v", ErrKafkaTarget, err)
-		}
-		if _, err := schema.ParseKafkaSecurity(&node, path+".security"); err != nil {
-			return fmt.Errorf("%w: %v", ErrKafkaTarget, err)
 		}
 	}
 	return nil

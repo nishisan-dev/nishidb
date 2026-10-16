@@ -97,9 +97,9 @@ func (p *positionMap) ensure(limit uint32) {
 //   - Mapa id → posição, um por contador: 4 B por id já emitido (blocos de
 //     4.096 ids, 16 KiB). É a única parte que cresce com o id, e fica abaixo do
 //     que o próprio contador já guarda por id: o dicionário e o contador
-//     mantêm por id a chave e o texto (dois slices, 48 B), o total e os refs
-//     (16 B) e o bit de vivo (1 B) — 65 B mais os bytes da chave e do texto
-//     (internal/storage/counter, Dict e Counter).
+//     mantêm por id a chave e o texto (dois slices, 48 B), o par total/refs
+//     numa palavra (8 B) e o bit de vivo (1 B) — 57 B mais os bytes da chave e
+//     do texto (internal/storage/counter, Dict e Counter).
 //   - Entradas em heap, por métrica: blocos de 1.024 × entryBytes até a maior
 //     posição usada. Uma posição nova só é criada com a lista livre vazia, ou
 //     seja, com todas as anteriores ocupadas: a maior posição é o MÁXIMO DE
@@ -117,6 +117,7 @@ type counterState struct {
 	measures      []schema.CounterMeasureSpec
 	groupBy       []string
 	where         string
+	scope         string
 	name          string
 	reader        Reader
 	metrics       []*Metric

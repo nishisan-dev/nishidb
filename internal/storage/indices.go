@@ -411,6 +411,7 @@ func (s *Store) aplicaIndexSets(row types.RowID, payload []byte) error {
 // Arquivo ausente não é anomalia: o segmento pode nunca ter tido índice (fora
 // da janela, ou gravado por um binário anterior).
 func (s *Store) removeIndexOfSegment(sec uint32) {
+	s.removeHistoryTimeBounds(sec)
 	if _, err := s.removeSidxOfDisk(sec); err != nil {
 		s.opts.Log.Warn("indice.orfao_apos_aposentadoria",
 			"o índice do segmento aposentado continuou em disco; ele é inofensivo e sai na limpeza de órfãos",

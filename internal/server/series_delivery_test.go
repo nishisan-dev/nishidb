@@ -21,6 +21,27 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+// emitClockMidInterval é o relógio parado dos testes da emissão Kafka: no meio
+// de um intervalo de 10 s, para que o laço espere a fronteira e nunca emita
+// sozinho (ver TestDeclaredEmitWritesTheSeries). A passada é a do teste.
+var emitClockMidInterval = time.Date(2026, 9, 15, 12, 0, 3, 0, time.UTC)
+
+// stopEmittersOnceUp espera o Run subir os laços de emissão e só então os
+// para. Parar antes não adianta: o Stop sem laço de pé não faz nada, e o Run
+// subiria o laço depois, disputando o EmitOnceForTest. O prazo é guarda de
+// travamento, e não medida.
+func stopEmittersOnceUp(t *testing.T, srv *server.Server, dataset string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !srv.EmitActive(dataset) {
+		if time.Now().After(deadline) {
+			t.Fatalf("o laço de emissão de %q não subiu", dataset)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	srv.StopEmittersForTest(dataset)
+}
+
 func TestServerEmitsRowsToNamedKafkaTopicsAndExposesDeliveryStats(t *testing.T) {
 	for _, file := range []bool{false, true} {
 		t.Run(fmt.Sprint(file), func(t *testing.T) {
@@ -49,20 +70,33 @@ func TestServerEmitsRowsToNamedKafkaTopicsAndExposesDeliveryStats(t *testing.T) 
 			if err := os.WriteFile(a.cfgPath, configBytes, 0600); err != nil {
 				t.Fatal(err)
 			}
-			srv, err := server.Novo(a.load(), server.Options{})
+			srv, err := server.Novo(a.load(), server.Options{Now: newTestClock(emitClockMidInterval).Now})
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = srv.Close() })
 			initial := srv.MetricsExpositionForTest()
 			labels := `{dataset="servicos",counter="autenticados_por_olt",destination="primary"}`
-			if !strings.Contains(initial, metrics.MetSeriesKafkaDeliveredTotal+labels+" 0") {
+			if !strings.Contains(initial, metrics.MetSeriesKafkaDeliveredTotal+labels+" 0") ||
+				!strings.Contains(initial, metrics.MetSeriesKafkaAdmissionWaitSecondsTotal+labels+" 0") {
 				t.Fatalf("missing initial zero: %s", initial)
+			}
+			// As duas do laço saem para todo emissor, inclusive o só-Kafka, e
+			// nascem com zero.
+			emitterLabels := `{dataset="servicos",counter="autenticados_por_olt"}`
+			for _, name := range []string{metrics.MetSeriesSkippedBoundariesTotal, metrics.MetSeriesPassSeconds} {
+				if !strings.Contains(initial, name+emitterLabels+" 0") {
+					t.Fatalf("missing initial zero for %s: %s", name, initial)
+				}
 			}
 			if !file && strings.Contains(initial, metrics.MetSeriesRowsTotal+"{") {
 				t.Fatal("Kafka-only exposed file metrics")
 			}
 			stop := startWebhookServer(t, srv)
+			stopEmittersOnceUp(t, srv, "servicos")
+			if err := srv.EmitOnceForTest("servicos"); err != nil {
+				t.Fatal(err)
+			}
 			deadline := time.Now().Add(5 * time.Second)
 			var delivery []protocol.SeriesDeliveryStats
 			for time.Now().Before(deadline) {
@@ -76,12 +110,15 @@ func TestServerEmitsRowsToNamedKafkaTopicsAndExposesDeliveryStats(t *testing.T) 
 				}
 				time.Sleep(5 * time.Millisecond)
 			}
-			srv.StopEmittersForTest("servicos")
 			if len(delivery) != 2 || delivery[0].Delivered != 2 || delivery[1].Delivered != 2 {
 				t.Fatalf("bad delivery stats: %+v", delivery)
 			}
-			if !strings.Contains(srv.MetricsExpositionForTest(), metrics.MetSeriesKafkaDeliveredTotal+labels+" 2") {
+			exposition := srv.MetricsExpositionForTest()
+			if !strings.Contains(exposition, metrics.MetSeriesKafkaDeliveredTotal+labels+" 2") {
 				t.Fatal("stats and metrics disagree")
+			}
+			if want := fmt.Sprintf("%s%s %v", metrics.MetSeriesKafkaAdmissionWaitSecondsTotal, labels, delivery[0].AdmissionWaitSeconds); !strings.Contains(exposition, want) {
+				t.Fatalf("admissionWaitSeconds do /v1/stats (%v) e a métrica divergem:\n%s", delivery[0].AdmissionWaitSeconds, exposition)
 			}
 			reader, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...), kgo.ConsumeTopics("primary", "backup"), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
 			if err != nil {
@@ -169,12 +206,16 @@ func TestSeriesKafkaUsesSharedTLSAndAllSASLMechanisms(t *testing.T) {
 			applyWithCounters(t, a, "servicos", serviceEvents("OLT_A", 1, true))
 			cfg := a.load()
 			cfg.KafkaTargets = append(cfg.KafkaTargets, config.KafkaTargetSpec{Name: "secure", BootstrapServers: cluster.ListenAddrs(), Topic: "samples", Security: security})
-			srv, err := server.Novo(cfg, server.Options{})
+			srv, err := server.Novo(cfg, server.Options{Now: newTestClock(emitClockMidInterval).Now})
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = srv.Close() })
 			stop := startWebhookServer(t, srv)
+			stopEmittersOnceUp(t, srv, "servicos")
+			if err := srv.EmitOnceForTest("servicos"); err != nil {
+				t.Fatal(err)
+			}
 			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
 				for _, ds := range readJSON[protocol.Stats](t, srv, "/v1/stats").Datasets {

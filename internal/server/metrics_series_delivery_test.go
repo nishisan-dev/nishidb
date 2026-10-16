@@ -7,8 +7,8 @@ import (
 )
 
 func TestSeriesDeliveryMetricsUseSharedStats(t *testing.T) {
-	s := protocol.SeriesDeliveryStats{Counter: "c", Destination: "dest", Delivered: 3, PendingRecords: 5, PendingBytes: 7, LastSuccessTimestamp: 11, Dropped: map[string]uint64{"timeout": 13, "buffer_full": 17}}
-	want := map[string]float64{metrics.MetSeriesKafkaDeliveredTotal: 3, metrics.MetSeriesKafkaPendingRecords: 5, metrics.MetSeriesKafkaPendingBytes: 7, metrics.MetSeriesKafkaLastSuccessTimestamp: 11}
+	s := protocol.SeriesDeliveryStats{Counter: "c", Destination: "dest", Delivered: 3, PendingRecords: 5, PendingBytes: 7, LastSuccessTimestamp: 11, AdmissionWaitSeconds: 19, Dropped: map[string]uint64{"timeout": 13, "buffer_full": 17}}
+	want := map[string]float64{metrics.MetSeriesKafkaDeliveredTotal: 3, metrics.MetSeriesKafkaPendingRecords: 5, metrics.MetSeriesKafkaPendingBytes: 7, metrics.MetSeriesKafkaLastSuccessTimestamp: 11, metrics.MetSeriesKafkaAdmissionWaitSecondsTotal: 19}
 	for _, sample := range samplesOfSeriesDelivery("d", s) {
 		if sample.Labels[0].Value != "d" || sample.Labels[1].Value != "c" || sample.Labels[2].Value != "dest" {
 			t.Fatal(sample)

@@ -207,9 +207,12 @@ type Options struct {
 	// dentro do Store. Exigir o id aqui obrigaria a abrir o dataset sem
 	// expiração, compilar, fechar e reabrir.
 	WriteInstantFieldName string
-	// TTLFieldName é o NOME do campo de sistema que carrega a DURAÇÃO de
-	// ociosidade da entidade, em millis. Obrigatório quando ActiveTTL, e pela
-	// mesma razão do WriteInstantFieldName: os dois são lidos do payload.
+	// TTLFieldName é o NOME do campo de sistema que carrega o PRAZO da
+	// entidade contado a partir do instante de escrita, em millis: ela vence
+	// em `instante + prazo`. Obrigatório quando ActiveTTL, e pela mesma razão
+	// do WriteInstantFieldName: os dois são lidos do payload. O storage não
+	// sabe se o prazo veio de um idle timeout ou de uma âncora — o
+	// materializer o resolve sobre o record, e aqui ele é só um número.
 	TTLFieldName string
 	// CompileCountersCallbackFunction devolve as definições dos contadores mantidos na
 	// escrita (o bloco `counters:` do YAML) compiladas contra o dicionário.
@@ -340,7 +343,8 @@ const defaultSegmentSize = 512 << 20
 // thread-safe entre si); GetByKey/GetByRowID/ScanLive/Lookup/Sequence/
 // Stats são seguros para leitores concorrentes com o writer.
 type Store struct {
-	opts Options
+	historyTime historyTimeState
+	opts        Options
 
 	dict *fielddict.Dict
 	// dictProprio diz se este Store abriu o dicionário e portanto o fecha. É
@@ -384,13 +388,24 @@ type Store struct {
 	// applyRecord, sob o wmu; lidos pela tabela virtual e pela auditoria sem
 	// lock do Store.
 	counters []*counter.Counter
-	// countersARecriar são os que a abertura decidiu reconstruir; a
+	// countersToRebuild são os que a abertura decidiu reconstruir; a
 	// varredura roda depois do ramo de recovery e a lista é esvaziada.
-	countersARecriar []pendenciaOfCounter
-	// countersConstruidos conta as reconstruções desta abertura — o
+	countersToRebuild []pendingCounterRebuild
+	// countersAwaitingAdoption são os contadores cuja construção TERMINOU e
+	// cujo marcador de construção em curso (counter.MarkBuilding) só pode
+	// sair depois do checkpoint que leva o vetor completo ao disco. O fim de
+	// um checkpoint bem-sucedido remove os marcadores e esvazia a lista.
+	// Writer-only (wmu).
+	countersAwaitingAdoption []*counter.Counter
+	// dictSyncHook é o seam de teste do fsync do dicionário de grupos (nil em
+	// produção): recebe o contador e o fsync de fato, e decide se o chama —
+	// é por ele que os testes injetam a falha de fsync e observam o prefixo
+	// que ficou durável. Ver counterDictSyncStep.
+	dictSyncHook func(counter string, sync func() error) error
+	// countersBuilt conta as reconstruções desta abertura — o
 	// observável que separa "adotou" de "reconstruiu e chegou ao mesmo
 	// resultado", como scheduleBuilt.
-	countersConstruidos int
+	countersBuilt int
 	// audTrace é o seam de teste da auditoria dos contadores: chamado depois
 	// de cada linha varrida. Nil em produção.
 	audTrace func(linha types.RowID)
@@ -1319,7 +1334,7 @@ func Open(opts Options) (*Store, error) {
 	// varre as locations e elas ainda estavam sendo publicadas pelo replay; e
 	// antes do índice por segmento e da agenda, porque não depende de nenhum
 	// dos dois.
-	if err := s.reconstroiCountersPendentes(); err != nil {
+	if err := s.rebuildPendingCounters(); err != nil {
 		return nil, err
 	}
 	if len(s.counters) > 0 {
@@ -1367,6 +1382,9 @@ func Open(opts Options) (*Store, error) {
 	// dataset ainda pode ser aberto pelo binário que criou aqueles arquivos, e
 	// apagá-los ali deixaria justamente o índice INCOMPLETO que este ciclo
 	// inteiro existe para tornar impossível.
+	if err := s.loadHistoryTimeBounds(); err != nil {
+		return nil, err
+	}
 	cleanLegacyGlobalIndices(s.opts.Log, idxDir)
 	ok = true
 	return s, nil
@@ -1959,7 +1977,7 @@ func (s *Store) applyRecord(a recordApply) error {
 			}
 		}
 	}
-	// 6c. duração de ociosidade da linha, LIDA DO PAYLOAD pela mesma razão do
+	// 6c. prazo da linha (contado da escrita), LIDO DO PAYLOAD pela mesma razão do
 	// instante: o replay do tail repõe as MESMAS durações depois de um crash.
 	if s.ttlMapping != nil {
 		if ms, ok := fieldOfPayload(a.payload, s.writeFieldTTL, types.TypeInt64); ok {
@@ -2137,9 +2155,10 @@ func (s *Store) venceuNaVersao(rec types.Record, in time.Time) bool {
 	return in.UnixMilli()-ms >= d.Milliseconds()
 }
 
-// durationOfPayload devolve a duração de ociosidade que ESTE payload declara,
-// caindo na duração de fundo quando ele não declara nenhuma — a mesma
-// precedência de durationEfetiva, sobre o payload em vez do índice.
+// durationOfPayload devolve o prazo, contado a partir do instante de escrita,
+// que ESTE payload declara, caindo na duração de fundo quando ele não declara
+// nenhum — a mesma precedência de durationEfetiva, sobre o payload em vez do
+// índice.
 func (s *Store) durationOfPayload(payload []byte) time.Duration {
 	if ms, ok := fieldOfPayload(payload, s.writeFieldTTL, types.TypeInt64); ok {
 		if ms <= 0 {
@@ -2369,7 +2388,10 @@ func (s *Store) replayValidator(key []byte, rowID types.RowID) primary.ValidateF
 
 // liveIterator percorre lazy as rows vivas até o limite fixado na criação.
 type liveIterator struct {
-	s *Store
+	ctx      context.Context
+	excluded map[uint32]bool
+	included map[uint32]bool
+	s        *Store
 	// snap é o universo da varredura, e ele é COPIADO para dentro do iterador
 	// porque o iterador sobrevive à chamada que o criou: o teto, o piso e o
 	// relógio têm de ser os do instante da abertura em todo avanço, inclusive
@@ -2398,13 +2420,19 @@ func (it *liveIterator) Next() bool {
 	}
 	defer it.s.sai()
 	for it.next < it.limit {
+		if it.ctx != nil && uint64(it.next)&255 == 0 {
+			if err := it.ctx.Err(); err != nil {
+				it.err = err
+				return false
+			}
+		}
 		id := it.next
 		it.next++
 		packed, ok := it.s.locs.Get(id)
 		if !ok {
 			continue
 		}
-		if _, _, locFlags := rowindex.Unpack(packed); locFlags&types.FlagTombstone != 0 {
+		if sec, _, locFlags := rowindex.Unpack(packed); locFlags&types.FlagTombstone != 0 || it.excluded[sec] || it.included != nil && !it.included[sec] {
 			continue
 		}
 		if it.s.prazoVencido(id, it.snap.Instant) || it.s.purgada(id) {
@@ -2701,6 +2729,7 @@ func (s *Store) Stats() Stats {
 //
 // É idempotente: o segundo Close devolve nil sem tocar em nada.
 func (s *Store) Close() error {
+	s.historyTime.closing.Store(true)
 	// A compaction é cancelada e AGUARDADA antes do quiesce (§53-55, decisão
 	// D7). O vida.Lock() abaixo só é concedido quando nenhuma operação está em
 	// voo, e a varredura do §54 é a operação mais longa que existe no produto:
@@ -2721,6 +2750,7 @@ func (s *Store) Close() error {
 	// colheria os.ErrClosed no meio de até 512 MiB de leitura — e o laço
 	// anunciaria como falha o que é o encerramento normal do processo.
 	s.ForRebuild()
+	s.ForHistoryTimeBounds()
 	// E a aposentadoria de grupos, a quinta: a passada toma o wmu e escreve no
 	// dicionário do contador, que o Close fecha logo abaixo.
 	s.ForRetirementOfGroups()

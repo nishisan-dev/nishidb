@@ -14,7 +14,12 @@ import "github.com/nishisan-dev/nishidb/internal/query/lexer"
 // que não há ninguém para fornecê-lo é o consumidor da condição, não a
 // gramática.
 func ParseCondition(sql string) (Expr, error) {
-	p := &parser{}
+	return (&parser{}).parseLooseCondition(sql)
+}
+
+// parseLooseCondition é o corpo comum de ParseCondition e ParseConditionWith:
+// as opções vêm no parser já montado.
+func (p *parser) parseLooseCondition(sql string) (Expr, error) {
 	p.lx.Init(sql)
 	if err := p.advance(); err != nil {
 		return nil, err

@@ -26,11 +26,18 @@ import (
 // "counters[0].where"): a recusa sai na subida, para um operador lendo o log,
 // e "condição inválida" sem dizer qual é inacionável.
 func CompileCondition(rotulo, condition string, sc *schema.Compiled) (*Programa, binder.Slots, error) {
-	e, err := parser.ParseCondition(condition)
+	return compileCondition(rotulo, condition, sc, parser.ConditionOptions{}, binder.ConditionOptions{})
+}
+
+// compileCondition é o corpo comum de CompileCondition e CompileAlarmCondition:
+// a sequência parse → bind → programa é UMA, e as opções só ligam formas.
+func compileCondition(rotulo, condition string, sc *schema.Compiled,
+	parseOpts parser.ConditionOptions, bindOpts binder.ConditionOptions) (*Programa, binder.Slots, error) {
+	e, err := parser.ParseConditionWith(condition, parseOpts)
 	if err != nil {
 		return nil, binder.Slots{}, fmt.Errorf("%s: condição %q: %w", rotulo, condition, err)
 	}
-	bc, err := binder.BindCondition(e, sc)
+	bc, err := binder.BindConditionWith(e, sc, bindOpts)
 	if err != nil {
 		return nil, binder.Slots{}, fmt.Errorf("%s: condição %q: %w", rotulo, condition, err)
 	}

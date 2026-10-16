@@ -396,6 +396,9 @@ type SeriesDeliveryStats struct {
 	PendingRecords       int64             `json:"pendingRecords"`
 	PendingBytes         int64             `json:"pendingBytes"`
 	LastSuccessTimestamp float64           `json:"lastSuccessTimestamp"`
+	// AdmissionWaitSeconds acumula, desde a subida, o tempo que a emissão
+	// deste contador esperou vaga no destino (contrapressão). Zero sem espera.
+	AdmissionWaitSeconds float64 `json:"admissionWaitSeconds"`
 }
 
 // CounterStats é o retrato de UM contador mantido na escrita
@@ -413,9 +416,10 @@ type CounterStats struct {
 	TotalDisabled bool   `json:"-"`
 	Name          string `json:"name"`
 	// Rows e Total são os agregados do contador inteiro: quantas linhas vivas
-	// apontam para algum grupo, e quantas satisfazem a condição no dataset
-	// inteiro. Rows abaixo do rows do dataset são as linhas SEM alguma coluna
-	// do groupBy, que o contador não conta por desenho.
+	// apontam para algum grupo (os membros), e quantas satisfazem a condição no
+	// dataset inteiro. Rows abaixo do rows do dataset são as linhas SEM alguma
+	// coluna do groupBy e, com `scope`, as fora do escopo — o contador não
+	// conta nenhuma das duas, por desenho.
 	Rows                 int64  `json:"rows"`
 	Total                int64  `json:"total"`
 	Groups               uint32 `json:"groups"`
@@ -498,6 +502,7 @@ type IndexStats struct {
 // descartadas somam os eventos que passaram; Degraded diz se ela parou de
 // receber.
 type HistoryStats struct {
+	TimePruning *HistoryTimePruningStats `json:"timePruning,omitempty"`
 	// Table é o nome da tabela irmã — o mesmo que vai no FROM.
 	Table string `json:"table"`
 	// Rows são as linhas gravadas e Dropped os eventos que não viraram linha
@@ -571,17 +576,31 @@ type MaterializationStats struct {
 	// TTLUnmatched são as escritas que não casaram com regra nenhuma — só
 	// possível num dataset sem regra de fundo.
 	TTLUnmatched int64 `json:"ttlUnmatched"`
+	// TTLAnchorInFuture conta as âncoras posteriores ao instante da escrita,
+	// limitadas a ele, e TTLExpiredOnWrite os records gravados já vencidos
+	// (âncora + expireAfter no passado). Zero num dataset sem regra ancorada.
+	TTLAnchorInFuture int64 `json:"ttlAnchorInFuture"`
+	TTLExpiredOnWrite int64 `json:"ttlExpiredOnWrite"`
 }
 
 // TTLRuleStats é uma regra de expiração e quantas escritas ela decidiu.
 //
 // O `when` viaja junto da contagem porque o índice sozinho obrigaria quem lê o
 // painel a abrir o YAML para saber o que casou.
+//
+// Numa regra ancorada, ExpireAfterWrite sai VAZIO e a duração vem em
+// ExpireAfter, ao lado de Anchor: publicar 48h sob `expireAfterWrite` diria
+// que a escrita renova o prazo, que é exatamente o que a âncora impede.
+// AnchorAbsent só existe na regra ancorada — ponteiro para sair inclusive com
+// zero nela e sumir nas outras, que assim saem idênticas ao que eram.
 type TTLRuleStats struct {
 	Index            int    `json:"index"`
 	When             string `json:"when,omitempty"`
 	ExpireAfterWrite string `json:"expireAfterWrite"`
 	Matched          int64  `json:"matched"`
+	Anchor           string `json:"anchor,omitempty"`
+	ExpireAfter      string `json:"expireAfter,omitempty"`
+	AnchorAbsent     *int64 `json:"anchorAbsent,omitempty"`
 }
 
 // SchemaStats é o crescimento do dicionário de campos contra o teto.
@@ -694,9 +713,14 @@ type IngestionStats struct {
 	Paused    string `json:"paused,omitempty"`
 }
 
-// AlarmDeliveryStats descreve uma fila de webhook, sem credenciais nem URL.
+// AlarmDeliveryStats descreve a fila de um destino de alarme (webhook ou
+// Kafka), sem credenciais, URL nem bootstrap.
 type AlarmDeliveryStats struct {
-	Destination          string            `json:"destination"`
+	Destination string `json:"destination"`
+	// Kind é o tipo do destino configurado, `webhook` ou `kafka`. Vazio (e
+	// fora do JSON) no destino pausado, que não está mais no config. Não é
+	// rótulo de métrica: as séries de entrega valem para os dois tipos.
+	Kind                 string            `json:"kind,omitempty"`
 	State                string            `json:"state"`
 	MemoryEvents         int               `json:"memoryEvents"`
 	MemoryBytes          int64             `json:"memoryBytes"`
@@ -708,4 +732,15 @@ type AlarmDeliveryStats struct {
 	PersistenceErrors    uint64            `json:"persistenceErrors"`
 	Dropped              map[string]uint64 `json:"dropped"`
 	LastSuccessTimestamp float64           `json:"lastSuccessTimestamp"`
+	// AdmissionWaitSeconds acumula, desde a subida, o tempo que a varredura
+	// esperou vaga em memória porque o gravador não acompanhou a rajada.
+	AdmissionWaitSeconds float64 `json:"admissionWaitSeconds"`
+}
+
+// HistoryTimePruningStats describes derived time bounds independently of indexes.
+type HistoryTimePruningStats struct {
+	SegmentsSkipped int64 `json:"segmentsSkipped"`
+	Pending         int64 `json:"pending"`
+	Rebuilt         int64 `json:"rebuilt"`
+	RebuildRunning  bool  `json:"rebuildRunning"`
 }

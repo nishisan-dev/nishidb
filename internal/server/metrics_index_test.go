@@ -848,7 +848,7 @@ func blocosOfIndexIn(t *testing.T, dir string) int64 {
 		total += somaBlocos(t, filepath.Join(dir, sub), nil)
 	}
 	total += somaBlocos(t, filepath.Join(dir, "data"), func(name string) bool {
-		return strings.HasSuffix(name, ".sidx") || strings.HasSuffix(name, ".widx") || strings.HasSuffix(name, ".tmp")
+		return strings.HasSuffix(name, ".sidx") || strings.HasSuffix(name, ".widx") || strings.HasSuffix(name, ".tmp") || strings.HasSuffix(name, ".tidx") || strings.HasPrefix(name, ".tidx-tmp-")
 	})
 	return total
 }

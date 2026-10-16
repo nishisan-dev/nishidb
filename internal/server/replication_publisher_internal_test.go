@@ -196,3 +196,37 @@ func labelValue(t *testing.T, s metrics.Sample, name string) string {
 	}
 	return s.Labels[2].Value
 }
+
+func TestReplicationTargetsKeepAlarmKafkaEnvelopesOffTheCDCTopic(t *testing.T) {
+	for _, tc := range []struct {
+		name, broker, topic string
+		used, reject        bool
+	}{
+		{"same topic and cluster", "broker:9092", "cdc", true, true},
+		{"another cluster", "other:9092", "cdc", true, false},
+		{"another topic", "broker:9092", "alarms", true, false},
+		{"unused destination", "broker:9092", "cdc", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{
+				KafkaTargets:  []config.KafkaTargetSpec{{Name: "cdc", BootstrapServers: []string{"Broker:9092"}, Topic: "cdc"}},
+				AlarmDelivery: config.AlarmDeliverySpec{Kafka: []config.AlarmKafkaSpec{{Name: "notify", BootstrapServers: []string{tc.broker}, Topic: tc.topic}}},
+			}
+			specs := map[string]*schema.DatasetSpec{
+				"events":   {Replication: schema.ReplicationSpec{Enabled: true, Role: "master", Targets: []string{"cdc"}}},
+				"services": {},
+			}
+			if tc.used {
+				specs["services"].Counters = []schema.CounterSpec{{Name: "c", Alarms: []schema.AlarmSpec{{Name: "a", Notify: []string{"notify"}}}}}
+			}
+			err := validateReplicationTargets(cfg, specs)
+			if tc.reject {
+				if err == nil || !strings.Contains(err.Error(), `alarm Kafka target "notify"`) {
+					t.Fatalf("expected alarm topic collision, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

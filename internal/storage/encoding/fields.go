@@ -176,3 +176,25 @@ func (r *FieldReader) Next() (types.FieldID, types.Value, bool) {
 	}
 	return id, val, true
 }
+
+// fieldHeaderSize é o cabeçalho de todo campo: FIELD_ID u16 + TYPE u8.
+const fieldHeaderSize = 3
+
+// OverwriteInt64 reescreve, NO LUGAR, o valor do campo corrente — o devolvido
+// pelo último Next —, que precisa ser int64. O payload sob o reader é
+// mutado; nenhum byte muda de posição, porque o int64 tem largura fixa.
+//
+// Existe para o materializer decidir o prazo sobre o payload JÁ montado e só
+// então gravá-lo: o campo entra com um valor provisório, o merge roda, e o
+// valor decidido sobre o resultado substitui os 8 bytes sem remontar nada.
+//
+// Campo corrente ausente ou de outro tipo devolve ErrInvalidPayload com o
+// payload intacto.
+func (r *FieldReader) OverwriteInt64(v int64) error {
+	raw := r.RawField()
+	if len(raw) != fieldHeaderSize+8 || types.FieldType(raw[2]) != types.TypeInt64 {
+		return fmt.Errorf("%w: current field is not an int64 (%d raw bytes)", ErrInvalidPayload, len(raw))
+	}
+	binary.LittleEndian.PutUint64(raw[fieldHeaderSize:], uint64(v))
+	return nil
+}

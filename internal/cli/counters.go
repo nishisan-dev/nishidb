@@ -97,9 +97,16 @@ func countersLocal(argConfig, dataset string, audit, rebuild bool, amb Context) 
 		code := writeOutputWithContext("counters", amb, func(w io.Writer) { writeAudit(w, dataset, rows) })
 		return auditOutcome(rows, code, amb)
 	case rebuild:
-		recs, err := st.ReconstroiCounters(amb.Ctx)
+		recs, err := st.RebuildCounters(amb.Ctx)
 		if err != nil {
 			notify(amb, "counters: reconstrução: %v\n", err)
+			return errorCode(err)
+		}
+		// O checkpoint é o que adota a reconstrução: leva o vetor ao disco e
+		// remove o marcador de construção. Fechar sem ele faria a próxima
+		// abertura reconstruir tudo de novo.
+		if err := st.Checkpoint(); err != nil {
+			notify(amb, "counters: checkpoint depois da reconstrução: %v\n", err)
 			return errorCode(err)
 		}
 		rows := make([]rowOfRebuild, 0, len(recs))

@@ -87,7 +87,7 @@ func registerMetricsOfDataset(reg *metrics.Registry, s *Server) {
 			// dataset base. As séries de política de escrita saem no rótulo
 			// de quem as aplicou.
 			if d.mat != nil {
-				out = append(out, samplesOfMaterializacao(d.nome, d.spec, d.mat.Metrics())...)
+				out = append(out, samplesOfMaterialization(d.nome, d.spec, d.mat.Metrics())...)
 			}
 			out = append(out, samplesOfHistory(d)...)
 			// As séries do índice por segmento saem para TODO dataset, e não só
@@ -96,6 +96,9 @@ func registerMetricsOfDataset(reg *metrics.Registry, s *Server) {
 			// pela mesma porta. Elas vêm de uma leitura própria porque a
 			// EstatisticasOfRetention não vale fora do histórico.
 			out = append(out, samplesOfIndex(d.nome, d.st.EstatisticasOfIndex())...)
+			if d.ehHistorico {
+				out = append(out, samplesOfHistoryTime(d.nome, d.st.HistoryTimeStats())...)
+			}
 			out = append(out, samplesOfIsolamento(d.nome, d.st)...)
 			out = append(out, samplesOfCounters(d.nome, d.st.EstatisticasOfCounters())...)
 			rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: d.nome}}
@@ -299,7 +302,7 @@ func samplesOfCounters(dataset string, ests []counter.Stats) []metrics.Sample {
 			metrics.Sample{
 				Family: metrics.MetCounterRows,
 				Name:   metrics.MetCounterRows,
-				Help:   "linhas vivas que apontam para algum grupo deste contador; abaixo do rows do dataset são as linhas sem alguma coluna do groupBy, que o contador não conta por desenho",
+				Help:   "linhas vivas que apontam para algum grupo deste contador (os membros); abaixo do rows do dataset são as linhas sem alguma coluna do groupBy ou fora do scope, que o contador não conta por desenho",
 				Type:   metrics.TypeGauge,
 				Labels: rotulo,
 				Value:  float64(e.Rows),

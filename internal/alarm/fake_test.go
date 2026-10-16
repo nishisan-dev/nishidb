@@ -16,6 +16,18 @@ type grupo struct {
 	slot  int64
 	total int64
 	live  bool
+	// rows são os membros do grupo, válidos com withRows; sem ele o fake
+	// devolve rows = total, o contador sem where.
+	rows     int64
+	withRows bool
+}
+
+// rowsOf devolve os membros do grupo como o fake os anuncia.
+func (g grupo) rowsOf() int64 {
+	if g.withRows {
+		return g.rows
+	}
+	return g.total
 }
 
 // fakeCounter satisfaz o Reader que a tabela virtual do contador pede, com um
@@ -61,7 +73,7 @@ func (f *fakeCounter) Group(id uint32) ([]byte, []byte, int64, int64, bool) {
 		return nil, nil, 0, 0, false
 	}
 	g := f.groups[i]
-	return f.keys[i], f.texts[i], g.total, g.total, true
+	return f.keys[i], f.texts[i], g.total, g.rowsOf(), true
 }
 
 func (f *fakeCounter) ByText(text []byte) (uint32, bool) {
@@ -79,6 +91,16 @@ func (f *fakeCounter) setTotal(olt string, slot, total int64) {
 	for i, g := range f.groups {
 		if g.olt == olt && g.slot == slot {
 			f.groups[i].total = total
+			return
+		}
+	}
+}
+
+// setCounts muda total e rows de um grupo entre duas passadas.
+func (f *fakeCounter) setCounts(olt string, slot, total, rows int64) {
+	for i, g := range f.groups {
+		if g.olt == olt && g.slot == slot {
+			f.groups[i].total, f.groups[i].rows, f.groups[i].withRows = total, rows, true
 			return
 		}
 	}

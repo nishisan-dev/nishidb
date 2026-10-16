@@ -127,8 +127,8 @@ type MaterializationSpec struct {
 	// que é semântica: a primeira que casa vence. Vazia significa dataset sem
 	// expiração.
 	TTLRules []TTLRule
-	// FallbackDuration é a duração da regra sem `when`, ou zero quando não há.
-	// Sai pré-computada porque quem a consome — os montadores de Options do
+	// FallbackDuration é a duração da regra de FUNDO (sem `when` e sem
+	// `anchor`), ou zero quando não há. Sai pré-computada porque quem a consome — os montadores de Options do
 	// storage — não deve reimplementar a busca pela última regra.
 	FallbackDuration time.Duration
 	// TombstoneRetention é por quanto tempo a lápide de uma entidade expirada

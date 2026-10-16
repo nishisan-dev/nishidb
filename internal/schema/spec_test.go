@@ -220,7 +220,7 @@ func TestParseValidationErrors(t *testing.T) {
 		// do materializer.
 		{"sequence nao declarada", "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n  sequence:\n    field: _SEQ\nschema:\n  include: [id, _SEQ]\n  fields:\n    id:\n      type: string\n", "sequence"},
 		{"sequence declarada com outro tipo", repl("    _SEQ:\n      type: int64", "    _SEQ:\n      type: string"), "_SEQ"},
-		{"ttl na forma antiga", "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n  ttl:\n    expireAfterWrite: 2h\nschema:\n  include: [id]\n  fields:\n    id:\n      type: string\n", "lista"},
+		{"ttl na forma antiga", "version: 1\nname: t\nschemaName: telecom\nmaterialization:\n  key:\n    field: id\n  ttl:\n    expireAfterWrite: 2h\nschema:\n  include: [id]\n  fields:\n    id:\n      type: string\n", "list of rules"},
 		{"unknownFields invalido", repl("unknownFields: include", "unknownFields: drop"), "unknownFields"},
 		{"tipo de campo invalido", repl("      type: double", "      type: float"), "float"},
 		{"index invalido", repl("index: true", "index: btree"), "btree"},

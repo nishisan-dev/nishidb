@@ -44,7 +44,7 @@ func TestGrupoZeradoComRefsNaoEhAposentado(t *testing.T) {
 		t.Fatalf("X: total %d refs %d", total, refs)
 	}
 	clk.advance(30 * 24 * time.Hour)
-	n, err := c.RetireEmptyGroups(clk.now())
+	n, err := c.RetireEmptyGroups(clk.now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestGrupoSemRefsEhAposentadoDepoisDoPrazo(t *testing.T) {
 	}
 	// Antes do prazo: continua visível, com total 0.
 	clk.advance(6 * 24 * time.Hour)
-	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 0 {
+	if n, err := c.RetireEmptyGroups(clk.now(), nil); err != nil || n != 0 {
 		t.Fatalf("antes do prazo: %d, %v", n, err)
 	}
 	if _, _, _, _, live := c.Group(1); !live {
@@ -82,7 +82,7 @@ func TestGrupoSemRefsEhAposentadoDepoisDoPrazo(t *testing.T) {
 	}
 	// Depois do prazo: sai.
 	clk.advance(2 * 24 * time.Hour)
-	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 1 {
+	if n, err := c.RetireEmptyGroups(clk.now(), nil); err != nil || n != 1 {
 		t.Fatalf("depois do prazo: %d, %v", n, err)
 	}
 	if _, _, _, _, live := c.Group(1); live {
@@ -120,11 +120,11 @@ func TestGrupoSoEhAposentadoDepoisDoCheckpointQueCobreASaida(t *testing.T) {
 		t.Fatal(err)
 	}
 	clk.advance(2 * time.Hour)
-	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 0 {
+	if n, err := c.RetireEmptyGroups(clk.now(), nil); err != nil || n != 0 {
 		t.Fatalf("sem checkpoint cobrindo a saída: aposentou %d, %v", n, err)
 	}
 	cover(c)
-	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 1 {
+	if n, err := c.RetireEmptyGroups(clk.now(), nil); err != nil || n != 1 {
 		t.Fatalf("com a saída coberta: aposentou %d, %v", n, err)
 	}
 }
@@ -139,7 +139,7 @@ func TestRetainNeverNuncaAposenta(t *testing.T) {
 	}
 	cover(c)
 	clk.advance(365 * 24 * time.Hour)
-	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 0 {
+	if n, err := c.RetireEmptyGroups(clk.now(), nil); err != nil || n != 0 {
 		t.Fatalf("never aposentou %d, %v", n, err)
 	}
 }
@@ -157,7 +157,7 @@ func TestReinicioEstendeAVisibilidade(t *testing.T) {
 	if err := c.Transition(0, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ApplyOverlay(); err != nil {
+	if err := c.ApplyOverlay(nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Msync(); err != nil {
@@ -174,11 +174,11 @@ func TestReinicioEstendeAVisibilidade(t *testing.T) {
 	}
 	// Seis dias já tinham passado, mas a reabertura recomeça a contar.
 	clk.advance(2 * 24 * time.Hour)
-	if n, err := c2.RetireEmptyGroups(clk.now()); err != nil || n != 0 {
+	if n, err := c2.RetireEmptyGroups(clk.now(), nil); err != nil || n != 0 {
 		t.Fatalf("a reabertura tinha de estender a visibilidade: aposentou %d, %v", n, err)
 	}
 	clk.advance(6 * 24 * time.Hour)
-	if n, err := c2.RetireEmptyGroups(clk.now()); err != nil || n != 1 {
+	if n, err := c2.RetireEmptyGroups(clk.now(), nil); err != nil || n != 1 {
 		t.Fatalf("um prazo inteiro depois da reabertura: aposentou %d, %v", n, err)
 	}
 }
@@ -195,10 +195,10 @@ func TestAposentadoriaSobreviveAReabertura(t *testing.T) {
 	}
 	cover(c)
 	clk.advance(2 * time.Hour)
-	if n, _ := c.RetireEmptyGroups(clk.now()); n != 1 {
+	if n, _ := c.RetireEmptyGroups(clk.now(), nil); n != 1 {
 		t.Fatalf("aposentou %d", n)
 	}
-	if err := c.ApplyOverlay(); err != nil {
+	if err := c.ApplyOverlay(nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Close(); err != nil {
@@ -246,7 +246,7 @@ func TestAposentadoriaNaoMexeNosAgregados(t *testing.T) {
 		t.Fatalf("com X vazio e Y com uma linha: linhas %d total %d, quer 1 e 1", before.Rows, before.Total)
 	}
 	clk.advance(8 * 24 * time.Hour)
-	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 1 {
+	if n, err := c.RetireEmptyGroups(clk.now(), nil); err != nil || n != 1 {
 		t.Fatalf("aposentadoria: %d, %v", n, err)
 	}
 	after := c.Stats()

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/protocol"
@@ -98,6 +99,35 @@ func TestReconstrucaoDeContadoresPelaRota(t *testing.T) {
 		if c.DivergentGroups != 0 {
 			t.Fatalf("%s divergiu depois de reconstruir: %+v", c.Name, c)
 		}
+	}
+}
+
+// TestRemoteRebuildIsAdoptedBeforeTheResponse: a reconstrução pela rota só
+// responde depois do checkpoint que a adota — nenhum marcador de construção em
+// curso fica no disco. O dataset do teste não tem ingestão Kafka (não há
+// checkpoint periódico), e o encerramento fecha o Store sem checkpoint: um
+// marcador que sobrasse faria a subida seguinte varrer tudo de novo.
+func TestRemoteRebuildIsAdoptedBeforeTheResponse(t *testing.T) {
+	a := newEnvWithStorage(t, blockAuth(""), "")
+	a.writeDataset("servicos", fmt.Sprintf(specServices, "servicos"))
+	seedServices(t, a, "servicos", 24)
+	provisionUsers(t, a, authAccounts()...)
+	srv, err := server.Novo(a.load(), server.Options{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	run(t, srv)
+	resp := postWithAuth(t, srv, "/v1/counters/rebuild", "", "chefe", passwordChefeAuth)
+	defer fecha(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, quer 200", resp.StatusCode)
+	}
+	marks, err := filepath.Glob(filepath.Join(a.dir, "dados", "servicos", "indexes", "contadores", "*", "building"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(marks) != 0 {
+		t.Fatalf("a rota respondeu sucesso com a reconstrução ainda não adotada: marcadores %v", marks)
 	}
 }
 

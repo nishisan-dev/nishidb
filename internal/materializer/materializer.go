@@ -201,12 +201,21 @@ type Metrics struct {
 	failed   atomic.Int64
 	byCat    [numCategories]atomic.Int64
 
-	// byRegra conta quantas escritas cada regra de TTL decidiu, e withoutRegra
+	// byTTLRule conta quantas escritas cada regra de TTL decidiu, e ttlUnmatched
 	// as que não casaram com nenhuma. São a resposta para "qual regra está
 	// pegando o quê" — sem eles, um `when` que nunca casa é indistinguível de
 	// um que casa sempre, e os dois são erros de configuração comuns.
-	byRegra      []atomic.Int64
-	withoutRegra atomic.Int64
+	byTTLRule    []atomic.Int64
+	ttlUnmatched atomic.Int64
+	// ttlAnchorAbsent conta, por regra, as escritas em que a regra ancorada
+	// teria decidido (o `when` casou, ou não existe) e a âncora faltava no
+	// record — a escrita caiu para a regra seguinte. Só as regras com
+	// `anchor` sobem; as outras ficam em zero.
+	ttlAnchorAbsent []atomic.Int64
+	// ttlAnchorInFuture conta as âncoras posteriores à escrita, limitadas ao
+	// instante dela, e ttlExpiredOnWrite os records que nasceram vencidos.
+	ttlAnchorInFuture atomic.Int64
+	ttlExpiredOnWrite atomic.Int64
 	// congeladasCapturadas conta a CAPTURA (o valor entrou no patch); a
 	// PRESERVAÇÃO (o merge segurou o anterior) e os efeitos da soma vivem em
 	// efeitos, porque quem os enxerga é o merge. Captura sem preservação é
@@ -244,10 +253,17 @@ type MetricsSnapshot struct {
 	FailedTotal int64
 	ByCategory  [numCategories]int64
 
-	// RegrasCasadas é indexada pela ORDEM das regras no YAML, e WithoutRegra são
+	// TTLRuleMatches é indexada pela ORDEM das regras no YAML, e TTLUnmatched são
 	// as escritas que não casaram com nenhuma. Vazia num dataset sem regras.
-	RegrasCasadas []int64
-	WithoutRegra  int64
+	TTLRuleMatches []int64
+	TTLUnmatched   int64
+	// TTLAnchorAbsent é indexada como TTLRuleMatches: as escritas em que a
+	// âncora da regra faltava e a próxima regra foi tentada. TTLAnchorInFuture
+	// são as âncoras limitadas ao instante da escrita, e TTLExpiredOnWrite os
+	// records gravados já vencidos.
+	TTLAnchorAbsent   []int64
+	TTLAnchorInFuture int64
+	TTLExpiredOnWrite int64
 	// CongeladasCapturadas e CongeladasPreservadas contam as duas metades do
 	// congelamento: a entry emitida na ingestão e o valor anterior segurado
 	// pelo merge.
@@ -308,13 +324,13 @@ type Materializer struct {
 	// que só prova a expiração com prazos irrealistas.
 	agora func() time.Time
 
-	// regras são as de TTL já compiladas, e slots são os arrays de avaliação
+	// rules são as de TTL já compiladas, e slots são os arrays de avaliação
 	// de cada uma — um por regra, alocados UMA vez aqui: a avaliação roda por
-	// evento e não pode alocar. fr é o leitor reusado da coleta do estado
-	// anterior, como todo buffer deste pacote.
-	regras []predicate.RegraCompilada
-	slots  [][]predicate.Slot
-	fr     encoding.FieldReader
+	// evento e não pode alocar. fr é o leitor reusado das passadas sobre o
+	// payload que a escrita monta, como todo buffer deste pacote.
+	rules []predicate.CompiledRule
+	slots [][]predicate.Slot
+	fr    encoding.FieldReader
 
 	// reprocessosInuteis conta os reprocessos SEGUIDOS que não fizeram o
 	// dicionário crescer, e aoReprocessar é o aviso de uma vez só. Pertencem à
@@ -337,15 +353,16 @@ type Materializer struct {
 func New(c *schema.Compiled, s Store) (*Materializer, error) {
 	m := &Materializer{schema: c, store: s, agora: time.Now}
 	if len(c.TTLRules) > 0 {
-		regras, err := predicate.CompileRegras(c.TTLRules, c)
+		rules, err := predicate.CompileRules(c.TTLRules, c)
 		if err != nil {
 			return nil, err
 		}
-		m.regras = regras
-		m.metrics.byRegra = make([]atomic.Int64, len(regras))
-		m.slots = make([][]predicate.Slot, len(regras))
-		for i := range regras {
-			m.slots[i] = predicate.NovosSlots(regras[i].Slots.IDs)
+		m.rules = rules
+		m.metrics.byTTLRule = make([]atomic.Int64, len(rules))
+		m.metrics.ttlAnchorAbsent = make([]atomic.Int64, len(rules))
+		m.slots = make([][]predicate.Slot, len(rules))
+		for i := range rules {
+			m.slots[i] = predicate.NovosSlots(rules[i].Slots.IDs)
 		}
 	}
 	return m, nil
@@ -374,13 +391,21 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 	for i := range s.ByCategory {
 		s.ByCategory[i] = m.metrics.byCat[i].Load()
 	}
-	if n := len(m.metrics.byRegra); n > 0 {
-		s.RegrasCasadas = make([]int64, n)
-		for i := range m.metrics.byRegra {
-			s.RegrasCasadas[i] = m.metrics.byRegra[i].Load()
+	if n := len(m.metrics.byTTLRule); n > 0 {
+		s.TTLRuleMatches = make([]int64, n)
+		for i := range m.metrics.byTTLRule {
+			s.TTLRuleMatches[i] = m.metrics.byTTLRule[i].Load()
 		}
 	}
-	s.WithoutRegra = m.metrics.withoutRegra.Load()
+	s.TTLUnmatched = m.metrics.ttlUnmatched.Load()
+	if n := len(m.metrics.ttlAnchorAbsent); n > 0 {
+		s.TTLAnchorAbsent = make([]int64, n)
+		for i := range m.metrics.ttlAnchorAbsent {
+			s.TTLAnchorAbsent[i] = m.metrics.ttlAnchorAbsent[i].Load()
+		}
+	}
+	s.TTLAnchorInFuture = m.metrics.ttlAnchorInFuture.Load()
+	s.TTLExpiredOnWrite = m.metrics.ttlExpiredOnWrite.Load()
 	s.CongeladasCapturadas = m.metrics.congeladasCapturadas.Load()
 	s.CongeladasPreservadas = m.metrics.efeitos.congeladas.Load()
 	s.Acumuladas = m.metrics.efeitos.acumuladas.Load()
@@ -416,8 +441,8 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 }
 
 // Aplica publica no storage um evento já decodificado: carimba o relógio, lê o
-// estado corrente, roda o sequence check, decide o prazo, faz o merge ou o
-// replace e chama o Put.
+// estado corrente, roda o sequence check, faz o merge ou o replace, decide o
+// prazo sobre o payload resultante e chama o Put.
 //
 // É a metade NÃO paralelizável do Apply, e continua valendo aqui tudo o que
 // vale para o Materializer: pertence à goroutine do writer único (§28) e
@@ -488,21 +513,17 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 		return ApplyResult{Action: ActionStale, RowID: m.prevRec.RowID}
 	}
 
-	// O prazo é decidido DEPOIS do Parse e ANTES do merge: ele depende do
-	// estado anterior, que o Parse não tem, e a entry precisa entrar no patch
-	// antes de o payload novo ser montado.
+	// A entry do prazo entra no patch ANTES do merge, com valor provisório, e
+	// o prazo de verdade é decidido DEPOIS dele, sobre o payload final (ver
+	// stampTTL).
 	if m.schema.TTLField != nil {
-		dur, err := m.durationOf(m.prevRec.Payload, d.entries)
-		if err != nil {
-			return m.failure(err)
-		}
 		// Emitida em TODA escrita, e não só quando o resultado muda. O merge
 		// preserva campo que o evento não menciona, então a emissão
 		// condicional deixaria o prazo curto de quando a condição valia
 		// sobreviver ao evento que a quebra — e a entidade morreria logo
 		// depois de o alarme reabrir. São 8 bytes por versão de record para
 		// tornar impossível a única falha que arruinaria a feature.
-		d.emitePrazo(m.schema.TTLField, dur)
+		d.emitTTL(m.schema.TTLField)
 	}
 
 	// prevRec.Payload aponta para prevBuf e outBuf é um buffer DISTINTO: o
@@ -522,6 +543,11 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	m.outBuf = payload
 	if err != nil {
 		return m.failure(err)
+	}
+	if m.schema.TTLField != nil {
+		if err := m.stampTTL(payload); err != nil {
+			return m.failure(err)
+		}
 	}
 
 	// prev entrega ao Put o rowId e o payload anterior — sem ele o Put refaz o
