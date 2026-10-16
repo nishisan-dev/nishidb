@@ -372,3 +372,35 @@ Proposta de aceite, na .228, com o `events` e `publishHistory: false`:
 
 `startup | crash | rewind | retention | gap | snapshot_failed |
 partitions_changed | config_changed | requested | periodic`.
+
+## 11. Ajustes vindos da refutação do plano (16/10/2026)
+
+O plano foi revisado contra o código antes de qualquer implementação. Estes
+pontos mudam ou detalham o que está acima. O plano é a referência.
+
+- **Erro de I/O no feed** (6.1): ENOSPC e EIO passam a ser tratados como disco
+  lento. O lote fica na memória e o gravador tenta de novo. A lacuna só vem
+  quando a memória lota. Invalidar a cada ENOSPC derrubaria todos os destinos
+  em laço com o disco cheio.
+- **Piso de memória** (6.5): `maxBufferedBytes ≥ 3 × maxBatchBytes` em todo
+  master. Com o gravador assíncrono, cabem ao mesmo tempo três lotes: o
+  intervalo ativo, um lote na fila de gravação e um arrendado já despejado.
+- **Pedido de snapshot sob demanda** (10.2): fica num contador próprio,
+  `<destino>.resync`, e não no `.ckpt`. O `.ckpt` registra o pedido consumido.
+  Assim um pedido feito durante o snapshot não se perde.
+- **Conferência de rewind** (10.1): compara com a `sequence` do instante da
+  retomada, e não com a corrente, porque a ingestão já roda. Também é rewind o
+  topo do tópico com uma epoch que o checkpoint não conhece. A conferência
+  roda ANTES de qualquer outro motivo: um `reset` na epoch antiga de um feed
+  restaurado também divergiria.
+- **Impressão da renderização** (6.3): cobre só aliases, tabelas e
+  `publishHistory`. Colunas descobertas em runtime não mudam o rótulo de
+  coluna existente.
+- **Contrato** (seção 5): a `v0.14.1` já foi publicada com o envelope Kafka.
+  Toda mudança no wire é aditiva. O cursor HTTP anuncia `historyExcluded`, e o
+  campo ausente vale o legado.
+- **Follower HTTP** (6.7): para atravessar o reinício limpo do master, o
+  follower desconectado com a mesma epoch tenta o tail antes do snapshot, e o
+  encerramento responde 410 ao long-poll.
+- **Abertura** (6.2): o feed abre DEPOIS do `LOCK` do Store base, e a abertura
+  só lê. A subida abortada depois do `Resume` fecha limpa.
