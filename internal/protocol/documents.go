@@ -329,6 +329,62 @@ type DatasetStats struct {
 	// MESMA leitura que alimenta as séries nishidb_counter_*. Lista vazia — e
 	// não omitida — no dataset sem `counters:`, pela razão do Index.
 	Counters []CounterStats `json:"counters"`
+	// Replication é o feed de replicação do dataset master e a publicação
+	// dele nos destinos Kafka. Sai só no dataset BASE com `replication`
+	// ligado no papel master — o seguidor e a tabela irmã não têm feed —, e
+	// da MESMA leitura que alimenta as séries nishidb_replication_*.
+	Replication *ReplicationStats `json:"replication,omitempty"`
+}
+
+// ReplicationStats é o bloco `replication` do /v1/stats.
+type ReplicationStats struct {
+	Feed ReplicationFeedStats `json:"feed"`
+	// Delivery é um item por destino de `replication.targets`, na ordem do
+	// YAML. Lista vazia — e não omitida — no master sem destino Kafka: o
+	// feed existe e só serve os seguidores.
+	Delivery []ReplicationDeliveryStats `json:"delivery"`
+}
+
+// ReplicationFeedStats é o retrato do feed de replicação.
+type ReplicationFeedStats struct {
+	Epoch string `json:"epoch"`
+	// Produced é a última sequência publicada no feed; AvailableAfter é o
+	// piso: o feed serve as sequências acima dele.
+	Produced       uint64 `json:"produced"`
+	AvailableAfter uint64 `json:"availableAfter"`
+	BufferedBytes  int64  `json:"bufferedBytes"`
+	// InputEntries conta as entradas publicadas pelo writer; OutputEntries,
+	// as que saíram nos lotes fechados, depois da coalescência.
+	InputEntries  uint64 `json:"inputEntries"`
+	OutputEntries uint64 `json:"outputEntries"`
+	// EvictedBatches conta os lotes descartados para abrir espaço sob o teto
+	// de memória do feed.
+	EvictedBatches uint64 `json:"evictedBatches"`
+	Flushes        uint64 `json:"flushes"`
+	// LastFlushReason é o motivo do último fechamento de lote; vazio até o
+	// primeiro.
+	LastFlushReason string `json:"lastFlushReason"`
+	Invalidations   uint64 `json:"invalidations"`
+}
+
+// ReplicationDeliveryStats é o retrato de UM publicador do feed num destino
+// Kafka. Os mapas Snapshots e Errors trazem todos os motivos da lista fechada,
+// em zero até o primeiro.
+type ReplicationDeliveryStats struct {
+	Destination string `json:"destination"`
+	// State é um de snapshotting, following, retrying, blocked, failed ou
+	// stopped.
+	State string `json:"state"`
+	// Epoch e Cursor são o ponto do feed até onde tudo foi confirmado pelo
+	// broker.
+	Epoch                string            `json:"epoch"`
+	Cursor               uint64            `json:"cursor"`
+	LagSequences         uint64            `json:"lagSequences"`
+	Delivered            uint64            `json:"delivered"`
+	Snapshots            map[string]uint64 `json:"snapshots"`
+	Errors               map[string]uint64 `json:"errors"`
+	LastSuccessTimestamp float64           `json:"lastSuccessTimestamp"`
+	LastError            string            `json:"lastError"`
 }
 
 // SeriesDeliveryStats describes a counter's best-effort Kafka output.

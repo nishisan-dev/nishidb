@@ -22,9 +22,17 @@ A regra tem uma consequência que este glossário resolve: a prosa em PT-BR
 fala de "lápide", "fila" e "orçamento", e o código diz `tombstone`, `queue` e
 `budget`.
 
-**Sem compat.** Nada foi lançado. Chaves de YAML, campo do wire, métricas,
+**Compatibilidade.** No ciclo de identificadores em inglês os contratos ainda
+eram tratados como não lançados, e chaves de YAML, campo do wire, métricas,
 valor de CLI, nomes públicos do client Python e nomes de arquivo em disco
-mudam de nome direto, sem aceitar os dois por um ciclo.
+mudaram de nome direto, sem aceitar os dois por um ciclo. Isso deixou de valer: há releases publicadas (v0.10.0, v0.11.0 e v0.12.0,
+entre outras), e contrato lançado só muda com decisão explícita e registrada.
+O precedente é o rename de `seriesDelivery:` para `kafkaTargets:` (v0.12 →
+seguinte): a chave antiga é RECUSADA na subida, com uma mensagem que nomeia a
+nova, e a migração está descrita em `docs/operacao-series-kafka.md`; o campo
+`seriesDelivery` do `/v1/stats`, que é wire lançado, manteve o nome. Nesse
+precedente as duas grafias da configuração não convivem: a antiga é recusada
+alto, nunca ignorada em silêncio.
 
 ## 2. Regras de tradução
 
@@ -1026,6 +1034,36 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | geração de medidas | `measures.<epoch>.snapshot` / MeasureCounters | internal/storage/counter, internal/storage/checkpoint |
 | identidade da fonte amostrada | `.win.source` / reconcileSource | internal/countermetrics |
 
+## Replicação publicada em Kafka
+
+| PT-BR | inglês | onde aparece |
+|---|---|---|
+| destino Kafka (um destino nomeado da lista global do `nishidb.yaml`, usado pelo `emit.target` dos contadores e pelo `replication.targets`) | `kafkaTargets` / KafkaTargetSpec | internal/config |
+| tamanho máximo de mensagem (o teto de bytes de um registro Kafka de um destino, e do lote do produtor) | `maxMessageBytes` / MessageBytes | internal/config, internal/seriesdelivery, internal/replicationkafka |
+| folga de enquadramento (os bytes somados à key e ao valor na conferência de tamanho, pelo enquadramento do registro Kafka) | recordFramingBytes | internal/seriesdelivery (em internal/replicationkafka a mesma folga ainda se chama recordOverheadBytes) |
+| destinos da replicação (os nomes de `kafkaTargets:` que recebem o feed de um dataset master) | `replication.targets` / ReplicationSpec.Targets | internal/schema, internal/server |
+| publicador da replicação (a goroutine que publica o feed de um dataset num destino Kafka) | Publisher | internal/replicationkafka |
+| envelope (a forma JSON de cada registro Kafka da replicação) | envelope | internal/replicationkafka/envelope.go |
+| renderizador do envelope (escreve cada registro no formato do envelope, sem alocar por registro) | Renderer | internal/replicationkafka |
+| marcador de controle (`reset`, `snapshot_end` ou `retain`: registro sem `record`, publicado em cada partição) | control record / addControl | internal/replicationkafka |
+| chave de controle (a key Kafka fixa `__nishidb_control__` dos marcadores de controle) | ControlKey | internal/replicationkafka |
+| marcador de reset (abre uma reconstrução do tópico) | `reset` / OpReset | internal/replicationkafka |
+| motivo do reset (`startup`, `gap`, `snapshot_failed` ou `partitions_changed`) | ResetReason | internal/replicationkafka |
+| fim do snapshot (o marcador que fecha a reconstrução, com a contagem por partição) | `snapshot_end` / OpSnapshotEnd | internal/replicationkafka |
+| geração do feed (o identificador aleatório que muda a cada reinício do master) | epoch / Status.Epoch | internal/replication, internal/replicationkafka |
+| instante da publicação (quando a entrada entrou no feed; na consolidação, o da última alteração) | `at` / Entry.At | internal/replication, internal/replicationkafka |
+| invalidação do feed (o descarte do intervalo retido inteiro, que força os seguidores a ressincronizar) | Status.Invalidations | internal/replication |
+| exportador de snapshot (a exportação do estado vivo em blocos curtos, com o cursor lido antes da varredura) | ExportSnapshot | internal/replication |
+| fonte do snapshot (o que o exportador precisa de um Store) | SnapshotSource | internal/replication |
+| varredura por faixa (as linhas vivas de um snapshot de leitura a partir de um rowId, até um teto) | ScanLiveFrom | internal/storage, internal/replication |
+| teto em bytes do bloco do exportador (fecha o bloco copiado antes das linhas do teto em linhas) | snapshotChunkMaxBytes | internal/replication |
+| teto em bytes do bloco do publicador (fecha o bloco do snapshot que vai ao produtor) | snapshotChunkBytes | internal/replicationkafka |
+| número de partições fixado (o número de partições do tópico no último reset, usado para escolher a partição de cada key) | pinned | internal/replicationkafka |
+| sufixo reproduzido (numa partição com falha, do primeiro registro falho até o fim do lote) | retry suffix / retrySuffix | internal/replicationkafka |
+| laço do snapshot (o feed perde o cursor do reset durante o snapshot, e o publicador republica sem alcançar o tail) | livelock / `snapshot_gap`, ErrorSnapshotGap | internal/replicationkafka |
+| validador de JSON do envelope (decide se uma coluna json sai inline ou como string) | validJSON | internal/replicationkafka |
+| orçamento da drenagem (o prazo próprio dos publicadores no encerramento) | publisherCloseBudget | internal/server |
+| rótulo do estado do publicador (o label da série one-hot de estado) | LabelPublisherState / `state` | internal/metrics |
 ## Escopo do contador e comparação linear (issue #61)
 
 | PT-BR | Identificador/contrato | Dono |

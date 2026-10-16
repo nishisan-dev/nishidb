@@ -25,9 +25,14 @@ func (s *Store) ApplyReplication(e replication.Entry) error {
 		return s.ApendaReplication(e.Record.RowID, e.Record.Payload)
 	}
 	seq := int64(e.Sequence)
-	// Snapshot entries have no feed sequence; their record sequence is the
-	// master's materialization sequence. Prefer it whenever present so a
-	// resync cannot move an existing follower row backwards.
+	// A sequence de materialização do master (Record.Sequence) tem
+	// preferência sempre que existe, para que um resync não faça uma linha do
+	// follower andar para trás. Entradas do tail levam a sequence do feed, e
+	// as do snapshot levam o cursor₀ da exportação — então, com
+	// Record.Sequence == 0 (dataset sem `sequence:`), o follower grava o
+	// cursor₀ ou a sequence do feed. Nenhum stale check lê esse valor: o Put
+	// não compara sequences, e o único leitor no follower é a poda
+	// (pruneFollowerBase), que só o usa para dar à lápide uma sequence maior.
 	if e.Record.Sequence != 0 {
 		seq = e.Record.Sequence
 	}
@@ -42,16 +47,23 @@ func (s *Store) ApplyReplication(e replication.Entry) error {
 	}
 }
 
+// applyReplicationDelete grava a lápide de uma key apagada no master.
+//
+// A lápide é montada FORA do wmu (o Put o toma depois), e por isso num buffer
+// novo, e não no tempBuffer do writer: no follower a compaction expira linhas
+// com TTL e monta a sua lápide no tempBuffer sob o wmu, em paralelo a este
+// caminho. Montar a lápide dentro do wmu exigiria um Put com a lápide
+// derivada lá dentro — um contrato novo no caminho de escrita só para poupar
+// uma alocação que o State acima já faz por delete.
 func (s *Store) applyReplicationDelete(key []byte, seq int64) error {
-	prev, buf, presence, err := s.State(key, nil)
-	_ = buf
+	prev, _, presence, err := s.State(key, nil)
 	if err != nil {
 		return err
 	}
 	if presence == types.PresenceAbsent {
 		return nil
 	}
-	tomb, err := s.buildLapide(prev.Payload)
+	tomb, err := s.appendLapide(nil, prev.Payload)
 	if err != nil {
 		return err
 	}

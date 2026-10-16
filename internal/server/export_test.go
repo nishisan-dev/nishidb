@@ -12,6 +12,11 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/series"
 )
 
+// SetPublisherCloseBudgetForTest encurta o orçamento da drenagem dos
+// publicadores da replicação no encerramento, para o teste do estouro não
+// esperar os 10 s de produção. Chamado antes do Run.
+func (s *Server) SetPublisherCloseBudgetForTest(d time.Duration) { s.publisherBudget = d }
+
 // StopSamplingAndAlarmsForTest para o laço do amostrador das métricas de janela
 // e o laço de alarmes do dataset, para que o teste conduza cada passada com
 // SampleCounterMetricsOnceForTest e EvaluateAlarmsOnceForTest.

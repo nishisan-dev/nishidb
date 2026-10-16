@@ -335,3 +335,28 @@ func TestDatasetComJanelaInvalidaSaiComExitDataset(t *testing.T) {
 		t.Errorf("stderr não nomeia a chave recusada: %q", a.stderr.String())
 	}
 }
+
+// TestServerWithLegacySeriesDeliveryExitsWithUsageErrorAndRenameMessage trava
+// a subida de verdade com a chave antiga `seriesDelivery:` no nishidb.yaml:
+// exit 1 (erro de configuração) e a mensagem que ensina a chave nova. O 1 é o
+// mesmo que o default do errorCode daria, então este teste NÃO distingue a
+// presença do caso explícito de config.ErrKafkaTarget; o que ele distingue é
+// a guarda — sem ela o arquivo subiria em silêncio e a mensagem não viria.
+func TestServerWithLegacySeriesDeliveryExitsWithUsageErrorAndRenameMessage(t *testing.T) {
+	a := newEnv(t)
+	body, err := os.ReadFile(a.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := "\nseriesDelivery:\n  kafka:\n    - name: metrics\n      bootstrapServers: ['127.0.0.1:9092']\n      topic: counter.samples\n"
+	if err := os.WriteFile(a.config, append(body, legacy...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := a.run("server", "--config", a.config)
+	if code != cli.ExitUsageError {
+		t.Fatalf("code = %d, want %d (ExitUsageError)\n%s", code, cli.ExitUsageError, a.stderr.String())
+	}
+	if !strings.Contains(a.stderr.String(), "seriesDelivery was renamed to kafkaTargets") {
+		t.Errorf("stderr não ensina a chave nova: %q", a.stderr.String())
+	}
+}

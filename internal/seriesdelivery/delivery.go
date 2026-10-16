@@ -30,8 +30,8 @@ import (
 const (
 	MaxRecords = 10_000
 	MaxBytes   = 16 << 20
-	// Match franz-go's batch limit, including space for Kafka framing.
-	maxRecordBytes = kafka.MaxProducedRecordBytes
+	// Folga reservada para o enquadramento do lote Kafka.
+	recordFramingBytes = 128
 )
 
 // kgoBufferSlack multiplica os limites locais para formar os do kgo.
@@ -62,12 +62,13 @@ type producer interface {
 }
 
 type destination struct {
-	client  producer
-	topic   string
-	timeout time.Duration
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
+	maxRecordBytes int64
+	client         producer
+	topic          string
+	timeout        time.Duration
+	ctx            context.Context
+	cancel         context.CancelFunc
+	mu             sync.Mutex
 	// space acorda quem espera vaga. É um sync.Cond sobre mu, e não um canal
 	// de geração, porque a condição já mora sob mu (records, bytes, closed) e
 	// a espera precisa reavaliá-la inteira a cada despertar. Todo despertar é
@@ -88,7 +89,7 @@ type destination struct {
 // newDestination monta o destino com a espera ligada ao seu lock.
 func newDestination(client producer, topic string, timeout time.Duration) *destination {
 	ctx, cancel := context.WithCancel(context.Background())
-	d := &destination{client: client, topic: topic, timeout: timeout, ctx: ctx, cancel: cancel}
+	d := &destination{maxRecordBytes: config.DefaultKafkaMessageBytes - recordFramingBytes, client: client, topic: topic, timeout: timeout, ctx: ctx, cancel: cancel}
 	d.space.L = &d.mu
 	return d
 }
@@ -114,11 +115,11 @@ type Manager struct {
 
 // Open validates references and local credentials without requiring a broker.
 func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging.Logger) (*Manager, error) {
-	if err := cfg.ValidateSeriesDelivery(); err != nil {
+	if err := cfg.ValidateKafkaTargets(); err != nil {
 		return nil, err
 	}
 	known := make(map[string]bool)
-	for _, k := range cfg.SeriesDelivery.Kafka {
+	for _, k := range cfg.KafkaTargets {
 		known[k.Name] = true
 	}
 	names := make([]string, 0, len(specs))
@@ -135,7 +136,7 @@ func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging
 			seen := make(map[string]bool)
 			for _, target := range c.Emit.Targets {
 				if seen[target] || target != "file" && !known[target] {
-					return nil, fmt.Errorf("%w: dataset %q counter %q unknown or duplicate target %q", config.ErrSeriesDelivery, name, c.Name, target)
+					return nil, fmt.Errorf("%w: dataset %q counter %q unknown or duplicate target %q", config.ErrKafkaTarget, name, c.Name, target)
 				}
 				seen[target] = true
 				if target != "file" {
@@ -157,15 +158,19 @@ func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging
 		}
 		return nil, err
 	}
-	for _, k := range cfg.SeriesDelivery.Kafka {
+	for _, k := range cfg.KafkaTargets {
 		tlsConfig, mechanism, err := kafka.ResolveSecurity(k.Security)
 		if err != nil {
-			return fail(fmt.Errorf("%w: destination %q: %v", config.ErrSeriesDelivery, k.Name, err))
+			return fail(fmt.Errorf("%w: destination %q: %v", config.ErrKafkaTarget, k.Name, err))
 		}
 		if !used[k.Name] {
 			continue
 		}
 		timeout, err := k.DeliveryTimeout()
+		if err != nil {
+			return fail(err)
+		}
+		messageBytes, err := k.MessageBytes()
 		if err != nil {
 			return fail(err)
 		}
@@ -184,6 +189,7 @@ func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging
 			kgo.SeedBrokers(k.BootstrapServers...), kgo.DefaultProduceTopic(k.Topic),
 			kgo.RequiredAcks(kgo.AllISRAcks()), kgo.DisableIdempotentWrite(),
 			kgo.RecordRetries(0), kgo.UnknownTopicRetries(0),
+			kgo.ProducerBatchMaxBytes(int32(messageBytes)),
 			kgo.MaxBufferedRecords(kgoBufferSlack * MaxRecords), kgo.MaxBufferedBytes(kgoBufferSlack * MaxBytes),
 			kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
 			kgo.ProduceRequestTimeout(max(timeout, 100*time.Millisecond)),
@@ -197,9 +203,10 @@ func Open(cfg *config.Config, specs map[string]*schema.DatasetSpec, log *logging
 		}
 		client, err := kgo.NewClient(opts...)
 		if err != nil {
-			return fail(fmt.Errorf("%w: destination %q: %v", config.ErrSeriesDelivery, k.Name, err))
+			return fail(fmt.Errorf("%w: destination %q: %v", config.ErrKafkaTarget, k.Name, err))
 		}
 		d := newDestination(client, k.Topic, timeout)
+		d.maxRecordBytes = min(messageBytes-recordFramingBytes, MaxBytes)
 		m.destinations = append(m.destinations, d)
 		byName[k.Name] = d
 	}
@@ -267,7 +274,7 @@ func (o *output) Publish(ctx context.Context, key, body []byte, at time.Time) er
 		switch {
 		case d.closed, ctx.Err() != nil:
 			reason = "shutdown"
-		case n > maxRecordBytes:
+		case n > d.maxRecordBytes:
 			reason = "message_too_large"
 		}
 		if reason != "" {

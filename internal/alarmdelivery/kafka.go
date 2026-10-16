@@ -54,7 +54,7 @@ type kafkaTransport struct {
 // newKafkaTransport monta o cliente sem falar com o broker: o kgo só conecta
 // na primeira produção, e broker fora do ar não impede a subida.
 //
-// A configuração é FIXA e é a do seriesDelivery, pelos motivos abaixo
+// A configuração é FIXA e é a de kafkaTargets, pelos motivos abaixo
 // (franz-go v1.21.6):
 //
 //   - DisableIdempotentWrite. Com o produtor idempotente o kgo não cancela

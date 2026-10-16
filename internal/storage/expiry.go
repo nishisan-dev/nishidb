@@ -172,19 +172,28 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 // indexes são limpos" do §56 continua verdadeiro no OBSERVÁVEL (a row expirada
 // não sai em consulta indexada), por outro mecanismo.
 //
-// Usa o tempBuffer, que é do writer e está sob o wmu — os dois chamadores (o
-// coletor e a compaction) já estão dentro da seção crítica.
+// Usa o tempBuffer, que é do writer: SÓ pode ser chamado com o wmu na mão. Os
+// dois chamadores (o coletor e a compaction) já estão dentro da seção crítica.
+// Quem monta lápide FORA do wmu — o delete replicado — usa appendLapide com
+// buffer próprio.
 func (s *Store) buildLapide(payloadAnterior []byte) ([]byte, error) {
-	tomb := s.tempBuffer[:0]
-	if ms, has := writeInstant(payloadAnterior, s.writeFieldID); has {
-		var err error
-		if tomb, err = encoding.AppendField(tomb, s.writeFieldID,
-			types.Value{Type: types.TypeTimestamp, I64: ms}); err != nil {
-			return nil, err
-		}
+	tomb, err := s.appendLapide(s.tempBuffer[:0], payloadAnterior)
+	if err != nil {
+		return nil, err
 	}
 	s.tempBuffer = tomb
 	return tomb, nil
+}
+
+// appendLapide acrescenta a dst a lápide de payloadAnterior (ver buildLapide).
+// Não toca estado mutável do Store — só o writeFieldID, fixado no Open —, e
+// por isso pode rodar fora do wmu com um dst do próprio chamador.
+func (s *Store) appendLapide(dst, payloadAnterior []byte) ([]byte, error) {
+	if ms, has := writeInstant(payloadAnterior, s.writeFieldID); has {
+		return encoding.AppendField(dst, s.writeFieldID,
+			types.Value{Type: types.TypeTimestamp, I64: ms})
+	}
+	return dst, nil
 }
 
 // LimitesOfExpiration é o freio de uma passada do coletor. Os dois valem

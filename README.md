@@ -1,7 +1,10 @@
 # NishiDB
 
 O fluxo master/follower com lotes configuráveis e resync automático está
-documentado em [`docs/replication.md`](docs/replication.md).
+documentado em [`docs/replication.md`](docs/replication.md). O master também
+pode publicar o mesmo feed num tópico Kafka, em JSON, por um destino de
+`kafkaTargets:` nomeado em `replication.targets`: ver
+[Publicação em Kafka](docs/replication.md#publicação-em-kafka).
 
 Engine de materialização e consulta para fluxos de eventos JSON parciais.
 
@@ -1771,7 +1774,7 @@ counters:
       target: [file, metricas_olt]
 ```
 
-O destino `metricas_olt` deve existir em `seriesDelivery.kafka`, conforme o
+O destino `metricas_olt` deve existir em `kafkaTargets:`, conforme o
 [guia de emissão Kafka](docs/operacao-series-kafka.md). `emit` e `metrics` são
 opcionais: a medida pode ser consultada diretamente em
 `_counters.stops_by_olt`, sem amostrador ou emissão.
@@ -2211,14 +2214,22 @@ selecionados por `notify`.
 ### Emissão periódica: a série de cada grupo
 
 A emissão também suporta [destinos Kafka nomeados](docs/operacao-series-kafka.md).
-Declare brokers e tópico em `seriesDelivery.kafka` no `nishidb.yaml` e selecione
-`target: [file, metricas_olt]` no bloco abaixo para arquivo e Kafka, ou
+Declare brokers e tópico na lista global `kafkaTargets:` do `nishidb.yaml` e
+selecione `target: [file, metricas_olt]` no bloco abaixo para arquivo e Kafka, ou
 `target: metricas_olt` para somente Kafka (removendo `file`, `maxBytes` e `keep`).
 Cada grupo vira uma mensagem JSON com os nomes das colunas, `dataset` e
 `counter`. O envio é assíncrono e falhas descartam a amostra daquele destino,
 sem reenvio. Destino com o buffer cheio não descarta: a passada espera espaço,
 e um destino lento atrasa a passada. Sem `target`, permanece a emissão em
 arquivo.
+
+**Migração:** até a v0.12, os destinos ficavam em `seriesDelivery.kafka`. A
+chave foi renomeada para `kafkaTargets:` (mesmos campos, mesmos nomes em
+`emit.target`), e um `nishidb.yaml` que ainda traga `seriesDelivery:` é
+recusado na subida com exit 1 e a mensagem
+`seriesDelivery was renamed to kafkaTargets`. Cada destino ganhou a chave
+opcional `maxMessageBytes` (1 KiB a 64 MiB; default 1.000.012 bytes). Detalhes
+no [guia de emissão Kafka](docs/operacao-series-kafka.md#migração-de-seriesdelivery).
 
 Para alimentar gráfico por equipamento, o contador pode escrever o valor de
 **cada grupo** num arquivo NDJSON, periodicamente:

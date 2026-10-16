@@ -179,9 +179,18 @@ type Options struct {
 	// ingerir, e uma consulta recusada com código próprio é um resultado que o
 	// cliente sabe tratar.
 	SnapshotMaxBytes int64
-	// OnReplicationChange receives a logically committed change. The callback
-	// is invoked while the writer lock is held and must return quickly; the
-	// replication feed copies its bytes before returning.
+	// OnReplicationChange recebe cada mudança lógica já commitada. O callback
+	// roda com o lock do writer tomado e tem de voltar rápido; o record é
+	// emprestado, e o feed de replicação copia os bytes antes de voltar.
+	//
+	// Insert e Update carregam o estado NOVO da linha. Um Delete carrega o
+	// último estado VIVO (o payload anterior à lápide), venha a lápide do
+	// coletor de expiração, da expiração oportunista da compaction ou de um
+	// Put com FlagTombstone — ou a lápide anterior, se a linha já estava
+	// apagada; o Flags continua com o bit de lápide. Sem estado
+	// anterior — Put de lápide para uma key que não existia —, o Delete
+	// carrega a própria lápide. O copy-forward da compaction e o replay da
+	// recovery não publicam nada.
 	OnReplicationChange func(table string, op replication.Operation, rec types.Record, at time.Time)
 	// OnReplicationRetain publishes the history visibility floor after it
 	// advances. It is separate from row changes because retention has no row
@@ -2049,14 +2058,26 @@ func (s *Store) applyRecord(a recordApply) error {
 	}
 	if a.emitChange && s.opts.OnReplicationChange != nil {
 		op := replication.Update
+		published := a.payload
 		if a.flags&types.FlagTombstone != 0 {
 			op = replication.Delete
+			// O delete leva o ÚLTIMO estado vivo da linha, não a lápide: a
+			// lápide só guarda o instante de escrita, e o consumidor do feed
+			// precisa saber o que saiu. prevPayload vem do coletor
+			// (expireBuffer) e da compaction (o record copiado), e os dois
+			// valem até o callback voltar — o Publish copia os bytes antes
+			// disso. Sem estado anterior (Put com FlagTombstone para uma key
+			// que não existia), publica-se a própria lápide: falhar o writer
+			// por isso trocaria um detalhe do feed por indisponibilidade.
+			if a.prevPayload != nil {
+				published = a.prevPayload
+			}
 		} else if !a.hadPrevious {
 			op = replication.Insert
 		}
 		s.opts.OnReplicationChange(s.opts.Dataset, op, types.Record{
 			RowID: a.rowID, Sequence: a.seq, Flags: a.flags,
-			Key: a.key, Payload: a.payload,
+			Key: a.key, Payload: published,
 		}, s.now())
 	}
 	// NÃO HÁ passo 8. A fase de CLEAR saiu junto com os motores globais, e a
@@ -2481,14 +2502,27 @@ func (it *hashIterator) Close() error { return it.it.Close() }
 // location válida — overlay incluso — e sem tombstone). Rows criadas após a
 // chamada não aparecem (snapshot do limite superior).
 func (s *Store) ScanLive(snap types.Snapshot) types.RowIDIterator {
+	// A varredura começa na marca-d'água, e não em zero: no histórico o
+	// prefixo purgado pode ser de dezenas de milhões de rowIds, e percorrê-los
+	// para descartar cada um seria pagar pela retenção em toda consulta.
+	return s.ScanLiveFrom(snap, snap.BaseRowID, snap.LimitRowID)
+}
+
+// ScanLiveFrom é o ScanLive restrito à faixa [from, limit) de rowIds, já
+// recortada pelo universo do snapshot: começa em max(from, snap.BaseRowID) e
+// para antes de min(limit, snap.LimitRowID). Nunca enxerga além do que o
+// ScanLive do mesmo snapshot enxergaria.
+//
+// Existe para o exportador de snapshot da replicação, que varre a tabela em
+// blocos curtos — um snapshot por bloco — e precisa retomar do rowId seguinte
+// ao último varrido sem reler o prefixo, e parar no teto fixado pelo PRIMEIRO
+// snapshot da exportação, e não no de cada bloco.
+func (s *Store) ScanLiveFrom(snap types.Snapshot, from, limit types.RowID) types.RowIDIterator {
 	if err := s.entra(); err != nil {
 		return &liveIterator{err: err}
 	}
 	defer s.sai()
-	// A varredura começa na marca-d'água, e não em zero: no histórico o
-	// prefixo purgado pode ser de dezenas de milhões de rowIds, e percorrê-los
-	// para descartar cada um seria pagar pela retenção em toda consulta.
-	return &liveIterator{s: s, snap: snap, next: snap.BaseRowID, limit: snap.LimitRowID}
+	return &liveIterator{s: s, snap: snap, next: max(from, snap.BaseRowID), limit: min(limit, snap.LimitRowID)}
 }
 
 // DiretorioOfSpill é onde o motor de consulta pode transbordar o que não cabe

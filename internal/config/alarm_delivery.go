@@ -40,7 +40,7 @@ type WebhookSpec struct {
 }
 
 // AlarmKafkaSpec é um destino Kafka de alarmes: a conexão tem o MESMO
-// contrato da do `seriesDelivery` (bootstrap, tópico, timeout e o bloco
+// contrato da do `kafkaTargets` (bootstrap, tópico, timeout e o bloco
 // `security`, com credenciais por nome de variável de ambiente), e a fila
 // durável tem o mesmo contrato da do webhook.
 type AlarmKafkaSpec struct {

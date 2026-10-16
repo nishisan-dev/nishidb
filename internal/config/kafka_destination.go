@@ -12,7 +12,7 @@ import (
 )
 
 // kafkaTopicName é a regra do nome de tópico para todo destino Kafka de
-// produção: a série (`seriesDelivery.kafka`) e os alarmes
+// produção: a série (`kafkaTargets`) e os alarmes
 // (`alarmDelivery.kafka`). Mora aqui, e não num dos dois blocos, para que
 // nenhum deles redeclare a regex.
 var kafkaTopicName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,249}$`)
@@ -23,7 +23,7 @@ var kafkaTopicName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,249}$`)
 // é compartilhada, parametrizada pelo sentinela e pelo caminho da chave.
 //
 // O timeout não entra aqui: cada bloco o resolve pela própria função
-// (SeriesKafkaSpec.DeliveryTimeout, AlarmKafkaSpec.Limits), ambas sobre
+// (KafkaTargetSpec.DeliveryTimeout, AlarmKafkaSpec.Limits), ambas sobre
 // deliveryTimeout, e uma segunda conferência só mascararia a primeira.
 type kafkaTarget struct {
 	path, topic string

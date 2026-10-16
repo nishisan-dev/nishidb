@@ -275,6 +275,22 @@ que só afirma ausência (script de mantenedor que "não chama nada" no upgrade)
 um script morto — `exit 0` no topo — o deixa verde. Pareie a ausência com uma
 asserção positiva no mesmo teste, e prove a vitalidade matando o script.
 
+**O oráculo do teste não pode sair do código em teste.** No ciclo da replicação
+em Kafka, o teste "toda série nasce em zero" foi reescrito para comparar
+`Stats` com `ErrorReasons()` — a lista que ele deveria proteger. Tirar da lista
+o motivo que alarma o livelock deixava o teste verde: a lista concordava
+consigo mesma. Lista fechada, golden e contrato de wire são asseverados como
+LITERAIS no teste; a função do código é o que está sob prova, nunca a régua.
+
+**Fuzz não roda no `make test` nem no CI; só as sementes rodam.** O validador de
+JSON do envelope bateu com `json.Valid` em milhões de execuções de `-fuzz`, e
+ainda assim quatro mutantes dele passavam verdes na suíte normal — só o fuzz
+ligado os matava. O que o fuzz achar vira caso na tabela (que também semeia o
+fuzz), e o mutante é reaplicado SEM `-fuzz` até ficar vermelho. Estrutura com
+fronteira (bitset em palavras de 64) pede caso que CRUZE a fronteira com
+padrão que distinga as palavras: alternância pura acerta por coincidência de
+paridade.
+
 ## Convenções de documentação
 
 - **`§NN`** cita seção de spec, e o marcador serve a MAIS DE UM documento: a
@@ -327,6 +343,10 @@ worktree, e todo subagente dela fica preso ao mesmo worktree.
   embutido.** Use um comando git por chamada; laço e script vão para um arquivo no
   scratchpad, executado como `bash <arquivo>`. Os objetos são compartilhados:
   `git show <sha>` de dentro do próprio worktree lê commit feito noutro.
+  A mesma guarda recusa `cd` em comando composto, `bash -c`/`bash $VAR` e
+  argumento vindo de variável sem `--` antes (ex.: `sed -i ... -- "$F"`), porque
+  não consegue provar que aquilo não é git; isso também vale para comando que
+  só roda ssh. Script em arquivo com `--` antes dos argumentos variáveis passa.
 - **A pilha de `stash` é compartilhada** entre worktrees e sessões. Nunca use
   `git stash` cru; prefira commit WIP.
 - **O cache do golangci-lint guarda arquivos de worktree removido** e infla a

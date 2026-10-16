@@ -66,7 +66,7 @@ func TestServerEmitsRowsToNamedKafkaTopicsAndExposesDeliveryStats(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			configBytes = append(configBytes, []byte(fmt.Sprintf("\nseriesDelivery:\n  kafka:\n    - name: primary\n      bootstrapServers: [%q]\n      topic: primary\n    - name: backup\n      bootstrapServers: [%q]\n      topic: backup\n", cluster.ListenAddrs()[0], cluster.ListenAddrs()[0]))...)
+			configBytes = append(configBytes, []byte(fmt.Sprintf("\nkafkaTargets:\n  - name: primary\n    bootstrapServers: [%q]\n    topic: primary\n  - name: backup\n    bootstrapServers: [%q]\n    topic: backup\n", cluster.ListenAddrs()[0], cluster.ListenAddrs()[0]))...)
 			if err := os.WriteFile(a.cfgPath, configBytes, 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -205,7 +205,7 @@ func TestSeriesKafkaUsesSharedTLSAndAllSASLMechanisms(t *testing.T) {
 			a.writeDataset("servicos", spec)
 			applyWithCounters(t, a, "servicos", serviceEvents("OLT_A", 1, true))
 			cfg := a.load()
-			cfg.SeriesDelivery.Kafka = append(cfg.SeriesDelivery.Kafka, config.SeriesKafkaSpec{Name: "secure", BootstrapServers: cluster.ListenAddrs(), Topic: "samples", Security: security})
+			cfg.KafkaTargets = append(cfg.KafkaTargets, config.KafkaTargetSpec{Name: "secure", BootstrapServers: cluster.ListenAddrs(), Topic: "samples", Security: security})
 			srv, err := server.Novo(cfg, server.Options{Now: newTestClock(emitClockMidInterval).Now})
 			if err != nil {
 				t.Fatal(err)
@@ -236,7 +236,7 @@ func TestFailedSeriesStartupClosesEarlierEmittersAndDatasets(t *testing.T) {
 	spec := strings.Replace(specServicesWithWindowMetricsAndEmit, "      keep: 2\n", "      keep: 2\n      target: [file, samples]\n  - name: second\n    groupBy: [olt]\n    emit:\n      every: 30s\n", 1)
 	a.writeDataset("servicos", spec)
 	cfg := a.load()
-	cfg.SeriesDelivery.Kafka = []config.SeriesKafkaSpec{{Name: "samples", BootstrapServers: []string{"127.0.0.1:1"}, Topic: "samples"}}
+	cfg.KafkaTargets = []config.KafkaTargetSpec{{Name: "samples", BootstrapServers: []string{"127.0.0.1:1"}, Topic: "samples"}}
 	root := filepath.Join(cfg.DatasetRootDir("servicos"), schema.EmitDirName)
 	bad := filepath.Join(root, "second.ndjson")
 	if err := os.MkdirAll(bad, 0755); err != nil {

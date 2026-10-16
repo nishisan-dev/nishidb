@@ -1,13 +1,14 @@
 package server
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/replication"
-	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // handleReplicationCursor is the handshake used by a follower before it
@@ -58,10 +59,10 @@ func (s *Server) handleReplicationBatch(w http.ResponseWriter, r *http.Request) 
 	s.respondeJSON(w, b)
 }
 
-// handleReplicationSnapshot exports a consistent logical generation. The
-// Store snapshot freezes row versions while the feed cursor supplies the
-// incremental tail. The cursor may be newer than the snapshot; that is safe
-// because the follower replays all batches after it.
+// handleReplicationSnapshot exporta, em streaming, a geração lógica corrente do
+// dataset e da tabela histórica irmã. O cursor do feed é lido antes da
+// varredura (ver replication.ExportSnapshot), e o follower reaplica o tail
+// depois dele.
 func (s *Server) handleReplicationSnapshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.rejectSimples(w, r, http.MethodGet)
@@ -72,36 +73,81 @@ func (s *Server) handleReplicationSnapshot(w http.ResponseWriter, r *http.Reques
 		s.reject(w, r, http.StatusNotFound, "", protocol.ErrorDetail{Code: protocol.CodeUnknownDataset, Message: "replication is not enabled for this dataset"})
 		return
 	}
-	epoch, cursor := d.replication.Cursor()
-	out := replication.Snapshot{Epoch: epoch, Cursor: cursor}
+	tables := make([]replication.SnapshotTable, 0, 2)
 	for _, source := range []*dataset{d, d.irma} {
 		if source == nil {
 			continue
 		}
-		if source.ehHistorico {
-			out.Entries = append(out.Entries, replication.Entry{
-				Table: source.nome, Operation: replication.Retain,
-				Record: types.Record{RowID: source.st.RowIDBase()},
-			})
-		}
-		snap := source.st.OpenSnapshot()
-		it := source.st.ScanLive(snap)
-		var buf []byte
-		for it.Next() {
-			rec, next, live, e := source.st.GetByRowID(snap, it.RowID(), buf)
-			buf = next
-			if e != nil {
-				_ = it.Close()
-				source.st.CloseSnapshot(snap)
-				s.reject(w, r, http.StatusInternalServerError, d.nome, protocol.ErrorDetail{Code: protocol.CodeInternal, Message: e.Error()})
-				return
-			}
-			if live {
-				out.Entries = append(out.Entries, replication.Entry{Table: source.nome, Operation: replication.Insert, Record: types.Record{RowID: rec.RowID, Sequence: rec.Sequence, Flags: rec.Flags, Key: append([]byte(nil), rec.Key...), Payload: append([]byte(nil), rec.Payload...)}})
-			}
-		}
-		_ = it.Close()
-		source.st.CloseSnapshot(snap)
+		tables = append(tables, replication.SnapshotTable{Name: source.nome, History: source.ehHistorico, Source: source.st})
 	}
-	s.respondeJSON(w, out)
+	s.streamReplicationSnapshot(w, r, d.nome, d.replication, tables, replicationSnapshotChunkRows)
+}
+
+// replicationSnapshotChunkRows é quantas linhas cada snapshot curto do
+// exportador varre, no máximo, antes de fechar; o exportador também fecha o
+// bloco pelo seu teto em bytes. Um snapshot aberto retém o journal de versões
+// e congela a expiração oportunista e o piso da retenção, então o bloco é
+// curto; e a memória da exportação fica limitada a um bloco, em linhas e em
+// bytes, qualquer que seja o tamanho do dataset.
+const replicationSnapshotChunkRows = 4096
+
+// replicationSnapshotBufferBytes é o buffer de escrita da resposta do
+// snapshot: evita uma escrita na conexão por entrada.
+const replicationSnapshotBufferBytes = 64 << 10
+
+// streamReplicationSnapshot escreve o snapshot como um replication.Snapshot em
+// JSON, entrada por entrada, sem montar a lista em memória.
+//
+// Antes do primeiro byte, uma falha responde pelo caminho normal de erro.
+// Depois dele o status 200 já saiu, e fechar o JSON com "]}" entregaria um
+// snapshot truncado e VÁLIDO — que o follower aplicaria e usaria para podar as
+// linhas ausentes, apagando dado. Por isso a falha no meio do stream derruba a
+// conexão (http.ErrAbortHandler): o decode do follower falha e ele tenta de
+// novo, sem podar nada.
+func (s *Server) streamReplicationSnapshot(w http.ResponseWriter, r *http.Request, name string, feed *replication.Stream, tables []replication.SnapshotTable, chunkRows int) {
+	out := bufio.NewWriterSize(w, replicationSnapshotBufferBytes)
+	started := false
+	separator := false
+	err := replication.ExportSnapshot(r.Context(), feed, tables, chunkRows, func(h replication.SnapshotHeader) error {
+		epoch, err := json.Marshal(h.Epoch)
+		if err != nil {
+			return err
+		}
+		w.Header().Set("Content-Type", protocol.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		started = true
+		// O bufio.Writer guarda o primeiro erro e o devolve em toda escrita
+		// seguinte: basta conferir a última.
+		_, _ = out.WriteString(`{"epoch":`)
+		_, _ = out.Write(epoch)
+		_, _ = out.WriteString(`,"cursor":`)
+		_, _ = out.WriteString(strconv.FormatUint(h.Cursor, 10))
+		_, err = out.WriteString(`,"entries":[`)
+		return err
+	}, func(e replication.Entry) error {
+		b, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		if separator {
+			_ = out.WriteByte(',')
+		}
+		separator = true
+		_, err = out.Write(b)
+		return err
+	})
+	if err == nil {
+		if _, err = out.WriteString("]}\n"); err == nil {
+			err = out.Flush()
+		}
+	}
+	if err == nil {
+		return
+	}
+	if !started {
+		s.reject(w, r, http.StatusInternalServerError, name, protocol.ErrorDetail{Code: protocol.CodeInternal, Message: err.Error()})
+		return
+	}
+	s.log.Warn("replication.snapshot_aborted", "snapshot interrupted mid-stream; connection aborted", "dataset", name, "error", err.Error())
+	panic(http.ErrAbortHandler)
 }

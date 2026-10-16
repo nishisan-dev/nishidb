@@ -43,6 +43,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/budget"
 	"github.com/nishisan-dev/nishidb/internal/replication"
+	"github.com/nishisan-dev/nishidb/internal/replicationkafka"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/series"
 	"github.com/nishisan-dev/nishidb/internal/seriesdelivery"
@@ -64,6 +65,10 @@ type dataset struct {
 	mat         *materializer.Materializer
 	replication *replication.Stream
 	follower    *replication.Client
+	// publishers publicam o feed nos destinos de `replication.targets`, um por
+	// destino, na ordem do YAML. Só o dataset base master os tem: o seguidor
+	// e a tabela irmã não têm feed.
+	publishers []*replicationkafka.Publisher
 
 	// irma é a tabela histórica deste dataset, ou nil. Ela é um dataset de
 	// pleno direito para /v1/metadata, /v1/health e as métricas — o que ela
@@ -239,6 +244,11 @@ type Server struct {
 	// amostrador das métricas de janela. Nil em produção, que eles tratam como
 	// time.Now (ver Options.Now).
 	now func() time.Time
+
+	// publisherBudget é o orçamento da drenagem dos publicadores da replicação
+	// no encerramento. Zero em produção, que vale publisherCloseBudget; só o
+	// teste o encurta (export_test.go), para provar o estouro sem esperar 10 s.
+	publisherBudget time.Duration
 }
 
 // Options configura a subida.
@@ -334,6 +344,12 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 			return nil, err
 		}
 	}
+	// Os destinos da replicação cruzam arquivos (dataset × nishidb.yaml ×
+	// contadores de outros datasets), e por isso são conferidos aqui, antes
+	// de qualquer lock, com o sentinela do `emit.target` logo abaixo.
+	if err := validateReplicationTargets(cfg, specs); err != nil {
+		return nil, err
+	}
 	// Validate series routes and credentials before taking dataset locks.
 	seriesManager, err := seriesdelivery.Open(cfg, specs, log)
 	if err != nil {
@@ -421,6 +437,14 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		if err := s.closeAlarmDelivery(); err != nil {
 			log.Warn("alarm.delivery.close", "failed to close alarm delivery on aborted startup", "error", err.Error())
 		}
+		// Cobre a falha do openReplicationPublishers no meio da lista (um
+		// destino cuja segurança não resolve depois de outros já montados):
+		// os publicadores montados nunca foram iniciados, e o Close só solta
+		// o cliente Kafka de cada um. Fechar os feeds antes é o que faz esse
+		// Close sair na hora, pela mesma ordem do encerra(). Sem teste: a
+		// validação da subida recusa quase tudo que chegaria aqui.
+		s.closeFeeds()
+		s.closePublishers()
 		if err := s.closeDatasets(); err != nil {
 			log.Warn("datasets.close", "falha ao fechar datasets na subida abortada", "erro", err.Error())
 		}
@@ -481,11 +505,18 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 			s.byNome[d.irma.nome] = d.irma
 		}
 	}
+	// Os publicadores da replicação nascem com todos os datasets abertos: o
+	// publicador exporta a tabela irmã junto com o base, e ela é a última
+	// coisa que a abertura do base monta.
+	if err := s.openReplicationPublishers(log); err != nil {
+		return nil, err
+	}
 	// Depois do loop: o coletor percorre a lista pronta, e registrá-lo antes
 	// exporia um scrape com metade dos datasets durante a subida.
 	registerMetricsOfDataset(reg, s)
 	registerMetricsOfAlarms(reg, s)
 	registerMetricsOfCounterMetrics(reg, s)
+	registerMetricsOfReplication(reg, s)
 	ok = true
 	seriesOwned = true
 	return s, nil
@@ -800,6 +831,10 @@ func (s *Server) Run(ctx context.Context, pprofAddr string) error {
 	for _, d := range s.datasets {
 		if d.replication != nil {
 			d.replication.Start(ctx)
+			// Depois do feed, e sem o ctx do Run: o publicador tem vida
+			// própria e só para no encerra(), depois de drenar a cauda que o
+			// Close do feed deixa retida.
+			startPublishers(d)
 		}
 		if d.follower != nil {
 			go func(d *dataset) {
@@ -1252,6 +1287,14 @@ func (s *Server) ctxOfMutacao(r *http.Request) (context.Context, context.CancelF
 func (s *Server) Close() error { return s.encerra() }
 
 func (s *Server) encerra() error {
+	// ORDEM: o feed de replicação fecha PRIMEIRO, antes do http.Shutdown. O
+	// Close acorda o long-poll de cada seguidor, que recebe o fim do feed na
+	// hora; fechado depois, o Shutdown esperaria esses long-polls até o
+	// próprio prazo. E é o Close que deixa os publicadores entregarem a cauda
+	// retida e saírem — eles drenam em seguida, com orçamento PRÓPRIO
+	// (publisherCloseBudget), separado do prazo do Shutdown.
+	s.closeFeeds()
+	s.closePublishers()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	var errs []error
@@ -1293,11 +1336,6 @@ func (s *Server) encerra() error {
 	s.forEmitters()
 	s.seriesDelivery.Close()
 	s.forCounterMetrics()
-	for _, d := range s.datasets {
-		if d.replication != nil {
-			d.replication.Close()
-		}
-	}
 	errs = append(errs, s.closeDatasets())
 	// A tabela de usuários fecha por último: até aqui o http.Server ainda
 	// podia estar drenando requests autenticados contra ela.

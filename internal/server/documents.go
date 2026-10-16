@@ -355,6 +355,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			},
 			// Da MESMA leitura que alimenta as séries nishidb_counter_*.
 			Counters: counterStats(d.st.EstatisticasOfCounters()),
+			// Da MESMA leitura que alimenta as séries nishidb_replication_*;
+			// nil (omitido) no dataset sem feed.
+			Replication: replicationStats(d),
 		}
 		// A tabela irmã não tem materializer: quem escreve nela é o do
 		// dataset base, no mesmo evento. Publicar um bloco zerado ali seria
