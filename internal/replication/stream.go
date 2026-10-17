@@ -786,14 +786,33 @@ func (s *Stream) Invalidate() {
 //
 // Faz I/O SÍNCRONO: a regravação do `state` (writeFeedState, com fsync do
 // arquivo e do diretório) acontece antes de voltar. Por isso o Rotate NUNCA
-// pode ser chamado sob o wmu do Store nem de dentro do Publish: será chamada
-// pelo publicador na decisão de rewind.
+// pode ser chamado sob o wmu do Store nem de dentro do Publish. O publicador
+// Kafka usa o RotateFrom, que confere a geração na mesma seção crítica.
 func (s *Stream) Rotate(reason string) {
+	s.rotate("", false, reason)
+}
+
+// RotateFrom é o Rotate condicionado à geração: abre a geração nova só se a
+// corrente for epoch e o feed estiver retomado e aberto, conferido e trocado
+// ATOMICAMENTE sob mu. Devolve se rotacionou. false sem rotação nenhuma em
+// três casos: a geração já não é epoch (outro chamador rotacionou primeiro,
+// ou a queda abriu outra), o feed ainda não foi retomado, ou já foi fechado.
+//
+// É o que o rewind do publicador Kafka precisa: com dois destinos no mesmo
+// dataset, só o primeiro rotaciona a geração que os dois conferiram; e com o
+// feed fechado no meio da conferência (encerramento), nada rotaciona, e o
+// chamador sabe que não pode publicar o reset do rewind na epoch antiga.
+// Faz o mesmo I/O síncrono do Rotate.
+func (s *Stream) RotateFrom(epoch, reason string) bool {
+	return s.rotate(epoch, true, reason)
+}
+
+func (s *Stream) rotate(from string, check bool, reason string) bool {
 	raw := newEpoch()
 	s.mu.Lock()
-	if !s.resumed || s.closed {
+	if !s.resumed || s.closed || (check && s.epoch != from) {
 		s.mu.Unlock()
-		return
+		return false
 	}
 	old := s.epoch
 	s.dropAllLocked()
@@ -826,6 +845,7 @@ func (s *Stream) Rotate(reason string) {
 	}
 	s.log.Info("replication.feed.rotated", "the replication feed started a new generation",
 		"reason", reason, "previousEpoch", old, "epoch", epochString(raw))
+	return true
 }
 
 // flushLocked fecha o intervalo ativo num lote e o põe no cache e na fila do

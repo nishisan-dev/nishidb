@@ -15,3 +15,21 @@ func WithAfterSnapshot(o *Options, fn func()) { o.afterSnapshot = fn }
 
 // WithKgoOpts acrescenta opções ao cliente kgo do publicador.
 func WithKgoOpts(o *Options, opts ...kgo.Opt) { o.extraOpts = append(o.extraOpts, opts...) }
+
+// WithTopicReadHook roda fn antes de cada leitura do topo do tópico na
+// subida; um erro de fn conta como falha da leitura.
+func WithTopicReadHook(o *Options, fn func() error) { o.beforeTopicRead = fn }
+
+// WithCheckpointFault roda fn antes de cada gravação do .ckpt; um erro de fn
+// conta como falha da gravação.
+func WithCheckpointFault(o *Options, fn func() error) { o.checkpointFault = fn }
+
+// CheckpointFile expõe o conteúdo do .ckpt ao teste externo, para montar o
+// cenário de cada linha da decisão da subida.
+type CheckpointFile = checkpointFile
+
+// LoadCheckpoint e StoreCheckpoint leem e gravam o .ckpt.
+var (
+	LoadCheckpoint  = loadCheckpoint
+	StoreCheckpoint = storeCheckpoint
+)

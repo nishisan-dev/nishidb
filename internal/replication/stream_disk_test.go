@@ -981,6 +981,42 @@ func TestRotateForcesResyncAndNewEpoch(t *testing.T) {
 	}
 }
 
+// O RotateFrom só rotaciona a geração informada, com o feed retomado e
+// aberto: com a epoch já trocada (outro chamador rotacionou primeiro) ele
+// devolve false e não rotaciona de novo; com o feed fechado, false e a epoch
+// intacta. É o que impede o rewind do publicador de publicar o reset na
+// epoch antiga quando o feed fechou no meio da conferência.
+func TestRotateFromRotatesOnlyTheGivenOpenGeneration(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "feed")
+	s, _ := openDir(t, dir, diskOpts(), testFP)
+	old, _ := s.Cursor()
+	if !s.RotateFrom(old, "rewind") {
+		t.Fatal("RotateFrom da geração corrente não rotacionou")
+	}
+	first, _ := s.Cursor()
+	if first == old {
+		t.Fatal("RotateFrom devolveu true sem trocar a epoch")
+	}
+	if s.RotateFrom(old, "rewind") {
+		t.Fatal("RotateFrom de uma geração que já não é a corrente rotacionou")
+	}
+	if e, _ := s.Cursor(); e != first {
+		t.Fatalf("RotateFrom da geração velha trocou a epoch: %s → %s", first, e)
+	}
+	closeClean(t, s, testFP)
+	if s.RotateFrom(first, "rewind") {
+		t.Fatal("RotateFrom com o feed fechado rotacionou")
+	}
+	if e, _ := s.Cursor(); e != first {
+		t.Fatalf("RotateFrom com o feed fechado trocou a epoch: %s → %s", first, e)
+	}
+	n, origin := openDir(t, dir, diskOpts(), testFP)
+	t.Cleanup(func() { _ = n.Close(nil, time.Second); n.Wait() })
+	if e, _ := n.Cursor(); origin.Kind != OriginClean || e != first {
+		t.Fatalf("reabertura: origin=%+v epoch=%s, quer clean %s", origin, e, first)
+	}
+}
+
 func TestCloseDeadlineSkipsCleanMark(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "feed")
 	s, _ := openDir(t, dir, diskOpts(), testFP)

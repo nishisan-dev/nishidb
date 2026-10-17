@@ -28,14 +28,19 @@ import (
 //	03000000                  Partitions = 3
 //	c0eeb843865bd718          LastSnapshotEnd = 1790000009123000000 ns
 //	0102...20                 RenderHash (32 bytes)
+//	0410000000000000          RulerSequence = 4100
 //	1000 "aaaa0000bbbb1111"   Epoch
 //	1000 "cccc2222dddd3333"   TargetEpoch
 //	0a00 "events.cdc"         Topic
+//	1000 "eeee4444ffff5555"   RulerEpoch
 //	0200                      dois brokers, canonizados (ordenados, sem vazio nem repetição)
 //	0c00 "kafka-a:9092"
 //	0c00 "kafka-b:9092"
-//	a1c30f61                  crc32c de tudo acima
-const goldenCheckpointHex = "4e44424b01010000881300000000000000001000000000000200000000000000681000000000000003000000c0eeb843865bd7180102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f201000616161613030303062626262313131311000636363633232323264646464333333330a006576656e74732e63646302000c006b61666b612d613a393039320c006b61666b612d623a39303932a1c30f61"
+//	0f62d11d                  crc32c de tudo acima
+//
+// A versão com a régua saiu do mesmo tipo de oráculo: struct.pack e CRC32C
+// bit a bit, com o CRC conferido contra o vetor "123456789" → e3069283.
+const goldenCheckpointHex = "4e44424b01010000881300000000000000001000000000000200000000000000681000000000000003000000c0eeb843865bd7180102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2004100000000000001000616161613030303062626262313131311000636363633232323264646464333333330a006576656e74732e63646310006565656534343434666666663535353502000c006b61666b612d613a393039320c006b61666b612d623a393039320f62d11d"
 
 // goldenResyncHex é o .resync com contador 3, do mesmo oráculo:
 //
@@ -65,6 +70,8 @@ func sampleCheckpoint() checkpointFile {
 		Snapshotting:    true,
 		ResyncConsumed:  2,
 		LastSnapshotEnd: time.Unix(1790000009, 123000000).UTC(),
+		RulerEpoch:      "eeee4444ffff5555",
+		RulerSequence:   4100,
 	}
 }
 
@@ -116,7 +123,8 @@ func TestCheckpointGoldenBytes(t *testing.T) {
 	if back.Epoch != wantBack.Epoch || back.TargetEpoch != wantBack.TargetEpoch || back.Cursor != 5000 || back.TargetCursor != 4200 ||
 		back.CursorPos != 1<<20 || back.Partitions != 3 || back.Topic != "events.cdc" ||
 		!slices.Equal(back.Bootstrap, wantBack.Bootstrap) || back.RenderHash != wantBack.RenderHash ||
-		!back.Snapshotting || back.ResyncConsumed != 2 || !back.LastSnapshotEnd.Equal(wantBack.LastSnapshotEnd) {
+		!back.Snapshotting || back.ResyncConsumed != 2 || !back.LastSnapshotEnd.Equal(wantBack.LastSnapshotEnd) ||
+		back.RulerEpoch != "eeee4444ffff5555" || back.RulerSequence != 4100 {
 		t.Fatalf("round trip = %+v", back)
 	}
 }
@@ -177,8 +185,10 @@ func TestCheckpointRejectsBadCRC(t *testing.T) {
 func TestCheckpointRejectsStructuralNonsenseWithValidCRC(t *testing.T) {
 	good := mustDecodeHex(t, goldenCheckpointHex)
 	body := good[:len(good)-4]
-	// O deslocamento do bootstrapCount: 84 + (2+16) + (2+16) + (2+10).
-	const countAt = 84 + 18 + 18 + 12
+	// O deslocamento do bootstrapCount: 92 + (2+16) + (2+16) + (2+10) + (2+16).
+	const countAt = 92 + 18 + 18 + 12 + 18
+	// O comprimento da RulerEpoch: 92 + (2+16) + (2+16) + (2+10).
+	const rulerEpochAt = 92 + 18 + 18 + 12
 	if binary.LittleEndian.Uint16(body[countAt:]) != 2 {
 		t.Fatalf("o deslocamento do bootstrapCount mudou; o teste está desalinhado")
 	}
@@ -201,8 +211,14 @@ func TestCheckpointRejectsStructuralNonsenseWithValidCRC(t *testing.T) {
 		},
 		"trailing byte": func(b []byte) []byte { return append(b, 0) },
 		"epoch length past end": func(b []byte) []byte {
-			binary.LittleEndian.PutUint16(b[84:], 0xffff)
+			binary.LittleEndian.PutUint16(b[92:], 0xffff)
 			return b
+		},
+		// A régua sem geração: tira os 16 bytes da RulerEpoch e zera o
+		// comprimento dela, deixando RulerSequence = 4100.
+		"ruler sequence without ruler epoch": func(b []byte) []byte {
+			binary.LittleEndian.PutUint16(b[rulerEpochAt:], 0)
+			return append(b[:rulerEpochAt+2], b[rulerEpochAt+2+16:]...)
 		},
 	}
 	for name, mutate := range cases {
@@ -275,6 +291,17 @@ func TestCheckpointRefusesNegativePartitionsOnStore(t *testing.T) {
 	}
 	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("nada devia ter sido gravado: %v", statErr)
+	}
+}
+
+// A régua sem geração não é gravada: ela não diz o que mede.
+func TestCheckpointRefusesRulerSequenceWithoutEpochOnStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dest.ckpt")
+	if err := storeCheckpoint(path, checkpointFile{RulerSequence: 7}); err == nil {
+		t.Fatal("a régua sem geração foi gravada")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("o .ckpt recusado existe no disco: %v", err)
 	}
 }
 
@@ -582,12 +609,40 @@ func TestCheckpointDirectorySyncFailureAbortsStore(t *testing.T) {
 	if _, statErr := os.Stat(ckpt); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("o checkpoint não devia ter sido gravado: %v", statErr)
 	}
-	// O diretório já foi criado pela tentativa anterior: a nova tentativa não
-	// vê mais nível a criar. Remove para reproduzir a queda no primeiro pedido.
-	if err := os.RemoveAll(filepath.Join(root, "replication")); err != nil {
-		t.Fatal(err)
-	}
+	// O diretório já foi criado pela tentativa anterior, mas a criação ainda
+	// não é durável: a nova tentativa, por outro caminho, refaz o fsync e
+	// falha de novo, em vez de achar o diretório pronto e seguir.
 	if _, err := requestResync(resync); !errors.Is(err, boom) {
 		t.Errorf("requestResync err = %v, quer o fsync que falhou", err)
+	}
+}
+
+// A retentativa depois de um fsync de diretório falho sincroniza os níveis que
+// a primeira tentativa criou e não tornou duráveis, mesmo achando o diretório
+// já existente. Sem a memória dos níveis pendentes, a segunda chamada não vê
+// nada a criar, pula o fsync e volta sucesso com a criação ainda volátil.
+func TestCheckpointDirectoryRetrySyncsLevelsLeftPendingByAFailedSync(t *testing.T) {
+	root := t.TempDir()
+	ckpt, _ := checkpointPaths(root, "dest")
+	boom := errors.New("fsync boom")
+	observeSyncDir(t, boom)
+	if err := storeCheckpoint(ckpt, checkpointFile{}); !errors.Is(err, boom) {
+		t.Fatalf("primeira gravação err = %v, quer o fsync que falhou", err)
+	}
+	synced := observeSyncDir(t, nil)
+	if err := storeCheckpoint(ckpt, checkpointFile{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{root, filepath.Join(root, "replication")}
+	if !slices.Equal(*synced, want) {
+		t.Errorf("a retentativa sincronizou %q, quer %q (os pais dos níveis criados pela tentativa falha)", *synced, want)
+	}
+	// Depois do fsync bem-sucedido, nada fica pendente.
+	*synced = nil
+	if err := storeCheckpoint(ckpt, checkpointFile{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(*synced) != 0 {
+		t.Errorf("terceira gravação sincronizou %q; quer nada", *synced)
 	}
 }

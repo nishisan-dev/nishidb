@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -166,10 +167,17 @@ type harnessOpts struct {
 
 // harness é um dataset `events` (e a histórica, se pedida) com feed, fontes
 // em memória, um cluster kfake e o publicador.
+//
+// O diretório do feed (feedDir) e o dos arquivos de estado do publicador
+// (ckptDir) sobrevivem ao restart, como a pasta do dataset sobrevive ao
+// reinício do servidor; as fontes em memória fazem o papel dos Stores.
 type harness struct {
 	t          *testing.T
+	o          harnessOpts
 	cluster    *kfake.Cluster
 	addrs      []string
+	feedDir    string
+	ckptDir    string
 	feed       *replication.Stream
 	base, hist *schema.Compiled
 	baseSrc    *memSource
@@ -205,7 +213,20 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 		h.cluster = c
 		h.addrs = c.ListenAddrs()
 	}
-	feed, err := replication.Open(t.TempDir(), o.feed)
+	h.o = o
+	h.feedDir, h.ckptDir = t.TempDir(), t.TempDir()
+	h.base, h.hist = compiledPair(t, goldenYAML)
+	h.open()
+	t.Cleanup(h.close)
+	return h
+}
+
+// open abre o feed de feedDir (Open + Resume com a impressão vazia) e monta
+// um publicador novo sobre ele, sem iniciá-lo.
+func (h *harness) open() {
+	t := h.t
+	t.Helper()
+	feed, err := replication.Open(h.feedDir, h.o.feed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,10 +234,17 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 		t.Fatal(err)
 	}
 	h.feed = feed
-	h.base, h.hist = compiledPair(t, goldenYAML)
+	h.pub = h.newPublisher(feed)
+}
+
+// newPublisher monta o publicador do cenário sobre o feed dado.
+func (h *harness) newPublisher(feed *replication.Stream) *replicationkafka.Publisher {
+	t := h.t
+	t.Helper()
 	var renderer *replicationkafka.Renderer
+	var err error
 	tables := []replication.SnapshotTable{{Name: "events", Source: h.baseSrc}}
-	if o.history {
+	if h.o.history {
 		renderer, err = replicationkafka.NewRenderer("events", goldenHistory, h.base, h.hist)
 		tables = append(tables, replication.SnapshotTable{Name: goldenHistory, History: true, Source: h.histSrc})
 	} else {
@@ -226,8 +254,8 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 		t.Fatal(err)
 	}
 	target := config.KafkaTargetSpec{Name: "alarms_cdc", BootstrapServers: h.addrs, Topic: pubTopic, Timeout: "5s"}
-	if o.target != nil {
-		o.target(&target)
+	if h.o.target != nil {
+		h.o.target(&target)
 	}
 	opts := replicationkafka.Options{
 		Dataset:                "events",
@@ -236,20 +264,49 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 		Tables:                 tables,
 		Renderer:               renderer,
 		Logger:                 logging.New(h.logs, logging.FormatJSON, slog.LevelDebug),
+		CheckpointDir:          h.ckptDir,
 		MinBackoff:             20 * time.Millisecond,
 		MaxBackoff:             200 * time.Millisecond,
 		PartitionCheckInterval: time.Hour,
 	}
-	if o.publisher != nil {
-		o.publisher(&opts)
+	if h.o.publisher != nil {
+		h.o.publisher(&opts)
 	}
 	pub, err := replicationkafka.New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.pub = pub
-	t.Cleanup(h.close)
-	return h
+	return pub
+}
+
+// stop encerra o feed e o publicador na ordem do servidor. clean grava a
+// marca limpa do feed (a próxima abertura retoma a MESMA geração); sem ela a
+// próxima abertura é queda.
+func (h *harness) stop(clean bool) {
+	h.t.Helper()
+	var fp *replication.Fingerprint
+	if clean {
+		fp = &replication.Fingerprint{}
+	}
+	if err := h.feed.Close(fp, 10*time.Second); err != nil && clean {
+		h.t.Fatalf("o feed não fechou limpo: %v", err)
+	}
+	// O orçamento da drenagem é curto: os cenários daqui drenam em
+	// milissegundos, e o que não drena (publicador preso de propósito) só
+	// gastaria o prazo inteiro.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = h.pub.Close(ctx)
+	h.feed.Wait()
+}
+
+// restart simula o reinício do servidor: stop(clean) e open() sobre os
+// mesmos diretórios, com o publicador novo já iniciado.
+func (h *harness) restart(clean bool) {
+	h.t.Helper()
+	h.stop(clean)
+	h.open()
+	h.pub.Start()
 }
 
 // close segue a ordem do servidor: o feed antes, o publicador depois, e o
@@ -257,11 +314,16 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 func (h *harness) close() {
 	h.closeOnce.Do(func() {
 		_ = h.feed.Close(nil, 10*time.Second)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = h.pub.Close(ctx)
 		h.feed.Wait()
 	})
+}
+
+// checkpointPath é o .ckpt do destino do cenário.
+func (h *harness) checkpointPath() string {
+	return filepath.Join(h.ckptDir, "alarms_cdc.ckpt")
 }
 
 // alarm é o payload de um alarme do events.
@@ -330,7 +392,7 @@ func (m msg) num(k string) uint64 {
 func (m msg) record() map[string]any { r, _ := m.env["record"].(map[string]any); return r }
 func (m msg) isControl() bool {
 	switch m.op() {
-	case "reset", "snapshot_end", "retain":
+	case "reset", "snapshot_end", "retain", "resume":
 		return true
 	}
 	return false

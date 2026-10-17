@@ -649,9 +649,10 @@ func TestDeleteEnvelopeCarriesLastStateEndToEnd(t *testing.T) {
 	h := &harness{t: t, cluster: c, addrs: c.ListenAddrs(), feed: feed, base: base, logs: &lockedBuffer{}}
 	h.pub, err = replicationkafka.New(replicationkafka.Options{
 		Dataset: "events", Feed: feed, Renderer: renderer,
-		Target: config.KafkaTargetSpec{Name: "alarms_cdc", BootstrapServers: h.addrs, Topic: pubTopic, Timeout: "5s"},
-		Tables: []replication.SnapshotTable{{Name: "events", Source: st}},
-		Logger: logging.New(h.logs, logging.FormatJSON, slog.LevelDebug),
+		Target:        config.KafkaTargetSpec{Name: "alarms_cdc", BootstrapServers: h.addrs, Topic: pubTopic, Timeout: "5s"},
+		Tables:        []replication.SnapshotTable{{Name: "events", Source: st}},
+		Logger:        logging.New(h.logs, logging.FormatJSON, slog.LevelDebug),
+		CheckpointDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -808,8 +809,10 @@ func TestRenderErrorFailsPublisherWithoutBlockingFeed(t *testing.T) {
 // só provaria que a lista concorda consigo mesma, e um motivo removido dela
 // (snapshot_gap, que alarma o livelock) sumiria das séries sem ninguém ver.
 func TestStatsSeriesExistAtZeroBeforeFirstDelivery(t *testing.T) {
-	wantSnapshots := []string{"startup", "gap", "snapshot_failed", "partitions_changed"}
-	wantErrors := []string{"timeout", "unavailable", "message_too_large", "publish_error", "render_error", "snapshot_gap"}
+	wantSnapshots := []string{"startup", "gap", "snapshot_failed", "partitions_changed",
+		"crash", "rewind", "retention", "config_changed", "requested", "periodic"}
+	wantErrors := []string{"timeout", "unavailable", "message_too_large", "publish_error", "render_error", "snapshot_gap",
+		"checkpoint_write", "topic_read"}
 	if got := replicationkafka.SnapshotReasons(); !slices.Equal(got, wantSnapshots) {
 		t.Errorf("SnapshotReasons() = %v, quer %v", got, wantSnapshots)
 	}
@@ -877,7 +880,9 @@ func TestLivelockAfterSnapshotIsLogged(t *testing.T) {
 	h.readUntil("snapshot de lacuna", snapshotEnds(3, 2))
 	waitFor(t, "snapshot gap contado", func() bool { return h.pub.Stats().Snapshots["gap"] == 1 })
 	logs := h.logs.String()
-	if !strings.Contains(logs, `"replication.kafka.livelock"`) || !strings.Contains(logs, "maxBufferedBytes") ||
+	// O remédio do laço é o disco do feed: o ERROR nomeia maxDiskBytes, e
+	// não mais o buffer em memória, que deixou de ser o que limita a janela.
+	if !strings.Contains(logs, `"replication.kafka.livelock"`) || !strings.Contains(logs, "replication.maxDiskBytes") ||
 		!strings.Contains(logs, `"level":"ERROR"`) || !strings.Contains(logs, "snapshot_duration") {
 		t.Errorf("sem o ERROR de livelock com o dimensionamento:\n%s", logs)
 	}

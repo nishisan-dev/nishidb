@@ -200,6 +200,8 @@ func (s *Server) openReplicationPublishers(log *logging.Logger) error {
 			// ele que resolve as colunas da histórica pelo FieldID.
 			history = h.sch
 		}
+		renderHash := replicationkafka.RenderHash(renderSpecOf(d))
+		checkpointDir := replicationkafka.CheckpointDir(s.cfg.DatasetRootDir(d.nome))
 		for _, name := range d.spec.Replication.Targets {
 			target, ok := targets[name]
 			if !ok {
@@ -214,13 +216,16 @@ func (s *Server) openReplicationPublishers(log *logging.Logger) error {
 				return fmt.Errorf("dataset %q: replication target %q: %w", d.nome, name, err)
 			}
 			p, err := replicationkafka.New(replicationkafka.Options{
-				Dataset:  d.nome,
-				Target:   target,
-				Feed:     d.replication,
-				Tables:   tables,
-				Renderer: renderer,
-				Logger:   log,
-				Now:      s.now,
+				Dataset:          d.nome,
+				Target:           target,
+				Feed:             d.replication,
+				Tables:           tables,
+				Renderer:         renderer,
+				Logger:           log,
+				Now:              s.now,
+				CheckpointDir:    checkpointDir,
+				RenderHash:       renderHash,
+				PeriodicSnapshot: d.spec.Replication.PeriodicSnapshot,
 			})
 			if err != nil {
 				return fmt.Errorf("dataset %q: replication target %q: %w", d.nome, name, err)
@@ -229,6 +234,36 @@ func (s *Server) openReplicationPublishers(log *logging.Logger) error {
 		}
 	}
 	return nil
+}
+
+// renderSpecOf é a renderização DECLARADA do dataset, que o publicador
+// compara com a do .ckpt na subida: as tabelas publicadas (o base e, só
+// quando publicada, a histórica), publishHistory e os aliases declarados em
+// `schema.fields` de cada tabela publicada. Sai só da spec, e nunca do
+// Compiled nem do dicionário de campos: as colunas descobertas em runtime
+// (`include: ["*"]`) não mudam o rótulo de coluna nenhuma que já exista, e
+// contá-las daria config_changed na primeira subida depois de uma descoberta.
+func renderSpecOf(d *dataset) replicationkafka.RenderSpec {
+	spec := replicationkafka.RenderSpec{Tables: []string{d.nome}, Aliases: declaredAliases(d.nome, d.spec)}
+	if h := d.publishedHistory(); h != nil {
+		spec.Tables = append(spec.Tables, h.nome)
+		spec.Aliases = append(spec.Aliases, declaredAliases(h.nome, h.spec)...)
+		spec.PublishHistory = true
+	}
+	return spec
+}
+
+// declaredAliases lista os aliases de `schema.fields` da spec, ordenados
+// pelo nome do campo.
+func declaredAliases(table string, spec *schema.DatasetSpec) []replicationkafka.FieldAlias {
+	var out []replicationkafka.FieldAlias
+	for field, f := range spec.Schema.Fields {
+		if f.Alias != "" {
+			out = append(out, replicationkafka.FieldAlias{Table: table, Field: field, Alias: f.Alias})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Field < out[j].Field })
+	return out
 }
 
 // startPublishers inicia os publicadores de um dataset. Vem DEPOIS do Start
@@ -307,9 +342,11 @@ func (s *Server) waitFeeds() {
 // Idempotente, como o Close do publicador.
 //
 // A drenagem que não termina no prazo (broker fora, tópico lento) vira WARN,
-// e não erro do encerramento: nada do dataset se perde — o estado está no
-// disco, e a próxima subida publica `reset` e um snapshot completo —, e um
-// broker fora no instante do SIGTERM não é falha do processo.
+// e não erro do encerramento: nada do dataset se perde — o publicador grava
+// no .ckpt o último ponto confirmado ao parar, e a próxima subida retoma dali
+// e entrega de novo o que faltou (ou publica `reset` com snapshot_failed, se
+// um snapshot estava em curso) —, e um broker fora no instante do SIGTERM não
+// é falha do processo.
 func (s *Server) closePublishers() {
 	budget := s.publisherBudget
 	if budget <= 0 {
@@ -325,7 +362,7 @@ func (s *Server) closePublishers() {
 				defer wg.Done()
 				if err := p.Close(ctx); err != nil {
 					s.log.Warn("replication.publisher.close_failed",
-						"the replication publisher did not drain the feed tail before the deadline; the next start publishes a reset and a full snapshot",
+						"the replication publisher did not drain the feed tail before the deadline; the next start resumes from the destination checkpoint and delivers the rest again",
 						"dataset", name, "destination", p.Stats().Destination, "error", err.Error())
 				}
 			}(d.nome, p)

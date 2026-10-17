@@ -338,8 +338,8 @@ subida, em zero antes da primeira entrega. A origem é a mesma de
 |---|---|---|
 | `nishidb_replication_kafka_delivered_total` | counter | replication records acknowledged by Kafka |
 | `nishidb_replication_kafka_lag_sequences` | gauge | feed sequences produced beyond the publisher's acknowledged cursor |
-| `nishidb_replication_kafka_snapshots_total` | counter | replication snapshots completed on Kafka, by reason; label adicional `reason`: `startup`, `gap`, `snapshot_failed`, `partitions_changed` |
-| `nishidb_replication_kafka_errors_total` | counter | failed replication delivery attempts, by reason; label adicional `reason`: `timeout`, `unavailable`, `message_too_large`, `publish_error`, `render_error`, `snapshot_gap` |
+| `nishidb_replication_kafka_snapshots_total` | counter | replication snapshots completed on Kafka, by reason; label adicional `reason`: `startup`, `gap`, `snapshot_failed`, `partitions_changed`, `crash`, `rewind`, `retention`, `config_changed`, `requested`, `periodic` |
+| `nishidb_replication_kafka_errors_total` | counter | failed replication delivery attempts, by reason; label adicional `reason`: `timeout`, `unavailable`, `message_too_large`, `publish_error`, `render_error`, `snapshot_gap`, `checkpoint_write`, `topic_read` |
 | `nishidb_replication_kafka_state` | gauge | 1 on the current state of the replication publisher, 0 on the others; label adicional `state`: `snapshotting`, `following`, `retrying`, `blocked`, `failed`, `stopped` |
 | `nishidb_replication_kafka_last_success_timestamp` | gauge | last complete replication delivery in epoch seconds; zero until the first |
 

@@ -228,13 +228,33 @@ func createDiskLog(dir string, segmentBytes, maxBytes int64) (*diskLog, error) {
 	return openDiskLog(dir, segmentBytes, maxBytes)
 }
 
+// dirSync guarda os níveis de diretório criados cujo pai ainda não teve um
+// fsync bem-sucedido. Sem essa memória, a nova tentativa depois de um fsync
+// falho acharia o diretório já criado, não veria nível nenhum a criar e
+// voltaria sucesso sem nunca ter tornado a criação durável.
+var dirSync struct {
+	mu      sync.Mutex
+	pending map[string]struct{}
+}
+
 // ensureDir cria dir e os ancestrais que faltam. Uma entrada de diretório só
 // é durável depois do fsync do diretório que a contém, então cada nível criado
 // tem o pai sincronizado (do mais alto para o mais baixo): sincronizar só o
 // pai imediato deixaria os níveis de cima fora do fsync.
+//
+// Um nível criado fica PENDENTE até o fsync do pai dele dar certo: a chamada
+// seguinte, mesmo achando o diretório já criado, sincroniza de novo todo nível
+// pendente da cadeia de dir, e só então volta sucesso. Roda inteira sob
+// dirSync.mu: uma chamada concorrente que achasse o diretório pronto não pode
+// voltar antes do fsync da que o criou.
 func ensureDir(dir string) error {
-	var created []string
-	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+	dirSync.mu.Lock()
+	defer dirSync.mu.Unlock()
+	if dirSync.pending == nil {
+		dirSync.pending = make(map[string]struct{})
+	}
+	dir = filepath.Clean(dir)
+	for d := dir; ; d = filepath.Dir(d) {
 		_, err := os.Stat(d)
 		if err == nil {
 			break
@@ -242,7 +262,7 @@ func ensureDir(dir string) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		created = append(created, d)
+		dirSync.pending[d] = struct{}{}
 		if filepath.Dir(d) == d {
 			break
 		}
@@ -250,10 +270,22 @@ func ensureDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	for i := len(created) - 1; i >= 0; i-- {
-		if err := syncDirFn(filepath.Dir(created[i])); err != nil {
+	// A cadeia de dir, do mais baixo para o mais alto; o fsync vai na ordem
+	// inversa.
+	var chain []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, ok := dirSync.pending[d]; ok {
+			chain = append(chain, d)
+		}
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		if err := syncDirFn(filepath.Dir(chain[i])); err != nil {
 			return err
 		}
+		delete(dirSync.pending, chain[i])
 	}
 	return nil
 }

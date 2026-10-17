@@ -55,6 +55,16 @@ func TestKafkaTargetRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+// O broker com vírgula num item só é recusado na carga de `kafkaTargets:`,
+// pela guarda do schema: aceito, ele quebraria para sempre o checkpoint do
+// publicador da replicação, que junta os brokers por vírgula.
+func TestKafkaTargetRefusesBootstrapServerWithComma(t *testing.T) {
+	_, err := Load(writeConfig(t, strings.Replace(kafkaTargetsConfig, "'localhost:9092'", "'kafka01,kafka02:9092'", 1)))
+	if !errors.Is(err, ErrKafkaTarget) || !strings.Contains(err.Error(), "contém vírgula") {
+		t.Fatalf("recusa = %v, quer ErrKafkaTarget com a mensagem da guarda da vírgula", err)
+	}
+}
+
 // TestKafkaTargetMaxMessageBytesAcceptsSizesInRange cobre as duas grafias que
 // a chave aceita (unidade binária e bytes puros) e as duas pontas da faixa,
 // que são inclusivas.

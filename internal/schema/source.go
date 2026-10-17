@@ -363,12 +363,21 @@ func validateBootstrap(items []string) error {
 }
 
 // ValidateKafkaBootstrap checks connection addresses for consumers and producers.
+//
+// Recusa a vírgula dentro de um item: "a,b:9092" passa no net.SplitHostPort
+// (o host seria "a,b"), mas é a lista colada num item só por engano no YAML.
+// Além de nunca conectar, ele quebraria o checkpoint do publicador Kafka, que
+// guarda os brokers juntados por vírgula e recusaria gravar esse item para
+// sempre (errBootstrapComma em internal/replicationkafka).
 func ValidateKafkaBootstrap(items []string, keyPath string) error {
 	if len(items) == 0 {
 		return specErrf("%s não pode ser lista vazia", keyPath)
 	}
 	for i, item := range items {
 		item = strings.TrimSpace(item)
+		if strings.Contains(item, ",") {
+			return specErrf("%s[%d] %q contém vírgula: liste um broker por item", keyPath, i, item)
+		}
 		host, port, err := net.SplitHostPort(item)
 		if err != nil {
 			return specErrf("%s[%d] %q inválido (esperado host:porta)", keyPath, i, item)

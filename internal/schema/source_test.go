@@ -154,6 +154,9 @@ func TestBootstrapInvalidoERecusado(t *testing.T) {
 		{"porta acima do teto", "kafka01:65536", "porta inválida"},
 		{"porta não numérica", "kafka01:noventa", "porta inválida"},
 		{"sem host", ":9092", "sem host"},
+		// "a,b:9092" passa no net.SplitHostPort com o host "a,b": só a guarda
+		// da vírgula o recusa, e por isso o trecho é a mensagem dela.
+		{"vírgula no item", "kafka01,kafka02:9092", "contém vírgula"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

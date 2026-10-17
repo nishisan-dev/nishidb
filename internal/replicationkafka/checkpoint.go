@@ -31,7 +31,7 @@ const (
 	checkpointVersion   = 1
 	resyncVersion       = 1
 	checkpointFlagSnap  = 1
-	checkpointFixedSize = 4 + 1 + 1 + 2 + 8 + 8 + 8 + 8 + 4 + 8 + 32
+	checkpointFixedSize = 4 + 1 + 1 + 2 + 8 + 8 + 8 + 8 + 4 + 8 + 32 + 8
 	resyncSize          = 4 + 1 + 3 + 8 + 4
 )
 
@@ -93,12 +93,36 @@ type checkpointFile struct {
 	// LastSnapshotEnd é o instante do último snapshot_end confirmado (zero se
 	// nunca houve), para o snapshot periódico.
 	LastSnapshotEnd time.Time
+	// RulerEpoch e RulerSequence são a RÉGUA pendente da conferência de
+	// rewind: a geração do feed e a menor sequence em que ele reabriu limpo
+	// desde a última decisão tomada neste destino. Vazia (RulerEpoch "")
+	// quando não há conferência pendente. Existe porque a vida que reabre o
+	// feed e não chega a decidir (o tópico ilegível a vida inteira) ingere e
+	// fecha limpo: a vida seguinte reabre com uma sequence MAIOR, e comparar
+	// o topo do tópico com ela esconderia o rewind. A régua gravada nunca
+	// sobe; ela sai do arquivo quando uma decisão termina (a retomada ou a
+	// marca de reset em curso).
+	RulerEpoch    string
+	RulerSequence uint64
+}
+
+// CheckpointDir devolve o diretório dos arquivos de estado dos publicadores
+// de um dataset, a partir do DatasetRootDir dele. É a fonte ÚNICA do caminho:
+// o servidor passa o resultado em Options.CheckpointDir, e checkpointPaths
+// (que o CLI offline também usa) parte dele.
+func CheckpointDir(datasetRoot string) string {
+	return filepath.Join(datasetRoot, filepath.FromSlash(checkpointSubdir))
 }
 
 // checkpointPaths devolve os caminhos do .ckpt e do .resync do destino. root é
 // o DatasetRootDir.
 func checkpointPaths(root, destination string) (ckpt, resync string) {
-	dir := filepath.Join(root, filepath.FromSlash(checkpointSubdir))
+	return checkpointFiles(CheckpointDir(root), destination)
+}
+
+// checkpointFiles devolve os caminhos do .ckpt e do .resync do destino dentro
+// de dir, o CheckpointDir do dataset.
+func checkpointFiles(dir, destination string) (ckpt, resync string) {
 	return filepath.Join(dir, destination+checkpointExt), filepath.Join(dir, destination+resyncExt)
 }
 
@@ -110,9 +134,11 @@ func checkpointPaths(root, destination string) (ckpt, resync string) {
 var errBootstrapComma = errors.New("replicationkafka: bootstrap server contains a comma")
 
 // canonicalBootstrapList é a forma canônica dos brokers como lista, a mesma
-// de checkpoint.CanonicalBootstrap (que é quem decide o que é canônico). Lista
-// vazia, e não nil nem [""], quando não há broker nenhum. Recusa o broker que
-// contém vírgula (errBootstrapComma) em vez de dividi-lo.
+// de checkpoint.CanonicalBootstrap (que é quem decide o que é canônico). Sem
+// broker nenhum devolve nil, e nunca [""] (o Split da string vazia). Recusa o
+// broker que contém vírgula (errBootstrapComma) em vez de dividi-lo; a carga
+// da configuração já recusa a vírgula (schema.ValidateKafkaBootstrap), e esta
+// guarda é a segunda linha, para quem chegar aqui por outro caminho.
 func canonicalBootstrapList(brokers []string) ([]string, error) {
 	for _, b := range brokers {
 		if strings.Contains(b, ",") {
@@ -139,9 +165,13 @@ func canonicalBootstrapList(brokers []string) ([]string, error) {
 //	40  4  Partitions i32 (não negativo)
 //	44  8  LastSnapshotEnd, em nanossegundos Unix (0 = nunca)
 //	52 32  RenderHash
-//	84     Epoch, TargetEpoch, Topic: cada um  len u16 | bytes
+//	84  8  RulerSequence
+//	92     Epoch, TargetEpoch, Topic, RulerEpoch: cada um  len u16 | bytes
 //	       bootstrapCount u16, e por broker  len u16 | bytes
 //	    4  crc32c sobre tudo acima
+//
+// RulerSequence diferente de zero com RulerEpoch vazia é incoerente e é
+// recusada como arquivo corrompido: a régua sem geração não diz o que mede.
 //
 // O formato é de disco e tem golden test (TestCheckpointGoldenBytes) com o
 // literal gerado fora do código. O instante zero não tem representação em
@@ -158,8 +188,11 @@ func encodeCheckpoint(c checkpointFile) ([]byte, error) {
 	if len(bootstrap) > math.MaxUint16 {
 		return nil, errors.New("replicationkafka: checkpoint bootstrap list longer than 65535 entries")
 	}
-	size := checkpointFixedSize + 3*2 + len(c.Epoch) + len(c.TargetEpoch) + len(c.Topic) + 2 + 4
-	for _, s := range []string{c.Epoch, c.TargetEpoch, c.Topic} {
+	if c.RulerEpoch == "" && c.RulerSequence != 0 {
+		return nil, errors.New("replicationkafka: checkpoint ruler sequence without a ruler epoch")
+	}
+	size := checkpointFixedSize + 4*2 + len(c.Epoch) + len(c.TargetEpoch) + len(c.Topic) + len(c.RulerEpoch) + 2 + 4
+	for _, s := range []string{c.Epoch, c.TargetEpoch, c.Topic, c.RulerEpoch} {
 		if len(s) > math.MaxUint16 {
 			return nil, errors.New("replicationkafka: checkpoint string longer than 65535 bytes")
 		}
@@ -188,9 +221,11 @@ func encodeCheckpoint(c checkpointFile) ([]byte, error) {
 	}
 	b = binary.LittleEndian.AppendUint64(b, uint64(snapEnd))
 	b = append(b, c.RenderHash[:]...)
+	b = binary.LittleEndian.AppendUint64(b, c.RulerSequence)
 	b = appendCheckpointString(b, c.Epoch)
 	b = appendCheckpointString(b, c.TargetEpoch)
 	b = appendCheckpointString(b, c.Topic)
+	b = appendCheckpointString(b, c.RulerEpoch)
 	b = binary.LittleEndian.AppendUint16(b, uint16(len(bootstrap)))
 	for _, s := range bootstrap {
 		b = appendCheckpointString(b, s)
@@ -205,7 +240,7 @@ func appendCheckpointString(b []byte, s string) []byte {
 
 func decodeCheckpoint(src []byte) (checkpointFile, error) {
 	var c checkpointFile
-	if len(src) < checkpointFixedSize+3*2+2+4 || [4]byte(src[0:4]) != checkpointMagic {
+	if len(src) < checkpointFixedSize+4*2+2+4 || [4]byte(src[0:4]) != checkpointMagic {
 		return c, errCorruptCheckpoint
 	}
 	body, crc := src[:len(src)-4], binary.LittleEndian.Uint32(src[len(src)-4:])
@@ -229,7 +264,8 @@ func decodeCheckpoint(src []byte) (checkpointFile, error) {
 		c.LastSnapshotEnd = time.Unix(0, snapEnd).UTC()
 	}
 	copy(c.RenderHash[:], src[52:84])
-	rest := body[84:]
+	c.RulerSequence = binary.LittleEndian.Uint64(src[84:92])
+	rest := body[92:]
 	var ok bool
 	if c.Epoch, rest, ok = readCheckpointString(rest); !ok {
 		return checkpointFile{}, errCorruptCheckpoint
@@ -238,6 +274,9 @@ func decodeCheckpoint(src []byte) (checkpointFile, error) {
 		return checkpointFile{}, errCorruptCheckpoint
 	}
 	if c.Topic, rest, ok = readCheckpointString(rest); !ok {
+		return checkpointFile{}, errCorruptCheckpoint
+	}
+	if c.RulerEpoch, rest, ok = readCheckpointString(rest); !ok || (c.RulerEpoch == "" && c.RulerSequence != 0) {
 		return checkpointFile{}, errCorruptCheckpoint
 	}
 	if len(rest) < 2 {
@@ -280,16 +319,37 @@ func readCheckpointString(src []byte) (string, []byte, bool) {
 // observarem (e falharem) a durabilidade da criação.
 var syncDirFn = atomicfile.SyncDir
 
+// dirSync guarda os níveis de diretório criados cujo pai ainda não teve um
+// fsync bem-sucedido. Sem essa memória, a nova tentativa depois de um fsync
+// falho acharia o diretório já criado, não veria nível nenhum a criar e
+// voltaria sucesso sem nunca ter tornado a criação durável.
+var dirSync struct {
+	mu      sync.Mutex
+	pending map[string]struct{}
+}
+
 // ensureDir cria dir e os ancestrais que faltam, com fsync do pai de CADA
 // nível criado (do mais alto para o mais baixo). Uma entrada de diretório só é
 // durável depois do fsync do diretório que a contém: sincronizar só o pai
 // imediato deixaria os níveis de cima fora do fsync, e o primeiro checkpoint
 // de um destino novo, gravado com sucesso, sumiria numa queda junto com o
-// diretório. É o mesmo padrão do ensureDir de internal/replication/disklog.go,
-// replicado porque aquele é privado do pacote replication.
+// diretório.
+//
+// Um nível criado fica PENDENTE até o fsync do pai dele dar certo: a chamada
+// seguinte, mesmo achando o diretório já criado, sincroniza de novo todo nível
+// pendente da cadeia de dir, e só então volta sucesso. Roda inteira sob
+// dirSync.mu: uma chamada concorrente que achasse o diretório pronto não pode
+// voltar antes do fsync da que o criou. É o mesmo padrão do ensureDir de
+// internal/replication/disklog.go, replicado porque aquele é privado do pacote
+// replication.
 func ensureDir(dir string) error {
-	var created []string
-	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+	dirSync.mu.Lock()
+	defer dirSync.mu.Unlock()
+	if dirSync.pending == nil {
+		dirSync.pending = make(map[string]struct{})
+	}
+	dir = filepath.Clean(dir)
+	for d := dir; ; d = filepath.Dir(d) {
 		_, err := os.Stat(d)
 		if err == nil {
 			break
@@ -297,7 +357,7 @@ func ensureDir(dir string) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		created = append(created, d)
+		dirSync.pending[d] = struct{}{}
 		if filepath.Dir(d) == d {
 			break
 		}
@@ -305,10 +365,22 @@ func ensureDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	for i := len(created) - 1; i >= 0; i-- {
-		if err := syncDirFn(filepath.Dir(created[i])); err != nil {
+	// A cadeia de dir, do mais baixo para o mais alto; o fsync vai na ordem
+	// inversa.
+	var chain []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, ok := dirSync.pending[d]; ok {
+			chain = append(chain, d)
+		}
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		if err := syncDirFn(filepath.Dir(chain[i])); err != nil {
 			return err
 		}
+		delete(dirSync.pending, chain[i])
 	}
 	return nil
 }

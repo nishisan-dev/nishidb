@@ -66,7 +66,7 @@ func TestSnapshotAbortedByGapIsCountedAndLogged(t *testing.T) {
 	}
 	logs := h.logs.String()
 	if !strings.Contains(logs, `"replication.kafka.livelock"`) || !strings.Contains(logs, `"stage":"snapshot"`) ||
-		!strings.Contains(logs, "maxBufferedBytes") || !strings.Contains(logs, "snapshot_duration") {
+		!strings.Contains(logs, "replication.maxDiskBytes") || !strings.Contains(logs, "snapshot_duration") {
 		t.Errorf("sem o ERROR de livelock do snapshot abortado:\n%s", logs)
 	}
 }

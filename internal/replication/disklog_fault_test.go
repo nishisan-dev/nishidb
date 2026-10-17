@@ -512,6 +512,42 @@ func TestDiskLogSyncFlushesTheCurrentSegmentThenTheDirectory(t *testing.T) {
 	}
 }
 
+// TestEnsureDirRetrySyncsLevelsLeftPendingByAFailedSync: o fsync de
+// diretório que falha deixa os níveis criados PENDENTES, e a nova tentativa,
+// mesmo achando o diretório já criado, sincroniza os pais deles. Sem essa
+// memória, ela não veria nada a criar e voltaria sucesso com a criação ainda
+// volátil.
+func TestEnsureDirRetrySyncsLevelsLeftPendingByAFailedSync(t *testing.T) {
+	seams(t)
+	boom := errors.New("fsync boom")
+	syncDirFn = func(string) error { return boom }
+	base := t.TempDir()
+	dir := filepath.Join(base, "a", "feed")
+	if _, err := createDiskLog(dir, 4096, 1<<30); !errors.Is(err, boom) {
+		t.Fatalf("primeira criação err = %v, esperado o fsync que falhou", err)
+	}
+	var got []string
+	syncDirFn = func(d string) error { got = append(got, d); return nil }
+	l, err := createDiskLog(dir, 4096, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = l.close()
+	want := []string{base, filepath.Join(base, "a")}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("fsyncs da retentativa = %q, esperado %q", got, want)
+	}
+	got = nil
+	l, err = createDiskLog(dir, 4096, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = l.close()
+	if len(got) != 0 {
+		t.Fatalf("depois do fsync bem-sucedido ainda houve fsyncs: %q", got)
+	}
+}
+
 // TestEnsureDirSyncsTheParentOfEveryCreatedLevel: criar a/b/feed sincroniza o
 // pai de CADA nível criado, do mais alto para o mais baixo.
 func TestEnsureDirSyncsTheParentOfEveryCreatedLevel(t *testing.T) {

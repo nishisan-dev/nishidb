@@ -218,6 +218,39 @@ func TestExportCapturesCursorBeforeScan(t *testing.T) {
 	}
 }
 
+// A posição em bytes do header é a do MESMO instante do cursor: um lote
+// fechado durante a exportação avança a posição do feed, mas não a do
+// header. Lida depois, ela contaria como entregue um lote que o tail ainda
+// vai entregar, e o atraso em bytes do publicador sairia menor que o real.
+func TestExportReadsEndPosTogetherWithTheCursor(t *testing.T) {
+	feed := newTestFeed(t)
+	feed.Publish("events", Insert, rec(0, "antes"), time.Now())
+	feed.Flush(time.Now(), "test")
+	_, cursor, endPos := feed.Position()
+	if endPos == 0 {
+		t.Fatal("o lote fechado não avançou a posição em bytes; o teste não prova nada")
+	}
+	src := newFakeSource(t, 3)
+	src.onOpen = func(n int) {
+		if n != 1 {
+			return
+		}
+		feed.Publish("events", Insert, rec(1, "durante"), time.Now())
+		feed.Flush(time.Now(), "test")
+	}
+	res := runExport(context.Background(), feed, []SnapshotTable{{Name: "events", Source: src}}, 10, nil)
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	if _, _, now := feed.Position(); now <= endPos {
+		t.Fatalf("a posição não avançou durante a exportação (%d ≤ %d); o teste não prova nada", now, endPos)
+	}
+	if res.header.Cursor != cursor || res.header.EndPos != endPos {
+		t.Fatalf("header cursor=%d endPos=%d, quer %d e %d (lidos juntos, antes da varredura)",
+			res.header.Cursor, res.header.EndPos, cursor, endPos)
+	}
+}
+
 func TestExportFailsOnIteratorError(t *testing.T) {
 	feed := newTestFeed(t)
 	src := newFakeSource(t, 6)

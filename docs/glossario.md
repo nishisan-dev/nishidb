@@ -1048,7 +1048,7 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | marcador de controle (`reset`, `snapshot_end` ou `retain`: registro sem `record`, publicado em cada partição) | control record / addControl | internal/replicationkafka |
 | chave de controle (a key Kafka fixa `__nishidb_control__` dos marcadores de controle) | ControlKey | internal/replicationkafka |
 | marcador de reset (abre uma reconstrução do tópico) | `reset` / OpReset | internal/replicationkafka |
-| motivo do reset (`startup`, `gap`, `snapshot_failed` ou `partitions_changed`) | ResetReason | internal/replicationkafka |
+| motivo do reset (`startup`, `crash`, `rewind`, `retention`, `gap`, `snapshot_failed`, `partitions_changed`, `config_changed`, `requested` ou `periodic`) | ResetReason | internal/replicationkafka |
 | fim do snapshot (o marcador que fecha a reconstrução, com a contagem por partição) | `snapshot_end` / OpSnapshotEnd | internal/replicationkafka |
 | geração do feed (o identificador aleatório do feed; sobrevive ao reinício limpo e muda na queda e na rotação) | epoch / Status.Epoch | internal/replication, internal/replicationkafka |
 | instante da publicação (quando a entrada entrou no feed; na consolidação, o da última alteração) | `at` / Entry.At | internal/replication, internal/replicationkafka |
@@ -1074,6 +1074,18 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | header de motivo (segundo header do `reset`, com o motivo) | `nishidb-reason` / HeaderReason, ReasonHeader | internal/replicationkafka |
 | marcador de retomada (controle na mesma epoch depois do reinício limpo, sem snapshot) | `resume` / OpResume, AppendResume | internal/replicationkafka |
 | epoch anterior (chave opcional do `reset` com a epoch substituída) | `previousEpoch` | internal/replicationkafka |
+| decisão na subida (a tabela que escolhe entre `resume` e `reset`, e o motivo) | Publisher.decide | internal/replicationkafka |
+| conferência de rewind (compara o feed reaberto com o `.ckpt` e com o topo do tópico, antes da tabela) | checkRewind / `replication.kafka.rewind` | internal/replicationkafka |
+| topo do tópico (o último registro de cada partição, com a epoch e a posição) | readTopicTail / topicMark | internal/replicationkafka |
+| partição esvaziada (início = fim > 0: desconhecida, nunca limpa) | errEmptiedPartition | internal/replicationkafka |
+| régua da conferência de rewind (a geração e a menor sequence de reabertura limpa desde a última decisão do destino; persistida, nunca sobe) | RulerEpoch, RulerSequence / pinRuler | internal/replicationkafka |
+| sequence da retomada (a sequence em que o feed reabriu limpo) | Origin.ResumedSequence | internal/replication |
+| rotação condicionada (troca de geração atômica, só a partir da epoch informada e com o feed aberto) | Stream.RotateFrom | internal/replication |
+| impressão da renderização (o que entra no hash: tabelas publicadas, aliases declarados e `publishHistory`) | RenderSpec / FieldAlias | internal/replicationkafka, internal/server |
+| atraso em bytes (`EndPos` do feed menos a posição do cursor, na mesma geração) | LagBytes | internal/replicationkafka |
+| cursor do checkpoint (o cursor do último `.ckpt` gravado) | CheckpointCursor | internal/replicationkafka |
+| pedido de snapshot (registra um pedido no contador durável do destino) | RequestSnapshot | internal/replicationkafka |
+| falha de leitura do tópico e falha de gravação do checkpoint (motivos de erro do publicador) | `topic_read` / ErrorTopicRead, `checkpoint_write` / ErrorCheckpointWrite | internal/replicationkafka |
 ## Feed de replicação em disco
 
 | PT-BR | Identificador/contrato | Dono |

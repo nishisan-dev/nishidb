@@ -34,7 +34,15 @@
 //
 // O `resume` marca a retomada, na MESMA epoch, de um publicador que reabriu
 // o feed de um fechamento limpo: nenhum snapshot se segue, e `cursor` é o
-// ponto de onde o tail continua. Não tem `sequence` nem `record`.
+// último ponto confirmado antes do reinício, de onde o tail continua
+// (`sequence` acima dele). Não tem `sequence` nem `record`. Sai em TODAS as
+// partições, logo na subida e sem barreira de ack, e não exige ação nenhuma
+// do consumidor: é só observabilidade.
+//
+// A escolha entre `resume` e `reset` na subida (e o motivo do `reset`) é do
+// laço do publicador (publisher_resume.go, decide); o envelope só escreve o
+// que ele decide. O `previousEpoch` é a última epoch publicada NESTE destino,
+// lida do checkpoint dele, e sai só quando difere da epoch do `reset`.
 //
 // O `reset` sai com DOIS headers, `nishidb-op: reset` e
 // `nishidb-reason: <motivo>` (a mesma grafia do `reason` do JSON), para o
@@ -141,7 +149,7 @@ var ErrUnknownResetReason = errors.New("replicationkafka: unknown reset reason")
 var ErrInvalidRenderer = errors.New("replicationkafka: invalid renderer configuration")
 
 // ControlKey é a chave Kafka dos marcadores de controle (reset, snapshot_end,
-// retain). O slice é compartilhado: quem o recebe não pode escrever nele.
+// resume, retain). O slice é compartilhado: quem o recebe não pode escrever nele.
 var ControlKey = []byte("__nishidb_control__")
 
 // HeaderOp é o nome do header Kafka que carrega o `op` do registro, para o
@@ -258,7 +266,8 @@ const (
 	// ResetRewind é o feed que voltou no tempo em relação ao que o destino
 	// já recebeu: o .ckpt está à frente do feed, OU o topo do tópico tem uma
 	// posição acima da retomada, OU o topo traz uma epoch que o .ckpt não
-	// conhece.
+	// conhece, OU o topo não pode ser conferido (partição sem registro
+	// legível).
 	ResetRewind
 	// ResetRetention é o ponto confirmado que a retenção do feed já
 	// descartou.

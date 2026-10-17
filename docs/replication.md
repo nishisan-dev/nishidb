@@ -227,7 +227,9 @@ mesmos lotes, na mesma ordem, e escreve um registro Kafka por entrada (o
 segura a ingestão. Se o Kafka ficar lento ou fora do ar, o feed segue gravando
 no disco dentro de `maxDiskBytes`, e o publicador lê do disco o que atrasou; se
 a retenção apagar o que ele ainda não leu, ele se recupera republicando o
-estado inteiro no próprio tópico. O consumidor do tópico nunca precisa das rotas HTTP nem de
+estado inteiro no próprio tópico. O publicador guarda, por destino, até onde
+o Kafka já confirmou (o checkpoint), e o reinício limpo do master retoma dali,
+sem republicar o dataset. O consumidor do tópico nunca precisa das rotas HTTP nem de
 credencial ADMIN.
 
 ![Publicação da replicação em Kafka: reset, snapshot, snapshot_end e tail, com os caminhos de lacuna, falha de entrega e mudança de partições](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/replication_kafka_flow.puml)
@@ -320,7 +322,7 @@ extraída de `persistent`, é uma coluna derivada, que não entra no `record`.
 - `dataset`: o nome do dataset base, inclusive nas linhas da tabela histórica.
 - `table`: o dataset base ou a tabela histórica dele.
 - `op`: `insert`, `update`, `delete` ou `snapshot` nos registros de dado;
-  `reset`, `snapshot_end` e `retain` nos marcadores de controle.
+  `reset`, `snapshot_end`, `resume` e `retain` nos marcadores de controle.
 - `key`: na tabela base, a key da entidade; na histórica, o `rowID` em
   decimal. A key do registro Kafka é a autoritativa: ela leva os bytes crus
   da key, e o `key` do JSON troca byte de UTF-8 inválido por U+FFFD, de modo
@@ -353,19 +355,29 @@ Os marcadores de controle não têm `record`:
 
 ```json
 {"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"reset","reason":"gap","cursor":100,"at":"2026-09-21T14:13:29.000Z"}
+{"epoch":"fedcba9876543210fedcba9876543210","dataset":"events","op":"reset","reason":"crash","previousEpoch":"0123456789abcdef0123456789abcdef","cursor":0,"at":"2026-09-21T14:20:00.000Z"}
 {"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"snapshot_end","cursor":100,"count":17,"at":"2026-09-21T14:13:29.000Z"}
+{"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"resume","cursor":250,"at":"2026-09-21T15:02:11.318Z"}
 {"epoch":"0123456789abcdef0123456789abcdef","sequence":46,"dataset":"events","table":"events_history","op":"retain","floor":8000,"at":"2026-09-21T14:13:22.456Z"}
 ```
 
-- `reset` abre uma reconstrução. `reason` é `startup`, `gap`,
-  `snapshot_failed` ou `partitions_changed`; `cursor` é o ponto do feed de onde
-  o tail recomeça.
+- `reset` abre uma reconstrução. `reason` é um dos dez motivos de
+  [Motivos do reset](#motivos-do-reset); `cursor` é o ponto do feed de onde o
+  tail recomeça. `previousEpoch`, logo depois de `reason`, é opcional: sai só
+  quando o `reset` troca de geração, com a última geração cujo `reset` já saiu
+  neste destino (inclusive a de um snapshot que falhou no meio), e é omitida
+  no primeiro `reset` do destino e no `reset` dentro da mesma geração (`gap`,
+  por exemplo).
 - `snapshot_end` fecha a reconstrução, com o mesmo `cursor` do `reset` e o
   `count` de registros `snapshot` que foram para AQUELA partição.
+- `resume` marca a retomada do tail depois do reinício limpo do master, na
+  MESMA geração: nenhum snapshot se segue, e `cursor` é o último ponto que o
+  Kafka confirmou antes do reinício (o tail continua com `sequence` acima
+  dele). Não tem `sequence` nem `record`.
 - `retain` avisa que a tabela histórica apagou as linhas com `rowID` menor que
   `floor`.
 
-Os três usam a key fixa `__nishidb_control__` e são publicados uma vez em
+Os quatro usam a key fixa `__nishidb_control__` e são publicados uma vez em
 CADA partição do tópico. Todo registro, de dado ou de controle, leva o header
 `nishidb-op` com o `op`, para o consumidor rotear sem abrir o JSON. O `reset`
 leva, além dele, o header `nishidb-reason` com o motivo (a mesma grafia do
@@ -373,15 +385,19 @@ leva, além dele, o header `nishidb-reason` com o motivo (a mesma grafia do
 
 ### Ciclo de vida: reset, snapshot e tail
 
+Uma reconstrução anda assim:
+
 1. O publicador consulta quantas partições o tópico tem e fixa esse número.
-2. Lê o cursor do feed e copia o primeiro bloco do snapshot; só então publica
-   `reset` em todas as partições, e espera a confirmação de todas antes de
+2. Lê o cursor do feed e copia o primeiro bloco do snapshot. Grava no
+   checkpoint do destino que há um `reset` em curso, e só então publica o
+   `reset` em todas as partições. Espera a confirmação de todas antes de
    publicar qualquer linha.
 3. Publica o estado vivo inteiro como `op: snapshot`, um registro por linha: a
    tabela base primeiro e depois a histórica, precedida de um `retain` com o
    piso dela. Todo registro do snapshot sai com `sequence` igual ao `cursor`
    do `reset`.
-4. Publica `snapshot_end` em todas as partições.
+4. Publica `snapshot_end` em todas as partições e, confirmado, grava o
+   checkpoint com o cursor do `reset`.
 5. Segue o tail, lote a lote, com `insert`, `update`, `delete` e `retain`. O
    que o snapshot já cobriu (`sequence` até o cursor) não se repete.
 
@@ -391,25 +407,171 @@ ir para o Kafka, e no máximo dois blocos ficam em voo. Uma linha alterada
 durante a exportação pode sair num estado mais novo que o cursor; o tail
 reaplica as alterações seguintes por cima, e o estado converge.
 
-Uma nova reconstrução começa por quatro motivos, que são o `reason` do `reset`:
-
-- `startup`: a subida do master. **Todo reinício do master republica o dataset
-  inteiro no tópico**: com a mesma geração depois do reinício limpo, e com
-  geração nova depois de queda. O publicador ainda não retoma de onde parou, e
-  o tópico e o consumidor devem ser dimensionados para isso;
-- `gap`: o feed descartou alterações que o publicador ainda não tinha lido,
-  ou invalidou o intervalo retido, porque o Kafka ficou lento ou fora e o
-  buffer do feed encheu. A geração
-  continua a MESMA, e o `cursor` salta;
-- `snapshot_failed`: um snapshot anterior falhou no meio, depois de já ter
-  publicado alguma coisa;
-- `partitions_changed`: a conferência periódica (uma vez por minuto) achou um
-  número de partições diferente do fixado.
-
 Um snapshot interrompido deixa no tópico um `reset` sem o `snapshot_end`
 correspondente. O próximo `reset` recomeça a reconstrução do zero.
 
+#### O checkpoint do destino
+
+Cada destino tem dois arquivos em `<dataset>/replication/kafka/`, ao lado do
+feed:
+
+- `<destino>.ckpt`: a geração e o cursor que o Kafka confirmou, a posição em
+  bytes desse cursor no feed, o tópico, os `bootstrapServers`, o número de
+  partições, a impressão da renderização, o instante do último `snapshot_end`,
+  a marca de `reset` em curso e a régua pendente da conferência de rewind
+  (abaixo). É gravado com CRC, de forma atômica: depois de
+  uma queda, vale o anterior inteiro ou o novo inteiro.
+- `<destino>.resync`: o contador de pedidos de snapshot (ver
+  [Snapshot periódico e sob demanda](#snapshot-periódico-e-sob-demanda)).
+
+O checkpoint é gravado antes de cada `reset` (com a marca de `reset` em
+curso), depois de cada `snapshot_end` confirmado, no tail no máximo uma vez
+por segundo, e na parada do publicador, com o último ponto confirmado. Ele
+pode ficar atrás do confirmado: a retomada reentrega o intervalo, e a entrega
+já é at-least-once. Cada tentativa de gravação que falha conta uma vez
+`errors{reason="checkpoint_write"}`: antes do `reset`, o snapshot não começa
+(o publicador fica em `retrying` e tenta de novo); no tail e depois do
+`snapshot_end`, só é contada, e o publicador segue. Com o disco falhando, o
+tail tenta no máximo uma gravação por segundo.
+
+A **impressão da renderização** cobre o que muda o `record` e que a
+configuração declara: as tabelas publicadas, os aliases de `schema.fields` e
+`publishHistory`. Colunas descobertas em execução (`unknownFields: include`)
+ficam de fora: descobrir uma coluna não muda o nome de nenhuma coluna que já
+existe.
+
+#### Decisão na subida
+
+Na subida, cada destino escolhe entre retomar o tail e reconstruir. Primeiro
+vem a conferência de rewind (abaixo); depois, a tabela, em que vale a primeira
+linha que casa:
+
+| # | Situação | Ação |
+|---|---|---|
+| 0 | a conferência de rewind achou o feed atrás do que o destino já recebeu, ou não conseguiu conferir o topo do tópico | geração nova do feed e `reset` com `rewind` |
+| 1 | sem checkpoint (primeira subida, destino novo, checkpoint ilegível); tópico diferente; ou nenhum `host:porta` em comum com os `bootstrapServers` gravados | `reset` com `startup` |
+| 2 | impressão da renderização diferente | `reset` com `config_changed` |
+| 3 | o checkpoint marca um `reset` em curso (o snapshot anterior morreu no meio) | `reset` com `snapshot_failed` |
+| 4 | pedido de snapshot pendente | `reset` com `requested` |
+| 5 | o feed está noutra geração: queda (a geração anterior do feed é a do checkpoint) | `reset` com `crash` |
+| 5 | o feed está noutra geração: rotacionado (o rewind de outro destino do mesmo dataset) | `reset` com `rewind` |
+| 5 | o feed está noutra geração, outro caso | `reset` com `startup` |
+| 6 | o cursor do checkpoint está abaixo do piso do feed | `reset` com `retention` |
+| 7 | o número de partições do tópico difere do gravado | `reset` com `partitions_changed` |
+| 8 | `periodicSnapshot` venceu desde o último `snapshot_end` | `reset` com `periodic` |
+| 9 | nenhuma das anteriores | **retoma o tail**: `resume` em todas as partições, e o tail continua do cursor do checkpoint |
+
+Acrescentar um broker à lista não troca o cluster: basta um `host:porta` em
+comum. O `resume` sai na hora, sem esperar a confirmação nem o primeiro lote
+do tail. A decisão que depende do broker (a conferência de rewind e as
+partições) espera o broker: com ele fora, o publicador fica em `retrying` e
+tenta de novo, e nunca retoma nem publica `reset` às cegas.
+
+#### Conferência de rewind
+
+O feed e o checkpoint moram na pasta do dataset. Um backup restaurado traz os
+dois coerentes, mas no passado, e retomar dali reusaria `(epoch, sequence)` já
+entregues com outro conteúdo. Por isso, quando o feed reabre de um
+fechamento limpo, o publicador confere, antes de qualquer outra regra:
+
+- no próprio checkpoint, sem ler o tópico: o cursor confirmado, ou o cursor do
+  `reset` em curso, acima da régua (só o feed voltou no tempo). Só vale com o checkpoint do MESMO tópico e cluster;
+- no tópico: o último registro de cada partição. É rewind se ele tem a geração
+  do feed com posição (`sequence` no dado, `cursor` no controle) acima da
+  régua, ou se tem uma geração que o checkpoint não
+  conhece (o tópico é exclusivo do dataset, então ela é publicação posterior
+  ao backup);
+- no tópico, a partição sem registro legível: esvaziada pela retenção do
+  tópico (início igual ao fim, acima de zero) ou, com o checkpoint deste
+  tópico, nunca escrita (fim zero) entre as partições que ele registra: é o
+  tópico recriado vazio. A conferência não consegue provar que o feed não
+  voltou no tempo, e por isso não retoma nem fica esperando: é rewind. A
+  partição acrescentada com o master parado (índice além das partições do
+  checkpoint, nunca escrita) não recebeu registro nosso e não conta: a
+  subida segue pela tabela, com `partitions_changed`.
+
+O checkpoint de OUTRO tópico ou cluster (o destino trocado no YAML) conta como
+ausente na conferência: ele não diz nada sobre o tópico conferido. O destino
+trocado para um tópico vazio, portanto, segue pela tabela, com `startup`, sem
+rotacionar o feed.
+
+Sem checkpoint (destino renomeado, já que o checkpoint é por nome, ou
+checkpoint apagado à mão) ou com o checkpoint de outro tópico, toda geração
+presente no tópico é desconhecida, e o resultado também é rewind, e não
+`startup`. Sem checkpoint não dá para saber
+se a geração do feed já apareceu no tópico e foi superada por outra: um
+`reset` nela seria descartado pelo consumidor como geração antiga. Sem
+checkpoint e com o tópico vazio, não há o que conferir, e o destino é novo
+(`startup`).
+
+A **régua** da conferência é a `sequence` em que o feed reabriu, e nunca a
+corrente: a ingestão já roda, e um feed restaurado alcançaria o topo antigo
+do tópico enquanto a leitura não volta. Ela é gravada no checkpoint ANTES da
+primeira leitura do tópico, e sobrevive a uma vida que não chega a decidir:
+uma subida que reabre o feed restaurado, fica com o tópico ilegível a vida
+inteira, ingere e fecha limpo deixa a régua gravada, e a vida seguinte, que
+reabre com uma `sequence` maior, confere com a menor das duas. A régua
+gravada nunca sobe; a de outra geração (o feed nasceu de queda desde então)
+é descartada. Ela sai do checkpoint quando a decisão termina: na retomada,
+logo depois do `resume`, e na marca de `reset` em curso. Se ela não puder
+ser gravada, a conta é `errors{reason="checkpoint_write"}`, o publicador fica
+em `retrying`, e a conferência não roda. Com o rewind, o feed abre uma geração
+nova e o destino é reconstruído nela (o `reset` leva `previousEpoch`). A
+troca de geração é condicionada: se o feed fechou no meio da conferência (o
+encerramento chegou enquanto a leitura falhava), nada é rotacionado e nada é
+publicado, e a próxima subida confere de novo. O `reset` do rewind nunca sai
+na geração antiga.
+
+A falha de infraestrutura na leitura do tópico (broker fora, timeout, ou o
+último registro que não chega no prazo, como o último offset num marcador de
+transação) conta `errors{reason="topic_read"}` e é repetida com o backoff da
+entrega. Ela não é ausência comprovada de registro, e nunca vira rewind, nem
+retomada, nem `reset` na geração antiga. Limites conhecidos:
+
+- num dataset de pouco tráfego, com reinícios espaçados mais que a retenção
+  do tópico, a partição esvaziada faz a subida limpa publicar `rewind` e um
+  snapshot completo. Com `periodicSnapshot` abaixo da retenção do tópico,
+  toda partição recebe um marcador de controle antes de esvaziar;
+- só o publicador Kafka confere. Um master com apenas followers HTTP não
+  detecta o rewind (débito 141).
+
+#### Motivos do reset
+
+| Motivo | Quando |
+|---|---|
+| `startup` | primeira subida do destino, destino trocado (tópico ou cluster) para um tópico vazio, checkpoint ilegível com o feed não limpo ou o tópico vazio, ou feed numa geração sem relação com a do checkpoint |
+| `crash` | o feed abriu uma geração nova depois de queda do master (ou de mutação com ele parado) |
+| `rewind` | o feed voltou no tempo em relação ao que o destino já recebeu (backup restaurado), ou foi rotacionado pelo rewind de outro destino. Também o feed reaberto limpo quando o topo do tópico não pode ser conferido (partição esvaziada pela retenção do tópico, ou tópico recriado vazio com checkpoint), e diante de um tópico com registros sem checkpoint legível (destino renomeado, checkpoint apagado) |
+| `retention` | o cursor do checkpoint já saiu do disco do feed |
+| `gap` | em operação: o feed descartou alterações que o publicador ainda não tinha lido, ou invalidou o intervalo retido; a geração continua a MESMA, e o `cursor` salta |
+| `snapshot_failed` | um snapshot anterior falhou no meio, depois de já ter publicado alguma coisa, inclusive o que o reinício interrompeu |
+| `partitions_changed` | o número de partições do tópico mudou (na subida, inclusive a partição acrescentada com o master parado, ou na conferência periódica, uma vez por minuto) |
+| `config_changed` | a impressão da renderização mudou: tabelas publicadas, aliases ou `publishHistory` |
+| `requested` | o operador pediu um snapshot do destino |
+| `periodic` | `periodicSnapshot` venceu |
+
+#### Snapshot periódico e sob demanda
+
+Com `replication.periodicSnapshot`, todo destino Kafka do dataset republica o
+estado inteiro quando passa esse intervalo desde o último `snapshot_end`
+confirmado. O instante está no checkpoint, e por isso o prazo atravessa o
+reinício. Use um valor abaixo da retenção do tópico: um consumidor que começa
+do início do tópico sempre encontra um snapshot completo.
+
+O pedido de snapshot sob demanda incrementa um contador em
+`<destino>.resync`. O pedido é durável quando registrado, e sobrevive a um
+reinício que aconteça antes do snapshot. O checkpoint guarda o valor do
+contador que o último snapshot atendeu: um pedido feito durante um snapshot
+fica acima dele e gera outro. O publicador confere o contador e o prazo do
+periódico a cada conferência de partições (uma vez por minuto), e o pedido
+feito pelo próprio processo é conferido na hora.
+
 ### Regras para o consumidor
+
+O `resume` não exige nada do consumidor: ele só registra que o master
+reiniciou de forma limpa e que o tail continua na mesma geração, a partir do
+`cursor` dele. O `previousEpoch` do `reset` também é só informação: as regras
+abaixo não dependem dele.
 
 Guarde UM estado por `(table, key)`, e não por key: a key da histórica é o
 `rowID` e pode coincidir com a key de uma entidade da tabela base. Junto do
@@ -486,7 +648,7 @@ O publicador está sempre num destes estados:
 |---|---|
 | `snapshotting` | reset, snapshot e snapshot_end em curso |
 | `following` | tail acompanhando o feed |
-| `retrying` | a entrega falhou por infraestrutura (broker fora, timeout, tópico ausente, mensagem recusada pelo broker); tenta de novo para sempre |
+| `retrying` | a entrega falhou por infraestrutura (broker fora, timeout, tópico ausente, mensagem recusada pelo broker), a leitura do tópico na subida falhou (`topic_read`) ou o checkpoint não foi gravado antes do `reset` (`checkpoint_write`); tenta de novo para sempre |
 | `blocked` | um registro passou de `maxMessageBytes`; parado até o reinício |
 | `failed` | uma entrada do feed não pôde ser convertida em JSON (bug); parado até o reinício |
 | `stopped` | parado pelo encerramento do servidor |
@@ -513,6 +675,16 @@ silêncio.
 
 ### Dimensionamento
 
+O disco do feed (`maxDiskBytes`) é o que o publicador pode atrasar sem perder a
+continuidade: com o broker fora, ele lê do disco tudo o que o feed reteve, e o
+`reset` por `gap` (ou por `retention`, na subida) só vem quando a retenção
+apaga o que ele ainda não entregou. A janela que o disco cobre é
+
+    maxDiskBytes / (alterações por segundo × custo por entrada)
+
+e é ela que deve passar da maior queda do broker que o destino precisa
+atravessar sem snapshot.
+
 Enquanto o snapshot anda, o feed tem de reter todas as alterações feitas desde
 o cursor do `reset`: são elas que o tail entrega depois. Se o disco do feed
 não comportar o que a ingestão produz durante um snapshot inteiro, o cursor se
@@ -538,9 +710,8 @@ Quando o laço acontece, ele aparece de duas formas:
   `stage=snapshot` (perdeu no meio) ou `stage=tail_start` (perdeu entre o
   `snapshot_end` e o primeiro lote do tail), e com a duração do snapshot.
 
-O remédio é subir `maxDiskBytes`, que é o que limita a janela retida (a
-mensagem do log ainda cita `maxBufferedBytes`). A proteção atual só detecta o
-laço.
+O remédio é subir `maxDiskBytes`, que é o que limita a janela retida, e é o
+que a mensagem do log recomenda. A proteção atual só detecta o laço.
 Com `stage=snapshot`, o publicador espera 200 ms antes do próximo snapshot;
 com `stage=tail_start`, recomeça na hora (débito 132).
 
@@ -595,10 +766,20 @@ continua lendo o que lia.
   de `gap`).
 - **Header `nishidb-reason` no `reset`.** Todo `reset` sai agora com DOIS
   headers, `nishidb-op: reset` e `nishidb-reason: <motivo>`, o motivo na mesma
-  grafia do `reason` do corpo (hoje `startup`, `gap`, `snapshot_failed` ou
-  `partitions_changed`). O consumidor decide sem abrir o JSON. Os demais
-  registros seguem só com o `nishidb-op`. Mudança aditiva: o corpo do `reset`
-  não mudou.
+  grafia do `reason` do corpo. O consumidor decide sem abrir o JSON. Os demais
+  registros seguem só com o `nishidb-op`.
+- **Seis motivos novos no `reset`.** Além de `startup`, `gap`,
+  `snapshot_failed` e `partitions_changed`, o `reason` pode ser `crash`,
+  `rewind`, `retention`, `config_changed`, `requested` e `periodic` (ver
+  [Motivos do reset](#motivos-do-reset)). O consumidor trata todo `reset` do
+  mesmo jeito, qualquer que seja o motivo, e o que não conhece um motivo
+  continua lendo o `reset` pelo `op`.
+- **`previousEpoch` no `reset`.** Chave opcional, logo depois de `reason`, com
+  a geração que o `reset` substitui; omitida quando não há troca de geração.
+- **Op `resume`.** Marcador de controle novo, em todas as partições, na
+  retomada depois do reinício limpo. Não exige ação: o consumidor que não o
+  conhece pode ignorá-lo. Com ele, o reinício limpo do master deixa de
+  republicar o dataset inteiro.
 
 **Defeito conhecido da v0.14.x.** Quando um lote do feed fechava por tamanho
 (`maxBatchBytes`) antes de a alteração seguinte entrar, ele anunciava a
@@ -631,8 +812,9 @@ retomar a mesma geração:
    próprio de 10 s para todos os publicadores juntos, separado do prazo do
    servidor HTTP. Se o prazo vence (broker fora, tópico lento), sai um WARN
    `replication.publisher.close_failed` e o encerramento continua. Nada se
-   perde: o estado está no disco, e a próxima subida publica `reset` e um
-   snapshot completo. Um snapshot em curso no encerramento continua dentro do
-   orçamento; se o prazo vence antes do fim, ele é abandonado sem
-   `snapshot_end`.
+   perde: cada publicador grava no checkpoint o último ponto confirmado, e a
+   próxima subida retoma dali, entregando de novo o que faltou. Um snapshot em
+   curso no encerramento continua dentro do orçamento; se o prazo vence antes
+   do fim, ele é abandonado sem `snapshot_end`, e a próxima subida publica
+   `reset` com `snapshot_failed`.
 7. Os datasets fecham, e só então o log do feed.

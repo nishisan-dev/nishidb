@@ -30,10 +30,13 @@ type SnapshotTable struct {
 
 // SnapshotHeader identifica a geração exportada. Cursor é o ponto do feed a
 // partir do qual o tail completa o snapshot; At é UM instante só para a
-// exportação inteira.
+// exportação inteira. EndPos é a posição em bytes do fim do último lote
+// fechado, lida JUNTO com Epoch e Cursor (Stream.Position): é a base do atraso
+// em bytes do publicador enquanto o tail ainda não confirmou lote nenhum.
 type SnapshotHeader struct {
 	Epoch  string
 	Cursor uint64
+	EndPos uint64
 	At     time.Time
 }
 
@@ -105,9 +108,9 @@ func ExportSnapshot(ctx context.Context, feed *Stream, tables []SnapshotTable, c
 	if feed == nil || begin == nil || emit == nil || chunkRows < 1 {
 		return ErrInvalidSnapshotExport
 	}
-	epoch, cursor := feed.Cursor()
+	epoch, cursor, endPos := feed.Position()
 	x := &snapshotExporter{
-		header:    SnapshotHeader{Epoch: epoch, Cursor: cursor},
+		header:    SnapshotHeader{Epoch: epoch, Cursor: cursor, EndPos: endPos},
 		chunkRows: chunkRows,
 		begin:     begin,
 		emit:      emit,
