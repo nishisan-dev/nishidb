@@ -68,6 +68,12 @@ with nishidb.connect("nishidb://db01:9142/radius_sessions", user="leitor") as cx
         print(linha["user_name"], linha["nas_ip"])
 ```
 
+A URL do Python continua nomeando o **dataset** (`radius_sessions`). O JDBC e
+o CLI remoto (`query --server --schema`) nomeiam o **schema** (`telecom`):
+nessa migração, o servidor preservou o caminho por dataset usado pelo Python.
+Os dois escopos são exclusivos por requisição; ver o
+[aceite da conexão por schema](../../docs/aceite-conexao-por-schema.md).
+
 A senha nunca vai na string de conexão. Use `password=`, `password_file=` ou a
 variável `NISHIDB_PASSWORD` — uma e só uma delas.
 

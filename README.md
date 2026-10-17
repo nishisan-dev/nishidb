@@ -1,15 +1,5 @@
 # NishiDB
 
-O fluxo master/follower com lotes configuráveis e resync automático está
-documentado em [`docs/replication.md`](docs/replication.md). O master também
-pode publicar o mesmo feed num tópico Kafka, em JSON, por um destino de
-`kafkaTargets:` nomeado em `replication.targets`: ver
-[Publicação em Kafka](docs/replication.md#publicação-em-kafka). O snapshot de
-um destino Kafka pode ser pedido com o servidor no ar, por
-`nishidb replication resync --server <host:porta> --dataset <nome> --destination <destino>`
-(rota ADMIN `POST /v1/replication/resync`), e o estado de cada destino é
-consultável por SQL em `_meta.replication`.
-
 Engine de materialização e consulta para fluxos de eventos JSON parciais.
 
 Recebe eventos, mantém o **estado corrente** de cada entidade (merge por campo,
@@ -21,20 +11,31 @@ Medido com **8 milhões de entidades**: 483 MiB de RSS de pico (limite: 1 GiB),
 caminho SQL completo. O heap Go da ingestão fica em **396 KiB com 8 milhões de
 rows**, contra 389 KiB com 1 milhão — 8× de dados, 1,9% de heap a mais.
 
+O fluxo master/follower com lotes configuráveis e resync automático está
+documentado em [`docs/replication.md`](docs/replication.md). O master também
+pode publicar o mesmo feed num tópico Kafka, em JSON, por um destino de
+`kafkaTargets:` nomeado em `replication.targets`: ver
+[Publicação em Kafka](docs/replication.md#publicação-em-kafka). O snapshot de
+um destino Kafka pode ser pedido com o servidor no ar, por
+`nishidb replication resync --server <host:porta> --dataset <nome> --destination <destino>`
+(rota ADMIN `POST /v1/replication/resync`), e o estado de cada destino é
+consultável por SQL em `_meta.replication`.
+
 ## Releases e driver JDBC
 
 As [GitHub Releases](https://github.com/nishisan-dev/nishidb/releases) oferecem
-`nishidb-vx.y.z-linux-amd64` e `nishidb-jdbc.jar` juntos. O driver exige Java 21
+`nishidb-vx.y.z-linux-amd64`, `nishidb-vx.y.z-linux-arm64`, os pacotes
+`.deb` para as duas arquiteturas e `nishidb-jdbc.jar` juntos. O driver exige Java 21
 ou superior e não precisa de dependências adicionais no classpath. Sua versão
-interna acompanha a release: em `v0.8.1`, o JAR e os metadados JDBC informam
-`0.8.1`.
+interna acompanha a release: em `v0.15.0`, o JAR e os metadados JDBC informam
+`0.15.0`.
 
-Para publicar, crie uma tag no commit desejado **que já contenha o novo workflow**
-e envie essa tag ao GitHub, por exemplo:
+Para publicar uma próxima versão, crie uma tag no commit desejado e envie
+essa tag ao GitHub. Exemplo para uma futura versão `0.15.1`:
 
 ```sh
-git tag -a v0.8.1 -m "NishiDB 0.8.1"
-git push origin v0.8.1
+git tag -a v0.15.1 -m "NishiDB 0.15.1"
+git push origin v0.15.1
 ```
 
 Use uma tag nova no formato exato `vx.y.z`, sem zeros à esquerda ou sufixos.
@@ -46,8 +47,9 @@ para essa automação, use um token de GitHub App ou pessoal. Esses limites
 são descritos na [documentação de eventos do GitHub](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push).
 
 O workflow **Release** executa a suíte Go e os testes JDBC contra o servidor
-real, compila ambos os artefatos e os anexa a um rascunho com notas geradas
-automaticamente. A release só é publicada após confirmar os dois uploads.
+real, compila os binários, os pacotes `.deb` e o driver, e os anexa a um
+rascunho com notas geradas automaticamente. A release só é publicada após
+confirmar o envio de todos os anexos.
 Publicação e limpeza compartilham uma fila entre todas as tags (até 100
 execuções pendentes, limite do GitHub).
 
@@ -69,13 +71,41 @@ Release**.
 Para compilar ou testar o JDBC localmente com uma versão específica:
 
 ```sh
-make test-jdbc JDBC_VERSION=0.8.1
-make build-jdbc JDBC_VERSION=0.8.1
+make test-jdbc JDBC_VERSION=0.15.0
+make build-jdbc JDBC_VERSION=0.15.0
 ```
 
 Sem `JDBC_VERSION`, o Maven usa `0.1.0-SNAPSHOT`. O resultado continua em
 `clients/jdbc/target/nishidb-jdbc.jar`. A distribuição é pela GitHub Release;
 não há publicação em repositório Maven.
+
+### Upgrade para a v0.15.0
+
+A v0.15.0 acrescenta o feed de replicação em disco e a retomada do publicador
+Kafka por checkpoint após encerramento limpo. Antes de trocar o binário:
+
+- Confira `replication.maxBufferedBytes`: em todo master habilitado, o mínimo
+  passou de 2 para **3 × `maxBatchBytes`**, mesmo sem destino Kafka. Uma
+  configuração abaixo desse piso impede a subida.
+- Reserve espaço para `replication.maxDiskBytes`, com padrão de **2 GiB por
+  master**, e inclua `<dataset>/replication/` no backup junto dos dados.
+- Declare um broker por item de `bootstrapServers`; itens com vírgula são
+  recusados na ingestão, nos destinos globais e na entrega de alarmes.
+- Após uma queda do master, espere uma geração nova e um snapshot completo.
+  A retomada sem snapshot depende do encerramento limpo e das verificações do
+  feed, do checkpoint e do tópico. O reinício do próprio follower HTTP ainda
+  exige snapshot.
+
+Esta versão também corrige a perda da alteração na fronteira de um lote
+fechado por tamanho na v0.14.x. O procedimento completo, os limites e as
+mudanças de contrato estão em [Replicação](docs/replication.md).
+
+Correções recentes já incorporadas incluem a
+[redução de leituras do histórico por `_writtenAt`](#consultas-por-período-de-escrita),
+a [emissão de séries alinhada a `every`, com espera por vaga no Kafka](docs/operacao-series-kafka.md),
+a [entrega durável de alarmes para Kafka](docs/operacao-alarmes-kafka.md), o
+[TTL ancorado](docs/aceite-ttl-ancorado.md) e os
+[ajustes de prazo do driver JDBC](#clients).
 
 ## Estado
 
@@ -196,7 +226,7 @@ está na seção da janela de indexação, abaixo.
 ## Instalação
 
 ```bash
-go build -o nishidb ./cmd/nishidb
+make build
 ```
 
 Binário único, sem dependência externa em runtime. Requer Go 1.25+ e Linux
@@ -2853,6 +2883,13 @@ Detalhes de cada um em [clients/python/README.md](clients/python/README.md).
 
 - [Arquitetura](docs/architecture.md) — como o sistema funciona, com os números.
 - [Client Python](clients/python/README.md) — DB-API 2.0, tipos, erros e limites.
+- [Replicação](docs/replication.md) — feed em disco, master/follower, publicação
+  Kafka, checkpoints, resync e compatibilidade da v0.15.0.
+- [Ingestão Kafka](docs/operacao-kafka.md) — consumo, posição e diagnóstico.
+- [Séries para Kafka](docs/operacao-series-kafka.md) — cadência, limites e entrega.
+- [Alarmes para Kafka](docs/operacao-alarmes-kafka.md) e
+  [webhooks](docs/operacao-webhook.md) — fila durável e diagnóstico.
+- [Métricas](docs/metricas.md) — séries publicadas para monitoramento.
 - [Aceite do M1](docs/aceite-m1.md) — os 25 critérios, item a item.
 - [Aceite do M4](docs/aceite-m4.md) — a compaction em regime, com a escala e o
   ambiente da rodada declarados.
