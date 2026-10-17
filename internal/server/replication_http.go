@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/replication"
+	"github.com/nishisan-dev/nishidb/internal/replicationkafka"
 )
 
 // handleReplicationCursor is the handshake used by a follower before it
@@ -93,6 +95,81 @@ func (s *Server) handleReplicationSnapshot(w http.ResponseWriter, r *http.Reques
 		tables = append(tables, replication.SnapshotTable{Name: source.nome, History: source.ehHistorico, Source: source.st})
 	}
 	s.streamReplicationSnapshot(w, r, d.nome, d.replication, tables, replicationSnapshotChunkRows)
+}
+
+// handleReplicationResync pede o snapshot sob demanda de um destino Kafka do
+// dataset: POST /v1/replication/resync?dataset=<d>&destination=<t>, ADMIN.
+// É uma rota própria, e não um método a mais no GET /v1/replication/snapshot
+// dos followers: aquela exporta o snapshot pela própria conexão, esta só pede
+// ao publicador que o publique no tópico.
+//
+// Responde 202 só DEPOIS de o pedido estar gravado no `<destino>.resync`
+// (Publisher.RequestSnapshot): o pedido sobrevive a um reinício que aconteça
+// antes do snapshot, e o operador que recebeu o 202 não precisa pedir de
+// novo. A gravação que falha responde 500, e nada ficou pedido.
+//
+// O 202 sai também com o publicador parado (blocked, failed ou stopped): o
+// pedido fica gravado e a próxima subida o atende. O corpo leva o estado do
+// publicador, e é por ele que o operador sabe se o `reset` vem agora.
+//
+// Dataset sem feed e destino que não é um `replication.targets` dele saem 404
+// com UNKNOWN_DATASET, o código que as outras rotas de replicação já usam
+// para "não há replicação aqui": o protocolo não tem um código genérico de
+// recurso inexistente, e um código novo obrigaria o SQLSTATE no driver JDBC e
+// a exceção no client Python para uma rota que nenhum dos dois chama. As duas
+// recusas se distinguem pela mensagem.
+func (s *Server) handleReplicationResync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.rejectSimples(w, r, http.MethodPost)
+		return
+	}
+	query := r.URL.Query()
+	name, destination := query.Get("dataset"), query.Get("destination")
+	if name == "" || destination == "" {
+		s.reject(w, r, http.StatusBadRequest, "", protocol.ErrorDetail{Code: protocol.CodeBadRequest, Message: "dataset and destination are required"})
+		return
+	}
+	d, ok := s.byNome[name]
+	if !ok || d.replication == nil {
+		s.reject(w, r, http.StatusNotFound, "", protocol.ErrorDetail{Code: protocol.CodeUnknownDataset, Message: "replication is not enabled for this dataset"})
+		return
+	}
+	p := d.publisherOf(destination)
+	if p == nil {
+		s.reject(w, r, http.StatusNotFound, d.nome, protocol.ErrorDetail{
+			Code:    protocol.CodeUnknownDataset,
+			Message: fmt.Sprintf("destination %q is not a Kafka replication target of dataset %q", destination, d.nome),
+		})
+		return
+	}
+	// O estado é lido ANTES do pedido: o pedido acorda o laço, que pode
+	// passar a snapshotting a qualquer instante, e o que o operador precisa é
+	// o estado do publicador que recebeu o pedido.
+	state := p.Stats().State
+	if err := p.RequestSnapshot(); err != nil {
+		s.reject(w, r, http.StatusInternalServerError, d.nome, protocol.ErrorDetail{
+			Code:    protocol.CodeInternal,
+			Message: "the snapshot request could not be recorded: " + err.Error(),
+		})
+		return
+	}
+	resp := protocol.ReplicationResyncResponse{Dataset: d.nome, Destination: destination, Requested: true, State: state}
+	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
+	w.WriteHeader(http.StatusAccepted)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.log.Warn("replication.resync.response_failed", "the snapshot request was recorded, but the response could not be written", "dataset", d.nome, "error", err.Error())
+	}
+}
+
+// publisherOf devolve o publicador do destino, ou nil se o destino não é um
+// `replication.targets` do dataset.
+func (d *dataset) publisherOf(destination string) *replicationkafka.Publisher {
+	for _, p := range d.publishers {
+		if p.Stats().Destination == destination {
+			return p
+		}
+	}
+	return nil
 }
 
 // shuttingDown diz se o servidor está encerrando (o ctx do Run cancelado). Sem

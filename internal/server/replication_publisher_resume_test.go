@@ -185,6 +185,11 @@ func TestReplicationPublisherResumesAcrossCleanServerRestart(t *testing.T) {
 			t.Errorf("a vida nova contou snapshot %s=%d", reason, n)
 		}
 	}
+	// O /v1/stats publica o ponto do .ckpt de onde a vida nova retomou: o
+	// encerramento limpo gravou a última sequence da primeira vida.
+	if d.CheckpointCursor < resumeCursor {
+		t.Errorf("checkpointCursor = %d no /v1/stats, quero ao menos %d (o .ckpt gravado no encerramento)", d.CheckpointCursor, resumeCursor)
+	}
 }
 
 // A impressão da renderização cobre só o DECLARADO: a coluna descoberta em

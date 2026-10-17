@@ -13,8 +13,8 @@ import (
 )
 
 // engineWithCountersAndMeta monta o motor do harness (dataset `radius_sessions`
-// no schema `telecom`) com dois contadores e as duas tabelas de meta que hoje
-// são registradas — `_meta.counters` e `_meta.kafka`. É o retrato do que um
+// no schema `telecom`) com dois contadores e as três tabelas de meta que hoje
+// são registradas — `_meta.counters`, `_meta.kafka` e `_meta.replication`. É o retrato do que um
 // servidor de verdade publica, que é o que o catálogo tem de descrever.
 func engineWithCountersAndMeta(t *testing.T) *query.Engine {
 	t.Helper()
@@ -23,6 +23,7 @@ func engineWithCountersAndMeta(t *testing.T) *query.Engine {
 	tableVirtualOfTest(t, h.engine, dataset, schema.CountersNamespace, "por_pon")
 	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "counters")
 	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "kafka")
+	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "replication")
 	return h.engine
 }
 
@@ -78,6 +79,7 @@ func TestCatalogoListaABaseOsContadoresEAsTabelasDeMeta(t *testing.T) {
 		"VIEW:_meta.counters",
 		"VIEW:_meta.fields",
 		"VIEW:_meta.kafka",
+		"VIEW:_meta.replication",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("catálogo = %v, quero %v", got, want)
@@ -174,12 +176,13 @@ func TestCatalogoPublicaONamespaceQueAbreAView(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"telecom." + dataset:         "",
-		"telecom.por_olt":            schema.CountersNamespace,
-		"telecom.por_pon":            schema.CountersNamespace,
-		meta.Namespace + ".counters": meta.Namespace,
-		meta.Namespace + ".fields":   meta.Namespace,
-		meta.Namespace + ".kafka":    meta.Namespace,
+		"telecom." + dataset:            "",
+		"telecom.por_olt":               schema.CountersNamespace,
+		"telecom.por_pon":               schema.CountersNamespace,
+		meta.Namespace + ".counters":    meta.Namespace,
+		meta.Namespace + ".fields":      meta.Namespace,
+		meta.Namespace + ".kafka":       meta.Namespace,
+		meta.Namespace + ".replication": meta.Namespace,
 	}
 	got := make(map[string]string, len(tables))
 	for _, tb := range tables {

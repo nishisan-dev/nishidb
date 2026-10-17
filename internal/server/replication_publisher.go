@@ -371,6 +371,26 @@ func (s *Server) closePublishers() {
 	wg.Wait()
 }
 
+// feedStatus é o retrato do feed do dataset para a `_meta.replication`;
+// ok=false no dataset sem feed (seguidor ou replicação desligada).
+func (d *dataset) feedStatus() (replication.Status, bool) {
+	if d.replication == nil {
+		return replication.Status{}, false
+	}
+	return d.replication.Status(), true
+}
+
+// publisherStats é o retrato de cada publicador do dataset, na ordem de
+// `replication.targets`, para a `_meta.replication`. Lista vazia no dataset
+// sem destino Kafka.
+func (d *dataset) publisherStats() []replicationkafka.Stats {
+	out := make([]replicationkafka.Stats, 0, len(d.publishers))
+	for _, p := range d.publishers {
+		out = append(out, p.Stats())
+	}
+	return out
+}
+
 // replicationStats é o retrato do feed e dos publicadores de um dataset, ou
 // nil no dataset sem feed. É a fonte ÚNICA do bloco `replication` do
 // /v1/stats e das séries nishidb_replication_*: dois caminhos lendo o mesmo
@@ -392,6 +412,9 @@ func replicationStats(d *dataset) *protocol.ReplicationStats {
 			Flushes:         st.Flushes,
 			LastFlushReason: st.LastFlushReason,
 			Invalidations:   st.Invalidations,
+			DiskBytes:       st.DiskBytes,
+			DiskSegments:    st.DiskSegments,
+			DiskErrors:      st.DiskErrors,
 		},
 		Delivery: make([]protocol.ReplicationDeliveryStats, 0, len(d.publishers)),
 	}
@@ -408,6 +431,8 @@ func replicationStats(d *dataset) *protocol.ReplicationStats {
 			Errors:               ps.Errors,
 			LastSuccessTimestamp: ps.LastSuccessTimestamp,
 			LastError:            ps.LastError,
+			LagBytes:             ps.LagBytes,
+			CheckpointCursor:     ps.CheckpointCursor,
 		})
 	}
 	return out

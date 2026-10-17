@@ -155,6 +155,13 @@ func TestReplicationPublisherPublishesSnapshotAndTailThroughTheServer(t *testing
 	born := []string{
 		metrics.MetReplicationKafkaDeliveredTotal + `{` + labels + `} 0`,
 		metrics.MetReplicationFeedInvalidationsTotal + `{dataset="events"} 0`,
+		// As do feed em disco e do checkpoint também: o feed recém-aberto
+		// ainda não gravou segmento, e o destino ainda não gravou .ckpt.
+		metrics.MetReplicationFeedDiskBytes + `{dataset="events"} 0`,
+		metrics.MetReplicationFeedDiskSegments + `{dataset="events"} 0`,
+		metrics.MetReplicationFeedDiskErrorsTotal + `{dataset="events"} 0`,
+		metrics.MetReplicationKafkaLagBytes + `{` + labels + `} 0`,
+		metrics.MetReplicationKafkaCheckpointSequence + `{` + labels + `} 0`,
 	}
 	// As listas fechadas são lidas do publicador, e não escritas aqui: um
 	// motivo novo tem de nascer em zero sem que ninguém lembre deste teste.
@@ -320,7 +327,16 @@ func TestReplicationPublisherPublishesSnapshotAndTailThroughTheServer(t *testing
 		exposition := srv.MetricsExpositionForTest()
 		delivered := fmt.Sprintf("%s{%s} %d\n", metrics.MetReplicationKafkaDeliveredTotal, labels, d.Delivered)
 		input := fmt.Sprintf("%s{dataset=\"events\"} %d\n", metrics.MetReplicationFeedInputEntriesTotal, rep.Feed.InputEntries)
+		// O feed em disco e o checkpoint pelas duas portas: o tail gravou
+		// segmento, e o número do /metrics é o do /v1/stats.
+		disk := fmt.Sprintf("%s{dataset=\"events\"} %d\n", metrics.MetReplicationFeedDiskBytes, rep.Feed.DiskBytes)
+		segments := fmt.Sprintf("%s{dataset=\"events\"} %d\n", metrics.MetReplicationFeedDiskSegments, rep.Feed.DiskSegments)
+		checkpoint := fmt.Sprintf("%s{%s} %d\n", metrics.MetReplicationKafkaCheckpointSequence, labels, d.CheckpointCursor)
+		lagBytes := fmt.Sprintf("%s{%s} %d\n", metrics.MetReplicationKafkaLagBytes, labels, d.LagBytes)
 		if d.State == "following" && d.LagSequences == 0 && rep.Feed.InputEntries == 4 &&
+			rep.Feed.DiskBytes > 0 && rep.Feed.DiskSegments > 0 && d.LagBytes == 0 &&
+			strings.Contains(exposition, disk) && strings.Contains(exposition, segments) &&
+			strings.Contains(exposition, checkpoint) && strings.Contains(exposition, lagBytes) &&
 			strings.Contains(exposition, delivered) && strings.Contains(exposition, input) &&
 			strings.Contains(exposition, metrics.MetReplicationKafkaState+`{`+labels+`,state="following"} 1`) {
 			if d.Delivered == 0 || d.LastSuccessTimestamp == 0 || d.Epoch != epoch {

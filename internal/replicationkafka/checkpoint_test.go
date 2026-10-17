@@ -646,3 +646,32 @@ func TestCheckpointDirectoryRetrySyncsLevelsLeftPendingByAFailedSync(t *testing.
 		t.Errorf("terceira gravação sincronizou %q; quer nada", *synced)
 	}
 }
+
+// O leitor exportado da `_meta.replication` offline devolve o ponto
+// confirmado e o último snapshot_end do .ckpt gravado, e o mesmo tri-estado
+// do loadCheckpoint: ausente é ok=false sem erro, ilegível é erro.
+func TestLoadCheckpointRowReadsTheStoredCheckpoint(t *testing.T) {
+	dir := CheckpointDir(t.TempDir())
+	c := sampleCheckpoint()
+	ckpt, _ := checkpointFiles(dir, "cdc")
+	if err := storeCheckpoint(ckpt, c); err != nil {
+		t.Fatal(err)
+	}
+	row, ok, err := LoadCheckpointRow(dir, "cdc")
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	want := CheckpointRow{Epoch: "aaaa0000bbbb1111", Cursor: 5000, LastSnapshotAt: time.Unix(1790000009, 123000000).UTC()}
+	if row != want {
+		t.Fatalf("linha = %+v, quero %+v", row, want)
+	}
+	if _, ok, err := LoadCheckpointRow(dir, "never"); ok || err != nil {
+		t.Fatalf("destino sem .ckpt: ok=%v err=%v; quero ausente sem erro", ok, err)
+	}
+	if err := os.WriteFile(ckpt, []byte("NDBKlixo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := LoadCheckpointRow(dir, "cdc"); ok || !errors.Is(err, errCorruptCheckpoint) {
+		t.Fatalf(".ckpt ilegível: ok=%v err=%v; quero o erro de arquivo corrompido", ok, err)
+	}
+}

@@ -79,6 +79,7 @@ USO
   nishidb users password (--config <nishidb.yaml> | --server <host:porta>) --name <nome> --new-password-file <arquivo|->
   nishidb users role     (--config <nishidb.yaml> | --server <host:porta>) --name <nome> --role READ|ADMIN
   nishidb users delete   (--config <nishidb.yaml> | --server <host:porta>) --name <nome>
+  nishidb replication resync --server <host:porta> --dataset <nome> --destination <destino>
   nishidb --version | version
 
 INGEST
@@ -169,7 +170,16 @@ USERS
   servidor no ar) e é o caminho para recuperar a senha de um ADMIN perdida;
   --server usa as rotas /v1/users/* do servidor no ar.
 
-CREDENCIAL E TLS (query --server, status, datasets, inspect, compact, checkpoint, counters --server, users --server)
+REPLICATION
+  resync                 pede o snapshot sob demanda de UM destino Kafka do
+                         master (rota ADMIN POST /v1/replication/resync). O
+                         pedido fica gravado antes da resposta e sobrevive a
+                         um reinício; o publicador o atende com um reset de
+                         motivo requested. A saída confirma o PEDIDO, não o
+                         fim do snapshot: o andamento está em
+                         SELECT * FROM _meta.replication.
+
+CREDENCIAL E TLS (query --server, status, datasets, inspect, compact, checkpoint, counters --server, users --server, replication resync)
   --user <nome>          usuário HTTP Basic (§74-77). A senha NUNCA é uma
                          flag — apareceria em "ps" para qualquer usuário da
                          máquina — e vem de exatamente UMA das duas fontes
@@ -224,6 +234,8 @@ func Run(args []string, amb Context) int {
 		return runCounters(args[1:], amb)
 	case "users":
 		return runUsers(args[1:], amb)
+	case "replication":
+		return runReplication(args[1:], amb)
 	case "--version", "version":
 		_, _ = fmt.Fprintln(amb.Stdout, buildinfo.String())
 		return ExitOK

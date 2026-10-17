@@ -8,7 +8,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
-// harnessWithMetaTables monta À MÃO um catálogo — a base, um contador e duas
+// harnessWithMetaTables monta À MÃO um catálogo — a base, um contador e três
 // tabelas de meta — e registra a `_meta.tables`.
 //
 // NÃO é o retrato completo do que um servidor publica: o servidor registra
@@ -23,7 +23,7 @@ import (
 // metakafka.Register). As linhas são montadas a cada consulta, então a ordem
 // não muda a resposta; registrá-la primeiro é o que faz o teste discriminar
 // uma implementação que congelasse o catálogo no registro — ela sairia sem as
-// três tabelas seguintes E sem si mesma.
+// quatro tabelas seguintes E sem si mesma.
 func harnessWithMetaTables(t *testing.T) *harness {
 	t.Helper()
 	h := newHarness(t)
@@ -33,6 +33,7 @@ func harnessWithMetaTables(t *testing.T) *harness {
 	tableVirtualOfTest(t, h.engine, dataset, schema.CountersNamespace, "por_olt")
 	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "counters")
 	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "kafka")
+	tableVirtualOfTest(t, h.engine, dataset, meta.Namespace, "replication")
 	return h
 }
 
@@ -48,13 +49,13 @@ func TestMetaTablesListaOCatalogo(t *testing.T) {
 	h := harnessWithMetaTables(t)
 	rows := h.consultaOK("SELECT id, kind FROM _meta.tables ORDER BY id")
 	got := strings.Join(chaves(rows, "id"), ",")
-	want := "_counters.por_olt,_meta.counters,_meta.fields,_meta.kafka,_meta.tables,radius_sessions"
+	want := "_counters.por_olt,_meta.counters,_meta.fields,_meta.kafka,_meta.replication,_meta.tables,radius_sessions"
 	if got != want {
 		t.Fatalf("id = %s, quero %s", got, want)
 	}
 	// A base é a ÚNICA TABLE; todo o resto é VIEW. Com o kind fixo em VIEW
 	// para todas, a comparação abaixo fica vermelha.
-	if got := strings.Join(chaves(rows, "kind"), ","); got != "VIEW,VIEW,VIEW,VIEW,VIEW,TABLE" {
+	if got := strings.Join(chaves(rows, "kind"), ","); got != "VIEW,VIEW,VIEW,VIEW,VIEW,VIEW,TABLE" {
 		t.Fatalf("kind = %s (só a tabela base é TABLE)", got)
 	}
 }
@@ -88,7 +89,7 @@ func TestMetaTablesPublicaOSchemaDeCadaTabela(t *testing.T) {
 	h := harnessWithMetaTables(t)
 	rows := h.consultaOK("SELECT id, schema FROM _meta.tables ORDER BY id")
 	got := strings.Join(chaves(rows, "schema"), ",")
-	want := "telecom,_meta,_meta,_meta,_meta,telecom"
+	want := "telecom,_meta,_meta,_meta,_meta,_meta,telecom"
 	if got != want {
 		t.Fatalf("schema = %s, quero %s (o contador e a base em telecom; as de meta em _meta)", got, want)
 	}
@@ -105,13 +106,13 @@ func TestMetaTablesPublicaOSchemaDeCadaTabela(t *testing.T) {
 // ATALHO — o que abre a tabela no dataset da requisição —, e a base não tem
 // atalho com prefixo: ausência, que neste produto é NULL. Sem ele o cliente não
 // teria como reconstruir `_counters.por_olt` a partir de `telecom` e `por_olt`.
-// O par `schema.tabela` abre as seis, base inclusive, e sai nas colunas
+// O par `schema.tabela` abre as sete, base inclusive, e sai nas colunas
 // `schema` e `name`.
 func TestMetaTablesNamespaceEhNuloSoNaTabelaBase(t *testing.T) {
 	h := harnessWithMetaTables(t)
 	rows := h.consultaOK("SELECT id, namespace FROM _meta.tables ORDER BY id")
 	got := strings.Join(chaves(rows, "namespace"), ",")
-	want := "_counters,_meta,_meta,_meta,_meta,<null>"
+	want := "_counters,_meta,_meta,_meta,_meta,_meta,<null>"
 	if got != want {
 		t.Fatalf("namespace = %s, quero %s", got, want)
 	}

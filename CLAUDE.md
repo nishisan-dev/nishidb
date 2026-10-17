@@ -123,6 +123,11 @@ Pacotes que estruturam o todo:
 - `internal/metakafka` — a tabela virtual `_meta.kafka`. Mora fora de
   `internal/kafka` e de `internal/query` porque precisa dos dois, e nenhum dos
   dois pode importar o outro (mesmo argumento de `internal/counters`).
+- `internal/metareplication` — a tabela virtual `_meta.replication`, uma linha
+  por destino Kafka do feed. Mesmo argumento: precisa do retrato de
+  `internal/replicationkafka`/`internal/replication` e do Store virtual de
+  `internal/query`. No servidor lê o publicador vivo; no `query --config`, o
+  `.ckpt` de cada destino e o `state` do feed fechado limpo.
 - `internal/server` + `internal/protocol` — protocolo remoto `/v1/*`.
   `protocolo` é pacote próprio porque tem quatro falantes (servidor, CLI remoto,
   JDBC, Python) que não podem redeclarar o formato.
@@ -185,7 +190,7 @@ Pacotes que estruturam o todo:
 - **Exit codes são contrato** (0–8, precedência `4 > 3 > 7 > 6 > 1`; tabela no
   README). Erro novo precisa de sentinela + `errors.Is` em `errorCode`, senão
   cai no default 1.
-- **Rota HTTP nova entra por `rt.registra(padrao, papel, handler)`**
+- **Rota HTTP nova entra por `rt.register(pattern, role, handler)`**
   (READ/ADMIN, fail-closed). Códigos de erro do wire são estáveis; código novo
   exige SQLSTATE no driver JDBC e exceção mapeada no client Python (gate cobra).
 - **SQL v1**: SELECT/WHERE/LIKE/ORDER BY (até 16 chaves; operador bloqueante com

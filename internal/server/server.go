@@ -38,6 +38,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
+	"github.com/nishisan-dev/nishidb/internal/metareplication"
 	"github.com/nishisan-dev/nishidb/internal/metausers"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
@@ -573,7 +574,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		// O Open do feed SÓ LÊ (o `state` e, se ele marca fechamento limpo, os
 		// segmentos); quem decide a geração e grava é o Resume, no fim desta
 		// abertura, com a impressão dos Stores já recuperados.
-		feed, err = replication.Open(filepath.Join(dir, "replication", "feed"), replication.Options{
+		feed, err = replication.Open(replication.FeedDir(dir), replication.Options{
 			Interval:         spec.Replication.FlushInterval,
 			MaxMessages:      spec.Replication.MaxMessages,
 			MaxBatchBytes:    spec.Replication.MaxBatchBytes,
@@ -747,6 +748,20 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		Duraveis:   st.SourceOffsets,
 		State:      func() (string, string) { return stateOfIngestion(d) },
 		Vigia:      d.vigiaCorrente,
+	}); err != nil {
+		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
+	// `_meta.replication` entra pelo mesmo motivo, e SEMPRE: o dataset sem
+	// replicação responde a tabela vazia. As duas fontes são closures sobre d
+	// porque os publicadores só nascem em openReplicationPublishers, depois de
+	// todos os datasets abertos — capturá-los aqui guardaria a lista vazia.
+	// Sem Checkpoints: o publicador vivo já traz o que o .ckpt diria.
+	//
+	// A irmã não a recebe, como não recebe a `_meta.kafka`: o feed e os
+	// publicadores são do base.
+	if err := metareplication.Register(s.eng, spec.Name, metareplication.Source{
+		Feed:         d.feedStatus,
+		Destinations: d.publisherStats,
 	}); err != nil {
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}

@@ -143,7 +143,9 @@ var ErrInvalidPublisher = errors.New("replicationkafka: invalid publisher config
 type Stats struct {
 	// Destination é o nome do destino em `kafkaTargets:`.
 	Destination string `json:"destination"`
-	State       string `json:"state"`
+	// Topic é o tópico do destino, como a configuração o declara.
+	Topic string `json:"topic"`
+	State string `json:"state"`
 	// Epoch e Cursor são o ponto do feed até onde tudo foi confirmado pelo
 	// broker. Durante um snapshot, Cursor continua o do último ponto
 	// confirmado; ele salta para o cursor do reset quando o snapshot termina.
@@ -173,6 +175,10 @@ type Stats struct {
 	// atrás de Cursor (a gravação no tail é no máximo uma por segundo), e
 	// durante um snapshot continua o do último ponto confirmado.
 	CheckpointCursor uint64 `json:"checkpointCursor"`
+	// CheckpointFound diz se há um .ckpt deste destino: lido na subida ou
+	// gravado nesta vida. Falso até lá (inclusive antes do Start), e aí
+	// CheckpointCursor zero não é um ponto gravado, é ausência.
+	CheckpointFound bool `json:"checkpointFound"`
 	// LagBytes é o atraso em bytes de quadro do feed em disco: a posição do
 	// fim do último lote fechado menos a do cursor (durante o snapshot, a do
 	// cursor do reset). Zero quando o feed já está noutra geração, ou quando
@@ -458,6 +464,7 @@ func New(o Options) (*Publisher, error) {
 	}
 	p.stats = Stats{
 		Destination: t.Name,
+		Topic:       t.Topic,
 		State:       StateSnapshotting,
 		Snapshots:   make(map[string]uint64, len(snapshotReasons)),
 		Errors:      make(map[string]uint64, len(errorReasons)),

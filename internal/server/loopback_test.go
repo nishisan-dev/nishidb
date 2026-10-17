@@ -154,6 +154,30 @@ func TestLoopbackRecusaRotaAdminMasRotaReadContinuaAnonima(t *testing.T) {
 		}
 	})
 
+	// A rota do snapshot sob demanda é ADMIN: no loopback é 403 antes de o
+	// handler rodar. Pareado com o listener principal (sem autenticação),
+	// onde o MESMO pedido chega ao handler e sai 404 (o "d" não replica): o
+	// 403 é do papel da rota, e não de uma rota que recusasse todo mundo.
+	t.Run("resync via loopback eh 403", func(t *testing.T) {
+		const path = "/v1/replication/resync?dataset=d&destination=cdc"
+		resp, err := http.Post("http://"+srv.EnderecoLoopback()+path, "", nil)
+		if err != nil {
+			t.Fatalf("POST %s no loopback: %v", path, err)
+		}
+		status := resp.StatusCode
+		if f := failOf(t, resp); status != http.StatusForbidden || f.Code != "FORBIDDEN" {
+			t.Fatalf("loopback: status %d, código %q; quer 403 FORBIDDEN", status, f.Code)
+		}
+		main, err := http.Post("http://"+srv.Endereco()+path, "", nil)
+		if err != nil {
+			t.Fatalf("POST %s no listener principal: %v", path, err)
+		}
+		status = main.StatusCode
+		if f := failOf(t, main); status != http.StatusNotFound || f.Code != "UNKNOWN_DATASET" {
+			t.Fatalf("listener principal: status %d, código %q; quer 404 UNKNOWN_DATASET", status, f.Code)
+		}
+	})
+
 	t.Run("stats via loopback continua 200 sem credencial", func(t *testing.T) {
 		resp, err := http.Get("http://" + srv.EnderecoLoopback() + "/v1/stats")
 		if err != nil {

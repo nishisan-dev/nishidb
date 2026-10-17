@@ -1567,3 +1567,38 @@ func TestRewindRulerIsClearedByTheReset(t *testing.T) {
 		}
 	}
 }
+
+// O retrato diz se há .ckpt: falso antes de o publicador ler o arquivo (o
+// Stats de um publicador que nem começou), verdadeiro logo depois da leitura
+// da subida, ANTES de qualquer regravação — a gravação do .ckpt falhando (a
+// régua da conferência de rewind é gravada antes de tudo) segura o publicador
+// entre as duas, e só a leitura pode ter marcado o retrato. É o que deixa a
+// `_meta.replication` publicar NULL, e não zero, no destino sem .ckpt.
+func TestStatsReportsTheLoadedCheckpointBeforeItIsRewritten(t *testing.T) {
+	h, _ := liveHarness(t, harnessOpts{partitions: 3})
+	h.stop(true)
+	stored, ok, err := replicationkafka.LoadCheckpoint(h.checkpointPath())
+	if err != nil || !ok || stored.Cursor == 0 {
+		t.Fatalf("o .ckpt da primeira vida: ok=%v err=%v cursor=%d", ok, err, stored.Cursor)
+	}
+	var failing atomic.Bool
+	failing.Store(true)
+	h.o.publisher = func(o *replicationkafka.Options) {
+		replicationkafka.WithCheckpointFault(o, func() error {
+			if failing.Load() {
+				return errors.New("injected checkpoint write failure")
+			}
+			return nil
+		})
+	}
+	h.open()
+	if s := h.pub.Stats(); s.CheckpointFound || s.CheckpointCursor != 0 {
+		t.Fatalf("antes do Start: CheckpointFound=%v CheckpointCursor=%d; quero falso e zero", s.CheckpointFound, s.CheckpointCursor)
+	}
+	h.pub.Start()
+	waitFor(t, "gravação do .ckpt falhando", func() bool { return h.pub.Stats().Errors["checkpoint_write"] >= 1 })
+	if s := h.pub.Stats(); !s.CheckpointFound || s.CheckpointCursor != stored.Cursor {
+		t.Fatalf("depois da leitura: CheckpointFound=%v CheckpointCursor=%d; quero verdadeiro e %d", s.CheckpointFound, s.CheckpointCursor, stored.Cursor)
+	}
+	failing.Store(false)
+}

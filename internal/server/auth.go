@@ -158,6 +158,9 @@ func (s *Server) buildMux() *router {
 	rt.register("/v1/replication/cursor", config.RoleAdmin, s.handleReplicationCursor)
 	rt.register("/v1/replication/batch", config.RoleAdmin, s.handleReplicationBatch)
 	rt.register("/v1/replication/snapshot", config.RoleAdmin, s.handleReplicationSnapshot)
+	// O snapshot sob demanda de um destino Kafka é ADMIN como as outras três:
+	// cada pedido republica o dataset inteiro no tópico.
+	rt.register("/v1/replication/resync", config.RoleAdmin, s.handleReplicationResync)
 	return rt
 }
 

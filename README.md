@@ -4,7 +4,11 @@ O fluxo master/follower com lotes configuráveis e resync automático está
 documentado em [`docs/replication.md`](docs/replication.md). O master também
 pode publicar o mesmo feed num tópico Kafka, em JSON, por um destino de
 `kafkaTargets:` nomeado em `replication.targets`: ver
-[Publicação em Kafka](docs/replication.md#publicação-em-kafka).
+[Publicação em Kafka](docs/replication.md#publicação-em-kafka). O snapshot de
+um destino Kafka pode ser pedido com o servidor no ar, por
+`nishidb replication resync --server <host:porta> --dataset <nome> --destination <destino>`
+(rota ADMIN `POST /v1/replication/resync`), e o estado de cada destino é
+consultável por SQL em `_meta.replication`.
 
 Engine de materialização e consulta para fluxos de eventos JSON parciais.
 
@@ -2402,6 +2406,7 @@ SELECT name FROM _meta.fields WHERE parent = 'persistent'
 SELECT name, rows, total, groupBy, condition, groups, refused FROM _meta.counters
 SELECT id, windowMs, columns, groups, sampledAt FROM _meta.counter_metrics
 SELECT partition, appliedOffset, highWatermark, lag, state FROM _meta.kafka ORDER BY partition
+SELECT id, state, cursor, checkpointCursor, lagSequences, lagBytes, lastResetReason FROM _meta.replication
 ```
 
 `_meta.tables` lista **toda tabela consultável do dataset**, a começar por ela
@@ -2473,6 +2478,19 @@ são NULL quando a marca d'água do broker venceu, porque um zero diria "está e
 dia" a quem perdeu o broker. No `nishidb query --config`, com o servidor
 parado, saem a identidade do fluxo e o offset durável, e o `state` é NULL —
 aquele processo não observa ingestão nenhuma.
+
+`_meta.replication` responde a publicação do feed de replicação nos destinos
+Kafka do master, **uma linha por destino** de `replication.targets`: estado do
+publicador, geração e cursor confirmados, o cursor do último checkpoint
+gravado, os atrasos em sequências e em bytes do feed em disco, o tamanho do
+feed (em disco e em memória) e o histórico (último `reset`, último snapshot,
+última entrega, último erro). Ela lê as mesmas fontes (`Status` do feed e
+`Stats` do publicador) que o bloco `replication` do `/v1/stats`, e acrescenta
+`topic`, `lastResetReason` e `lastSnapshotAt`. Num dataset sem replicação, no follower e no master sem destino
+Kafka, ela responde vazia — nunca erro. No `nishidb query --config`, com o
+servidor parado, as linhas saem dos checkpoints dos destinos e do feed fechado
+limpo, e o que só um publicador vivo mede é NULL. As colunas estão em
+[`docs/replication.md`](docs/replication.md#_metareplication).
 
 Um `FROM _outro.x` é recusado nomeando os namespaces que existem, e um
 `FROM _meta.x` nomeia as tabelas. As duas recusas são erro **do cliente** —
@@ -2771,17 +2789,19 @@ telecom                        (schema: o schemaName do YAML)
     └── autenticados_por_pon   outro
 _meta                          (schema do motor; descreve o dataset da conexão)
 └── Views
+    ├── counter_metrics
     ├── counters
     ├── fields
     ├── kafka
+    ├── replication
     └── tables
 ```
 
-As quatro do `_meta` existem em todo dataset declarado, com contador ou sem,
-com Kafka ou sem: "este dataset não consome de Kafka" é uma resposta, e
-`SELECT * FROM _meta.kafka` nunca pode ser erro. A tabela **histórica** é a
-exceção — ela publica só `fields` e `tables`, porque contador e ingestão são do
-dataset base.
+As seis do `_meta` existem em todo dataset declarado, com contador ou sem,
+com Kafka ou sem, com replicação ou sem: "este dataset não consome de Kafka" é
+uma resposta, e `SELECT * FROM _meta.kafka` nunca pode ser erro. A tabela **histórica** é a
+exceção — ela publica só `fields` e `tables`, porque contador, ingestão e
+replicação são do dataset base.
 
 O `TABLE_SCHEM` de cada linha é preenchido, e é ele que faz a ferramenta gerar
 `SELECT ... FROM telecom.autenticados_por_olt` ao clicar na tabela — a forma

@@ -294,3 +294,44 @@ func TestFingerprintEqualComparesPositionsInOrder(t *testing.T) {
 		t.Fatalf("nil e vazio deveriam ser iguais")
 	}
 }
+
+// O retrato offline do feed só sai do `state` com a marca limpa: é aí que a
+// posição gravada é a que a próxima subida retoma. Sem a marca (a vida que
+// caiu) e sem `state` não há retrato; o ilegível é erro. O tamanho em disco
+// é a soma dos arquivos de segmento, e só deles.
+func TestReadClosedStatusOnlyTrustsACleanState(t *testing.T) {
+	dir := t.TempDir()
+	if _, ok, err := ReadClosedStatus(dir); ok || err != nil {
+		t.Fatalf("sem state: ok=%v err=%v; quero ausente sem erro", ok, err)
+	}
+	st := sampleFeedState()
+	if err := writeFeedState(dir, st); err != nil {
+		t.Fatal(err)
+	}
+	for name, size := range map[string]int{segmentFileName(21): 300, segmentFileName(50): 200, "lixo.tmp": 999} {
+		if err := os.WriteFile(filepath.Join(dir, name), make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, ok, err := ReadClosedStatus(dir)
+	if err != nil || !ok {
+		t.Fatalf("state limpo: ok=%v err=%v", ok, err)
+	}
+	want := Status{Epoch: "101112131415161718191a1b1c1d1e1f", Produced: 77, AvailableAfter: 20, EndPos: 4096, DiskBytes: 500, DiskSegments: 2}
+	if got != want {
+		t.Fatalf("retrato = %+v\nquero    %+v", got, want)
+	}
+	st.Clean = false
+	if err := writeFeedState(dir, st); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := ReadClosedStatus(dir); ok || err != nil {
+		t.Fatalf("state sem marca limpa: ok=%v err=%v; quero sem retrato", ok, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stateFileName), []byte("NDBT"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := ReadClosedStatus(dir); ok || !errors.Is(err, errCorruptState) {
+		t.Fatalf("state ilegível: ok=%v err=%v; quero o erro de estado corrompido", ok, err)
+	}
+}

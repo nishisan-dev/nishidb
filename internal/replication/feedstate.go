@@ -212,3 +212,59 @@ func readFeedState(dir string) (st feedState, ok bool, err error) {
 	}
 	return st, true, nil
 }
+
+// FeedDir devolve o diretório do feed em disco de um dataset (segmentos e
+// `state`), a partir do DatasetRootDir dele. É a fonte ÚNICA do caminho: a
+// abertura do servidor e a leitura offline do CLI partem dela.
+func FeedDir(datasetRoot string) string {
+	return filepath.Join(datasetRoot, "replication", "feed")
+}
+
+// ReadClosedStatus é o retrato do feed fechado, lido do disco sem abri-lo —
+// para quem consulta com o servidor parado (`nishidb query --config`). Só lê:
+// não toma lock, não religa o log, não apaga órfão.
+//
+// Devolve ok=true SÓ com o `state` presente e com a marca limpa: é aí que a
+// posição gravada (epoch, sequence, piso e posição em bytes) é a que a
+// próxima subida retoma. Um `state` sem a marca limpa é o da subida de uma
+// vida que caiu ou fechou sem a impressão, e a sequence dele parou no Resume:
+// publicá-la como "produced" mentiria, e a próxima subida abre outra geração
+// de qualquer jeito. Ausente ou sem marca limpa devolvem ok=false sem erro;
+// ilegível devolve o erro.
+//
+// Com ok=true, DiskBytes e DiskSegments são o tamanho dos arquivos de
+// segmento do diretório (cabeçalhos incluídos, como no feed aberto).
+// BufferedBytes e os contadores da vida (entradas, lotes, invalidações,
+// erros de disco) ficam zerados: não há processo, e quem os lê na
+// `_meta.replication` os publica como NULL.
+func ReadClosedStatus(dir string) (Status, bool, error) {
+	st, found, err := readFeedState(dir)
+	if err != nil || !found || !st.Clean {
+		return Status{}, false, err
+	}
+	out := Status{
+		Epoch:          epochString(st.Epoch),
+		Produced:       st.Sequence,
+		AvailableAfter: st.Floor,
+		EndPos:         st.EndPos,
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return Status{}, false, err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if _, ok := parseSegmentName(e.Name()); !ok {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return Status{}, false, err
+		}
+		out.DiskBytes += info.Size()
+		out.DiskSegments++
+	}
+	return out, true, nil
+}

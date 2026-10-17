@@ -426,6 +426,33 @@ func loadCheckpoint(path string) (checkpointFile, bool, error) {
 	return c, true, nil
 }
 
+// CheckpointRow é o que o .ckpt de um destino diz a quem lê o disco sem o
+// publicador no ar (o `nishidb query --config`, na `_meta.replication`): o
+// último ponto confirmado gravado e o instante do último snapshot_end. O
+// resto do arquivo é a régua da retomada, que só o publicador interpreta.
+type CheckpointRow struct {
+	// Epoch e Cursor são o ponto confirmado gravado: Cursor é o que o
+	// publicador vivo chama de CheckpointCursor.
+	Epoch  string
+	Cursor uint64
+	// LastSnapshotAt é o instante do último snapshot_end confirmado; zero se
+	// nunca houve.
+	LastSnapshotAt time.Time
+}
+
+// LoadCheckpointRow lê o .ckpt do destino dentro de dir, o CheckpointDir do
+// dataset. Arquivo ausente (destino que nunca gravou checkpoint) devolve
+// ok=false sem erro; arquivo ilegível devolve o erro, nunca uma linha parcial
+// — o mesmo tri-estado do loadCheckpoint, que é quem lê.
+func LoadCheckpointRow(dir, destination string) (row CheckpointRow, ok bool, err error) {
+	path, _ := checkpointFiles(dir, destination)
+	c, ok, err := loadCheckpoint(path)
+	if err != nil || !ok {
+		return CheckpointRow{}, false, err
+	}
+	return CheckpointRow{Epoch: c.Epoch, Cursor: c.Cursor, LastSnapshotAt: c.LastSnapshotEnd}, true, nil
+}
+
 // resyncMu serializa o ler-incrementar-gravar do contador: dois pedidos
 // concorrentes (duas chamadas administrativas) não podem ler o mesmo valor e
 // devolver o mesmo número, senão um deles seria indistinguível do outro.

@@ -5,13 +5,30 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/replication"
 	"github.com/nishisan-dev/nishidb/internal/series"
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
+
+// HandleReplicationResyncForTest chama o handler da rota do snapshot sob
+// demanda sem HTTP, com o ResponseWriter do teste: é o único jeito de
+// observar o disco NO INSTANTE do WriteHeader (a resposta pela porta só sai
+// quando o handler termina, e esconderia um 202 escrito antes da gravação).
+func (s *Server) HandleReplicationResyncForTest(w http.ResponseWriter, r *http.Request) {
+	s.handleReplicationResync(w, r)
+}
+
+// PublishToFeedForTest publica uma entrada crua no feed do dataset, como o
+// writer faria. Serve para levar o publicador a um estado terminal: a entrada
+// de op Schema não tem envelope, e o publicador vai para failed (bug).
+func (s *Server) PublishToFeedForTest(dataset string, op replication.Operation, rec types.Record) uint64 {
+	return s.byNome[dataset].replication.Publish(dataset, op, rec, time.Now())
+}
 
 // SetPublisherCloseBudgetForTest encurta o orçamento da drenagem dos
 // publicadores da replicação no encerramento, para o teste do estouro não

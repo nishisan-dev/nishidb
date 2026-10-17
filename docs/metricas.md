@@ -328,6 +328,19 @@ de `datasets[].replication.feed` no `/v1/stats`.
 | `nishidb_replication_feed_buffered_bytes` | gauge | `dataset` | bytes retained by the replication feed |
 | `nishidb_replication_feed_evicted_batches_total` | counter | `dataset` | replication feed batches evicted by the memory ceiling |
 | `nishidb_replication_feed_invalidations_total` | counter | `dataset` | times the replication feed dropped its retained range and forced a resync |
+| `nishidb_replication_feed_disk_bytes` | gauge | `dataset` | bytes of the replication feed segment log on disk, segment headers included |
+| `nishidb_replication_feed_disk_segments` | gauge | `dataset` | segments of the replication feed log on disk |
+| `nishidb_replication_feed_disk_errors_total` | counter | `dataset` | failed disk operations of the replication feed, one per failed attempt |
+
+`feed_disk_bytes` encostando em `replication.maxDiskBytes` é a retenção em
+disco no teto: o feed apaga o segmento mais antigo, e o destino que estiver
+atrás dele refaz o snapshot (`reset` com o motivo `gap` em operação, ou
+`retention` quando a subida encontra o ponto do `.ckpt` abaixo do piso).
+`feed_disk_errors_total` subindo é o disco do feed falhando (gravação,
+religação do log, limpeza da retenção, leitura, durabilidade do gravador,
+regravação do `state` ou sync do encerramento); com o disco cheio o lote fica
+na memória e o gravador tenta de novo, e a lacuna só vem quando a memória
+lota.
 
 Cada destino de `replication.targets` publica as séries abaixo por `dataset`
 e `destination` (o `name` do destino em `kafkaTargets:`), todas desde a
@@ -342,12 +355,24 @@ subida, em zero antes da primeira entrega. A origem é a mesma de
 | `nishidb_replication_kafka_errors_total` | counter | failed replication delivery attempts, by reason; label adicional `reason`: `timeout`, `unavailable`, `message_too_large`, `publish_error`, `render_error`, `snapshot_gap`, `checkpoint_write`, `topic_read` |
 | `nishidb_replication_kafka_state` | gauge | 1 on the current state of the replication publisher, 0 on the others; label adicional `state`: `snapshotting`, `following`, `retrying`, `blocked`, `failed`, `stopped` |
 | `nishidb_replication_kafka_last_success_timestamp` | gauge | last complete replication delivery in epoch seconds; zero until the first |
+| `nishidb_replication_kafka_lag_bytes` | gauge | feed frame bytes on disk beyond the publisher's acknowledged cursor |
+| `nishidb_replication_kafka_checkpoint_sequence` | gauge | feed sequence of the last destination checkpoint written; the next start resumes from it |
 
 `nishidb_replication_kafka_state{state="blocked"}` ou `{state="failed"}` em 1
 é o publicador parado: `blocked` é registro maior que `maxMessageBytes` (nada é
 pulado; corrija o limite e reinicie), `failed` é erro de renderização (bug; a
 ingestão segue). `lag_sequences` crescendo com `state="retrying"` é o broker
 recusando ou fora do ar.
+
+`lag_bytes` é o mesmo atraso medido em bytes do feed em disco: comparado com
+`feed_disk_bytes`, diz quanto do disco ainda espera por este destino: quando
+ele encosta no tamanho do feed, a retenção está a um segmento de abrir a
+lacuna desse destino. Zero quando o feed
+já está noutra geração. `checkpoint_sequence` é o ponto que a próxima subida
+retoma sem snapshot; fica atrás do cursor confirmado (o `.ckpt` do tail é
+gravado no máximo uma vez por segundo), e a diferença é o que o destino recebe
+de novo depois de um reinício. A mesma leitura sai por SQL, uma linha por
+destino, em `_meta.replication`.
 
 ### Autenticação e TLS
 

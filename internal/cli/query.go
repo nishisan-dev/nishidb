@@ -14,6 +14,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
+	"github.com/nishisan-dev/nishidb/internal/metareplication"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
@@ -210,6 +211,15 @@ func runQuery(args []string, amb Context) int {
 			Declarada: metakafka.OfYAML(spec.Source.Kafka),
 			Duraveis:  st.SourceOffsets,
 		}); err != nil {
+			notify(amb, "query: %v\n", err)
+			return ExitUsageError
+		}
+	}
+	// `_meta.replication` responde aqui com o que está no disco: o feed
+	// fechado limpo e o .ckpt de cada destino (offlineReplicationSource). Só
+	// no dataset DECLARADO, como a `_meta.kafka`: o feed é do base.
+	if spec != nil {
+		if err := metareplication.Register(eng, *dataset, offlineReplicationSource(cfg, spec)); err != nil {
 			notify(amb, "query: %v\n", err)
 			return ExitUsageError
 		}

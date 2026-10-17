@@ -166,6 +166,7 @@ func (p *Publisher) loadCheckpoint() {
 	p.ckpt, p.ckptFound = c, found
 	p.mu.Lock()
 	p.stats.CheckpointCursor = c.Cursor
+	p.stats.CheckpointFound = found
 	if !c.LastSnapshotEnd.IsZero() {
 		p.stats.LastSnapshotAt = float64(c.LastSnapshotEnd.UnixMilli()) / 1000
 	}
@@ -642,6 +643,7 @@ func (p *Publisher) writeCheckpoint(c checkpointFile) error {
 	p.ckpt, p.ckptFound, p.ckptDirty = c, true, false
 	p.mu.Lock()
 	p.stats.CheckpointCursor = c.Cursor
+	p.stats.CheckpointFound = true
 	if !c.LastSnapshotEnd.IsZero() {
 		p.stats.LastSnapshotAt = float64(c.LastSnapshotEnd.UnixMilli()) / 1000
 	}

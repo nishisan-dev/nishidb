@@ -1083,9 +1083,17 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | rotação condicionada (troca de geração atômica, só a partir da epoch informada e com o feed aberto) | Stream.RotateFrom | internal/replication |
 | impressão da renderização (o que entra no hash: tabelas publicadas, aliases declarados e `publishHistory`) | RenderSpec / FieldAlias | internal/replicationkafka, internal/server |
 | atraso em bytes (`EndPos` do feed menos a posição do cursor, na mesma geração) | LagBytes | internal/replicationkafka |
-| cursor do checkpoint (o cursor do último `.ckpt` gravado) | CheckpointCursor | internal/replicationkafka |
+| cursor do checkpoint (o cursor do último `.ckpt` gravado) | CheckpointCursor / `checkpointCursor` / `nishidb_replication_kafka_checkpoint_sequence` | internal/replicationkafka, internal/protocol |
 | pedido de snapshot (registra um pedido no contador durável do destino) | RequestSnapshot | internal/replicationkafka |
 | falha de leitura do tópico e falha de gravação do checkpoint (motivos de erro do publicador) | `topic_read` / ErrorTopicRead, `checkpoint_write` / ErrorCheckpointWrite | internal/replicationkafka |
+| snapshot sob demanda (rota ADMIN que registra o pedido de snapshot de um destino e devolve o estado do publicador) | `POST /v1/replication/resync` / handleReplicationResync, ReplicationResyncResponse (`state`) | internal/server, internal/protocol |
+| comando do snapshot sob demanda | `nishidb replication resync` / runReplicationResync | internal/cli |
+| tabela de replicação (uma linha por destino Kafka do feed) | `_meta.replication` / metareplication.TableName, Register, Source | internal/metareplication |
+| linha do checkpoint (o que o `.ckpt` diz sem publicador no ar) | replicationkafka.CheckpointRow / LoadCheckpointRow; metareplication.CheckpointRow | internal/replicationkafka, internal/metareplication |
+| retrato do feed fechado (posição do `state` com marca limpa, lida sem abrir o feed) | replication.ReadClosedStatus | internal/replication |
+| diretório do feed | replication.FeedDir | internal/replication |
+| checkpoint encontrado (há `.ckpt` do destino, lido ou gravado nesta vida) | Stats.CheckpointFound | internal/replicationkafka |
+| tópico do destino no retrato | Stats.Topic | internal/replicationkafka |
 ## Feed de replicação em disco
 
 | PT-BR | Identificador/contrato | Dono |

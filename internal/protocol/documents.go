@@ -365,6 +365,14 @@ type ReplicationFeedStats struct {
 	// primeiro.
 	LastFlushReason string `json:"lastFlushReason"`
 	Invalidations   uint64 `json:"invalidations"`
+	// DiskBytes e DiskSegments são o tamanho do log de segmentos do feed em
+	// disco, cabeçalhos incluídos. DiskErrors conta as falhas de disco do
+	// feed — gravação, religação do log, limpeza da retenção, leitura,
+	// durabilidade do gravador, regravação do `state` e sync do Close —, uma
+	// por tentativa que falha.
+	DiskBytes    int64  `json:"diskBytes"`
+	DiskSegments int    `json:"diskSegments"`
+	DiskErrors   uint64 `json:"diskErrors"`
 }
 
 // ReplicationDeliveryStats é o retrato de UM publicador do feed num destino
@@ -385,6 +393,32 @@ type ReplicationDeliveryStats struct {
 	Errors               map[string]uint64 `json:"errors"`
 	LastSuccessTimestamp float64           `json:"lastSuccessTimestamp"`
 	LastError            string            `json:"lastError"`
+	// LagBytes é o atraso em bytes de quadro do feed em disco: a posição do
+	// fim do último lote fechado menos a do cursor (durante o snapshot, a do
+	// cursor do reset). Zero com o feed já noutra geração.
+	LagBytes uint64 `json:"lagBytes"`
+	// CheckpointCursor é o cursor do último .ckpt gravado: de onde a próxima
+	// subida retoma. Fica atrás de Cursor, porque o tail grava o .ckpt no
+	// máximo uma vez por segundo.
+	CheckpointCursor uint64 `json:"checkpointCursor"`
+}
+
+// ReplicationResyncResponse é o corpo do 202 de POST /v1/replication/resync:
+// o pedido de snapshot do destino ficou registrado de forma durável (o
+// contador `<destino>.resync`) antes da resposta. O 202, e não o 200, porque
+// o snapshot em si ainda não aconteceu: o publicador o atende na conferência
+// seguinte, e o `reset` sai com o motivo `requested`. Requested é sempre true
+// num 202; a recusa tem o corpo de erro comum do protocolo.
+//
+// State é o estado do publicador no instante do pedido, na grafia de
+// `delivery[].state` do /v1/stats. Com o publicador parado (blocked, failed
+// ou stopped) o pedido fica gravado do mesmo jeito e só é atendido na próxima
+// subida: o campo é o que diz ao operador que o `reset` não vem agora.
+type ReplicationResyncResponse struct {
+	Dataset     string `json:"dataset"`
+	Destination string `json:"destination"`
+	Requested   bool   `json:"requested"`
+	State       string `json:"state"`
 }
 
 // SeriesDeliveryStats describes a counter's best-effort Kafka output.

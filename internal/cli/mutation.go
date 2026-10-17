@@ -121,6 +121,13 @@ func postMutation(cmd, endereco, path, dataset string, cred remoteCredential, de
 // completo, qualquer outro valor vai como JSON. Recusa e credencial seguem o
 // caminho de postMutation, descrito acima.
 func postJSON(cmd, endereco, path string, body any, cred remoteCredential, destination any, amb Context) int {
+	return postJSONExpecting(cmd, endereco, path, body, http.StatusOK, cred, destination, amb)
+}
+
+// postJSONExpecting é postJSON com o status de sucesso explícito: a rota que
+// só REGISTRA o pedido (POST /v1/replication/resync) responde 202, e qualquer
+// outro status, inclusive o 200, segue o caminho da recusa.
+func postJSONExpecting(cmd, endereco, path string, body any, want int, cred remoteCredential, destination any, amb Context) int {
 	var corpo io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -157,7 +164,15 @@ func postJSON(cmd, endereco, path string, body any, cred remoteCredential, desti
 		}
 	}()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != want {
+		// Um sucesso com OUTRO status (o 200 de um servidor que não fala o
+		// contrato da rota) não tem corpo de erro: a recusa comum imprimiria
+		// a mensagem vazia. O status recebido e o esperado dizem o que houve.
+		if resp.StatusCode/100 == 2 {
+			notify(amb, "%s: o servidor respondeu %s, e esta rota responde %d %s\n",
+				cmd, resp.Status, want, http.StatusText(want))
+			return ExitUsageError
+		}
 		return remoteRefusal(cmd, resp, amb)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(destination); err != nil {

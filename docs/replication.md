@@ -566,6 +566,31 @@ fica acima dele e gera outro. O publicador confere o contador e o prazo do
 periódico a cada conferência de partições (uma vez por minuto), e o pedido
 feito pelo próprio processo é conferido na hora.
 
+O pedido é feito pela rota ADMIN
+`POST /v1/replication/resync?dataset=<dataset>&destination=<destino>`, com o
+servidor no ar, ou pelo comando equivalente:
+
+```
+nishidb replication resync --server <host:porta> --dataset <dataset> --destination <destino>
+```
+
+O comando aceita a mesma credencial e o mesmo TLS dos outros comandos remotos
+(`--user`, `NISHIDB_PASSWORD` ou `--password-file`, `--tls-ca`). A rota
+responde `202` só depois de o contador estar gravado, com o corpo
+`{"dataset":"<dataset>","destination":"<destino>","requested":true,"state":"<estado>"}`:
+o `202` confirma o PEDIDO, e não o fim do snapshot. `state` é o estado do
+publicador no instante do pedido, e o comando o imprime. Com o publicador
+ativo (`snapshotting`, `following` ou `retrying`), o `reset` sai em seguida
+com o motivo `requested`. Com o publicador parado (`blocked`, `failed` ou
+`stopped`), o pedido fica gravado do mesmo jeito e é atendido na próxima
+subida. O andamento se lê em `_meta.replication` (`lastResetReason`,
+`lastSnapshotAt`) ou em `snapshots_total{reason="requested"}`.
+Dataset sem feed e destino que não está em `replication.targets` do dataset
+respondem `404` com o código `UNKNOWN_DATASET`, e as duas recusas se
+distinguem pela mensagem; sem os dois parâmetros, `400`; método diferente de
+POST, `405`; a gravação do contador que falha, `500`, e nada fica pedido. Pelo
+listener de loopback a rota responde `403`, como toda rota ADMIN.
+
 ### Regras para o consumidor
 
 O `resume` não exige nada do consumidor: ele só registra que o master
@@ -719,10 +744,12 @@ com `stage=tail_start`, recomeça na hora (débito 132).
 
 O `/v1/stats` traz, no dataset master com replicação ligada, o bloco
 `replication`: `feed` (geração, sequência produzida, piso, bytes retidos,
-entradas antes e depois da consolidação, lotes descartados, invalidações) e
-`delivery`, um item por destino (estado, geração e cursor confirmados, atraso
-em sequências, registros entregues, snapshots por motivo, erros por motivo,
-última entrega e último erro). As métricas leem a mesma estrutura:
+entradas antes e depois da consolidação, lotes descartados, invalidações e,
+do feed em disco, `diskBytes`, `diskSegments` e `diskErrors`) e `delivery`, um
+item por destino (estado, geração e cursor confirmados, atraso em sequências e
+em bytes (`lagBytes`), o cursor do último checkpoint gravado
+(`checkpointCursor`), registros entregues, snapshots por motivo, erros por
+motivo, última entrega e último erro). As métricas leem a mesma estrutura:
 
 - por destino (`dataset`, `destination`):
   `nishidb_replication_kafka_delivered_total`,
@@ -730,16 +757,74 @@ em sequências, registros entregues, snapshots por motivo, erros por motivo,
   `nishidb_replication_kafka_snapshots_total` (`reason`),
   `nishidb_replication_kafka_errors_total` (`reason`),
   `nishidb_replication_kafka_state` (`state`: uma série por estado, com 1 no
-  corrente) e `nishidb_replication_kafka_last_success_timestamp`;
+  corrente), `nishidb_replication_kafka_last_success_timestamp`,
+  `nishidb_replication_kafka_lag_bytes` (o atraso em bytes do feed em disco)
+  e `nishidb_replication_kafka_checkpoint_sequence` (a sequence do último
+  checkpoint gravado: de onde a próxima subida retoma);
 - do feed: `nishidb_replication_feed_input_entries_total`,
   `nishidb_replication_feed_output_entries_total`,
   `nishidb_replication_feed_buffered_bytes`,
-  `nishidb_replication_feed_evicted_batches_total` e
-  `nishidb_replication_feed_invalidations_total`.
+  `nishidb_replication_feed_evicted_batches_total`,
+  `nishidb_replication_feed_invalidations_total`,
+  `nishidb_replication_feed_disk_bytes`,
+  `nishidb_replication_feed_disk_segments` e
+  `nishidb_replication_feed_disk_errors_total`.
 
 Os motivos de snapshot e de erro e os estados existem desde a subida, em
-zero, para que um alerta sobre eles funcione antes da primeira ocorrência. Os
-detalhes de cada série estão em [metricas.md](metricas.md).
+zero, para que um alerta sobre eles funcione antes da primeira ocorrência; as
+séries do feed em disco e do checkpoint também nascem em zero. Os detalhes de
+cada série estão em [metricas.md](metricas.md).
+
+#### `_meta.replication`
+
+A mesma leitura sai por SQL, uma linha por destino de `replication.targets`,
+em `SELECT * FROM _meta.replication` (no schema do dataset, pela rota de
+consulta). O dataset sem replicação, o follower e o master sem destino Kafka
+respondem a tabela vazia, e nunca erro. A tabela histórica não a recebe: o
+feed e os publicadores são do dataset base.
+
+| Coluna | Tipo | O que diz |
+|---|---|---|
+| `id` | string | o destino (o `name` em `kafkaTargets:`); é a chave |
+| `topic` | string | o tópico do destino na configuração |
+| `state` | string | o estado do publicador (`snapshotting`, `following`, `retrying`, `blocked`, `failed`, `stopped`) |
+| `epoch` | string | a geração do último ponto confirmado |
+| `cursor` | int64 | a sequence confirmada pelo Kafka, em memória |
+| `checkpointCursor` | int64 | a sequence do último checkpoint gravado; fica atrás de `cursor` (no máximo uma gravação por segundo no tail); NULL enquanto o destino não tem `.ckpt` |
+| `produced` | int64 | a última sequence produzida pelo feed |
+| `floor` | int64 | o piso do feed: ele serve as sequences acima dele |
+| `feedDiskBytes` | int64 | o tamanho do feed em disco, cabeçalhos incluídos |
+| `feedCacheBytes` | int64 | os bytes retidos em memória pelo feed |
+| `feedSegments` | int64 | o número de segmentos do feed em disco |
+| `lagSequences` | int64 | o que o feed produziu além do cursor |
+| `lagBytes` | int64 | o mesmo atraso, em bytes do feed em disco |
+| `lastResetReason` | string | o motivo do último `reset` publicado nesta vida |
+| `lastSnapshotAt` | timestamp | o último `snapshot_end` confirmado (persistido no checkpoint) |
+| `lastSuccessAt` | timestamp | a última entrega completa (lote do tail ou snapshot) |
+| `lastError` | string | o último erro de entrega |
+
+As colunas do feed (`produced`, `floor` e as três `feed*`) são do dataset, e
+repetem em toda linha. Valor ausente é NULL, e nunca zero: texto vazio e
+instante "nunca houve" saem NULL, e `checkpointCursor` é NULL enquanto o
+destino não tem `.ckpt`. Os números de uma consulta são colhidos uma vez, na
+abertura da consulta.
+
+`lastSnapshotAt` vem do `.ckpt` gravado depois do `snapshot_end` confirmado, e
+o publicador passa a `following` ANTES dessa gravação (o fsync não atrasa o
+retrato). Por isso há uma janela curta em que a linha mostra `following` com
+`lastSnapshotAt` ainda NULL (no primeiro snapshot) ou com o valor do snapshot
+anterior. Se essa gravação falha (`errors{reason="checkpoint_write"}`), o valor
+velho fica até a próxima gravação bem-sucedida do `.ckpt`.
+
+Com o servidor parado, `nishidb query --config` responde a tabela com o que
+está no disco: cada destino de `replication.targets` sai do seu `.ckpt`
+(`epoch`, `checkpointCursor`, `lastSnapshotAt`) com o tópico da
+configuração, e as colunas do feed saem do `state` só quando ele tem a marca
+de fechamento limpo (a posição que a próxima subida retoma; sem a marca, são
+NULL). O que só um publicador vivo mede — `state`, `cursor`, os dois atrasos,
+`feedCacheBytes`, `lastResetReason`, `lastSuccessAt` — é NULL. Um `.ckpt`
+ilegível não some com o destino: a linha sai com `lastError` =
+`checkpoint unreadable: …`.
 
 ### Mudanças de contrato desde a v0.14
 
@@ -780,6 +865,25 @@ continua lendo o que lia.
   retomada depois do reinício limpo. Não exige ação: o consumidor que não o
   conhece pode ignorá-lo. Com ele, o reinício limpo do master deixa de
   republicar o dataset inteiro.
+- **Rota `POST /v1/replication/resync`.** Rota ADMIN nova, que pede o snapshot
+  sob demanda de um destino (ver
+  [Snapshot periódico e sob demanda](#snapshot-periódico-e-sob-demanda)), e o
+  comando `nishidb replication resync`. Nenhum código de erro novo: as
+  recusas usam `UNKNOWN_DATASET`, `BAD_REQUEST`, `METHOD_NOT_ALLOWED` e
+  `INTERNAL`.
+- **Tabela `_meta.replication`.** Tabela virtual nova, registrada em todo
+  dataset base (ver [`_meta.replication`](#_metareplication)). Ela entra no
+  catálogo (`_meta.tables`, `/v1/metadata`): quem compara a lista inteira de
+  tabelas passa a ver uma a mais.
+- **Campos novos no `/v1/stats`.** `replication.feed` ganha `diskBytes`,
+  `diskSegments` e `diskErrors`, e cada item de `replication.delivery` ganha
+  `lagBytes` e `checkpointCursor`.
+- **Séries novas.** `nishidb_replication_feed_disk_bytes`,
+  `nishidb_replication_feed_disk_segments`,
+  `nishidb_replication_feed_disk_errors_total`,
+  `nishidb_replication_kafka_lag_bytes` e
+  `nishidb_replication_kafka_checkpoint_sequence`, todas desde a subida, em
+  zero.
 
 **Defeito conhecido da v0.14.x.** Quando um lote do feed fechava por tamanho
 (`maxBatchBytes`) antes de a alteração seguinte entrar, ele anunciava a
