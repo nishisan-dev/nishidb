@@ -49,6 +49,15 @@ func samplesOfReplication(dataset string, st *protocol.ReplicationStats) []metri
 		{Family: metrics.MetReplicationFeedInvalidationsTotal, Name: metrics.MetReplicationFeedInvalidationsTotal,
 			Help: "times the replication feed dropped its retained range and forced a resync", Type: metrics.TypeCounter,
 			Labels: feedLabels, Value: float64(f.Invalidations)},
+		{Family: metrics.MetReplicationFeedDiskBytes, Name: metrics.MetReplicationFeedDiskBytes,
+			Help: "bytes of the replication feed segment log on disk, segment headers included", Type: metrics.TypeGauge,
+			Labels: feedLabels, Value: float64(f.DiskBytes)},
+		{Family: metrics.MetReplicationFeedDiskSegments, Name: metrics.MetReplicationFeedDiskSegments,
+			Help: "segments of the replication feed log on disk", Type: metrics.TypeGauge,
+			Labels: feedLabels, Value: float64(f.DiskSegments)},
+		{Family: metrics.MetReplicationFeedDiskErrorsTotal, Name: metrics.MetReplicationFeedDiskErrorsTotal,
+			Help: "failed disk operations of the replication feed, one per failed attempt", Type: metrics.TypeCounter,
+			Labels: feedLabels, Value: float64(f.DiskErrors)},
 	}
 	for _, p := range st.Delivery {
 		labels := []metrics.Label{{Name: metrics.LabelDataset, Value: dataset}, {Name: metrics.LabelDestination, Value: p.Destination}}
@@ -62,6 +71,12 @@ func samplesOfReplication(dataset string, st *protocol.ReplicationStats) []metri
 			metrics.Sample{Family: metrics.MetReplicationKafkaLastSuccessTimestamp, Name: metrics.MetReplicationKafkaLastSuccessTimestamp,
 				Help: "last complete replication delivery in epoch seconds; zero until the first", Type: metrics.TypeGauge,
 				Labels: labels, Value: p.LastSuccessTimestamp},
+			metrics.Sample{Family: metrics.MetReplicationKafkaLagBytes, Name: metrics.MetReplicationKafkaLagBytes,
+				Help: "feed frame bytes on disk beyond the publisher's acknowledged cursor", Type: metrics.TypeGauge,
+				Labels: labels, Value: float64(p.LagBytes)},
+			metrics.Sample{Family: metrics.MetReplicationKafkaCheckpointSequence, Name: metrics.MetReplicationKafkaCheckpointSequence,
+				Help: "feed sequence of the last destination checkpoint written; the next start resumes from it", Type: metrics.TypeGauge,
+				Labels: labels, Value: float64(p.CheckpointCursor)},
 		)
 		for _, reason := range replicationkafka.SnapshotReasons() {
 			out = append(out, metrics.Sample{Family: metrics.MetReplicationKafkaSnapshotsTotal, Name: metrics.MetReplicationKafkaSnapshotsTotal,

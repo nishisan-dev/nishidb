@@ -151,26 +151,3 @@ func TestReplicationTargetsRejectsDuplicateName(t *testing.T) {
 	parseReplicationRefusal(t, replicationYAML("enabled: true", "targets: [metrics, backup, metrics]"),
 		`replication.targets: duplicate Kafka target "metrics"`)
 }
-
-func TestReplicationTargetsRequireBufferOfTwiceTheBatch(t *testing.T) {
-	const want = "replication.maxBufferedBytes (2097151) must be at least twice replication.maxBatchBytes (1048576)"
-	parseReplicationRefusal(t,
-		replicationYAML("enabled: true", "maxBatchBytes: 1MiB", "maxBufferedBytes: 2097151B", "targets: [metrics]"),
-		want)
-	// Exatamente o dobro é o piso aceito.
-	s := parseOK(t, replicationYAML("enabled: true", "maxBatchBytes: 1MiB", "maxBufferedBytes: 2MiB", "targets: [metrics]"))
-	if s.Replication.MaxBufferedBytes != 2<<20 || s.Replication.MaxBatchBytes != 1<<20 {
-		t.Fatalf("replication = %+v", s.Replication)
-	}
-	// Sem targets o piso é o de sempre (buffer >= lote): o dobro só é exigido
-	// de quem publica em Kafka.
-	parseOK(t, replicationYAML("enabled: true", "maxBatchBytes: 1MiB", "maxBufferedBytes: 1MiB"))
-}
-
-func TestReplicationTargetsBufferFloorDoesNotOverflow(t *testing.T) {
-	// 2^62 dobrado transborda int64; a comparação ingênua aprovaria o par.
-	parseReplicationRefusal(t,
-		replicationYAML("enabled: true",
-			"maxBatchBytes: 4611686018427387904B", "maxBufferedBytes: 4611686018427387904B", "targets: [metrics]"),
-		"must be at least twice replication.maxBatchBytes (4611686018427387904)")
-}

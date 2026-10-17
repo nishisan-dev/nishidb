@@ -5,12 +5,35 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
+	"github.com/nishisan-dev/nishidb/internal/replication"
 	"github.com/nishisan-dev/nishidb/internal/series"
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
+
+// HandleReplicationResyncForTest chama o handler da rota do snapshot sob
+// demanda sem HTTP, com o ResponseWriter do teste: é o único jeito de
+// observar o disco NO INSTANTE do WriteHeader (a resposta pela porta só sai
+// quando o handler termina, e esconderia um 202 escrito antes da gravação).
+func (s *Server) HandleReplicationResyncForTest(w http.ResponseWriter, r *http.Request) {
+	s.handleReplicationResync(w, r)
+}
+
+// PublishToFeedForTest publica uma entrada crua no feed do dataset, como o
+// writer faria. Serve para levar o publicador a um estado terminal: a entrada
+// de op Schema não tem envelope, e o publicador vai para failed (bug).
+//
+// Publica FORA do wmu do Store, ao contrário do writer: a sequence que ele
+// consome não corresponde a mutação nenhuma, e o Publish corre em paralelo a
+// qualquer Publish do writer. Só é seguro num teste sem ingestão concorrente
+// (nenhum Put, coletor, compaction ou rota de mutação em voo).
+func (s *Server) PublishToFeedForTest(dataset string, op replication.Operation, rec types.Record) uint64 {
+	return s.byNome[dataset].replication.Publish(dataset, op, rec, time.Now())
+}
 
 // SetPublisherCloseBudgetForTest encurta o orçamento da drenagem dos
 // publicadores da replicação no encerramento, para o teste do estouro não
@@ -152,4 +175,23 @@ func (s *Server) EmitOnceForTest(dataset string) error {
 		}
 	}
 	return nil
+}
+
+// FollowerStateForTest devolve o estado, a epoch e o cursor aplicado do
+// follower do dataset, que o /v1/health só mostra fora de following.
+func (s *Server) FollowerStateForTest(dataset string) (replication.ReplicaState, string, uint64) {
+	d := s.byNome[dataset]
+	if d == nil || d.follower == nil {
+		return "", "", 0
+	}
+	return d.follower.Replica.State()
+}
+
+// UseStoreClockForTest troca o relógio do Store do dataset (o da expiração).
+// Chamado antes do Run: o prazo mínimo de TTL é de um minuto, e o teste do
+// encerramento precisa de linhas vencidas na primeira passada do coletor.
+func (s *Server) UseStoreClockForTest(dataset string, now func() time.Time) {
+	if d := s.byNome[dataset]; d != nil {
+		d.st.UsaRelogio(now)
+	}
 }

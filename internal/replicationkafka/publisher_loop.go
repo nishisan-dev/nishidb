@@ -9,10 +9,6 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/replication"
 )
 
-// errPartitionsChanged é a divergência entre o número de partições do tópico
-// e o fixado no último reset.
-var errPartitionsChanged = errors.New("replicationkafka: topic partition count changed")
-
 // haltError é a parada terminal (blocked ou failed): o laço sai sem
 // retentar.
 type haltError struct{ err error }
@@ -32,30 +28,43 @@ func (e *deliveryError) Error() string {
 }
 func (e *deliveryError) Unwrap() error { return e.err }
 
-// run é o laço do publicador: snapshot quando falta continuidade, tail no
-// resto. Os três baldes de erro (§101) se separam aqui: infraestrutura
-// retenta para sempre (retrying); bug de renderização para o publicador
-// (failed); registro grande demais para sem pular nada (blocked). Nenhum dos
-// três trava a ingestão: o feed nunca espera o publicador.
+// run é o laço do publicador: a decisão da subida (publisher_resume.go)
+// retoma o tail ou pede um snapshot; depois, snapshot quando falta
+// continuidade e tail no resto. Os três baldes de erro (§101) se separam
+// aqui: infraestrutura retenta para sempre (retrying); bug de renderização
+// para o publicador (failed); registro grande demais para sem pular nada
+// (blocked). Nenhum dos três trava a ingestão: o feed nunca espera o
+// publicador.
+//
+// Toda saída grava o último ponto confirmado no .ckpt (flushCheckpoint), e só
+// depois de apurado o lote do resume.
 func (p *Publisher) run(ctx context.Context) {
 	defer close(p.done)
-	reason := ResetStartup
-	needSnapshot := true
+	defer p.flushCheckpoint()
+	defer p.reapControl(ctx, true)
+	reason, ok, err := p.startup(ctx)
+	if !ok {
+		p.setState(StateStopped)
+		return
+	}
+	needSnapshot := reason != 0
 	backoff := p.minBackoff
 	for {
-		var err error
 		produced := false
-		if needSnapshot {
-			if produced, err = p.snapshot(ctx, reason); err == nil {
-				needSnapshot = false
+		if err == nil {
+			if needSnapshot {
+				if produced, err = p.snapshot(ctx, reason); err == nil {
+					needSnapshot = false
+					backoff = p.minBackoff
+					continue
+				}
+			} else if err = p.tailOnce(ctx); err == nil {
 				backoff = p.minBackoff
 				continue
 			}
-		} else if err = p.tailOnce(ctx); err == nil {
-			backoff = p.minBackoff
-			continue
 		}
 		var halt *haltError
+		var transition *resetRequired
 		switch {
 		case ctx.Err() != nil:
 			p.setState(StateStopped)
@@ -68,6 +77,14 @@ func (p *Publisher) run(ctx context.Context) {
 				"cursor", p.cursor)
 			return
 		case errors.Is(err, replication.ErrResyncRequired):
+			if origin, epoch, _, _ := p.feed.OriginAndPosition(); epoch != p.workEpoch {
+				// A epoch do feed mudou debaixo do publicador: é a linha 5 da
+				// decisão da subida (o rewind de outro destino rotacionou o
+				// feed), e não uma lacuna na mesma geração. Origem e epoch
+				// lidas juntas, como no decide.
+				needSnapshot, reason = true, generationReason(origin, p.workEpoch)
+				break
+			}
 			if needSnapshot {
 				// O feed perdeu o cursor do reset NO MEIO do snapshot. Nenhum
 				// contador de snapshots sobe (só os concluídos contam), então
@@ -86,13 +103,13 @@ func (p *Publisher) run(ctx context.Context) {
 				p.logLivelock("tail_start", p.lastSnapshot)
 			}
 			needSnapshot, reason = true, ResetGap
-		case errors.Is(err, errPartitionsChanged):
-			needSnapshot, reason = true, ResetPartitionsChanged
+		case errors.As(err, &transition):
+			needSnapshot, reason = true, transition.reason
 		default:
 			p.noteFailure(err)
 			// A falha antes de qualquer registro produzido (tópico ausente,
-			// broker fora na consulta de metadado) não publicou reset nenhum:
-			// o motivo continua o original.
+			// broker fora na consulta de metadado, .ckpt que não grava) não
+			// publicou reset nenhum: o motivo continua o original.
 			if needSnapshot && produced {
 				reason = ResetSnapshotFailed
 			}
@@ -102,6 +119,7 @@ func (p *Publisher) run(ctx context.Context) {
 			}
 			backoff = min(2*backoff, p.maxBackoff)
 		}
+		err = nil
 	}
 }
 
@@ -157,20 +175,30 @@ func (p *Publisher) snapshot(ctx context.Context, reason ResetReason) (produced 
 
 	begin := func(h replication.SnapshotHeader) error {
 		hdr = h
+		// O .ckpt marca o reset em curso ANTES de qualquer registro dele: um
+		// reinício no meio do snapshot nunca retoma o tail de uma posição
+		// antiga, porque deixaria o consumidor em reconstrução sem
+		// snapshot_end. Sem a gravação, o snapshot não começa.
+		previous, err := p.beginCheckpoint(h, n)
+		if err != nil {
+			return err
+		}
+		p.workEpoch = h.Epoch
 		p.mu.Lock()
 		p.lagBase = h.Cursor
+		p.lagEpoch, p.lagPos = h.Epoch, h.EndPos
 		p.mu.Unlock()
 		p.log.Info("replication.kafka.snapshot.started", "publishing snapshot",
-			"reason", reason.String(), "epoch", h.Epoch, "cursor", h.Cursor, "partitions", n)
+			"reason", reason.String(), "epoch", h.Epoch, "previous_epoch", previous, "cursor", h.Cursor, "partitions", n)
 		b := &p.chunks[p.chunk]
 		start := len(b.buf)
-		buf, rerr := p.renderer.AppendReset(b.buf, h.Epoch, reason, h.Cursor, h.At)
+		buf, rerr := p.renderer.AppendReset(b.buf, h.Epoch, previous, reason, h.Cursor, h.At)
 		if rerr != nil {
 			return p.halt(StateFailed, ErrorRender, rerr, 0, "")
 		}
 		b.buf = buf
 		for part := range n {
-			b.addControl(OpReset, int32(part), start, len(b.buf))
+			b.addReset(reason, int32(part), start, len(b.buf))
 		}
 		if err := p.checkSizes(b); err != nil {
 			return err
@@ -183,6 +211,9 @@ func (p *Publisher) snapshot(ctx context.Context, reason ResetReason) (produced 
 			return err
 		}
 		b.reset()
+		p.mu.Lock()
+		p.stats.LastResetReason = reason.String()
+		p.mu.Unlock()
 		return nil
 	}
 
@@ -243,6 +274,9 @@ func (p *Publisher) snapshot(ctx context.Context, reason ResetReason) (produced 
 	p.stats.State = StateFollowing
 	p.stats.LastSuccessTimestamp = float64(now.UnixMilli()) / 1000
 	p.mu.Unlock()
+	// O .ckpt depois do retrato: o snapshot já está confirmado no tópico, e a
+	// gravação (com fsync) não atrasa o que /v1/stats mostra.
+	p.endCheckpoint(hdr, n, now)
 	p.log.Info("replication.kafka.snapshot.completed", "snapshot published",
 		"reason", reason.String(), "cursor", hdr.Cursor, "rows", rows, "partitions", n,
 		"duration", p.lastSnapshot.String())
@@ -256,16 +290,27 @@ func (p *Publisher) snapshot(ctx context.Context, reason ResetReason) (produced 
 // o lote, e só avança o cursor depois de TODOS os registros do lote
 // confirmados.
 func (p *Publisher) tailOnce(ctx context.Context) error {
+	p.reapControl(ctx, false)
 	if err := p.maybeCheckPartitions(ctx); err != nil {
 		return err
 	}
 	// O Acquire espera no máximo até a próxima conferência de partições: o
-	// tail ocioso não pode deixar de enxergar o tópico que cresceu.
+	// tail ocioso não pode deixar de enxergar o tópico que cresceu. Um
+	// RequestSnapshot o cancela antes, para o pedido ser conferido já.
 	actx, cancel := context.WithDeadline(ctx, p.nextCheck)
+	p.mu.Lock()
+	if p.wakeRequested {
+		cancel()
+	}
+	p.acquireCancel = cancel
+	p.mu.Unlock()
 	b, release, err := p.feed.Acquire(actx, p.epoch, p.cursor)
+	p.mu.Lock()
+	p.acquireCancel = nil
+	p.mu.Unlock()
 	cancel()
 	if err != nil {
-		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() == nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
 			// Tail ocioso até a conferência: o snapshot já não é "recém
 			// terminado", e uma lacuna daqui em diante não é o livelock do
 			// snapshot.
@@ -306,10 +351,12 @@ func (p *Publisher) tailOnce(ctx context.Context) error {
 		return err
 	}
 	p.cursor = b.To
+	p.tailCheckpoint(b)
 	now := p.now()
 	p.mu.Lock()
 	p.stats.Cursor = b.To
 	p.lagBase = b.To
+	p.lagEpoch, p.lagPos = p.epoch, b.EndPos
 	p.stats.State = StateFollowing
 	p.stats.LastSuccessTimestamp = float64(now.UnixMilli()) / 1000
 	p.mu.Unlock()
@@ -437,7 +484,7 @@ func (p *Publisher) checkSizes(b *outBatch) error {
 		r := &b.recs[i]
 		key := b.key(r)
 		size := int64(len(key)) + int64(r.valEnd-r.valueStart()) +
-			int64(len(HeaderOp)+len(OpHeader(r.op))) + recordOverheadBytes
+			int64(r.headerBytes()) + recordOverheadBytes
 		if size <= p.messageBytes {
 			continue
 		}
@@ -491,27 +538,29 @@ func (p *Publisher) partitions(ctx context.Context) (int, error) {
 	return len(d.Partitions), nil
 }
 
-// maybeCheckPartitions faz a conferência periódica do número de partições.
-// A falha da consulta não é transição: a próxima conferência tenta de novo,
-// e quem diz se o broker está fora é a entrega.
+// maybeCheckPartitions faz a conferência periódica do número de partições e,
+// na mesma cadência, dos gatilhos de snapshot (pedido pendente e periódico
+// vencido, checkTriggers). Um RequestSnapshot antecipa a conferência. A
+// falha da consulta de partições não é transição: a próxima conferência
+// tenta de novo, e quem diz se o broker está fora é a entrega.
 func (p *Publisher) maybeCheckPartitions(ctx context.Context) error {
 	now := time.Now()
-	if now.Before(p.nextCheck) {
+	if now.Before(p.nextCheck) && !p.takeWake() {
 		return nil
 	}
 	p.nextCheck = now.Add(p.checkEvery)
 	n, err := p.partitions(ctx)
 	if err != nil {
 		p.log.Debug("replication.kafka.partitions.unknown", "topic partition check failed", "error", err.Error())
-		return nil
+	} else {
+		p.log.Debug("replication.kafka.partitions.checked", "topic partition count checked", "partitions", n)
+		if pinned := int(p.pinned.Load()); n != pinned {
+			p.log.Warn("replication.kafka.partitions.changed", "topic partition count changed; publishing a new snapshot",
+				"partitions", n, "pinned", pinned)
+			return &resetRequired{reason: ResetPartitionsChanged}
+		}
 	}
-	p.log.Debug("replication.kafka.partitions.checked", "topic partition count checked", "partitions", n)
-	if pinned := int(p.pinned.Load()); n != pinned {
-		p.log.Warn("replication.kafka.partitions.changed", "topic partition count changed; publishing a new snapshot",
-			"partitions", n, "pinned", pinned)
-		return errPartitionsChanged
-	}
-	return nil
+	return p.checkTriggers()
 }
 
 // awaitProducerMetadata espera o metadado do produtor conhecer as n
@@ -545,8 +594,12 @@ func (p *Publisher) awaitProducerMetadata(ctx context.Context, n int) {
 func (p *Publisher) noteFailure(err error) {
 	reason := ErrorPublish
 	var de *deliveryError
-	if errors.As(err, &de) {
+	var se *stageError
+	switch {
+	case errors.As(err, &de):
 		reason = de.reason
+	case errors.As(err, &se):
+		reason = se.reason
 	}
 	p.mu.Lock()
 	p.stats.State = StateRetrying
@@ -582,7 +635,7 @@ func (p *Publisher) logLivelock(stage string, d time.Duration) {
 	}
 	p.lastLivelock = now
 	p.log.Error("replication.kafka.livelock",
-		"the feed evicted the snapshot cursor; the publisher will snapshot again and may never catch up. Raise replication.maxBufferedBytes (and maxBatchBytes) so the feed retains the changes of a whole snapshot",
+		"the feed evicted the snapshot cursor; the publisher will snapshot again and may never catch up. Raise replication.maxDiskBytes so the feed retains the changes of a whole snapshot",
 		"stage", stage, "cursor", p.cursor, "snapshot_duration", d.String(), "reason", ResetGap.String())
 }
 

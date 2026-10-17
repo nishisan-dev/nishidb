@@ -13,8 +13,9 @@
 //
 // Marcadores de controle, sem `record`:
 //
-//	{"epoch":"<hex>","dataset":"<base>","op":"reset","reason":"startup|gap|snapshot_failed|partitions_changed","cursor":N,"at":"<instante>"}
+//	{"epoch":"<hex>","dataset":"<base>","op":"reset","reason":"startup|gap|snapshot_failed|partitions_changed|crash|rewind|retention|config_changed|requested|periodic","previousEpoch":"<hex>","cursor":N,"at":"<instante>"}
 //	{"epoch":"<hex>","dataset":"<base>","op":"snapshot_end","cursor":N,"count":N,"at":"<instante>"}
+//	{"epoch":"<hex>","dataset":"<base>","op":"resume","cursor":N,"at":"<instante>"}
 //	{"epoch":"<hex>","sequence":N,"dataset":"<base>","table":"<tabela>","op":"retain","floor":N,"at":"<instante>"}
 //
 // `dataset` é sempre o nome do dataset BASE, inclusive na linha da tabela
@@ -22,6 +23,31 @@
 // milissegundos, na MESMA grafia do timestamp das consultas
 // ("2026-09-27T12:34:56.789Z") — é o executor quem o escreve, e não uma
 // segunda implementação que pudesse divergir dele.
+//
+// A chave `previousEpoch` do `reset` é OPCIONAL, vem logo depois de `reason`
+// e carrega a epoch da geração que o reset substitui; vazia, é omitida (o
+// primeiro reset de um destino não tem geração anterior). Os seis motivos
+// `crash`, `rewind`, `retention`, `config_changed`, `requested` e `periodic`,
+// a chave `previousEpoch`, o op `resume` e o header `nishidb-reason` são
+// ADITIVOS ao contrato publicado na v0.14: um consumidor que só conhece os
+// quatro motivos antigos continua lendo o `reset` pelo `op`.
+//
+// O `resume` marca a retomada, na MESMA epoch, de um publicador que reabriu
+// o feed de um fechamento limpo: nenhum snapshot se segue, e `cursor` é o
+// último ponto confirmado antes do reinício, de onde o tail continua
+// (`sequence` acima dele). Não tem `sequence` nem `record`. Sai em TODAS as
+// partições, logo na subida e sem barreira de ack, e não exige ação nenhuma
+// do consumidor: é só observabilidade.
+//
+// A escolha entre `resume` e `reset` na subida (e o motivo do `reset`) é do
+// laço do publicador (publisher_resume.go, decide); o envelope só escreve o
+// que ele decide. O `previousEpoch` é a última epoch publicada NESTE destino,
+// lida do checkpoint dele, e sai só quando difere da epoch do `reset`.
+//
+// O `reset` sai com DOIS headers, `nishidb-op: reset` e
+// `nishidb-reason: <motivo>` (a mesma grafia do `reason` do JSON), para o
+// consumidor decidir sem abrir o corpo; os demais ops saem só com o
+// `nishidb-op`.
 //
 // `op: snapshot` é a linha de um Insert vindo do snapshot, e sai com
 // `sequence` igual ao cursor do reset corrente (nunca o Record.Sequence, nem
@@ -123,12 +149,16 @@ var ErrUnknownResetReason = errors.New("replicationkafka: unknown reset reason")
 var ErrInvalidRenderer = errors.New("replicationkafka: invalid renderer configuration")
 
 // ControlKey é a chave Kafka dos marcadores de controle (reset, snapshot_end,
-// retain). O slice é compartilhado: quem o recebe não pode escrever nele.
+// resume, retain). O slice é compartilhado: quem o recebe não pode escrever nele.
 var ControlKey = []byte("__nishidb_control__")
 
 // HeaderOp é o nome do header Kafka que carrega o `op` do registro, para o
 // consumidor rotear sem abrir o JSON.
 const HeaderOp = "nishidb-op"
+
+// HeaderReason é o nome do header Kafka que o `reset` carrega ALÉM do
+// HeaderOp, com o motivo na mesma grafia do `reason` do JSON.
+const HeaderReason = "nishidb-reason"
 
 // Op é o `op` do envelope. Não é a replication.Operation: o envelope tem ops
 // que o feed não tem (snapshot, reset, snapshot_end) e o feed tem operações
@@ -152,6 +182,9 @@ const (
 	OpReset
 	// OpSnapshotEnd é o marcador de fim do snapshot.
 	OpSnapshotEnd
+	// OpResume é o marcador de retomada, na mesma epoch, depois de um
+	// fechamento limpo.
+	OpResume
 )
 
 // opNames é a grafia de cada Op no fio, indexada pelo próprio Op. É ao mesmo
@@ -165,6 +198,7 @@ var opNames = [...][]byte{
 	OpRetain:      []byte("retain"),
 	OpReset:       []byte("reset"),
 	OpSnapshotEnd: []byte("snapshot_end"),
+	OpResume:      []byte("resume"),
 }
 
 // String devolve a grafia do op no fio, ou "" para um Op inválido.
@@ -226,6 +260,27 @@ const (
 	// ResetPartitionsChanged é a mudança do número de partições do tópico,
 	// que muda o destino das keys.
 	ResetPartitionsChanged
+	// ResetCrash é a subida depois de uma queda: o feed em disco não foi
+	// fechado de forma limpa, então a geração é nova.
+	ResetCrash
+	// ResetRewind é o feed que voltou no tempo em relação ao que o destino
+	// já recebeu: o .ckpt está à frente do feed, OU o topo do tópico tem uma
+	// posição acima da retomada, OU o topo traz uma epoch que o .ckpt não
+	// conhece, OU o topo não pode ser conferido (partição sem registro
+	// legível).
+	ResetRewind
+	// ResetRetention é o ponto confirmado que a retenção do feed já
+	// descartou.
+	ResetRetention
+	// ResetConfigChanged é a mudança da impressão da renderização declarada
+	// (RenderHash: tabelas publicadas, aliases e publishHistory), que
+	// invalida o que o tópico já tem. Tópico ou cluster diferentes NÃO são
+	// este motivo: são destino novo e saem como ResetStartup.
+	ResetConfigChanged
+	// ResetRequested é o snapshot pedido pelo operador.
+	ResetRequested
+	// ResetPeriodic é o snapshot agendado pela configuração.
+	ResetPeriodic
 )
 
 var resetReasonJSON = [...][]byte{
@@ -233,16 +288,29 @@ var resetReasonJSON = [...][]byte{
 	ResetGap:               []byte(`"gap"`),
 	ResetSnapshotFailed:    []byte(`"snapshot_failed"`),
 	ResetPartitionsChanged: []byte(`"partitions_changed"`),
+	ResetCrash:             []byte(`"crash"`),
+	ResetRewind:            []byte(`"rewind"`),
+	ResetRetention:         []byte(`"retention"`),
+	ResetConfigChanged:     []byte(`"config_changed"`),
+	ResetRequested:         []byte(`"requested"`),
+	ResetPeriodic:          []byte(`"periodic"`),
+}
+
+// ReasonHeader devolve o valor do header HeaderReason para o motivo, sem
+// alocar, ou nil para um motivo inválido. É o `reason` do JSON sem as aspas.
+// O slice é compartilhado: quem o recebe não pode escrever nele. A capacidade
+// é limitada ao comprimento, então um append sobre ele copia em vez de
+// escrever na tabela.
+func ReasonHeader(r ResetReason) []byte {
+	if r == 0 || int(r) >= len(resetReasonJSON) {
+		return nil
+	}
+	b := resetReasonJSON[r]
+	return b[1 : len(b)-1 : len(b)-1]
 }
 
 // String devolve a grafia do motivo no fio, ou "" para um motivo inválido.
-func (r ResetReason) String() string {
-	if r == 0 || int(r) >= len(resetReasonJSON) {
-		return ""
-	}
-	b := resetReasonJSON[r]
-	return string(b[1 : len(b)-1])
-}
+func (r ResetReason) String() string { return string(ReasonHeader(r)) }
 
 // FieldSource é o que o renderizador precisa do Compiled de uma tabela. O
 // *schema.Compiled a satisfaz.
@@ -267,6 +335,11 @@ type Renderer struct {
 	// trabalho jogado fora.
 	epoch     string
 	epochJSON []byte
+
+	// previousEpoch e previousEpochJSON são o cache do fragmento
+	// `,"previousEpoch":"<hex>"` do reset, pelo mesmo motivo da epoch.
+	previousEpoch     string
+	previousEpochJSON []byte
 
 	fr encoding.FieldReader
 }
@@ -397,7 +470,11 @@ func (r *Renderer) appendEntry(dst []byte, epoch string, op Op, sequence uint64,
 
 // AppendReset escreve o marcador de reset ao final de dst. cursor é de onde o
 // tail recomeça; o snapshot que segue sai com `sequence` igual a ele.
-func (r *Renderer) AppendReset(dst []byte, epoch string, reason ResetReason, cursor uint64, at time.Time) ([]byte, error) {
+//
+// previousEpoch é a epoch da geração que este reset substitui e sai na chave
+// `previousEpoch`, logo depois de `reason`; vazia, a chave é omitida. Em erro
+// (motivo fora da lista fechada), devolve dst intacto.
+func (r *Renderer) AppendReset(dst []byte, epoch, previousEpoch string, reason ResetReason, cursor uint64, at time.Time) ([]byte, error) {
 	if reason == 0 || int(reason) >= len(resetReasonJSON) {
 		return dst, &renderError{
 			msg: "replicationkafka: unknown reset reason " + strconv.FormatUint(uint64(reason), 10),
@@ -409,10 +486,25 @@ func (r *Renderer) AppendReset(dst []byte, epoch string, reason ResetReason, cur
 	dst = appendOp(dst, OpReset)
 	dst = append(dst, `,"reason":`...)
 	dst = append(dst, resetReasonJSON[reason]...)
+	if previousEpoch != "" {
+		dst = r.appendPreviousEpoch(dst, previousEpoch)
+	}
 	dst = append(dst, `,"cursor":`...)
 	dst = strconv.AppendUint(dst, cursor, 10)
 	dst = appendAt(dst, at)
 	return append(dst, '}'), nil
+}
+
+// AppendResume escreve o marcador de retomada ao final de dst. cursor é o
+// ponto de onde o tail continua, na mesma epoch.
+func (r *Renderer) AppendResume(dst []byte, epoch string, cursor uint64, at time.Time) []byte {
+	dst = r.appendEpoch(dst, epoch)
+	dst = append(dst, r.datasetJSON...)
+	dst = appendOp(dst, OpResume)
+	dst = append(dst, `,"cursor":`...)
+	dst = strconv.AppendUint(dst, cursor, 10)
+	dst = appendAt(dst, at)
+	return append(dst, '}')
 }
 
 // AppendSnapshotEnd escreve o marcador de fim do snapshot ao final de dst.
@@ -477,6 +569,17 @@ func (r *Renderer) appendEpoch(dst []byte, epoch string) []byte {
 		r.epochJSON = appendMember(r.epochJSON[:0], `{"epoch":`, epoch)
 	}
 	return append(dst, r.epochJSON...)
+}
+
+// appendPreviousEpoch escreve `,"previousEpoch":"<hex>"`. Como a epoch, o
+// fragmento é cacheado: a conversão do appendMember aloca, e o reset de um
+// destino repete a mesma epoch anterior em todas as retentativas do snapshot.
+func (r *Renderer) appendPreviousEpoch(dst []byte, previousEpoch string) []byte {
+	if previousEpoch != r.previousEpoch || r.previousEpochJSON == nil {
+		r.previousEpoch = previousEpoch
+		r.previousEpochJSON = appendMember(r.previousEpochJSON[:0], `,"previousEpoch":`, previousEpoch)
+	}
+	return append(dst, r.previousEpochJSON...)
 }
 
 // appendRecord escreve o `record`: o objeto com as colunas presentes do

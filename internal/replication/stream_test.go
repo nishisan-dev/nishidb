@@ -17,10 +17,7 @@ func rec(row uint64, payload string) types.Record {
 }
 
 func TestSameOperationDeduplicatesButOperationBoundariesDoNot(t *testing.T) {
-	s, err := New(Options{Interval: time.Minute, MaxMessages: 100, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 2 << 20})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := openTestFeed(t, Options{Interval: time.Minute, MaxMessages: 100, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 3 << 20})
 	now := time.Unix(10, 0)
 	s.Publish("events", Insert, rec(1, "a"), now)
 	s.Publish("events", Update, rec(1, "b"), now)
@@ -44,10 +41,7 @@ func TestSameOperationDeduplicatesButOperationBoundariesDoNot(t *testing.T) {
 }
 
 func TestSameOperationAfterDifferentOperationDoesNotCrossBoundary(t *testing.T) {
-	s, err := New(Options{Interval: time.Minute, MaxMessages: 100, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 2 << 20})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := openTestFeed(t, Options{Interval: time.Minute, MaxMessages: 100, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 3 << 20})
 	now := time.Unix(10, 0)
 	s.Publish("events", Insert, rec(1, "a"), now)
 	s.Publish("events", Update, rec(1, "b"), now)
@@ -66,25 +60,8 @@ func TestSameOperationAfterDifferentOperationDoesNotCrossBoundary(t *testing.T) 
 	}
 }
 
-func TestAcquireRequiresResyncAfterRetentionGap(t *testing.T) {
-	s, err := New(Options{Interval: 0, MaxMessages: 1, MaxBatchBytes: 200, MaxBufferedBytes: 300})
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Unix(1, 0)
-	s.Publish("events", Insert, rec(1, "a"), now)
-	epoch, _ := s.Cursor()
-	s.Publish("events", Insert, rec(2, "b"), now)
-	if _, _, err := s.Acquire(context.Background(), epoch, 0); !errors.Is(err, ErrResyncRequired) {
-		t.Fatalf("err=%v, want resync", err)
-	}
-}
-
 func TestIntervalFlushWakesFollower(t *testing.T) {
-	s, err := New(Options{Interval: time.Second, MaxMessages: 100, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 2 << 20})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := openTestFeed(t, Options{Interval: time.Second, MaxMessages: 100, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 3 << 20})
 	epoch, _ := s.Cursor()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

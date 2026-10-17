@@ -38,6 +38,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
+	"github.com/nishisan-dev/nishidb/internal/metareplication"
 	"github.com/nishisan-dev/nishidb/internal/metausers"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
@@ -227,7 +228,7 @@ type Server struct {
 
 	// vidaCtx é o MESMO ctx que Run recebe — o que signal.NotifyContext
 	// cancela no SIGTERM (cmd/nishidb/main.go). handleCompact (mutations.go)
-	// o compõe com r.Context() via ctxOfMutacao, porque http.Server.Shutdown
+	// o compõe com r.Context() via mutationContext, porque http.Server.Shutdown
 	// NÃO cancela o contexto de uma requisição em voo — só espera o handler
 	// devolver, e por um tempo limitado (o ctx de 15s de encerra()). Sem
 	// esta composição, uma passada manual de compaction (POST /v1/compact)
@@ -236,7 +237,7 @@ type Server struct {
 	// Close (storage/compaction.go, ForCompaction) fica sem teto esperando
 	// por ela, minutos em produção, até o systemd desistir e mandar SIGKILL.
 	// Nil só em testes que constroem o handler sem passar por Run —
-	// ctxOfMutacao cai para o contrato antigo (só o cliente decide) nesse
+	// mutationContext cai para o contrato antigo (só o cliente decide) nesse
 	// caso, o que preserva o comportamento anterior a esta composição.
 	vidaCtx context.Context
 
@@ -437,17 +438,24 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		if err := s.closeAlarmDelivery(); err != nil {
 			log.Warn("alarm.delivery.close", "failed to close alarm delivery on aborted startup", "error", err.Error())
 		}
-		// Cobre a falha do openReplicationPublishers no meio da lista (um
-		// destino cuja segurança não resolve depois de outros já montados):
-		// os publicadores montados nunca foram iniciados, e o Close só solta
-		// o cliente Kafka de cada um. Fechar os feeds antes é o que faz esse
-		// Close sair na hora, pela mesma ordem do encerra(). Sem teste: a
-		// validação da subida recusa quase tudo que chegaria aqui.
+		// Os feeds dos datasets já abertos passaram pelo Resume, e nada mutou os
+		// Stores desde então (nenhum produtor sobe antes do Run): o closeFeeds
+		// os fecha com a impressão e a marca limpa, e a próxima subida retoma
+		// a mesma geração. Sem checkpoint aqui, de propósito: o Open de cada
+		// Store já checkpointou depois da recovery, e a posição de escrita não
+		// andou.
+		//
+		// Também cobre a falha do openReplicationPublishers no meio da lista
+		// (um destino cuja segurança não resolve depois de outros já
+		// montados): os publicadores montados nunca foram iniciados, e o Close
+		// só solta o cliente Kafka de cada um. Fechar os feeds antes é o que
+		// faz esse Close sair na hora, pela mesma ordem do encerra().
 		s.closeFeeds()
 		s.closePublishers()
 		if err := s.closeDatasets(); err != nil {
 			log.Warn("datasets.close", "falha ao fechar datasets na subida abortada", "erro", err.Error())
 		}
+		s.waitFeeds()
 		s.closeUsers(log)
 	}()
 
@@ -488,6 +496,10 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 				Username: os.Getenv(specs[name].Replication.UsernameEnv),
 				Password: os.Getenv(specs[name].Replication.PasswordEnv),
 				Replica:  replica,
+				// O follower que declara a histórica a exige do master: sem
+				// ela no feed, a irmã ficaria vazia em silêncio.
+				RequireHistory: d.irma != nil,
+				Logger:         log,
 			}
 			if d.irma != nil {
 				d.irma.follower = d.follower
@@ -525,14 +537,13 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*dataset, error) {
 	dir := s.cfg.DatasetRootDir(spec.Name)
 	indexados := schema.IndexedFieldNames(spec)
+	// O feed de replicação (master) abre DEPOIS do storage.Open, e não antes:
+	// o diretório dele mora dentro do dataset, e é o LOCK que o Store toma no
+	// Open que garante que nenhum outro processo o lê ou grava junto. O
+	// callback fecha sobre a variável, preenchida logo abaixo; o Open não
+	// publica nada (o replay da recovery não passa pelo callback), então
+	// nenhuma mudança encontra a variável vazia.
 	var feed *replication.Stream
-	if spec.Replication.Enabled && spec.Replication.Role == "master" {
-		var ferr error
-		feed, ferr = replication.New(replication.Options{Interval: spec.Replication.FlushInterval, MaxMessages: spec.Replication.MaxMessages, MaxBatchBytes: spec.Replication.MaxBatchBytes, MaxBufferedBytes: spec.Replication.MaxBufferedBytes})
-		if ferr != nil {
-			return nil, fmt.Errorf("dataset %q: replication: %w", spec.Name, ferr)
-		}
-	}
 	// O schema é compilado DENTRO do Open, pelo callback dos contadores: as
 	// definições precisam do schema, e o replay da recovery precisa das
 	// definições. É o mesmo Compile de sempre, no mesmo dicionário — só que
@@ -553,14 +564,44 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		SnapshotMaxBytes:                s.cfg.SnapshotMaxBytes(),
 		CompileCountersCallbackFunction: comp.Callback(),
 		OnReplicationChange: func(table string, op replication.Operation, rec types.Record, at time.Time) {
-			if feed != nil {
-				feed.Publish(table, op, rec, at)
-			}
+			s.publishChange(feed, table, op, rec, at)
 		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
 	}
+	if spec.Replication.Enabled && spec.Replication.Role == "master" {
+		// O Open do feed SÓ LÊ (o `state` e, se ele marca fechamento limpo, os
+		// segmentos); quem decide a geração e grava é o Resume, no fim desta
+		// abertura, com a impressão dos Stores já recuperados.
+		feed, err = replication.Open(replication.FeedDir(dir), replication.Options{
+			Interval:         spec.Replication.FlushInterval,
+			MaxMessages:      spec.Replication.MaxMessages,
+			MaxBatchBytes:    spec.Replication.MaxBatchBytes,
+			MaxBufferedBytes: spec.Replication.MaxBufferedBytes,
+			MaxDiskBytes:     spec.Replication.MaxDiskBytes,
+			// Só anuncia: quem deixa a histórica fora do feed é a fiação
+			// (openHistory e publishedHistory). Anuncia SEMPRE que não há
+			// histórica publicada — `publishHistory: false` ou dataset sem
+			// `history:` —, para que o follower que declara a irmã recuse
+			// (history_unavailable) em vez de ficar com ela vazia em silêncio.
+			ExcludeHistory: spec.History == nil || !spec.Replication.PublishHistory,
+			Logger:         log,
+		})
+		if err != nil {
+			return nil, closingStore(st, fmt.Errorf("dataset %q: replication: %w", spec.Name, err))
+		}
+	}
+	// Qualquer saída com erro daqui em diante fecha o feed sem tocar o disco:
+	// o Resume é o último passo da abertura, antes dele o Close(nil, 0) não
+	// grava nada, e um Resume que falhou não deixou geração a fechar.
+	opened := false
+	defer func() {
+		if !opened && feed != nil {
+			_ = feed.Close(nil, 0)
+			feed.Wait()
+		}
+	}()
 	compilado := comp.Compiled()
 	if compilado == nil {
 		return nil, closingStore(st, fmt.Errorf("dataset %q: o Open não compilou o schema", spec.Name))
@@ -710,6 +751,20 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	}); err != nil {
 		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
+	// `_meta.replication` entra pelo mesmo motivo, e SEMPRE: o dataset sem
+	// replicação responde a tabela vazia. As duas fontes são closures sobre d
+	// porque os publicadores só nascem em openReplicationPublishers, depois de
+	// todos os datasets abertos — capturá-los aqui guardaria a lista vazia.
+	// Sem Checkpoints: o publicador vivo já traz o que o .ckpt diria.
+	//
+	// A irmã não a recebe, como não recebe a `_meta.kafka`: o feed e os
+	// publicadores são do base.
+	if err := metareplication.Register(s.eng, spec.Name, metareplication.Source{
+		Feed:         d.feedStatus,
+		Destinations: d.publisherStats,
+	}); err != nil {
+		return nil, failing(fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
 	// A view `<schema>.alarms` (atalho `_counters.alarms`) entra pelo mesmo
 	// caminho, e SEMPRE — inclusive num dataset sem alarme declarado, onde ela
 	// responde a lista vazia: "este dataset não observa nada" é uma resposta.
@@ -744,7 +799,102 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		return nil, failing(err)
 	}
 	d.irma = irma
+	// O Resume vem por ÚLTIMO, com os dois Stores recuperados: é a impressão
+	// deles que decide entre retomar a geração e abrir uma nova. Nenhum
+	// produtor de mudança roda antes dele (expiração, compaction, retenção,
+	// rotas HTTP e ingestão sobem no Run), e um Publish antes do Resume
+	// forçaria a queda.
+	if feed != nil {
+		if err := s.resumeFeed(d, log); err != nil {
+			// A irmã fecha antes do base: o dicionário é o dele.
+			if irma != nil {
+				err = errors.Join(err, irma.st.Close())
+			}
+			return nil, failing(err)
+		}
+	}
+	opened = true
 	return d, nil
+}
+
+// publishChange entrega ao feed a mudança que o Store aplicou. Chamada sob o wmu
+// do Store, no caminho de escrita; sem feed (dataset sem replicação, ou a
+// histórica fora do feed) não faz nada.
+func (s *Server) publishChange(feed *replication.Stream, table string, op replication.Operation, rec types.Record, at time.Time) {
+	if feed == nil {
+		return
+	}
+	feed.Publish(table, op, rec, at)
+}
+
+// publishedHistory devolve a tabela irmã quando ela entra no feed. Com
+// `replication.publishHistory: false` a histórica fica fora do feed inteiro
+// (tail, retain e snapshot), e nil é a resposta para os três.
+func (d *dataset) publishedHistory() *dataset {
+	if d.irma == nil || !d.spec.Replication.PublishHistory {
+		return nil
+	}
+	return d.irma
+}
+
+// feedFingerprint é a impressão dos Stores que o feed do dataset publica: o
+// base e, só quando a histórica é publicada, a histórica, nesta ordem. O nome
+// de cada posição é o do Store (o dataset e a tabela irmã), estável entre
+// subidas.
+//
+// Com a histórica publicada, uma mutação offline só na irmã (um append, ou a
+// retenção rodada com a replicação desligada) muda a impressão, e a próxima
+// subida é queda. A histórica fora do feed fica fora da impressão: mexer nela
+// não toca nada do que o feed publicou.
+func (s *Server) feedFingerprint(d *dataset) (replication.Fingerprint, error) {
+	stores := []*dataset{d}
+	if h := d.publishedHistory(); h != nil {
+		stores = append(stores, h)
+	}
+	fp := replication.Fingerprint{Stores: make([]replication.StorePosition, 0, len(stores))}
+	for _, x := range stores {
+		pos, err := x.st.WritePosition()
+		if err != nil {
+			return replication.Fingerprint{}, fmt.Errorf("dataset %q: replication fingerprint: %w", x.nome, err)
+		}
+		fp.Stores = append(fp.Stores, pos)
+	}
+	return fp, nil
+}
+
+// resumeFeed lê a impressão dos Stores recuperados e decide a geração do feed.
+// O INFO diz ao operador de onde a geração veio: depois de um reinício limpo
+// o feed continua a mesma epoch; depois de queda ou de mutação offline, a
+// epoch é nova e os consumidores refazem o snapshot.
+func (s *Server) resumeFeed(d *dataset, log *logging.Logger) error {
+	fp, err := s.feedFingerprint(d)
+	if err != nil {
+		return err
+	}
+	origin, err := d.replication.Resume(fp)
+	if err != nil {
+		return fmt.Errorf("dataset %q: replication: %w", d.nome, err)
+	}
+	epoch, sequence := d.replication.Cursor()
+	log.Info("replication.feed.resumed", "the replication feed decided its generation",
+		"dataset", d.nome, "origin", feedOriginName(origin.Kind), "epoch", epoch,
+		"sequence", sequence, "previousEpoch", origin.PreviousEpoch)
+	return nil
+}
+
+// feedOriginName é a grafia da origem da geração no log.
+func feedOriginName(k replication.OriginKind) string {
+	switch k {
+	case replication.OriginFresh:
+		return "fresh"
+	case replication.OriginClean:
+		return "clean"
+	case replication.OriginCrash:
+		return "crash"
+	case replication.OriginRotated:
+		return "rotated"
+	}
+	return "unknown"
 }
 
 // closingStore devolve o erro original, fechando o Store antes. O erro do
@@ -1247,10 +1397,12 @@ func (s *Server) risesHTTP() error {
 	return nil
 }
 
-// ctxOfMutacao devolve um ctx cancelado por QUALQUER um dos dois: o cliente
+// mutationContext devolve um ctx cancelado por QUALQUER um dos dois: o cliente
 // HTTP desistindo (r.Context()) OU o servidor encerrando (vidaCtx, o
 // cancelado no SIGTERM — godoc do campo). É o que handleCompact (mutations.go)
-// usa para chamar Store.CompactaUmaVez, cuja passada pode levar minutos.
+// usa para chamar Store.CompactaUmaVez, cuja passada pode levar minutos, e o
+// que o long-poll do /v1/replication/batch e o snapshot HTTP usam para sair
+// no encerramento (replication_http.go).
 //
 // A composição existe porque http.Server.Shutdown não cancela r.Context() —
 // só espera o handler devolver, com um teto (o ctx de 15s de encerra()) que
@@ -1263,7 +1415,12 @@ func (s *Server) risesHTTP() error {
 // que ele devolve é o que permite liberar o registro em vidaCtx assim que a
 // chamada acaba (via o cancel devolvido aqui), em vez de vazar uma goroutine
 // por requisição até o processo inteiro sair.
-func (s *Server) ctxOfMutacao(r *http.Request) (context.Context, context.CancelFunc) {
+//
+// Com o servidor JÁ encerrando, o ctx sai cancelado na hora: o AfterFunc
+// dispara o cancel numa goroutine própria, e sem isso a requisição que chega
+// no meio do encerramento ainda começaria o trabalho (um snapshot HTTP de
+// tabela pequena sairia inteiro com 200, em vez do 410 do encerramento).
+func (s *Server) mutationContext(r *http.Request) (context.Context, context.CancelFunc) {
 	base := r.Context()
 	if s.vidaCtx == nil {
 		// Só em teste que chama o handler sem passar por Run: sem vidaCtx
@@ -1271,6 +1428,10 @@ func (s *Server) ctxOfMutacao(r *http.Request) (context.Context, context.CancelF
 		return base, func() {}
 	}
 	ctx, cancel := context.WithCancel(base)
+	if s.vidaCtx.Err() != nil {
+		cancel()
+		return ctx, cancel
+	}
 	para := context.AfterFunc(s.vidaCtx, cancel)
 	return ctx, func() {
 		para()
@@ -1286,15 +1447,36 @@ func (s *Server) ctxOfMutacao(r *http.Request) (context.Context, context.CancelF
 // morrer. É idempotente.
 func (s *Server) Close() error { return s.encerra() }
 
+// encerra é o encerramento gracioso. A ORDEM é o que faz o reinício limpo
+// retomar a MESMA geração do feed de replicação (o follower e o destino Kafka
+// continuam sem snapshot), e cada passo depende do anterior:
+//
+//  1. A ingestão já parou: o Run espera as goroutines dela antes de chamar
+//     aqui. O ctx do Run, já cancelado, solta os handlers da replicação: o
+//     /v1/replication/batch e o /v1/replication/snapshot usam o ctx da
+//     requisição composto com ele (mutationContext), e o long-poll de um
+//     seguidor sai na hora com 410 (o master está encerrando), nunca com 409,
+//     que o mandaria refazer o snapshot.
+//  2. http.Shutdown, mais o loopback e o pprof: nenhuma rota roda depois
+//     daqui, inclusive as de mutação (/v1/compact publica no feed).
+//  3. stopStoreProducers: compaction, expiração e retenção param em todo
+//     Store. Depois daqui nada publica no feed nem move a posição de escrita.
+//  4. checkpointStores: todo dataset é checkpointado (o par base e histórica),
+//     com ou sem ingestão Kafka. O Store.Close não checkpointa, e a marca
+//     limpa do feed não pode cobrir record que não chegou ao disco.
+//  5. closeFeeds: com a posição agora estável, cada feed fecha com a impressão
+//     dos Stores e a marca limpa — sem ela, se a posição de um Store
+//     publicado não é legível (o checkpoint que falhou no fsync deixa o
+//     writer falho). Os feeds fecham em paralelo, com o orçamento total
+//     feedCloseBudget.
+//  6. closePublishers: os publicadores drenam a cauda para o Kafka, com
+//     orçamento PRÓPRIO (publisherCloseBudget), separado do prazo do Shutdown,
+//     e gravam o checkpoint deles.
+//  7. Alarmes, emissões, séries e contadores param antes do quiesce.
+//  8. closeDatasets solta os flocks.
+//  9. waitFeeds encerra a vida dos feeds e fecha o log de segmentos: até o
+//     passo 6 os publicadores ainda liam do disco a cauda que não receberam.
 func (s *Server) encerra() error {
-	// ORDEM: o feed de replicação fecha PRIMEIRO, antes do http.Shutdown. O
-	// Close acorda o long-poll de cada seguidor, que recebe o fim do feed na
-	// hora; fechado depois, o Shutdown esperaria esses long-polls até o
-	// próprio prazo. E é o Close que deixa os publicadores entregarem a cauda
-	// retida e saírem — eles drenam em seguida, com orçamento PRÓPRIO
-	// (publisherCloseBudget), separado do prazo do Shutdown.
-	s.closeFeeds()
-	s.closePublishers()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	var errs []error
@@ -1317,6 +1499,18 @@ func (s *Server) encerra() error {
 	if s.pprofSrv != nil {
 		errs = append(errs, s.pprofSrv.Shutdown(ctx))
 	}
+	s.stopStoreProducers()
+	// A falha não derruba o encerramento, e é a mesma régua do
+	// closePublishers: nada do dataset se perde, porque a recovery da próxima
+	// subida reaplica a cauda. O feed fica coberto pelo godoc do
+	// checkpointStores.
+	if err := s.checkpointStores(); err != nil {
+		s.log.Warn("datasets.shutdown_checkpoint_failed",
+			"a dataset did not checkpoint on shutdown; the next start replays its tail",
+			"error", err.Error())
+	}
+	s.closeFeeds()
+	s.closePublishers()
 	// ORDEM: os alarmes param ANTES do quiesce dos Stores.
 	//
 	// O laço lê os contadores pelo campo do Store, que é leitura direta sem a
@@ -1337,10 +1531,68 @@ func (s *Server) encerra() error {
 	s.seriesDelivery.Close()
 	s.forCounterMetrics()
 	errs = append(errs, s.closeDatasets())
+	s.waitFeeds()
 	// A tabela de usuários fecha por último: até aqui o http.Server ainda
 	// podia estar drenando requests autenticados contra ela.
 	if s.users != nil {
 		errs = append(errs, s.users.Close())
+	}
+	return errors.Join(errs...)
+}
+
+// stopStoreProducers cancela e AGUARDA, em todo Store, os laços que publicam
+// no feed ou gravam record: compaction (o copy-forward), expiração (a lápide)
+// e retenção (o retain da histórica, que move o piso da impressão). Os For*
+// são idempotentes, e o Close de cada Store os chama de novo.
+//
+// ForRebuild, ForHistoryTimeBounds e ForRetirementOfGroups ficam com o Close:
+// reconstruir índice de segmento, medir os limites de tempo da histórica e
+// aposentar grupo de contador não publicam no feed nem gravam record, e por
+// isso não mexem na posição de escrita.
+func (s *Server) stopStoreProducers() {
+	for _, d := range s.datasets {
+		d.st.ForCompaction()
+		d.st.ForExpiration()
+		d.st.ForRetention()
+	}
+}
+
+// checkpointStores checkpointa todo dataset base com a sua irmã
+// (storage.PairWithHistory: a histórica primeiro), com ou sem ingestão Kafka:
+// é o checkpoint que leva ao disco os records gravados desde o último, e o
+// feed só fecha limpo cobrindo record durável. Os erros da base e da irmã
+// saem juntos, com o nome do dataset.
+//
+// A falha não precisa de canal próprio até o closeFeeds, e o motivo está no
+// Store: a única falha que deixaria record fora do disco é a do fsync dos
+// segmentos, que é a PRIMEIRA etapa do checkpoint e deixa o writer falho
+// (sticky). Com o writer falho a posição de escrita não é legível, e o
+// closeFeeds fecha o feed sem a marca limpa. As falhas que NÃO deixam o
+// writer falho vêm todas depois desse fsync, com os records já duráveis: o
+// manifest antigo governa e a recovery reaplica a cauda. Nos dois casos, ou a
+// impressão bate, ou a subida seguinte é queda; nunca uma retomada falsa.
+//
+// Um Store já fechado (um segundo encerramento) não é falha: o primeiro já
+// checkpointou.
+func (s *Server) checkpointStores() error {
+	var errs []error
+	for _, d := range s.datasets {
+		if d.ehHistorico {
+			continue // vai junto do base
+		}
+		var histErr error
+		pair := storage.PairWithHistory{Store: d.st, AoFalharOHistory: func(err error) { histErr = err }}
+		if d.irma != nil {
+			pair.Hist = d.irma.st
+		}
+		err := pair.Checkpoint()
+		if histErr != nil {
+			err = errors.Join(histErr, err)
+		}
+		if err == nil || errors.Is(err, storage.ErrDatasetClosed) {
+			continue
+		}
+		errs = append(errs, fmt.Errorf("dataset %q: %w", d.nome, err))
 	}
 	return errors.Join(errs...)
 }

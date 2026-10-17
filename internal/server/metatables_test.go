@@ -46,12 +46,12 @@ func idsOfMetaTables(t *testing.T, srv *server.Server, dataset string) string {
 // pacote query montam o motor por conta própria e não passam por esta fiação.
 //
 // O catálogo do fixture é inteiro: a base, a `_meta.fields` que o motor
-// acrescenta à parte, as duas tabelas de meta que a abertura do dataset
-// registra mesmo sem contador e sem Kafka declarados, e a view `alarms`, que
+// acrescenta à parte, as tabelas de meta que a abertura do dataset registra
+// mesmo sem contador, sem Kafka e sem replicação declarados, e a view `alarms`, que
 // entra sob `_counters` mesmo sem alarme declarado.
 func TestMetaTablesRespondePelaRotaDeConsultaDoServidor(t *testing.T) {
 	srv := serverWithData(t, 4, blockPadrao)
-	const want = "_counters.alarms,_meta.counter_metrics,_meta.counters,_meta.fields,_meta.kafka,_meta.tables,d"
+	const want = "_counters.alarms,_meta.counter_metrics,_meta.counters,_meta.fields,_meta.kafka,_meta.replication,_meta.tables,d"
 	if got := idsOfMetaTables(t, srv, "d"); got != want {
 		t.Fatalf("catálogo = %s, quero %s", got, want)
 	}

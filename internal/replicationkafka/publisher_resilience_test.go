@@ -66,7 +66,7 @@ func TestSnapshotAbortedByGapIsCountedAndLogged(t *testing.T) {
 	}
 	logs := h.logs.String()
 	if !strings.Contains(logs, `"replication.kafka.livelock"`) || !strings.Contains(logs, `"stage":"snapshot"`) ||
-		!strings.Contains(logs, "maxBufferedBytes") || !strings.Contains(logs, "snapshot_duration") {
+		!strings.Contains(logs, "replication.maxDiskBytes") || !strings.Contains(logs, "snapshot_duration") {
 		t.Errorf("sem o ERROR de livelock do snapshot abortado:\n%s", logs)
 	}
 }
@@ -195,11 +195,12 @@ func TestBrokerMessageTooLargeIsRetriedAndCounted(t *testing.T) {
 }
 
 // O lease é solto logo depois do render: com o broker recusando o lote por
-// mais de um ciclo de retentativa, o feed despeja o lote e libera a memória
-// dele, sem invalidar o intervalo; o cursor só avança com o ack.
+// mais de um ciclo de retentativa, o feed despeja o lote (já gravado no
+// disco) e libera a memória dele, sem invalidar o intervalo; o cursor só
+// avança com o ack.
 func TestLeaseReleasedWhileDeliveryRetries(t *testing.T) {
 	h := newHarness(t, harnessOpts{partitions: 3,
-		feed:   replication.Options{Interval: 0, MaxMessages: 100, MaxBatchBytes: 2048, MaxBufferedBytes: 2048},
+		feed:   replication.Options{Interval: 0, MaxMessages: 100, MaxBatchBytes: 2048, MaxBufferedBytes: 6144},
 		target: func(k *config.KafkaTargetSpec) { k.Timeout = "1s" },
 		publisher: func(o *replicationkafka.Options) {
 			replicationkafka.WithKgoOpts(o, kgo.MetadataMinAge(50*time.Millisecond))
@@ -220,12 +221,15 @@ func TestLeaseReleasedWhileDeliveryRetries(t *testing.T) {
 	// Um lote que ocupa quase todo o teto do feed: segurado pelo lease, ele
 	// não deixaria espaço para a escrita seguinte.
 	big := payloadOf(t, h.base, namedValue{"identifier", str("big")},
-		namedValue{"persistent", doc(`{"blob":"` + strings.Repeat("x", 1700) + `"}`)})
+		namedValue{"persistent", doc(`{"blob":"` + strings.Repeat("x", 5796) + `"}`)})
 	bigSeq := h.upsertPayload("big", big)
 	waitFor(t, "um ciclo de retentativa", func() bool {
 		s := h.pub.Stats()
 		return s.State == replicationkafka.StateRetrying && rejected.Load() >= 2
 	})
+	// Só lote gravado sai da memória: sem esperar o gravador, a escrita
+	// seguinte acharia o lote ainda na fila e invalidaria por outro motivo.
+	waitFor(t, "lote gravado no disco", func() bool { return h.feed.Status().DiskBytes > 0 })
 	for i := range 4 {
 		h.upsert("after-"+strconv.Itoa(i), int64(i))
 	}

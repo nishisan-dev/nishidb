@@ -46,8 +46,10 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 	// closePublishers é o laço do publicador da replicação em Kafka: o
 	// snapshot em curso lê os Stores. closeFeeds não é laço sobre o Store,
 	// mas é o que deixa o publicador sair (ele drena a cauda até o fim do
-	// feed), e entra na lista pela ordem asseverada abaixo.
-	paradas := []string{"forAlarms", "forEmitters", "forCounterMetrics", "closeAlarmDelivery", "seriesDelivery.Close", "closeFeeds", "closePublishers"}
+	// feed), e entra na lista pela ordem asseverada abaixo; stopStoreProducers
+	// e checkpointStores precisam dos Stores abertos.
+	paradas := []string{"forAlarms", "forEmitters", "forCounterMetrics", "closeAlarmDelivery", "seriesDelivery.Close",
+		"stopStoreProducers", "checkpointStores", "closeFeeds", "closePublishers"}
 	const quiesce = "closeDatasets"
 
 	pos := map[string]int{}
@@ -87,21 +89,33 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 	if pos["forEmitters"] >= pos["seriesDelivery.Close"] {
 		t.Error("Kafka producers must close after all counter emitters have stopped")
 	}
-	// A ordem do encerramento da replicação: o feed fecha antes do
-	// http.Shutdown, para o long-poll dos seguidores sair na hora em vez de
-	// gastar o prazo do Shutdown; e antes dos publicadores, que só saem
-	// depois de drenar a cauda até o fim do feed.
-	posShutdown, ok := pos["http.Shutdown"]
-	if !ok {
-		t.Fatal("encerra() não chama s.http.Shutdown: este gate precisa dele para comparar")
+	// A ordem do encerramento da replicação, que é o que faz o reinício limpo
+	// retomar a mesma geração do feed:
+	//
+	//	http.Shutdown < stopStoreProducers < checkpointStores < closeFeeds < closePublishers < closeDatasets < waitFeeds
+	//
+	// O feed fecha DEPOIS do http.Shutdown (a rota /v1/compact publica), dos
+	// produtores do Store (compaction, expiração e retenção publicam e movem
+	// a posição de escrita) e do checkpoint (a marca limpa não pode cobrir
+	// record fora do disco): só aí a impressão dos Stores lida no closeFeeds
+	// é estável. E antes dos publicadores, que só saem depois de drenar a
+	// cauda até o fim do feed. O long-poll dos seguidores não segura o
+	// Shutdown: o handler sai pelo ctx do Run, já cancelado.
+	// waitFeeds fecha o log do feed: os publicadores ainda leem do disco a
+	// cauda que não receberam até o closePublishers voltar.
+	order := []string{"http.Shutdown", "stopStoreProducers", "checkpointStores", "closeFeeds", "closePublishers", quiesce, "waitFeeds"}
+	for _, name := range order {
+		if _, ok := pos[name]; !ok {
+			t.Fatalf("encerra() não chama %s: este gate precisa dele para comparar", name)
+		}
 	}
-	if pos["closeFeeds"] >= posShutdown {
-		t.Error("encerra() tem de fechar os feeds de replicação ANTES do http.Shutdown: " +
-			"o long-poll dos seguidores seguraria o Shutdown até o prazo")
-	}
-	if pos["closeFeeds"] >= pos["closePublishers"] {
-		t.Error("encerra() tem de fechar os feeds de replicação ANTES dos publicadores: " +
-			"cada publicador esperaria o orçamento inteiro por um fim de feed que não vem")
+	for i := 1; i < len(order); i++ {
+		if pos[order[i-1]] >= pos[order[i]] {
+			t.Errorf("encerra() chama %s (posição %d) depois de %s (posição %d): a ordem tem de ser %v; "+
+				"invertida, uma mudança publicada depois da impressão do feed (ou depois do Close dele) "+
+				"faz a próxima subida abrir uma geração nova e mandar todo consumidor ao snapshot",
+				order[i-1], pos[order[i-1]], order[i], pos[order[i]], order)
+		}
 	}
 	for _, parada := range paradas {
 		p, ok := pos[parada]
@@ -112,6 +126,73 @@ func TestLacosDoServidorParamAntesDoQuiesceDosDatasets(t *testing.T) {
 		if p > posQuiesce {
 			t.Errorf("encerra() chama %s (posição %d) DEPOIS de %s (posição %d): "+
 				"uma passada em voo leria um Store fechado", parada, p, quiesce, posQuiesce)
+		}
+	}
+}
+
+// TestStopStoreProducersParaOsTresProdutoresDeTodoStore é a metade estrutural
+// da garantia do stopStoreProducers: ele percorre s.datasets (que inclui a
+// tabela irmã logo depois do base) e, sobre o Store de CADA item, chama
+// ForCompaction, ForExpiration e ForRetention.
+//
+// É gate, e não só teste de comportamento, pela mesma razão do gate de cima:
+// a compaction e a retenção são canceladas pelo ctx do Run no mesmo instante
+// em que o encerramento começa, e uma passada que não esteja exatamente no
+// meio de uma unidade de trabalho termina sozinha. Tirar o For* da lista quase
+// nunca deixa rastro observável — o dano é a janela rara em que a passada está
+// em voo, que o teste de comportamento cobre para a expiração e a retenção.
+func TestStopStoreProducersParaOsTresProdutoresDeTodoStore(t *testing.T) {
+	const path = "../server/server.go"
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("lendo %s: %v", path, err)
+	}
+	corpo := methodBody(t, f, "Server", "stopStoreProducers")
+	want := []string{"ForCompaction", "ForExpiration", "ForRetention"}
+	var laco *ast.RangeStmt
+	for _, stmt := range corpo.List {
+		r, ok := stmt.(*ast.RangeStmt)
+		if !ok {
+			continue
+		}
+		// for _, d := range s.datasets
+		x, ok := r.X.(*ast.SelectorExpr)
+		if ok && x.Sel.Name == "datasets" {
+			laco = r
+		}
+	}
+	if laco == nil {
+		t.Fatal("stopStoreProducers não percorre s.datasets: a irmã e os outros datasets ficariam com os produtores de pé")
+	}
+	v, ok := laco.Value.(*ast.Ident)
+	if !ok {
+		t.Fatal("o laço de stopStoreProducers não nomeia o dataset do range")
+	}
+	called := map[string]bool{}
+	ast.Inspect(laco.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		// <d>.st.ForX()
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		st, ok := sel.X.(*ast.SelectorExpr)
+		if !ok || st.Sel.Name != "st" {
+			return true
+		}
+		if id, ok := st.X.(*ast.Ident); ok && id.Name == v.Name {
+			called[sel.Sel.Name] = true
+		}
+		return true
+	})
+	for _, name := range want {
+		if !called[name] {
+			t.Errorf("stopStoreProducers não chama %s.st.%s() no laço de s.datasets: o produtor seguiria publicando "+
+				"(ou movendo a posição de escrita) depois de o feed ler a impressão", v.Name, name)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/replication"
 	"github.com/nishisan-dev/nishidb/internal/replicationkafka"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
 // publisherCloseBudget é o orçamento PRÓPRIO da drenagem dos publicadores no
@@ -189,13 +191,17 @@ func (s *Server) openReplicationPublishers(log *logging.Logger) error {
 		tables := []replication.SnapshotTable{{Name: d.nome, Source: d.st}}
 		historyName := ""
 		var history replicationkafka.FieldSource
-		if d.irma != nil {
-			tables = append(tables, replication.SnapshotTable{Name: d.irma.nome, History: true, Source: d.irma.st})
-			historyName = d.irma.nome
+		// Só a histórica PUBLICADA entra: com `publishHistory: false` ela
+		// fica fora do snapshot do publicador, como já fica fora do tail.
+		if h := d.publishedHistory(); h != nil {
+			tables = append(tables, replication.SnapshotTable{Name: h.nome, History: true, Source: h.st})
+			historyName = h.nome
 			// O Compiled PRÓPRIO da irmã (openHistory), e não o do base: é
 			// ele que resolve as colunas da histórica pelo FieldID.
-			history = d.irma.sch
+			history = h.sch
 		}
+		renderHash := replicationkafka.RenderHash(renderSpecOf(d))
+		checkpointDir := replicationkafka.CheckpointDir(s.cfg.DatasetRootDir(d.nome))
 		for _, name := range d.spec.Replication.Targets {
 			target, ok := targets[name]
 			if !ok {
@@ -210,13 +216,16 @@ func (s *Server) openReplicationPublishers(log *logging.Logger) error {
 				return fmt.Errorf("dataset %q: replication target %q: %w", d.nome, name, err)
 			}
 			p, err := replicationkafka.New(replicationkafka.Options{
-				Dataset:  d.nome,
-				Target:   target,
-				Feed:     d.replication,
-				Tables:   tables,
-				Renderer: renderer,
-				Logger:   log,
-				Now:      s.now,
+				Dataset:          d.nome,
+				Target:           target,
+				Feed:             d.replication,
+				Tables:           tables,
+				Renderer:         renderer,
+				Logger:           log,
+				Now:              s.now,
+				CheckpointDir:    checkpointDir,
+				RenderHash:       renderHash,
+				PeriodicSnapshot: d.spec.Replication.PeriodicSnapshot,
 			})
 			if err != nil {
 				return fmt.Errorf("dataset %q: replication target %q: %w", d.nome, name, err)
@@ -227,6 +236,36 @@ func (s *Server) openReplicationPublishers(log *logging.Logger) error {
 	return nil
 }
 
+// renderSpecOf é a renderização DECLARADA do dataset, que o publicador
+// compara com a do .ckpt na subida: as tabelas publicadas (o base e, só
+// quando publicada, a histórica), publishHistory e os aliases declarados em
+// `schema.fields` de cada tabela publicada. Sai só da spec, e nunca do
+// Compiled nem do dicionário de campos: as colunas descobertas em runtime
+// (`include: ["*"]`) não mudam o rótulo de coluna nenhuma que já exista, e
+// contá-las daria config_changed na primeira subida depois de uma descoberta.
+func renderSpecOf(d *dataset) replicationkafka.RenderSpec {
+	spec := replicationkafka.RenderSpec{Tables: []string{d.nome}, Aliases: declaredAliases(d.nome, d.spec)}
+	if h := d.publishedHistory(); h != nil {
+		spec.Tables = append(spec.Tables, h.nome)
+		spec.Aliases = append(spec.Aliases, declaredAliases(h.nome, h.spec)...)
+		spec.PublishHistory = true
+	}
+	return spec
+}
+
+// declaredAliases lista os aliases de `schema.fields` da spec, ordenados
+// pelo nome do campo.
+func declaredAliases(table string, spec *schema.DatasetSpec) []replicationkafka.FieldAlias {
+	var out []replicationkafka.FieldAlias
+	for field, f := range spec.Schema.Fields {
+		if f.Alias != "" {
+			out = append(out, replicationkafka.FieldAlias{Table: table, Field: field, Alias: f.Alias})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Field < out[j].Field })
+	return out
+}
+
 // startPublishers inicia os publicadores de um dataset. Vem DEPOIS do Start
 // do feed, no Run: antes dele o feed não fecha lote por intervalo.
 func startPublishers(d *dataset) {
@@ -235,21 +274,78 @@ func startPublishers(d *dataset) {
 	}
 }
 
-// closeFeeds fecha os feeds de replicação. Vem ANTES do http.Shutdown no
-// encerra(): o Close acorda o long-poll de todo seguidor, que recebe o fim do
-// feed na hora em vez de segurar a requisição até o prazo do Shutdown; e é
-// o Close que faz o flush do intervalo ativo e deixa os publicadores drenarem
-// a cauda e saírem. Idempotente, como o Close do feed.
+// closeFeeds fecha os feeds de replicação com a impressão dos Stores e a marca
+// limpa: a próxima subida, com a impressão igual, retoma a MESMA epoch e
+// sequence, e nenhum consumidor refaz o snapshot. No encerra() vem DEPOIS do
+// http.Shutdown, do stopStoreProducers e do checkpointStores, porque só aí a
+// posição de escrita está estável: uma mudança publicada depois da leitura da
+// impressão a desmentiria, e uma depois do Close derruba a marca limpa (o feed
+// emite o ERROR replication.feed.publish_after_close). Na subida abortada vem
+// direto, porque nada mutou os Stores desde o Resume.
 //
-// O que for publicado DEPOIS do Close é descartado pelo feed: passadas de
-// expiração, retenção ou reconstrução ainda em voo, e as rotas ADMIN que
-// escrevem até o http.Shutdown. Nada se perde do dataset — a mudança está no
-// disco —, e a próxima subida abre uma epoch nova e publica `reset` e um
-// snapshot completo, que a inclui.
+// O Close faz o flush do intervalo ativo e acorda os leitores: os
+// publicadores drenam a cauda em seguida (closePublishers). Sem a marca limpa
+// — posição de um Store publicado ilegível (o writer falho do checkpoint que
+// não fez o fsync), gravador além do prazo ou sync do feed falho — a próxima
+// subida abre uma epoch nova, e os consumidores refazem o snapshot; o WARN
+// diz qual dos casos.
+//
+// Idempotente, como o Close do feed: num segundo encerramento os Stores já
+// estão fechados, o Close devolve o desfecho do primeiro, e nada é avisado
+// de novo.
+//
+// Os feeds fecham em PARALELO, como os publicadores (closePublishers), com o
+// orçamento TOTAL feedCloseBudget, contado antes da primeira impressão: cada
+// Close recebe o que resta dele. Em série, cada dataset somaria até o prazo
+// inteiro ao encerramento, que cresceria com o número de datasets de
+// gravador lento (disco cheio, EIO em retentativa). A impressão de cada dataset é lida
+// em série, antes do Close dele: ela só lê a posição de escrita do Store.
 func (s *Server) closeFeeds() {
+	deadline := time.Now().Add(feedCloseBudget)
+	var wg sync.WaitGroup
+	for _, d := range s.datasets {
+		if d.replication == nil {
+			continue
+		}
+		var fp *replication.Fingerprint
+		f, cause := s.feedFingerprint(d)
+		switch {
+		case errors.Is(cause, storage.ErrDatasetClosed):
+			_ = d.replication.Close(nil, 0)
+			continue
+		case cause == nil:
+			fp = &f
+		}
+		wg.Add(1)
+		go func(d *dataset, fp *replication.Fingerprint, cause error) {
+			defer wg.Done()
+			if err := d.replication.Close(fp, max(time.Until(deadline), 0)); err != nil {
+				s.log.Warn("replication.feed.close_failed",
+					"the replication feed did not close cleanly (writer past the deadline, disk sync or state write failure, or a change that reached it after the close); the next start opens a new generation",
+					"dataset", d.nome, "error", err.Error())
+				return
+			}
+			if fp == nil {
+				s.log.Warn("replication.feed.closed_unclean",
+					"the replication feed closed without its clean mark because the dataset position is not trustworthy; the next start opens a new generation",
+					"dataset", d.nome, "error", cause.Error())
+			}
+		}(d, fp, cause)
+	}
+	wg.Wait()
+}
+
+// feedCloseBudget é o prazo TOTAL para os gravadores dos feeds drenarem a
+// fila no Close: os feeds fecham em paralelo (closeFeeds).
+const feedCloseBudget = 10 * time.Second
+
+// waitFeeds é o fim da vida dos feeds: junta as goroutines e fecha o log de
+// segmentos. Vem DEPOIS do closePublishers, que ainda lê do disco a cauda que
+// os publicadores não receberam.
+func (s *Server) waitFeeds() {
 	for _, d := range s.datasets {
 		if d.replication != nil {
-			d.replication.Close()
+			d.replication.Wait()
 		}
 	}
 }
@@ -261,9 +357,11 @@ func (s *Server) closeFeeds() {
 // Idempotente, como o Close do publicador.
 //
 // A drenagem que não termina no prazo (broker fora, tópico lento) vira WARN,
-// e não erro do encerramento: nada do dataset se perde — o estado está no
-// disco, e a próxima subida publica `reset` e um snapshot completo —, e um
-// broker fora no instante do SIGTERM não é falha do processo.
+// e não erro do encerramento: nada do dataset se perde — o publicador grava
+// no .ckpt o último ponto confirmado ao parar, e a próxima subida retoma dali
+// e entrega de novo o que faltou (ou publica `reset` com snapshot_failed, se
+// um snapshot estava em curso) —, e um broker fora no instante do SIGTERM não
+// é falha do processo.
 func (s *Server) closePublishers() {
 	budget := s.publisherBudget
 	if budget <= 0 {
@@ -279,13 +377,33 @@ func (s *Server) closePublishers() {
 				defer wg.Done()
 				if err := p.Close(ctx); err != nil {
 					s.log.Warn("replication.publisher.close_failed",
-						"the replication publisher did not drain the feed tail before the deadline; the next start publishes a reset and a full snapshot",
+						"the replication publisher did not drain the feed tail before the deadline; the next start resumes from the destination checkpoint and delivers the rest again",
 						"dataset", name, "destination", p.Stats().Destination, "error", err.Error())
 				}
 			}(d.nome, p)
 		}
 	}
 	wg.Wait()
+}
+
+// feedStatus é o retrato do feed do dataset para a `_meta.replication`;
+// ok=false no dataset sem feed (seguidor ou replicação desligada).
+func (d *dataset) feedStatus() (replication.Status, bool) {
+	if d.replication == nil {
+		return replication.Status{}, false
+	}
+	return d.replication.Status(), true
+}
+
+// publisherStats é o retrato de cada publicador do dataset, na ordem de
+// `replication.targets`, para a `_meta.replication`. Lista vazia no dataset
+// sem destino Kafka.
+func (d *dataset) publisherStats() []replicationkafka.Stats {
+	out := make([]replicationkafka.Stats, 0, len(d.publishers))
+	for _, p := range d.publishers {
+		out = append(out, p.Stats())
+	}
+	return out
 }
 
 // replicationStats é o retrato do feed e dos publicadores de um dataset, ou
@@ -309,6 +427,9 @@ func replicationStats(d *dataset) *protocol.ReplicationStats {
 			Flushes:         st.Flushes,
 			LastFlushReason: st.LastFlushReason,
 			Invalidations:   st.Invalidations,
+			DiskBytes:       st.DiskBytes,
+			DiskSegments:    st.DiskSegments,
+			DiskErrors:      st.DiskErrors,
 		},
 		Delivery: make([]protocol.ReplicationDeliveryStats, 0, len(d.publishers)),
 	}
@@ -325,6 +446,8 @@ func replicationStats(d *dataset) *protocol.ReplicationStats {
 			Errors:               ps.Errors,
 			LastSuccessTimestamp: ps.LastSuccessTimestamp,
 			LastError:            ps.LastError,
+			LagBytes:             ps.LagBytes,
+			CheckpointCursor:     ps.CheckpointCursor,
 		})
 	}
 	return out

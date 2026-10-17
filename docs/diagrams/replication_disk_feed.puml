@@ -1,0 +1,156 @@
+@startuml replication_disk_feed
+title Feed de replicação em disco: escrita, gravador, retenção, leitura, encerramento, subida e rotação
+
+participant "Writer do Store\n(applyRecord, sob o wmu)" as st
+participant "Feed\nreplication.Stream\n(mu: só memória, nunca I/O)" as feed
+participant "Gravador do feed\n(runWriter, goroutine própria)" as wr
+database "Log de segmentos\n<dataset>/replication/feed/\n<20 dígitos>.seg" as log
+database "state\n(atomicfile, CRC)" as state
+participant "Leitor\n(follower HTTP ou\npublicador Kafka)" as rd
+
+== Escrita: Publish sob o wmu, sem I/O ==
+
+st -> feed : Publish(table, op, record, at)
+note right of feed
+  Sem I/O, sem esperar leitor nem disco, sem
+  devolver erro ao Store. Consolida updates
+  seguidos da mesma entidade no intervalo ativo,
+  nunca através de outra operação.
+end note
+feed -> feed : flushLocked (intervalo, maxMessages, maxBatchBytes,\nimmediate, close): fecha o lote, calcula o EndPos\n(posição em bytes acumulada na geração)
+feed -> feed : o lote entra no CACHE (batches) e na FILA do gravador (queue)
+feed ->> wr : wake
+alt memória acima de maxBufferedBytes
+  feed -> feed : makeRoomLocked: despeja do começo do cache só\nlotes JÁ GRAVADOS (evictedBatches++, sem lacuna)
+  opt ainda não cabe (lotes não gravados ou arrendados, ou\no registro sozinho passa do teto)
+    feed -> feed : invalidateLocked: lacuna na MESMA epoch,\npiso = produzido, geração interna++ (invalidations++)
+  end
+end
+
+== Gravador: gerações e escrita no log ==
+
+loop enquanto houver lote na fila
+  alt a geração interna mudou (lacuna ou rotação)
+    wr -> log : rebind: wipe dos segmentos e bind(epoch, piso, EndPos)
+  else lote da geração corrente
+    wr -> wr : appendFrame: quadro com cabeçalho e CRC32C,\nfora de mu (lote invalidado no meio é descartado)
+    wr -> log : append(quadro, from, to, EndPos)
+    note right of log
+      1. trunca a cauda rasgada que a queda deixou;
+      2. ROTAÇÃO antes do quadro que passaria do teto do
+         segmento (maxDiskBytes/8, entre 1 MiB e 64 MiB):
+         fdatasync do segmento que fecha, e só então cria
+         o próximo, com o nome = primeira sequence;
+      3. write(2) sem fsync, e só então publica o fim
+         visível: nenhum leitor vê quadro pela metade;
+      4. índice esparso em heap: uma entrada a cada 1 MiB.
+    end note
+    log -> log : RETENÇÃO por bytes: enquanto o total passa de\nmaxDiskBytes e há mais de um segmento, apaga o mais\nantigo inteiro; o piso sobe (o corrente nunca sai).\nNão espera leitor nem checkpoint de publicador
+    alt gravado
+      wr -> feed : lote marcado persisted e retirado da fila\n(pode sair do cache); piso = max(piso, piso do log)
+    else falha de write (ENOSPC, EIO)
+      wr -> wr : diskErrors++, WARN replication.feed.disk_error\n(no máximo a cada 5 s); o lote fica na memória e\na gravação é retentada de 100 ms a 5 s
+    else falha de fdatasync (errLogFailed, pegajosa)
+      wr -> feed : diskErrors++ e lacuna NA HORA\n(o rebind seguinte apaga o log e o cura)
+    else quadro que o log nunca aceita (grande demais, recusado)
+      wr -> feed : lacuna (WARN replication.feed.gap)
+    end
+  end
+end
+
+== Leitura: memória ou disco ==
+
+rd -> feed : Acquire(epoch, after)
+alt epoch diferente, after além do produzido ou abaixo do piso
+  feed --> rd : ErrResyncRequired (409 no follower, reset no publicador)
+else lote no cache
+  feed --> rd : lote compartilhado (refs++); conta na memória\naté o último release, mesmo despejado
+else só no disco (gravado e despejado do cache)
+  feed -> log : locate(after) sob mu, pelo índice esparso, sem syscall
+  rd -> log : readDisk fora de mu: quadros consecutivos agrupados\naté maxBatchBytes e maxMessages (CRC conferido)
+  note right of rd
+    O lote lido do disco é do leitor: não entra no
+    cache nem na conta. O fd aberto sobrevive ao
+    unlink da retenção; o próximo Acquire abaixo do
+    piso recebe ErrResyncRequired.
+  end note
+  opt quadro corrompido
+    rd -> feed : lacuna e ErrResyncRequired
+  end
+end
+
+== Encerramento limpo ==
+
+note over st, feed
+  Antes do Close do feed: a ingestão para, o servidor HTTP para
+  (inclusive /v1/compact), compaction, expiração e retenção param,
+  e todo dataset faz checkpoint, com o fsync dos segmentos.
+end note
+st -> feed : Close(impressão dos Stores, 10 s)\n(o servidor, no encerramento)
+feed -> feed : flushLocked("close") e writerStop
+wr -> log : drena a fila e para
+feed -> log : sync: fdatasync do segmento corrente e do diretório
+feed -> state : {epoch, sequence, piso, EndPos, clean=true,\nimpressão: base e histórica publicada}
+note right of state
+  Impressão = posição de escrita de cada Store:
+  segmento, fim do último record válido,
+  NextRowID e piso da retenção (RowIDBase).
+  Sem impressão legível (writer falho), prazo
+  vencido ou sync falho: fecha SEM a marca,
+  com WARN, e a próxima subida é queda.
+end note
+rd -> feed : os leitores drenam a cauda (memória e disco)\ne os publicadores gravam o .ckpt
+feed -> log : Wait: junta as goroutines e fecha o log
+
+opt Publish depois do Close (mutação tardia)
+  st -> feed : Publish
+  feed ->> state : uma goroutine regrava sem a marca limpa\n(ERROR replication.feed.publish_after_close);\no Close confere de novo depois de gravar e desfaz a marca
+end
+
+== Queda ==
+
+note over feed, state
+  kill -9, OOM, falta de energia: o state fica como o Resume
+  o deixou, SEM a marca limpa. Nenhum fsync durante a operação:
+  numa queda o feed é descartado de qualquer jeito.
+end note
+
+== Subida: Fresh, Clean ou Crash ==
+
+feed -> state : Open (só leitura): lê o state
+opt state com a marca limpa
+  feed -> log : abre os segmentos: selados só pelos cabeçalhos,\no último com o CRC de todo quadro
+end
+st -> st : os Stores (base e histórica) abrem e recuperam;\no replay não publica
+st -> feed : Resume(impressão recuperada)
+alt sem state
+  feed -> state : Fresh: epoch nova, sequence 0
+else marca limpa, impressão igual, bind e validateTail\n(epoch, última sequence e EndPos da cauda conferem)
+  feed -> state : Clean: regrava SEM a marca, de forma durável, ANTES\ndo primeiro Publish; MESMA epoch, sequence e EndPos;\nResumedSequence = a sequence gravada
+else qualquer outro caso (sem marca, impressão diferente,\nlog incoerente, state ilegível, Publish antes do Resume)
+  feed -> log : Crash: apaga os segmentos
+  feed -> state : epoch nova, sequence 0, previousEpoch = a do state\n(ERROR replication.feed.publish_before_resume quando é o caso)
+end
+note right of feed
+  INFO replication.feed.resumed com origin
+  (fresh, clean, crash), epoch, sequence e
+  previousEpoch. A subida abortada depois do
+  Resume fecha o feed limpo.
+end note
+
+== Rotação em operação ==
+
+rd -> feed : RotateFrom(epoch conferida, "rewind")\n(o publicador Kafka, depois da conferência de rewind)
+note right of rd
+  Ver replication_kafka_flow.puml: a conferência
+  compara o topo do tópico com a régua gravada
+  no .ckpt, nunca com a sequence corrente.
+end note
+alt a geração corrente ainda é a conferida e o feed está aberto
+  feed -> feed : epoch nova, sequence, piso e EndPos em 0;\ncache e fila descartados; geração interna++;\nleitores acordados (e mandados ressincronizar)
+  feed -> state : regrava o state com a epoch nova (I/O síncrono:\nnunca sob o wmu); origin = rotated
+  wr -> log : no próximo passo: wipe e bind da geração nova
+else outra geração ou feed fechado
+  feed --> rd : false: nada rotaciona, nada é publicado
+end
+@enduml

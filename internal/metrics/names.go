@@ -827,6 +827,14 @@ const (
 	// MetReplicationKafkaLastSuccessTimestamp é a última entrega completa, em
 	// segundos do epoch; zero até a primeira.
 	MetReplicationKafkaLastSuccessTimestamp = "nishidb_replication_kafka_last_success_timestamp"
+	// MetReplicationKafkaLagBytes é o atraso do publicador em bytes de quadro
+	// do feed em disco: a posição do fim do último lote fechado menos a do
+	// cursor confirmado. Zero com o feed noutra geração.
+	MetReplicationKafkaLagBytes = "nishidb_replication_kafka_lag_bytes"
+	// MetReplicationKafkaCheckpointSequence é a sequence do último .ckpt
+	// gravado do destino: o ponto de onde a próxima subida retoma. Fica atrás
+	// do cursor confirmado (o tail grava no máximo uma vez por segundo).
+	MetReplicationKafkaCheckpointSequence = "nishidb_replication_kafka_checkpoint_sequence"
 )
 
 // Feed de replicação do dataset master, por dataset. Saem para todo dataset
@@ -847,4 +855,12 @@ const (
 	// MetReplicationFeedInvalidationsTotal conta as vezes em que o feed
 	// descartou o intervalo retido e forçou a ressincronização.
 	MetReplicationFeedInvalidationsTotal = "nishidb_replication_feed_invalidations_total"
+	// MetReplicationFeedDiskBytes é o tamanho do log de segmentos do feed em
+	// disco, cabeçalhos incluídos.
+	MetReplicationFeedDiskBytes = "nishidb_replication_feed_disk_bytes"
+	// MetReplicationFeedDiskSegments é o número de segmentos do log do feed.
+	MetReplicationFeedDiskSegments = "nishidb_replication_feed_disk_segments"
+	// MetReplicationFeedDiskErrorsTotal conta as falhas de disco do feed,
+	// uma por tentativa que falha.
+	MetReplicationFeedDiskErrorsTotal = "nishidb_replication_feed_disk_errors_total"
 )

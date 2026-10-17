@@ -46,18 +46,55 @@ var opHeaders = func() [len(opNames)][]kgo.RecordHeader {
 	return h
 }()
 
+// resetHeaders é o header de cada motivo de reset, indexado pelo ResetReason:
+// o reset sai com DOIS headers, nishidb-op e nishidb-reason. Pré-montada como
+// opHeaders, para o envio não alocar um slice de headers por registro. O
+// índice 0 (motivo inválido) fica nil: o AppendReset recusa o motivo antes de
+// o registro existir.
+var resetHeaders = func() [len(resetReasonJSON)][]kgo.RecordHeader {
+	var h [len(resetReasonJSON)][]kgo.RecordHeader
+	for reason := ResetStartup; int(reason) < len(resetReasonJSON); reason++ {
+		h[reason] = []kgo.RecordHeader{
+			{Key: HeaderOp, Value: OpHeader(OpReset)},
+			{Key: HeaderReason, Value: ReasonHeader(reason)},
+		}
+	}
+	return h
+}()
+
 // outRecord é um registro de um lote. Key e valor moram no buffer do lote,
 // por deslocamento, porque o buffer cresce enquanto o lote é montado.
 type outRecord struct {
-	rec  kgo.Record
-	op   Op
-	part int32
+	rec kgo.Record
+	op  Op
+	// reason só vale quando op == OpReset: escolhe a linha de resetHeaders.
+	reason ResetReason
+	part   int32
 	// keyStart < 0 marca o registro de controle, cuja chave é ControlKey e
 	// cujo valor começa em -keyStart-1.
 	keyStart, keyEnd, valEnd int
 	// sequence e table identificam a Entry nos logs.
 	sequence uint64
 	table    string
+}
+
+// headers devolve os headers Kafka do registro: dois (op e motivo) no reset,
+// um (op) nos demais. O slice é compartilhado e o kgo só o lê.
+func (r *outRecord) headers() []kgo.RecordHeader {
+	if r.op == OpReset {
+		return resetHeaders[r.reason]
+	}
+	return opHeaders[r.op]
+}
+
+// headerBytes é o tamanho dos headers do registro no fio (chave e valor de
+// cada um), para o checkSizes.
+func (r *outRecord) headerBytes() int {
+	n := 0
+	for _, h := range r.headers() {
+		n += len(h.Key) + len(h.Value)
+	}
+	return n
 }
 
 func (r *outRecord) valueStart() int {
@@ -90,6 +127,12 @@ func (b *outBatch) reset() {
 
 func (b *outBatch) addControl(op Op, part int32, start, end int) {
 	b.recs = append(b.recs, outRecord{op: op, part: part, keyStart: -start - 1, valEnd: end})
+}
+
+// addReset registra o marcador de reset de uma partição, com o motivo que
+// escolhe o header nishidb-reason.
+func (b *outBatch) addReset(reason ResetReason, part int32, start, end int) {
+	b.recs = append(b.recs, outRecord{op: OpReset, reason: reason, part: part, keyStart: -start - 1, valEnd: end})
 }
 
 func (b *outBatch) key(r *outRecord) []byte {
@@ -150,7 +193,7 @@ func (p *Publisher) send(ctx context.Context, b *outBatch, idx []int) {
 		r.rec = kgo.Record{
 			Key:       b.key(r),
 			Value:     b.buf[r.valueStart():r.valEnd:r.valEnd],
-			Headers:   opHeaders[r.op],
+			Headers:   r.headers(),
 			Partition: r.part,
 		}
 		p.client.Produce(ctx, &r.rec, b.promises[i])

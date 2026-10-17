@@ -71,6 +71,14 @@ func validateHistoryNames(specs map[string]*schema.DatasetSpec) error {
 func (s *Server) openHistory(base *dataset, log *logging.Logger) (*dataset, error) {
 	h := base.spec.History
 	if h == nil {
+		// A chave sem efeito é anunciada, e não recusada: é inócua (não há
+		// irmã cujas mudanças publicar), e o YAML copiado de um dataset com
+		// histórico é o caso comum. Mesma régua do WindowExceedsRetention.
+		if base.spec.PublishHistoryWithoutHistory() {
+			log.Warn("replication.publish_history_without_history",
+				"replication.publishHistory is declared on a dataset without a history block and has no effect",
+				"dataset", base.nome)
+		}
 		return nil, nil
 	}
 	specIrma := base.spec.DeriveHistory()
@@ -84,6 +92,13 @@ func (s *Server) openHistory(base *dataset, log *logging.Logger) (*dataset, erro
 		return nil, fmt.Errorf("dataset %q: %w", base.nome, err)
 	}
 
+	// A irmã só entra no feed com `replication.publishHistory` (o padrão):
+	// desligada, nem o tail nem o retain dela chegam ao feed, e o snapshot e a
+	// impressão também a deixam de fora (publishedHistory).
+	var feed *replication.Stream
+	if base.spec.Replication.PublishHistory {
+		feed = base.replication
+	}
 	st, err := storage.Open(storage.Options{
 		Dir:                   s.cfg.DatasetRootDir(specIrma.Name),
 		Dataset:               specIrma.Name,
@@ -96,14 +111,10 @@ func (s *Server) openHistory(base *dataset, log *logging.Logger) (*dataset, erro
 		Log:                   log,
 		Metrics:               s.reg,
 		OnReplicationChange: func(table string, op replication.Operation, rec types.Record, at time.Time) {
-			if base.replication != nil {
-				base.replication.Publish(table, op, rec, at)
-			}
+			s.publishChange(feed, table, op, rec, at)
 		},
 		OnReplicationRetain: func(table string, floor types.RowID, at time.Time) {
-			if base.replication != nil {
-				base.replication.Publish(table, replication.Retain, types.Record{RowID: floor}, at)
-			}
+			s.publishChange(feed, table, replication.Retain, types.Record{RowID: floor}, at)
 		},
 	})
 	if err != nil {

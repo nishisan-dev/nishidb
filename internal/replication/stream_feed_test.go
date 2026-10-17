@@ -13,11 +13,7 @@ import (
 // Close explícitos do teste fechem lotes.
 func newFeedForTest(t *testing.T) *Stream {
 	t.Helper()
-	s, err := New(Options{Interval: time.Minute, MaxMessages: 100, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 2 << 20})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
+	return openTestFeed(t, Options{Interval: time.Minute, MaxMessages: 100, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 3 << 20})
 }
 
 // O Close faz o flush do intervalo ativo para que ele seja ENTREGUE: recusar
@@ -30,7 +26,7 @@ func TestAcquireServesRetainedBatchesAfterClose(t *testing.T) {
 	s.Flush(now, "test")
 	s.Publish("events", Insert, rec(2, "b"), now)
 	epoch, _ := s.Cursor()
-	s.Close()
+	_ = s.Close(nil, time.Second)
 
 	b, release, err := s.Acquire(context.Background(), epoch, 0)
 	if err != nil {
@@ -62,7 +58,7 @@ func TestAcquireReturnsClosedWithoutWaitingAfterDrain(t *testing.T) {
 	now := time.Unix(10, 0)
 	s.Publish("events", Insert, rec(1, "a"), now)
 	epoch, _ := s.Cursor()
-	s.Close()
+	_ = s.Close(nil, time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -147,7 +143,7 @@ func TestCloseWakesParkedReaderWithClosed(t *testing.T) {
 	epoch, seq := s.Cursor()
 	out := startBlockedAcquire(t, s, epoch, seq)
 
-	s.Close()
+	_ = s.Close(nil, time.Second)
 	if r := awaitAcquire(t, out); !errors.Is(r.err, ErrClosed) {
 		t.Fatalf("leitor estacionado depois do Close: err=%v, quer ErrClosed", r.err)
 	}
@@ -161,7 +157,7 @@ func TestCloseDeliversPendingIntervalToParkedReader(t *testing.T) {
 	out := startBlockedAcquire(t, s, epoch, 0)
 	s.Publish("events", Insert, rec(1, "a"), time.Unix(10, 0))
 
-	s.Close()
+	_ = s.Close(nil, time.Second)
 	r := awaitAcquire(t, out)
 	if r.err != nil {
 		t.Fatalf("leitor estacionado com intervalo pendente: err=%v", r.err)
@@ -174,10 +170,7 @@ func TestCloseDeliversPendingIntervalToParkedReader(t *testing.T) {
 // As duas portas do invalidateLocked contam: o Invalidate explícito e o
 // estouro do teto de memória no Publish.
 func TestInvalidationIsCounted(t *testing.T) {
-	s, err := New(Options{Interval: time.Minute, MaxMessages: 100, MaxBatchBytes: 200, MaxBufferedBytes: 300})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := openTestFeed(t, Options{Interval: time.Minute, MaxMessages: 100, MaxBatchBytes: 200, MaxBufferedBytes: 600})
 	if got := s.Status().Invalidations; got != 0 {
 		t.Fatalf("feed novo com %d invalidações", got)
 	}
@@ -186,7 +179,7 @@ func TestInvalidationIsCounted(t *testing.T) {
 		t.Fatalf("depois do Invalidate: %d invalidações, quer 1", got)
 	}
 	// Um record maior que o teto inteiro não cabe nem com o feed vazio.
-	s.Publish("events", Insert, rec(1, string(make([]byte, 400))), time.Unix(1, 0))
+	s.Publish("events", Insert, rec(1, string(make([]byte, 700))), time.Unix(1, 0))
 	if got := s.Status().Invalidations; got != 2 {
 		t.Fatalf("depois do estouro no Publish: %d invalidações, quer 2", got)
 	}

@@ -116,6 +116,26 @@ type ReplicationSpec struct {
 	// se valida a forma de cada nome: a spec do dataset não enxerga o
 	// nishidb.yaml, e por isso a existência do destino NÃO é conferida aqui.
 	Targets []string
+	// MaxDiskBytes é o teto do feed em disco deste dataset (segmentos do
+	// log de replicação). Padrão 2 GiB; só vale em master habilitado, o
+	// piso é o maior entre 8 MiB e 4 × MaxBatchBytes e o teto é 256 GiB. Aqui
+	// só se validam a forma e a faixa: quem o consome é o stream de
+	// replicação, não o schema.
+	MaxDiskBytes int64
+	// PublishHistory diz se o feed também carrega as mudanças da tabela
+	// histórica irmã (`history:`). Padrão true — o ausente vale ligado, e por
+	// isso o struct cru usa *bool para distinguir ausente de `false`.
+	PublishHistory bool
+	// PublishHistoryDeclared registra que a chave `publishHistory` veio escrita
+	// no YAML (com qualquer valor). Existe só para a carga poder avisar da
+	// chave sem efeito num dataset sem `history:` (ver
+	// DatasetSpec.PublishHistoryWithoutHistory); o valor efetivo é
+	// PublishHistory.
+	PublishHistoryDeclared bool
+	// PeriodicSnapshot é o intervalo entre snapshots periódicos republicados
+	// aos destinos Kafka (`targets`). Zero desliga; ligado, vale de 1 h a 365 d
+	// em segundos inteiros. Só faz sentido com Targets.
+	PeriodicSnapshot time.Duration
 }
 
 // MaterializationSpec ...
@@ -339,6 +359,15 @@ type rawReplication struct {
 	// ausente (Kind zero) se distingue de `targets: []` e de `targets:` nulo,
 	// e todo item que não seja string explícita é recusado pelo nome.
 	Targets yaml.Node `yaml:"targets"`
+	// As três chaves do feed em disco são ponteiros pela mesma razão do resto
+	// do bloco: o rawReplication não usa KnownFields, e a PRESENÇA é o que
+	// permite recusar a chave num dataset que não é master habilitado (um
+	// `maxDiskBytes` num follower seria ignorado em silêncio). *string, e não
+	// string, para que `maxDiskBytes: ""` seja presente e recusado em vez de
+	// virar o padrão.
+	MaxDiskBytes     *string `yaml:"maxDiskBytes"`
+	PublishHistory   *bool   `yaml:"publishHistory"`
+	PeriodicSnapshot *string `yaml:"periodicSnapshot"`
 	// Target existe aqui para ser RECUSADO, pela razão do Index de topo: a
 	// chave irmã em `emit` é `target`, no singular, e o rawReplication não usa
 	// yaml.KnownFields — `replication.target: [x]` passaria em silêncio e o
@@ -1216,7 +1245,10 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 	// replication is optional and disabled by default. The feed's limits are
 	// validated here so a malformed follower setup cannot silently become an
 	// unbounded master buffer.
-	r := ReplicationSpec{FlushInterval: 5 * time.Second, MaxMessages: 10000, MaxBatchBytes: 8 << 20, MaxBufferedBytes: 64 << 20}
+	r := ReplicationSpec{
+		FlushInterval: 5 * time.Second, MaxMessages: 10000, MaxBatchBytes: 8 << 20, MaxBufferedBytes: 64 << 20,
+		MaxDiskBytes: replicationDefaultMaxDiskBytes, PublishHistory: true,
+	}
 	if raw.Replication.Enabled != nil {
 		r.Enabled = *raw.Replication.Enabled
 	}
@@ -1275,27 +1307,26 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 	if r.Targets, e = validateReplicationTargets(&raw.Replication.Targets, r); e != nil {
 		return nil, e
 	}
+	if e = validateReplicationDiskFeed(&raw.Replication, &r); e != nil {
+		return nil, e
+	}
 	s.Replication = r
 
 	return s, nil
 }
 
 // validateReplicationTargets decodifica `replication.targets` e o confere
-// contra o restante do bloco já validado em r (enabled, role e os dois tetos
-// do buffer), devolvendo a lista a publicar — nil quando a chave não veio.
-// Só lista de strings explícitas é aceita: nulo, escalar e lista vazia são
-// recusados, como em `emit.target`, em vez de lidos como "sem destino".
+// contra o restante do bloco já validado em r (enabled e role), devolvendo a
+// lista a publicar — nil quando a chave não veio. Só lista de strings
+// explícitas é aceita: nulo, escalar e lista vazia são recusados, como em
+// `emit.target`, em vez de lidos como "sem destino".
 //
 // O nome segue a MESMA regra dos destinos nomeados de `emit.target` e de
 // `kafkaTargets:` (ValidDeliveryName), e `file` é recusado porque a
 // replicação não tem saída em arquivo: aceitá-lo seria publicar em lugar
-// nenhum sem avisar. O piso `maxBufferedBytes >= 2*maxBatchBytes` existe
-// porque um lote arrendado — pelo publicador Kafka enquanto o copia para o
-// próprio buffer, ou por um seguidor enquanto o envia — continua contando no
-// buffer do feed até ser solto, mesmo depois de despejado
-// (internal/replication, makeRoomLocked). Sem a folga de um lote inteiro além
-// do arrendado, a próxima escrita não acharia espaço e invalidaria o
-// intervalo retido.
+// nenhum sem avisar. O piso de memória do buffer não é conferido aqui: vale
+// para todo master habilitado, com ou sem targets, e mora em
+// validateReplicationDiskFeed.
 func validateReplicationTargets(n *yaml.Node, r ReplicationSpec) ([]string, error) {
 	if n.Kind == 0 {
 		return nil, nil
@@ -1338,12 +1369,146 @@ func validateReplicationTargets(n *yaml.Node, r ReplicationSpec) ([]string, erro
 		}
 		seen[name] = true
 	}
-	// Dividir em vez de dobrar: 2*MaxBatchBytes transbordaria int64 num
-	// maxBatchBytes gigante e aprovaria o par por engano.
-	if r.MaxBufferedBytes/2 < r.MaxBatchBytes {
-		return nil, specErrf("replication.maxBufferedBytes (%d) must be at least twice replication.maxBatchBytes (%d) "+
-			"when replication.targets is set: a leased batch keeps counting against the buffer until it is released",
+	return targets, nil
+}
+
+// replicationDefaultMaxDiskBytes é o padrão de `replication.maxDiskBytes`
+// (2 GiB), e replicationMinDiskBytes o piso absoluto (8 MiB): abaixo disso o
+// feed em disco não comporta nem um punhado de segmentos.
+//
+// replicationMaxDiskBytes é o teto (256 GiB). Cada segmento do log mantém um
+// descritor de arquivo aberto enquanto existe, e o segmento tem no máximo
+// 64 MiB (internal/replication, segmentBytesFor): 256 GiB são 4.096
+// descritores por dataset, e 1 TiB seriam 16.384, o que passa do limite de
+// descritores de um serviço comum e faria a gravação do feed falhar com
+// EMFILE no meio da operação, em vez de a carga recusar o valor na subida.
+const (
+	replicationDefaultMaxDiskBytes int64 = 2 << 30
+	replicationMinDiskBytes        int64 = 8 << 20
+	replicationMaxDiskBytes        int64 = 256 << 30
+)
+
+// Faixa de `replication.periodicSnapshot`: de 1 h a 365 d. Abaixo de uma hora
+// o snapshot periódico viraria carga constante sobre o master; acima de um
+// ano deixaria de ser periódico.
+const (
+	replicationMinPeriodicSnapshot = time.Hour
+	replicationMaxPeriodicSnapshot = 365 * 24 * time.Hour
+)
+
+// validateReplicationDiskFeed lê as três chaves do feed em disco
+// (`maxDiskBytes`, `publishHistory`, `periodicSnapshot`) para r e confere os
+// pisos de memória e de disco e o teto de disco do master habilitado. r já
+// traz o restante do bloco (enabled, role, tetos do buffer e targets)
+// validado.
+//
+// As três chaves só valem em master habilitado e são recusadas pelo mesmo
+// critério e com a mesma forma de mensagem de `replication.targets`: um
+// follower ou um bloco `enabled: false` não tem feed para limitar, e aceitar
+// a chave seria ignorá-la em silêncio. A recusa é por PRESENÇA (os campos
+// crus são ponteiros), e vale também para `publishHistory: false`.
+//
+// Pisos, todos comparados por divisão para que um valor gigante em
+// maxBatchBytes não transborde int64 e aprove o par por engano:
+//
+//   - maxBufferedBytes >= 3*maxBatchBytes em TODO master habilitado, com ou
+//     sem targets. O fator 3 cobre os três lotes que coexistem no buffer: o
+//     intervalo ativo, um lote na fila do gravador assíncrono e um lote
+//     arrendado (pelo publicador Kafka enquanto o copia, ou por um seguidor
+//     enquanto o envia) que continua contando até ser solto, mesmo depois de
+//     despejado (internal/replication, makeRoomLocked). Sem essa folga a
+//     próxima escrita não acharia espaço e invalidaria o intervalo retido.
+//   - maxDiskBytes >= 8 MiB e >= 4*maxBatchBytes, e no máximo 256 GiB
+//     (um descritor de arquivo aberto por segmento).
+//
+// periodicSnapshot é em segundos inteiros, de 1 h a 365 d, e só vale com
+// targets (o snapshot periódico existe para ressincronizar destinos Kafka);
+// fora da faixa é recusado, nunca arredondado.
+func validateReplicationDiskFeed(raw *rawReplication, r *ReplicationSpec) error {
+	present := func(key string, declared bool) error {
+		if !declared {
+			return nil
+		}
+		if !r.Enabled {
+			return specErrf("replication.%s requires replication.enabled: true", key)
+		}
+		if r.Role != "master" {
+			return specErrf("replication.%s is only valid for role master (role is %q)", key, r.Role)
+		}
+		return nil
+	}
+	for _, k := range []struct {
+		key      string
+		declared bool
+	}{
+		{"maxDiskBytes", raw.MaxDiskBytes != nil},
+		{"publishHistory", raw.PublishHistory != nil},
+		{"periodicSnapshot", raw.PeriodicSnapshot != nil},
+	} {
+		if err := present(k.key, k.declared); err != nil {
+			return err
+		}
+	}
+
+	if raw.MaxDiskBytes != nil {
+		if strings.TrimSpace(*raw.MaxDiskBytes) == "" {
+			return specErrf("replication.maxDiskBytes must not be empty; omit the key to use the default")
+		}
+		v, err := units.Size(*raw.MaxDiskBytes, r.MaxDiskBytes)
+		if err != nil {
+			return specErrf("replication.maxDiskBytes: %v", err)
+		}
+		r.MaxDiskBytes = v
+	}
+	if raw.PublishHistory != nil {
+		r.PublishHistory = *raw.PublishHistory
+		r.PublishHistoryDeclared = true
+	}
+	if raw.PeriodicSnapshot != nil {
+		d, err := time.ParseDuration(strings.TrimSpace(*raw.PeriodicSnapshot))
+		if err != nil || d%time.Second != 0 ||
+			d < replicationMinPeriodicSnapshot || d > replicationMaxPeriodicSnapshot {
+			return specErrf("replication.periodicSnapshot %q invalid (use whole seconds from 1h to 8760h, i.e. 365 days)",
+				*raw.PeriodicSnapshot)
+		}
+		if len(r.Targets) == 0 {
+			return specErrf("replication.periodicSnapshot requires replication.targets")
+		}
+		r.PeriodicSnapshot = d
+	}
+
+	// Os pisos só têm o que proteger num master habilitado; nos demais o
+	// bloco não alimenta nenhum feed.
+	if !r.Enabled || r.Role != "master" {
+		return nil
+	}
+	if r.MaxBufferedBytes/3 < r.MaxBatchBytes {
+		return specErrf("replication.maxBufferedBytes (%d) must be at least three times replication.maxBatchBytes (%d): "+
+			"the active interval, a batch queued for the disk writer and a leased batch coexist in the buffer",
 			r.MaxBufferedBytes, r.MaxBatchBytes)
 	}
-	return targets, nil
+	if r.MaxDiskBytes < replicationMinDiskBytes {
+		return specErrf("replication.maxDiskBytes (%d) must be at least %d (8MiB)", r.MaxDiskBytes, replicationMinDiskBytes)
+	}
+	if r.MaxDiskBytes > replicationMaxDiskBytes {
+		return specErrf("replication.maxDiskBytes (%d) must be at most %d (256GiB): each feed segment keeps a file descriptor open",
+			r.MaxDiskBytes, replicationMaxDiskBytes)
+	}
+	if r.MaxDiskBytes/4 < r.MaxBatchBytes {
+		return specErrf("replication.maxDiskBytes (%d) must be at least four times replication.maxBatchBytes (%d)",
+			r.MaxDiskBytes, r.MaxBatchBytes)
+	}
+	return nil
+}
+
+// PublishHistoryWithoutHistory reporta a chave sem efeito que a subida
+// ANUNCIA sem recusar: `replication.publishHistory` escrita num dataset que
+// não tem `history:` — não há tabela irmã cujas mudanças publicar.
+//
+// Não é erro, é inócuo (como WindowExceedsRetention): recusar transformaria
+// uma redundância, comum quando o YAML é copiado de um dataset com histórico,
+// em queda de serviço. O WARN nomeado é do chamador, que é quem tem o log e o
+// nome do dataset; o schema só responde se o aviso se aplica.
+func (s *DatasetSpec) PublishHistoryWithoutHistory() bool {
+	return s != nil && s.Replication.PublishHistoryDeclared && s.History == nil
 }

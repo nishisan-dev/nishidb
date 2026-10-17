@@ -5,13 +5,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
+	"github.com/nishisan-dev/nishidb/internal/replication"
 	"github.com/nishisan-dev/nishidb/internal/replicationkafka"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // O seguidor não tem feed, e por isso nunca ganha publicador — nem com
@@ -45,9 +48,11 @@ func TestFollowerDatasetNeverGetsAReplicationPublisher(t *testing.T) {
 // retrato não trouxer —, com o estado em one-hot.
 func TestReplicationMetricsCoverTheClosedListsFromTheSharedStats(t *testing.T) {
 	st := &protocol.ReplicationStats{
-		Feed: protocol.ReplicationFeedStats{InputEntries: 3, OutputEntries: 5, BufferedBytes: 7, EvictedBatches: 11, Invalidations: 13},
+		Feed: protocol.ReplicationFeedStats{InputEntries: 3, OutputEntries: 5, BufferedBytes: 7, EvictedBatches: 11, Invalidations: 13,
+			DiskBytes: 31, DiskSegments: 37, DiskErrors: 41},
 		Delivery: []protocol.ReplicationDeliveryStats{{
 			Destination: "cdc", State: replicationkafka.StateRetrying, LagSequences: 17, Delivered: 19, LastSuccessTimestamp: 23,
+			LagBytes: 43, CheckpointCursor: 47,
 			// Mapas incompletos de propósito: a série do motivo ausente
 			// tem de sair em zero assim mesmo.
 			Snapshots: map[string]uint64{"startup": 2},
@@ -60,11 +65,16 @@ func TestReplicationMetricsCoverTheClosedListsFromTheSharedStats(t *testing.T) {
 		metrics.MetReplicationFeedBufferedBytes:       7,
 		metrics.MetReplicationFeedEvictedBatchesTotal: 11,
 		metrics.MetReplicationFeedInvalidationsTotal:  13,
+		metrics.MetReplicationFeedDiskBytes:           31,
+		metrics.MetReplicationFeedDiskSegments:        37,
+		metrics.MetReplicationFeedDiskErrorsTotal:     41,
 	}
 	wantDelivery := map[string]float64{
 		metrics.MetReplicationKafkaDeliveredTotal:       19,
 		metrics.MetReplicationKafkaLagSequences:         17,
 		metrics.MetReplicationKafkaLastSuccessTimestamp: 23,
+		metrics.MetReplicationKafkaLagBytes:             43,
+		metrics.MetReplicationKafkaCheckpointSequence:   47,
 	}
 	// O tipo de cada família: counter só sobe, gauge sobe e desce, e o
 	// Prometheus calcula rate() errado sobre o tipo trocado.
@@ -80,6 +90,11 @@ func TestReplicationMetricsCoverTheClosedListsFromTheSharedStats(t *testing.T) {
 		metrics.MetReplicationKafkaErrorsTotal:          metrics.TypeCounter,
 		metrics.MetReplicationKafkaState:                metrics.TypeGauge,
 		metrics.MetReplicationKafkaLastSuccessTimestamp: metrics.TypeGauge,
+		metrics.MetReplicationFeedDiskBytes:             metrics.TypeGauge,
+		metrics.MetReplicationFeedDiskSegments:          metrics.TypeGauge,
+		metrics.MetReplicationFeedDiskErrorsTotal:       metrics.TypeCounter,
+		metrics.MetReplicationKafkaLagBytes:             metrics.TypeGauge,
+		metrics.MetReplicationKafkaCheckpointSequence:   metrics.TypeGauge,
 	}
 	seenFamilies := map[string]bool{}
 	snapshots := map[string]float64{}
@@ -186,6 +201,60 @@ func TestMetricsDocListsEveryReplicationReasonAndState(t *testing.T) {
 				t.Errorf("a linha de %s em docs/metricas.md não lista o valor %q:\n%s", family, v, row)
 			}
 		}
+	}
+}
+
+// O bloco `feed` do /v1/stats (e por ele as séries do feed em disco) leva o
+// tamanho do log e as falhas de disco do feed. O teste força as duas: o
+// diretório sem escrita faz o gravador falhar e tentar de novo (cada tentativa
+// conta), e devolvida a escrita o lote vai ao disco. Um campo esquecido no
+// replicationStats sairia zero aqui, e no teste de subida o zero é o valor
+// certo, que não discrimina.
+func TestReplicationStatsCarriesTheFeedDiskFigures(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root escreve em diretório sem permissão")
+	}
+	dir := filepath.Join(t.TempDir(), "feed")
+	feed, err := replication.Open(dir, replication.Options{MaxMessages: 1, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 3 << 20, MaxDiskBytes: 8 << 20, Logger: logging.Discard()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := feed.Resume(replication.Fingerprint{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(dir, 0o755)
+		_ = feed.Close(nil, 5*time.Second)
+		feed.Wait()
+	})
+	d := &dataset{nome: "events", replication: feed}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	feed.Publish("events", replication.Insert, types.Record{RowID: 1, Payload: []byte("a")}, time.Unix(1, 0))
+	waitUntil(t, "a falha de disco do feed", func() bool { return feed.Status().DiskErrors > 0 })
+	if got, after := replicationStats(d).Feed.DiskErrors, feed.Status().DiskErrors; got == 0 || got > after {
+		t.Fatalf("diskErrors = %d no /v1/stats, com o feed em %d: o campo não sai do retrato do feed", got, after)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "o lote no disco", func() bool { return feed.Status().DiskSegments > 0 })
+	st, got := feed.Status(), replicationStats(d).Feed
+	if got.DiskBytes == 0 || got.DiskBytes != st.DiskBytes || got.DiskSegments != st.DiskSegments {
+		t.Fatalf("diskBytes/diskSegments = %d/%d no /v1/stats, %d/%d no feed", got.DiskBytes, got.DiskSegments, st.DiskBytes, st.DiskSegments)
+	}
+}
+
+// waitUntil espera cond por até 10 s.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s não aconteceu em 10 s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

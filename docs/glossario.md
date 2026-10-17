@@ -1048,9 +1048,9 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | marcador de controle (`reset`, `snapshot_end` ou `retain`: registro sem `record`, publicado em cada partição) | control record / addControl | internal/replicationkafka |
 | chave de controle (a key Kafka fixa `__nishidb_control__` dos marcadores de controle) | ControlKey | internal/replicationkafka |
 | marcador de reset (abre uma reconstrução do tópico) | `reset` / OpReset | internal/replicationkafka |
-| motivo do reset (`startup`, `gap`, `snapshot_failed` ou `partitions_changed`) | ResetReason | internal/replicationkafka |
+| motivo do reset (`startup`, `crash`, `rewind`, `retention`, `gap`, `snapshot_failed`, `partitions_changed`, `config_changed`, `requested` ou `periodic`) | ResetReason | internal/replicationkafka |
 | fim do snapshot (o marcador que fecha a reconstrução, com a contagem por partição) | `snapshot_end` / OpSnapshotEnd | internal/replicationkafka |
-| geração do feed (o identificador aleatório que muda a cada reinício do master) | epoch / Status.Epoch | internal/replication, internal/replicationkafka |
+| geração do feed (o identificador aleatório do feed; sobrevive ao reinício limpo e muda na queda e na rotação) | epoch / Status.Epoch | internal/replication, internal/replicationkafka |
 | instante da publicação (quando a entrada entrou no feed; na consolidação, o da última alteração) | `at` / Entry.At | internal/replication, internal/replicationkafka |
 | invalidação do feed (o descarte do intervalo retido inteiro, que força os seguidores a ressincronizar) | Status.Invalidations | internal/replication |
 | exportador de snapshot (a exportação do estado vivo em blocos curtos, com o cursor lido antes da varredura) | ExportSnapshot | internal/replication |
@@ -1064,6 +1064,78 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | validador de JSON do envelope (decide se uma coluna json sai inline ou como string) | validJSON | internal/replicationkafka |
 | orçamento da drenagem (o prazo próprio dos publicadores no encerramento) | publisherCloseBudget | internal/server |
 | rótulo do estado do publicador (o label da série one-hot de estado) | LabelPublisherState / `state` | internal/metrics |
+| checkpoint do publicador (arquivo por destino com o ponto confirmado pelo Kafka e a identidade do tópico) | checkpointFile / arquivo `<destino>.ckpt` | internal/replicationkafka |
+| epoch alvo (a epoch do reset em curso enquanto o snapshot não termina) | TargetEpoch / TargetCursor | internal/replicationkafka |
+| contador de pedido de snapshot (persistido e nunca apagado; o pedido está pendente quando passa do consumido) | arquivo `<destino>.resync` / requestResync, pendingResync | internal/replicationkafka |
+| pedido consumido (o último valor do contador que um snapshot já atendeu) | ResyncConsumed | internal/replicationkafka |
+| hash de renderização (impressão das tabelas publicadas, dos aliases e de `publishHistory`) | RenderHash | internal/replicationkafka |
+| fim do último snapshot (instante do último `snapshot_end` confirmado; base do snapshot periódico) | LastSnapshotEnd | internal/replicationkafka |
+| bootstrap canônico (lista de brokers aparada, ordenada e sem repetição) | canonicalBootstrapList | internal/replicationkafka |
+| header de motivo (segundo header do `reset`, com o motivo) | `nishidb-reason` / HeaderReason, ReasonHeader | internal/replicationkafka |
+| marcador de retomada (controle na mesma epoch depois do reinício limpo, sem snapshot) | `resume` / OpResume, AppendResume | internal/replicationkafka |
+| epoch anterior (chave opcional do `reset` com a epoch substituída) | `previousEpoch` | internal/replicationkafka |
+| decisão na subida (a tabela que escolhe entre `resume` e `reset`, e o motivo) | Publisher.decide | internal/replicationkafka |
+| conferência de rewind (compara o feed reaberto com o `.ckpt` e com o topo do tópico, antes da tabela) | checkRewind / `replication.kafka.rewind` | internal/replicationkafka |
+| topo do tópico (o último registro de cada partição, com a epoch e a posição) | readTopicTail / topicMark | internal/replicationkafka |
+| partição sem registro legível (esvaziada pela retenção do tópico, ou nunca escrita com `.ckpt` do mesmo tópico: força rewind, nunca retomada) | topicMark.unreadable / `topic_unreadable` em `replication.kafka.rewind` | internal/replicationkafka |
+| régua da conferência de rewind (a geração e a menor sequence de reabertura limpa desde a última decisão do destino; persistida, nunca sobe) | RulerEpoch, RulerSequence / pinRuler | internal/replicationkafka |
+| sequence da retomada (a sequence em que o feed reabriu limpo) | Origin.ResumedSequence | internal/replication |
+| rotação condicionada (troca de geração atômica, só a partir da epoch informada e com o feed aberto) | Stream.RotateFrom | internal/replication |
+| pendência de conferência (enquanto algum publicador do dataset não terminou a conferência de rewind, o `/v1/replication/batch` e o `/snapshot` respondem 503) | Stream.HoldForVerification / VerificationPending, Publisher.releaseVerification, Server.rejectVerificationPending | internal/replication, internal/replicationkafka, internal/server |
+| leitura conjunta de origem e posição (as duas sob o mesmo lock, sem corrida com a rotação) | Stream.OriginAndPosition | internal/replication |
+| impressão da renderização (o que entra no hash: tabelas publicadas, aliases declarados e `publishHistory`) | RenderSpec / FieldAlias | internal/replicationkafka, internal/server |
+| atraso em bytes (`EndPos` do feed menos a posição do cursor, na mesma geração) | LagBytes | internal/replicationkafka |
+| cursor do checkpoint (o cursor do último `.ckpt` gravado) | CheckpointCursor / `checkpointCursor` / `nishidb_replication_kafka_checkpoint_sequence` | internal/replicationkafka, internal/protocol |
+| pedido de snapshot (registra um pedido no contador durável do destino) | RequestSnapshot | internal/replicationkafka |
+| falha de leitura do tópico e falha de gravação do checkpoint (motivos de erro do publicador) | `topic_read` / ErrorTopicRead, `checkpoint_write` / ErrorCheckpointWrite | internal/replicationkafka |
+| snapshot sob demanda (rota ADMIN que registra o pedido de snapshot de um destino e devolve o estado do publicador) | `POST /v1/replication/resync` / handleReplicationResync, ReplicationResyncResponse (`state`) | internal/server, internal/protocol |
+| comando do snapshot sob demanda | `nishidb replication resync` / runReplicationResync | internal/cli |
+| tabela de replicação (uma linha por destino Kafka do feed) | `_meta.replication` / metareplication.TableName, Register, Source | internal/metareplication |
+| linha do checkpoint (o que o `.ckpt` diz sem publicador no ar) | replicationkafka.CheckpointRow / LoadCheckpointRow; metareplication.CheckpointRow | internal/replicationkafka, internal/metareplication |
+| retrato do feed fechado (posição do `state` com marca limpa, lida sem abrir o feed) | replication.ReadClosedStatus | internal/replication |
+| diretório do feed | replication.FeedDir | internal/replication |
+| checkpoint encontrado (há `.ckpt` do destino, lido ou gravado nesta vida) | Stats.CheckpointFound | internal/replicationkafka |
+| tópico do destino no retrato | Stats.Topic | internal/replicationkafka |
+## Feed de replicação em disco
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| quadro (um lote fechado do feed gravado em disco: cabeçalho com magic, tamanho e CRC32C, e as entradas já consolidadas) | frame / appendFrame, decodeFrame | internal/replication |
+| segmento do feed (arquivo do log do feed, nomeado pela primeira sequence, com cabeçalho de 64 bytes) | segment / segmentHeader | internal/replication |
+| log de segmentos (o feed em disco: segmentos contíguos, retenção por bytes e índice esparso) | diskLog | internal/replication |
+| teto de disco do feed (limite do log de segmentos; padrão 2 GiB, de 8 MiB a 256 GiB) | `replication.maxDiskBytes` / Options.MaxDiskBytes | internal/schema, internal/replication |
+| tamanho de segmento (`clamp(maxDiskBytes/8, 1 MiB, 64 MiB)`) | segmentBytesFor | internal/replication |
+| posição em bytes (fim acumulado, em bytes de quadro desde o início da geração, do último quadro) | EndPos / Batch.EndPos, Status.EndPos, Position | internal/replication |
+| índice esparso (uma entrada em heap a cada ~1 MiB de segmento, para achar onde começa a leitura de um cursor) | indexEntry | internal/replication |
+| piso do feed (a maior sequence que o feed já não serve) | floor / Status.AvailableAfter | internal/replication |
+| arrendamento de segmento (referência contada de um leitor; o fd só fecha com o segmento aposentado e sem referência) | segmentHandle / release | internal/replication |
+| cauda rasgada (bytes no fim do último segmento que não formam quadro válido, deixados por queda) | tornBytes | internal/replication |
+| falha de durabilidade do log (fdatasync falho: o feed declara lacuna e recomeça o log) | errLogFailed | internal/replication |
+| gravador do feed (goroutine única que grava os lotes da fila no log, fora do lock do feed) | runWriter | internal/replication |
+| fila do gravador (lotes fechados ainda não gravados; também estão no cache) | Stream.queue | internal/replication |
+| geração interna (incrementa a cada invalidação e rotação; o gravador descarta lote de geração velha) | Stream.gen | internal/replication |
+| piso de memória do feed (`maxBufferedBytes ≥ 3 × maxBatchBytes`: intervalo ativo, fila do gravador e lote arrendado) | `replication.maxBufferedBytes` | internal/schema, internal/replication |
+| estado do feed (arquivo com geração, sequence, piso, posição, marca limpa e impressão dos Stores) | feedState / arquivo `state` | internal/replication |
+| marca limpa (o feed fechou depois de todas as mutações do Store, e a geração pode continuar) | feedState.Clean | internal/replication |
+| impressão dos Stores (a posição de escrita de cada Store no fechamento do feed, comparada na subida) | Fingerprint / StorePosition | internal/replication |
+| posição de escrita (segmento corrente, offset do fim do último record, próximo RowID e piso da histórica de um Store) | WritePosition / StorePosition | internal/storage, internal/replication |
+| origem da geração (de onde a geração corrente veio: nova, limpa, queda ou rotação) | Origin / OriginKind (OriginFresh, OriginClean, OriginCrash, OriginRotated) | internal/replication |
+| retomada do feed (decide a origem e derruba a marca limpa antes do primeiro Publish) | Resume | internal/replication |
+| mutação tardia (Publish depois do fechamento do feed; derruba a marca limpa) | Stream.late / `replication.feed.publish_after_close` | internal/replication |
+| rotação do feed (geração nova em operação: epoch nova, sequence e posição em bytes voltam a 0) | Rotate / `replication.feed.rotated` | internal/replication |
+| fim da vida do feed (junta as goroutines e fecha o log) | Wait | internal/replication |
+| histórica excluída (o feed não carrega a tabela histórica) | `replication.publishHistory` / Options.ExcludeHistory, Status.HistoryExcluded (`historyExcluded`) | internal/schema, internal/replication |
+| snapshot periódico (intervalo de republicação do snapshot aos destinos Kafka) | `replication.periodicSnapshot` | internal/schema |
+| reinício limpo (subida que retoma a mesma geração e sequence do feed) | OriginClean / `origin=clean` em `replication.feed.resumed` | internal/replication, internal/server |
+| produtores do Store (compaction, expiração e retenção, parados antes do fechamento do feed) | stopStoreProducers | internal/server |
+| checkpoint do encerramento (checkpoint do par base+histórica de todo dataset, antes de ler a impressão) | checkpointStores / `datasets.shutdown_checkpoint_failed` | internal/server |
+| histórica publicada (a irmã entra no tail, nos `retain`, no snapshot e na impressão) | publishedHistory | internal/server |
+| histórica indisponível (follower que exige a histórica diante de master que não a publica; nada é aplicado) | ReplicaHistoryUnavailable / `history_unavailable`, ErrHistoryNotPublished | internal/replication |
+| exige a histórica (follower com `history:` declarado) | Client.RequireHistory | internal/replication, internal/server |
+| desconexão retomável (desconexão vinda de `catching_up`/`following`: com a mesma geração, o tail retoma sem snapshot) | Replica.resumable / TailCursor | internal/replication |
+| erro local do apply (falha ao aplicar um lote no follower: resync, ERROR uma vez por ocorrência e backoff crescente) | ApplyError / ErrApplyFailed / `replication.follower.apply_failed` | internal/replication |
+| contexto de mutação (cancela com o request ou com o encerramento do servidor) | mutationContext | internal/server |
+
 ## Escopo do contador e comparação linear (issue #61)
 
 | PT-BR | Identificador/contrato | Dono |

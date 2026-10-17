@@ -1041,3 +1041,4 @@ internal/server	local	TestMetricasDeSerieSaoPublicadas.nome	name	renomeado ao al
 internal/server	local	TestMetricasDeSerieSaoPublicadas.achou	found	renomeado ao alinhar a emissão às fronteiras e pôr contrapressão no seriesDelivery (02/10/2026)
 internal/server	local	samplesOfSeries.emitindo	emitting	renomeado ao alinhar a emissão às fronteiras e pôr contrapressão no seriesDelivery (02/10/2026)
 internal/server	local	samplesOfSeries.rotulo	labels	renomeado ao alinhar a emissão às fronteiras e pôr contrapressão no seriesDelivery (02/10/2026)
+internal/server	method	Server.ctxOfMutacao	mutationContext	renomeado ao ligar o feed de replicação em disco ao encerramento (17/10/2026)

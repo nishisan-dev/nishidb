@@ -20,7 +20,8 @@ import (
 //
 // A passada medida cobre TODOS os caminhos que o publicador exercita por
 // registro — insert, update, delete, snapshot, a linha da histórica, os dois
-// retains, os dois marcadores, a key do registro Kafka e os dois lados da
+// retains, os marcadores (reset com e sem previousEpoch, snapshot_end e
+// resume), o header de motivo, a key do registro Kafka e os dois lados da
 // validação de json (válido inline, inválido como string) —, porque o gate só
 // protege o caminho que ele exercita. As linhas têm payload real, com o json
 // inline, o datetime, a coluna com alias e as colunas ocultas.
@@ -76,11 +77,19 @@ func TestEnvelopeRenderAllocatesNothing(t *testing.T) {
 				failure = err
 			}
 		}
-		if buf, err = r.AppendReset(buf[:0], goldenEpoch, replicationkafka.ResetGap, 100, at); err != nil {
+		if buf, err = r.AppendReset(buf[:0], goldenEpoch, "", replicationkafka.ResetGap, 100, at); err != nil {
+			failure = err
+		}
+		// O reset com previousEpoch exercita o cache do fragmento: a primeira
+		// passada (a de aquecimento do AllocsPerRun) o monta, as medidas o
+		// reaproveitam.
+		if buf, err = r.AppendReset(buf[:0], goldenEpoch, goldenPreviousEpoch, replicationkafka.ResetCrash, 0, at); err != nil {
 			failure = err
 		}
 		buf = r.AppendSnapshotEnd(buf[:0], goldenEpoch, 100, 17, at)
+		buf = r.AppendResume(buf[:0], goldenEpoch, 100, at)
 		_ = replicationkafka.OpHeader(replicationkafka.OpSnapshotEnd)
+		_ = replicationkafka.ReasonHeader(replicationkafka.ResetPeriodic)
 	})
 	if failure != nil {
 		t.Fatalf("render falhou dentro da passada medida: %v", failure)
@@ -96,6 +105,15 @@ func TestEnvelopeRenderAllocatesNothing(t *testing.T) {
 		if err != nil || !bytes.Contains(invalid, []byte(`"_raw":"`)) {
 			t.Fatalf("o caminho inválido não saiu como string: %s (%v)", invalid, err)
 		}
+	}
+	// Os marcadores novos têm de ter saído com a forma do contrato: sem isto o
+	// zero poderia vir de um caminho que não escreveu nada.
+	resume := r.AppendResume(nil, goldenEpoch, 100, at)
+	reset, err := r.AppendReset(nil, goldenEpoch, goldenPreviousEpoch, replicationkafka.ResetCrash, 0, at)
+	if err != nil || !bytes.Contains(resume, []byte(`"op":"resume"`)) ||
+		!bytes.Contains(reset, []byte(`"reason":"crash","previousEpoch":"`+goldenPreviousEpoch+`"`)) ||
+		string(replicationkafka.ReasonHeader(replicationkafka.ResetPeriodic)) != "periodic" {
+		t.Fatalf("a passada medida não exercitou os marcadores novos: %s | %s (%v)", resume, reset, err)
 	}
 	if allocs != 0 {
 		t.Errorf("renderizar um lote em regime alocou %.1f vezes por passada; quer 0", allocs)

@@ -60,10 +60,14 @@ func (it *rangeIterator) Close() error       { return nil }
 
 func newReplicationFeed(t *testing.T) *replication.Stream {
 	t.Helper()
-	feed, err := replication.New(replication.Options{Interval: 0, MaxMessages: 1000, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 64 << 20})
+	feed, err := replication.Open(t.TempDir(), replication.Options{Interval: 0, MaxMessages: 1000, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 64 << 20, MaxDiskBytes: 8 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := feed.Resume(replication.Fingerprint{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = feed.Close(nil, 5*time.Second); feed.Wait() })
 	return feed
 }
 
@@ -298,5 +302,40 @@ func TestHTTPSnapshotAbortsWhenFailureFollowsBeginWithoutEntries(t *testing.T) {
 	var snap replication.Snapshot
 	if derr := json.NewDecoder(res.Body).Decode(&snap); derr == nil && res.StatusCode == http.StatusOK {
 		t.Fatalf("status 200 com corpo decodificável (epoch=%q, %d entradas): a conexão não caiu", snap.Epoch, len(snap.Entries))
+	}
+}
+
+// O snapshot HTTP pedido com o servidor encerrando (o ctx do Run cancelado)
+// não exporta nada e responde 410, como o long-poll do batch: o master está
+// saindo, e o follower desconecta em vez de tratar a recusa como falha do
+// snapshot. Com o servidor no ar, o mesmo handler responde 200 — o par que
+// prova que o 410 vem do encerramento.
+func TestHTTPSnapshotAnswersGoneWhileShuttingDown(t *testing.T) {
+	feed := newReplicationFeed(t)
+	for _, tc := range []struct {
+		name     string
+		shutdown bool
+		want     int
+	}{{"running", false, http.StatusOK}, {"shutting_down", true, http.StatusGone}} {
+		t.Run(tc.name, func(t *testing.T) {
+			life, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.shutdown {
+				cancel()
+			}
+			s := &Server{log: logging.Discard(), met: registerMetricsOfQuery(metrics.NewRegistry(), nil, nil, nil), vidaCtx: life}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				s.streamReplicationSnapshot(w, r, "events", feed, []replication.SnapshotTable{{Name: "events", Source: emptySnapshotSource{}}}, 10)
+			}))
+			defer srv.Close()
+			res, err := srv.Client().Get(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = res.Body.Close()
+			if res.StatusCode != tc.want {
+				t.Fatalf("status=%d, quer %d", res.StatusCode, tc.want)
+			}
+		})
 	}
 }

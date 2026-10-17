@@ -54,7 +54,7 @@ func idsOfMetaTables(t *testing.T, a *env, dataset string) string {
 func TestQueryLocalRespondeMetaTablesComOCatalogoDoDataset(t *testing.T) {
 	a := newEnv(t)
 	writeDatasetServices(t, a)
-	const want = "_counters.alarms,_counters.autenticados_por_olt,_meta.counter_metrics,_meta.counters,_meta.fields,_meta.kafka,_meta.tables,servicos"
+	const want = "_counters.alarms,_counters.autenticados_por_olt,_meta.counter_metrics,_meta.counters,_meta.fields,_meta.kafka,_meta.replication,_meta.tables,servicos"
 	if got := idsOfMetaTables(t, a, "servicos"); got != want {
 		t.Fatalf("catálogo = %s, quero %s", got, want)
 	}

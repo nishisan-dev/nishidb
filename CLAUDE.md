@@ -123,6 +123,11 @@ Pacotes que estruturam o todo:
 - `internal/metakafka` — a tabela virtual `_meta.kafka`. Mora fora de
   `internal/kafka` e de `internal/query` porque precisa dos dois, e nenhum dos
   dois pode importar o outro (mesmo argumento de `internal/counters`).
+- `internal/metareplication` — a tabela virtual `_meta.replication`, uma linha
+  por destino Kafka do feed. Mesmo argumento: precisa do retrato de
+  `internal/replicationkafka`/`internal/replication` e do Store virtual de
+  `internal/query`. No servidor lê o publicador vivo; no `query --config`, o
+  `.ckpt` de cada destino e o `state` do feed fechado limpo.
 - `internal/server` + `internal/protocol` — protocolo remoto `/v1/*`.
   `protocolo` é pacote próprio porque tem quatro falantes (servidor, CLI remoto,
   JDBC, Python) que não podem redeclarar o formato.
@@ -169,6 +174,20 @@ Pacotes que estruturam o todo:
   proibido de importar `fmt` e `encoding/json` (há teste).
 - **Ordem de locks**: `vida` → `wmu` → `aposMu`; `aposMu` é sempre o mais
   interno — nada sob ele pode tomar `wmu` (deadlock).
+  No feed de replicação: `wmu` → `Stream.mu` → `diskLog.mu`, e
+  `stateMu` → `Stream.mu`. `Stream.mu` e `diskLog.mu` nunca são segurados
+  durante I/O; o `stateMu` serializa a gravação do arquivo `state` e é
+  segurado durante ela (com fsync). Nada sob esses locks toma `wmu`.
+- **O feed de replicação só retoma a geração com certeza** (débito 141,
+  `docs/replication.md`). Encerramento: `http.Shutdown` → parar compaction,
+  expiração e retenção → checkpoint de todo Store → fechar o feed com a marca
+  limpa e a impressão dos Stores → drenar os publicadores → `closeDatasets`.
+  Mutação depois do fechamento, impressão diferente, cauda rasgada ou
+  `Publish` antes do `Resume` = queda (epoch nova). Nenhuma
+  `(epoch, sequence)` já entregue é reaproveitada com outro conteúdo: o
+  rewind (backup restaurado) troca a geração por rotação ATÔMICA e
+  confirmada, e a régua da conferência fica persistida no `.ckpt` até uma
+  decisão terminar.
 - **stickyErr**: erro de durabilidade pós-Append deixa o writer FALHO até
   reabrir o dataset; retentativa "bem-sucedida" de fsync mentiria.
 - **NULL é ausência nas três camadas**: `"campo": null` REMOVE o campo; campo
@@ -185,7 +204,7 @@ Pacotes que estruturam o todo:
 - **Exit codes são contrato** (0–8, precedência `4 > 3 > 7 > 6 > 1`; tabela no
   README). Erro novo precisa de sentinela + `errors.Is` em `errorCode`, senão
   cai no default 1.
-- **Rota HTTP nova entra por `rt.registra(padrao, papel, handler)`**
+- **Rota HTTP nova entra por `rt.register(pattern, role, handler)`**
   (READ/ADMIN, fail-closed). Códigos de erro do wire são estáveis; código novo
   exige SQLSTATE no driver JDBC e exceção mapeada no client Python (gate cobra).
 - **SQL v1**: SELECT/WHERE/LIKE/ORDER BY (até 16 chaves; operador bloqueante com
@@ -281,6 +300,20 @@ em Kafka, o teste "toda série nasce em zero" foi reescrito para comparar
 o motivo que alarma o livelock deixava o teste verde: a lista concordava
 consigo mesma. Lista fechada, golden e contrato de wire são asseverados como
 LITERAIS no teste; a função do código é o que está sob prova, nunca a régua.
+
+**Segurança que vale "dentro de uma vida" tem de ser testada atravessando
+vidas.** No ciclo do feed em disco, a conferência de rewind comparava o topo
+do tópico com a sequence da reabertura CORRENTE. Uma vida com o Kafka fora o
+tempo todo ingeria além do topo antigo e fechava limpa, e a vida seguinte
+retomava reaproveitando `(epoch, sequence)`. A correção foi persistir a régua
+até uma decisão terminar. Estado de proteção que o processo guarda em memória
+precisa de um teste com reinício no meio, e não só do caminho de uma subida.
+
+**Controle de broker no `kfake` casa por `TopicID`, não só por nome.** O kgo
+negocia Produce v13 com o kfake, em que o tópico vai por `TopicID` e o nome
+chega vazio. Um `ControlKey` que casava `topic.Topic == "cdc"` nunca segurava
+nada, e o teste passava por coincidência de tempo. Controle de teste precisa
+de uma marca de que agiu (`held atomic.Bool`) asseverada no fim.
 
 **Fuzz não roda no `make test` nem no CI; só as sementes rodam.** O validador de
 JSON do envelope bateu com `json.Valid` em milhões de execuções de `-fuzz`, e
