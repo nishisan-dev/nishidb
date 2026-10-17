@@ -226,7 +226,8 @@ func TestWritePositionReturnsErrWriterFailedWhenWriterIsSticky(t *testing.T) {
 	s := openStore(t, Options{Dataset: "events"})
 	putRows(t, s, "sticky", 1)
 	s.wmu.Lock()
-	s.failWriter(errors.New("EIO simulado"))
+	// failWriter devolve o próprio erro sticky; aqui só interessa o estado.
+	_ = s.failWriter(errors.New("EIO simulado"))
 	s.wmu.Unlock()
 	if _, err := s.WritePosition(); !errors.Is(err, ErrWriterFailed) {
 		t.Fatalf("WritePosition com o writer falho = %v, quer ErrWriterFailed", err)
