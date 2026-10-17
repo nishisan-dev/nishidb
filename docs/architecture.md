@@ -1,7 +1,9 @@
-# Arquitetura do NishiDB — estado do M1
+# Arquitetura do NishiDB
 
-Escrito para quem chega agora. Os números são medidos, não estimados, e vêm da
-rodada de aceite de 2026-08-15 (`benchmark/baselines/aceite-8m-20260815.md`).
+Estado funcional revisado para a **v0.15.0**. Os números são medidos, não
+estimados: a referência inicial é a rodada de aceite de 2026-08-15
+(`benchmark/baselines/aceite-8m-20260815.md`), e as medições posteriores têm
+suas fontes indicadas nas respectivas seções.
 
 ## O problema
 
@@ -19,7 +21,7 @@ abaixo.
 
 ## Visão geral
 
-![Containers do M1: CLI, materializer, engine SQL e storage, os arquivos do dataset em disco, e o feed de replicação com o publicador em Kafka](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/c4_container.puml)
+![Containers do NishiDB: CLI, materializer, engine SQL e storage, os arquivos do dataset em disco, e o feed de replicação com o publicador em Kafka](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/c4_container.puml)
 
 > **Sobre as URLs dos diagramas.** O repositório é **privado**, então
 > `raw.githubusercontent.com` responde 404 a quem não está autenticado — e o
@@ -31,17 +33,25 @@ abaixo.
 > [`docs/diagrams/`](diagrams/) e renderizam em qualquer servidor PlantUML.
 > As URLs fixam **`main`** de propósito: fixar a branch de trabalho quebraria
 > os links no merge.
->
-> **Se as imagens não aparecerem, o problema é o certificado, não o fonte.** Em
-> 2026-08-22 o certificado TLS de `git-raw.nishisan.dev` estava **expirado
-> desde 2026-08-21 15:07 UTC**, e sem conseguir buscar o `.puml` o proxy
-> devolve **HTTP 500** para todas as URLs desta página. O conserto é renovar o
-> certificado no host — não há nada a mudar aqui. Os fontes em si continuam
-> válidos, e isso é verificável sem o proxy: `plantuml -checkonly -failfast2`
-> em `docs/diagrams/*.puml`. Registrado no débito 39.
 
-Um binário só, sem dependência externa em runtime. Dois comandos: `ingest`
-materializa NDJSON num dataset; `query` executa SQL e escreve NDJSON.
+O processo reúne ingestão, materialização, consulta SQL e manutenção do
+storage. `nishidb ingest` materializa arquivos NDJSON; `nishidb query` consulta
+localmente ou por HTTP; `nishidb server` serve consultas enquanto ingere e
+executa os laços de manutenção, alarmes, séries e replicação.
+
+### Replicação
+
+O master publica as alterações num feed em disco, com retenção por
+`replication.maxDiskBytes` e cache em memória por `maxBufferedBytes`.
+Followers HTTP e publicadores Kafka leem o mesmo feed. A ingestão continua
+mesmo se um consumidor ou o disco do feed falhar; se o intervalo necessário
+se perder, o consumidor precisa de um snapshot novo.
+
+Na v0.15.0, um encerramento limpo pode preservar a geração do feed e permitir
+que os publicadores Kafka retomem de seus checkpoints. Uma queda abre uma
+geração nova e exige snapshot completo. A configuração, a conferência de
+rewind, o resync administrativo e a tabela `_meta.replication` estão em
+[Replicação master/follower](replication.md).
 
 ## Ingestão
 
@@ -865,11 +875,11 @@ dataset, e não o par com o schema
 na linha porque não é reconstruível a partir de `(schema, name)`, e para as
 tabelas do `_meta` ele é o único endereço que existe.
 
-O que **não** foi resolvido aqui é o clamp do driver: `maxRows` e `timeoutMs`
-são por dataset, o servidor aplica os do dataset LIDO e o `NishiConnection`
-ainda clampa pelos do dataset da conexão. O mapa que faltava — qual dataset é
-dono de cada schema — passa a existir com estes campos; usá-lo é trabalho do
-driver, registrado no débito 118.
+O clamp do driver ainda tem uma limitação (débito 118): os limites são por
+dataset, mas o `NishiConnection` lê os do dataset base na abertura do schema.
+A conexão por schema já recusa o acesso a outro schema; a divergência restante
+é entre a base e a irmã histórica dentro do mesmo schema, quando seus limites
+diferem. O servidor aplica os limites da tabela efetivamente consultada.
 
 ### O `FROM` qualificado pelo schema
 
@@ -1998,14 +2008,32 @@ com cada entidade aparecendo uma vez por evento e o CRC batendo em todas. A
 direção inversa é pior — sem primary, o primeiro `Apenda` duplicaria uma
 entidade de forma durável.
 
-O dataset materializado tem modo e marca zerados e continua gravando um
-manifest **v1**, byte a byte igual ao de antes desta seção existir: o rollback
-segue possível para quem nunca declarou `history`.
+O dataset materializado tem modo e marca de retenção zerados. O manifest
+atual é **v3**, com ou sem `history:`, desde a adoção do índice por segmento;
+a leitura de versões anteriores permite a migração, mas um binário anterior
+à v3 recusa o dataset migrado. O rollback exige restaurar o backup anterior
+à migração (ver [Upgrade](../README.md#upgrade-dataset-criado-antes-do-índice-por-segmento)).
 
 No modo histórico, `primary.idx` e `sequences.idx` **não abrem** — a primary É o
 mecanismo de dedup e a sequence só serve ao stale check. `expiry.idx` e
 `prazos.idx` também não: o prazo ali é do dataset, não da linha. Sobra o
 `locations.idx`, que é o commit point de visibilidade.
+
+### Consultas por período de escrita
+
+Uma restrição obrigatória de `_writtenAt` no `WHERE` permite ao planner
+preservar o caminho de acesso escolhido e descartar segmentos fechados fora
+do intervalo. As comparações aceitas são `=`, `>`, `>=`, `<` e `<=`, com
+interseção das condições ligadas por `AND`. O executor continua reavaliando o
+predicado completo.
+
+Cada segmento fechado pode ter um `.tidx` derivado do `.dat`, com mínimo e
+máximo reais dos timestamps, independentemente da janela dos índices de
+campos. O segmento ativo sempre participa. Metadados ausentes, incompatíveis
+ou corrompidos, e timestamps ausentes ou de tipo inesperado, conservam a
+leitura; o planejamento não lê dados nem grava metadados. A otimização reduz
+as buscas em disco, mas ainda percorre as localizações em memória. Exemplos
+e diagnóstico estão no [README](../README.md#consultas-por-período-de-escrita).
 
 ### Retenção: exata na leitura, por segmento no disco
 
@@ -2726,7 +2754,7 @@ counters:
     metrics:
       - name: auth_5m
         type: window          # único tipo
-        source: total         # única fonte
+        source: total         # população; também aceita nome de measure
         window: 5m            # múltipla de 1m, de 1m a 30d
         aggregates: [avg]     # coluna auth_5m_avg (double)
       - name: auth_24h
@@ -2934,11 +2962,14 @@ blocos, as structs fixas e as fatias de trabalho. O leitor da bancada é o
 contador em memória dos testes — um mutex do contador inteiro, tomado a cada
 `Group` — e não o dicionário do storage.
 
-**O que NÃO existe.** A única fonte é `total` (débito 126). As colunas das
-métricas não saem na linha do `emit:` (débito 124) e não são ligáveis no `bind`
-do enriquecimento, que as recusa na subida (débito 125). E a razão entre dois
-contadores — autenticados ÷ serviços da mesma OLT — é a issue #61: `source` é
-um enum justamente para que uma fonte nova entre sem mudar a forma do bloco.
+**Fontes e limites.** `source` aceita `total`, quando habilitado, ou o nome
+de uma medida de taxa declarada em `measures:`. Os agregados de população
+preservam a tipagem inteira de `min`/`max`; os de taxa são fracionários (ver
+[Medidas de taxa dos contadores](#medidas-de-taxa-dos-contadores)). As colunas
+das métricas também saem no `emit:`. Elas ainda não são ligáveis no `bind`
+do enriquecimento, que as recusa na subida (débito 125), e a razão entre dois
+contadores — autenticados ÷ serviços da mesma OLT — continua fora do contrato
+(issue #61).
 
 ## Alarmes e emissão periódica de contador
 
@@ -3283,19 +3314,21 @@ condição fala de UM contador: ela cita as colunas dele, inclusive as geradas
 pelas métricas de janela do próprio contador, mas a razão entre dois
 (autenticados ÷ serviços da mesma OLT) não é expressável — é a issue #61. O
 `bind` do enriquecimento liga só `groupKey`, `total` e as colunas do `groupBy`,
-e recusa na subida as colunas das métricas (débito 125); a linha do `emit:`
-também não as leva (débito 124). `/v1/stats` não publica estes números; o
-coletor do `/metrics` é a fonte única, e expô-los no documento do dataset sairá
-de lá.
+e recusa na subida as colunas das métricas (débito 125). A linha do `emit:`
+leva as colunas de janela, como descrito acima (débito 124 fechado). O
+`/v1/stats` publica as filas em `alarmDelivery` e os destinos de séries Kafka
+em `seriesDelivery`; os agregados da avaliação de alarmes e das passadas de
+emissão são publicados pelo `/metrics` (ver [Métricas](metricas.md)).
 
 ## O que ainda não existe
 
-**Tombstones por retenção** — a expiração por inatividade existe e está
-descrita acima; o que não existe é o tombstone que devolveria o **disco** da
-entidade expirada, que hoje some da consulta e continua nos segmentos — e o
-**backfill da tabela histórica** (ela
-começa vazia quando é ligada, e o dataset base não guarda os eventos que a
-preencheriam). O **backfill do índice secundário** (débito 22) SAIU desta lista:
+**Remoção definitiva das keys expiradas** — o TTL já esconde a linha na
+leitura, o coletor publica a lápide e a compaction recupera os records
+superados. O que ainda não existe é `tombstoneRetention` para esquecer a key
+na primary e reutilizar o rowId; a identidade continua ocupando os índices
+densos depois da expiração. Também não existe **backfill da tabela histórica**:
+ela começa vazia quando é ligada, e o dataset base não guarda os eventos que
+a preencheriam. O **backfill do índice secundário** (débito 22) SAIU desta lista:
 declarar um campo indexado sobre um dataset que já tem linhas deixou de ser
 recusado, os segmentos antigos são agendados por (segmento, campo) e a goroutine
 de reconstrução drena a fila sozinha, em todos os datasets. O que sobrou dali é
@@ -3307,8 +3340,10 @@ que nenhuma reconstrução resolve: o valor extraído não existe nos records j�
 gravados, e não há de onde derivá-lo. **A compaction saiu desta lista no M4** e está
 descrita acima; **autenticação e TLS saíram nesta fase (Fase 11)** e estão
 descritas em "Segurança: autenticação e TLS" — o que falta ali é
-operacional, não de mecanismo: o deploy no piloto com certificado e usuários
-reais é a Fase C do ciclo, ainda não rodada (ver [`aceite-m5.md`](aceite-m5.md)).
+operacional, não de mecanismo. O [registro do piloto](piloto-events.md) já
+registra TLS e autenticação em loopback; a exposição à rede, com firewall
+restrito, continua pendente, conforme o [README](../README.md#estado). O
+[aceite do M5](aceite-m5.md) preserva os critérios da rodada original.
 O estado item a item está em [`aceite-m1.md`](aceite-m1.md),
 [`aceite-m2.md`](aceite-m2.md), [`aceite-fase6.md`](aceite-fase6.md),
 [`aceite-m4.md`](aceite-m4.md) e [`aceite-m5.md`](aceite-m5.md).
