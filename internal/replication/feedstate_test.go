@@ -29,12 +29,14 @@ import (
 //	03000000              Segment = 3
 //	0000100000000000      Offset = 1048576
 //	e903000000000000      NextRowID = 1001
+//	0000000000000000      RowIDBase = 0
 //	0e00 6576656e74735f686973746f7279   "events_history"
 //	00000000              Segment = 0
 //	4000000000000000      Offset = 64
 //	0500000000000000      NextRowID = 5
-//	cafb52ac              crc32c de tudo acima
-const goldenStateHex = "4e44425401010000101112131415161718191a1b1c1d1e1f4d00000000000000140000000000000000100000000000000200000006006576656e7473030000000000100000000000e9030000000000000e006576656e74735f686973746f72790000000040000000000000000500000000000000cafb52ac"
+//	0200000000000000      RowIDBase = 2
+//	766dbca5              crc32c de tudo acima
+const goldenStateHex = "4e44425401010000101112131415161718191a1b1c1d1e1f4d00000000000000140000000000000000100000000000000200000006006576656e7473030000000000100000000000e90300000000000000000000000000000e006576656e74735f686973746f727900000000400000000000000005000000000000000200000000000000766dbca5"
 
 func sampleFeedState() feedState {
 	return feedState{
@@ -45,7 +47,7 @@ func sampleFeedState() feedState {
 		Clean:    true,
 		Fingerprint: Fingerprint{Stores: []StorePosition{
 			{Name: "events", Segment: 3, Offset: 1 << 20, NextRowID: 1001},
-			{Name: "events_history", Segment: 0, Offset: 64, NextRowID: 5},
+			{Name: "events_history", Segment: 0, Offset: 64, NextRowID: 5, RowIDBase: 2},
 		}},
 	}
 }
@@ -279,6 +281,7 @@ func TestFingerprintEqualComparesPositionsInOrder(t *testing.T) {
 		"different offset":  {Stores: []StorePosition{{Name: "a", Segment: 1, Offset: 9, NextRowID: 3}, {Name: "b"}}},
 		"different rowid":   {Stores: []StorePosition{{Name: "a", Segment: 1, Offset: 2, NextRowID: 4}, {Name: "b"}}},
 		"different segment": {Stores: []StorePosition{{Name: "a", Segment: 2, Offset: 2, NextRowID: 3}, {Name: "b"}}},
+		"different floor":   {Stores: []StorePosition{{Name: "a", Segment: 1, Offset: 2, NextRowID: 3, RowIDBase: 1}, {Name: "b"}}},
 		"swapped order":     {Stores: []StorePosition{{Name: "b"}, {Name: "a", Segment: 1, Offset: 2, NextRowID: 3}}},
 		"missing store":     {Stores: []StorePosition{{Name: "a", Segment: 1, Offset: 2, NextRowID: 3}}},
 		"empty":             {},

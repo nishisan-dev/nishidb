@@ -1086,6 +1086,7 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | estado do feed (arquivo com geração, sequence, piso, posição, marca limpa e impressão dos Stores) | feedState / arquivo `state` | internal/replication |
 | marca limpa (o feed fechou depois de todas as mutações do Store, e a geração pode continuar) | feedState.Clean | internal/replication |
 | impressão dos Stores (a posição de escrita de cada Store no fechamento do feed, comparada na subida) | Fingerprint / StorePosition | internal/replication |
+| posição de escrita (segmento corrente, offset do fim do último record, próximo RowID e piso da histórica de um Store) | WritePosition / StorePosition | internal/storage, internal/replication |
 | origem da geração (de onde a geração corrente veio: nova, limpa, queda ou rotação) | Origin / OriginKind (OriginFresh, OriginClean, OriginCrash, OriginRotated) | internal/replication |
 | retomada do feed (decide a origem e derruba a marca limpa antes do primeiro Publish) | Resume | internal/replication |
 | mutação tardia (Publish depois do fechamento do feed; derruba a marca limpa) | Stream.late / `replication.feed.publish_after_close` | internal/replication |

@@ -25,7 +25,7 @@ const stateFlagClean = 1
 // storePositionMinBytes é o que uma StorePosition ocupa com nome vazio. Serve
 // de sanidade ANTES de alocar: sem ela um count adulterado (com o CRC refeito)
 // faria o decoder pedir a memória do processo.
-const storePositionMinBytes = 2 + 4 + 8 + 8
+const storePositionMinBytes = 2 + 4 + 8 + 8 + 8
 
 var stateMagic = [4]byte{'N', 'D', 'B', 'T'}
 
@@ -35,13 +35,19 @@ var stateMagic = [4]byte{'N', 'D', 'B', 'T'}
 var errCorruptState = errors.New("replication: corrupt feed state")
 
 // StorePosition é a posição de escrita de UM Store no instante do fechamento
-// do feed: o segmento corrente, o offset do fim do último record válido e o
-// próximo RowID a alocar.
+// do feed: o segmento corrente, o offset do fim do último record válido, o
+// próximo RowID a alocar e o piso de retenção (RowIDBase).
+//
+// O piso entra porque a retenção da tabela histórica o avança e aposenta
+// segmentos SEM gravar record: segmento, offset e NextRowID ficam idênticos, e
+// só o piso revela que linhas já publicadas pelo feed deixaram de existir.
+// Zero fora do modo histórico.
 type StorePosition struct {
 	Name      string
 	Segment   uint32
 	Offset    int64
 	NextRowID uint64
+	RowIDBase uint64
 }
 
 // Fingerprint é a impressão dos Stores (base e, quando publicada, a histórica)
@@ -78,7 +84,7 @@ type feedState struct {
 //	40  8  EndPos
 //	48  4  storeCount u32
 //	       por Store:
-//	         nameLen u16 | name | Segment u32 | Offset i64 | NextRowID u64
+//	         nameLen u16 | name | Segment u32 | Offset i64 | NextRowID u64 | RowIDBase u64
 //	    4  crc32c sobre tudo acima
 //
 // O formato é de disco e tem golden test (TestFeedStateGoldenBytes) com o
@@ -109,6 +115,7 @@ func encodeFeedState(st feedState) ([]byte, error) {
 		b = binary.LittleEndian.AppendUint32(b, s.Segment)
 		b = binary.LittleEndian.AppendUint64(b, uint64(s.Offset))
 		b = binary.LittleEndian.AppendUint64(b, s.NextRowID)
+		b = binary.LittleEndian.AppendUint64(b, s.RowIDBase)
 	}
 	return binary.LittleEndian.AppendUint32(b, crc32.Checksum(b, castagnoli)), nil
 }
@@ -145,7 +152,7 @@ func decodeFeedState(src []byte) (feedState, error) {
 		}
 		nameLen := int(binary.LittleEndian.Uint16(rest))
 		rest = rest[2:]
-		if len(rest) < nameLen+4+8+8 {
+		if len(rest) < nameLen+4+8+8+8 {
 			return feedState{}, errCorruptState
 		}
 		var sp StorePosition
@@ -154,7 +161,8 @@ func decodeFeedState(src []byte) (feedState, error) {
 		sp.Segment = binary.LittleEndian.Uint32(rest)
 		sp.Offset = int64(binary.LittleEndian.Uint64(rest[4:]))
 		sp.NextRowID = binary.LittleEndian.Uint64(rest[12:])
-		rest = rest[20:]
+		sp.RowIDBase = binary.LittleEndian.Uint64(rest[20:])
+		rest = rest[28:]
 		st.Fingerprint.Stores = append(st.Fingerprint.Stores, sp)
 	}
 	if len(rest) != 0 {

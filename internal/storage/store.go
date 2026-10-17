@@ -2644,6 +2644,56 @@ func (s *Store) Sync() error {
 	return s.syncLocked()
 }
 
+// WritePosition devolve a posição de escrita do Store: o segmento corrente, o
+// offset do fim do último record, o próximo RowID a alocar e o piso de
+// retenção (RowIDBase, zero fora do modo histórico). O feed de replicação
+// grava essa posição (na impressão dos Stores) ao fechar e a compara na
+// subida, depois da recovery: qualquer diferença quer dizer que o Store foi
+// mexido fora do feed (comando offline, backup restaurado, record que o fsync
+// final não levou ao disco, retenção rodada com a replicação desligada).
+//
+// O piso está na posição porque a retenção da tabela histórica o avança e
+// aposenta segmentos SEM gravar record: segmento, offset e NextRowID ficam
+// idênticos e só o RowIDBase denuncia que linhas já publicadas deixaram de
+// existir. Sem ele, ao religar o feed retomaria limpo sem o Retain.
+//
+// A leitura é feita sob o wmu, o mesmo mutex que serializa Put/Apenda: sem ele
+// o segmento e o offset de `secW.Current()` (campos do writer, sem atômico)
+// seriam lidos em corrida com o Append, e o par poderia sair rasgado. O
+// NextRowID e o piso são lidos DENTRO do mesmo trecho, para que os valores
+// descrevam o mesmo instante; nunca são cacheados, porque o contador anda a
+// cada Put. O wmu NÃO exclui a retenção (ela só publica o piso, atômico, sob
+// o retPassMu): por isso a impressão de fechamento só vale lida DEPOIS de
+// parar compaction, expiração e retenção e de fazer o Checkpoint — é essa
+// ordem, do chamador, que torna o instante estável.
+//
+// O Checkpoint que o Open faz depois da recovery NÃO move esta posição: ele
+// persiste o estado derivado (manifest, índices, contadores) e não escreve
+// record no segmento nem aloca RowID.
+//
+// Com o Store fechado devolve ErrDatasetClosed; com o writer falho (sticky)
+// devolve ErrWriterFailed, como o Sync, porque o offset de um writer falho não
+// descreve o que está durável.
+func (s *Store) WritePosition() (replication.StorePosition, error) {
+	if err := s.entra(); err != nil {
+		return replication.StorePosition{}, err
+	}
+	defer s.sai()
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if s.stickyErr != nil {
+		return replication.StorePosition{}, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
+	}
+	secID, offset := s.secW.Current()
+	return replication.StorePosition{
+		Name:      s.opts.Dataset,
+		Segment:   secID,
+		Offset:    offset,
+		NextRowID: s.nextRowID.Load(),
+		RowIDBase: s.rowIDBase.Load(),
+	}, nil
+}
+
 // syncLocked exige wmu já adquirido.
 func (s *Store) syncLocked() error {
 	if s.stickyErr != nil {
