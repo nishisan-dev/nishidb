@@ -190,6 +190,10 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 	if o.feed == (replication.Options{}) {
 		o.feed = replication.Options{Interval: 0, MaxMessages: 1000, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 8 << 20}
 	}
+	if o.feed.MaxDiskBytes == 0 {
+		// O piso do feed em disco: nenhum cenário daqui enche o log.
+		o.feed.MaxDiskBytes = 8 << 20
+	}
 	h := &harness{t: t, baseSrc: newMemSource(), histSrc: newMemSource(), logs: &lockedBuffer{}}
 	h.addrs = o.addrs
 	if h.addrs == nil {
@@ -201,8 +205,11 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 		h.cluster = c
 		h.addrs = c.ListenAddrs()
 	}
-	feed, err := replication.New(o.feed)
+	feed, err := replication.Open(t.TempDir(), o.feed)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := feed.Resume(replication.Fingerprint{}); err != nil {
 		t.Fatal(err)
 	}
 	h.feed = feed
@@ -245,13 +252,15 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 	return h
 }
 
-// close segue a ordem do servidor: o feed antes, o publicador depois.
+// close segue a ordem do servidor: o feed antes, o publicador depois, e o
+// fim da vida do feed (Wait) só quando o publicador já drenou a cauda.
 func (h *harness) close() {
 	h.closeOnce.Do(func() {
-		h.feed.Close()
+		_ = h.feed.Close(nil, 10*time.Second)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = h.pub.Close(ctx)
+		h.feed.Wait()
 	})
 }
 

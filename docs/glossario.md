@@ -1050,7 +1050,7 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | marcador de reset (abre uma reconstrução do tópico) | `reset` / OpReset | internal/replicationkafka |
 | motivo do reset (`startup`, `gap`, `snapshot_failed` ou `partitions_changed`) | ResetReason | internal/replicationkafka |
 | fim do snapshot (o marcador que fecha a reconstrução, com a contagem por partição) | `snapshot_end` / OpSnapshotEnd | internal/replicationkafka |
-| geração do feed (o identificador aleatório que muda a cada reinício do master) | epoch / Status.Epoch | internal/replication, internal/replicationkafka |
+| geração do feed (o identificador aleatório do feed; sobrevive ao reinício limpo e muda na queda e na rotação) | epoch / Status.Epoch | internal/replication, internal/replicationkafka |
 | instante da publicação (quando a entrada entrou no feed; na consolidação, o da última alteração) | `at` / Entry.At | internal/replication, internal/replicationkafka |
 | invalidação do feed (o descarte do intervalo retido inteiro, que força os seguidores a ressincronizar) | Status.Invalidations | internal/replication |
 | exportador de snapshot (a exportação do estado vivo em blocos curtos, com o cursor lido antes da varredura) | ExportSnapshot | internal/replication |
@@ -1064,6 +1064,36 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | validador de JSON do envelope (decide se uma coluna json sai inline ou como string) | validJSON | internal/replicationkafka |
 | orçamento da drenagem (o prazo próprio dos publicadores no encerramento) | publisherCloseBudget | internal/server |
 | rótulo do estado do publicador (o label da série one-hot de estado) | LabelPublisherState / `state` | internal/metrics |
+## Feed de replicação em disco
+
+| PT-BR | Identificador/contrato | Dono |
+|---|---|---|
+| quadro (um lote fechado do feed gravado em disco: cabeçalho com magic, tamanho e CRC32C, e as entradas já consolidadas) | frame / appendFrame, decodeFrame | internal/replication |
+| segmento do feed (arquivo do log do feed, nomeado pela primeira sequence, com cabeçalho de 64 bytes) | segment / segmentHeader | internal/replication |
+| log de segmentos (o feed em disco: segmentos contíguos, retenção por bytes e índice esparso) | diskLog | internal/replication |
+| teto de disco do feed (limite do log de segmentos; padrão 2 GiB) | `replication.maxDiskBytes` / Options.MaxDiskBytes | internal/schema, internal/replication |
+| tamanho de segmento (`clamp(maxDiskBytes/8, 1 MiB, 64 MiB)`) | segmentBytesFor | internal/replication |
+| posição em bytes (fim acumulado, em bytes de quadro desde o início da geração, do último quadro) | EndPos / Batch.EndPos, Status.EndPos, Position | internal/replication |
+| índice esparso (uma entrada em heap a cada ~1 MiB de segmento, para achar onde começa a leitura de um cursor) | indexEntry | internal/replication |
+| piso do feed (a maior sequence que o feed já não serve) | floor / Status.AvailableAfter | internal/replication |
+| arrendamento de segmento (referência contada de um leitor; o fd só fecha com o segmento aposentado e sem referência) | segmentHandle / release | internal/replication |
+| cauda rasgada (bytes no fim do último segmento que não formam quadro válido, deixados por queda) | tornBytes | internal/replication |
+| falha de durabilidade do log (fdatasync falho: o feed declara lacuna e recomeça o log) | errLogFailed | internal/replication |
+| gravador do feed (goroutine única que grava os lotes da fila no log, fora do lock do feed) | runWriter | internal/replication |
+| fila do gravador (lotes fechados ainda não gravados; também estão no cache) | Stream.queue | internal/replication |
+| geração interna (incrementa a cada invalidação e rotação; o gravador descarta lote de geração velha) | Stream.gen | internal/replication |
+| piso de memória do feed (`maxBufferedBytes ≥ 3 × maxBatchBytes`: intervalo ativo, fila do gravador e lote arrendado) | `replication.maxBufferedBytes` | internal/schema, internal/replication |
+| estado do feed (arquivo com geração, sequence, piso, posição, marca limpa e impressão dos Stores) | feedState / arquivo `state` | internal/replication |
+| marca limpa (o feed fechou depois de todas as mutações do Store, e a geração pode continuar) | feedState.Clean | internal/replication |
+| impressão dos Stores (a posição de escrita de cada Store no fechamento do feed, comparada na subida) | Fingerprint / StorePosition | internal/replication |
+| origem da geração (de onde a geração corrente veio: nova, limpa, queda ou rotação) | Origin / OriginKind (OriginFresh, OriginClean, OriginCrash, OriginRotated) | internal/replication |
+| retomada do feed (decide a origem e derruba a marca limpa antes do primeiro Publish) | Resume | internal/replication |
+| mutação tardia (Publish depois do fechamento do feed; derruba a marca limpa) | Stream.late / `replication.feed.publish_after_close` | internal/replication |
+| rotação do feed (geração nova em operação: epoch nova, sequence e posição em bytes voltam a 0) | Rotate / `replication.feed.rotated` | internal/replication |
+| fim da vida do feed (junta as goroutines e fecha o log) | Wait | internal/replication |
+| histórica excluída (o feed não carrega a tabela histórica) | `replication.publishHistory` / Options.ExcludeHistory, Status.HistoryExcluded (`historyExcluded`) | internal/schema, internal/replication |
+| snapshot periódico (intervalo de republicação do snapshot aos destinos Kafka) | `replication.periodicSnapshot` | internal/schema |
+
 ## Escopo do contador e comparação linear (issue #61)
 
 | PT-BR | Identificador/contrato | Dono |

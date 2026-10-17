@@ -448,6 +448,7 @@ func Novo(cfg *config.Config, o Options) (*Server, error) {
 		if err := s.closeDatasets(); err != nil {
 			log.Warn("datasets.close", "falha ao fechar datasets na subida abortada", "erro", err.Error())
 		}
+		s.waitFeeds()
 		s.closeUsers(log)
 	}()
 
@@ -527,12 +528,42 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	indexados := schema.IndexedFieldNames(spec)
 	var feed *replication.Stream
 	if spec.Replication.Enabled && spec.Replication.Role == "master" {
+		// Task 6: a fiação definitiva abre o feed DEPOIS do LOCK do Store,
+		// passa ao Resume a impressão dos Stores (base e histórica), deixa a
+		// histórica fora do feed com publishHistory: false e fecha com
+		// Close(&fp, budget) no encerramento. Até lá o feed nasce com a
+		// impressão vazia e fecha sem a marca limpa: toda subida abre uma
+		// epoch nova, como no feed só em memória.
+		opts := replication.Options{
+			Interval:         spec.Replication.FlushInterval,
+			MaxMessages:      spec.Replication.MaxMessages,
+			MaxBatchBytes:    spec.Replication.MaxBatchBytes,
+			MaxBufferedBytes: spec.Replication.MaxBufferedBytes,
+			MaxDiskBytes:     spec.Replication.MaxDiskBytes,
+			// Task 6: ExcludeHistory: !spec.Replication.PublishHistory entra junto
+			// com a filtragem da histórica. Ligado antes, o cursor anunciaria
+			// historyExcluded sem que a histórica saísse do feed.
+			Logger: log,
+		}
 		var ferr error
-		feed, ferr = replication.New(replication.Options{Interval: spec.Replication.FlushInterval, MaxMessages: spec.Replication.MaxMessages, MaxBatchBytes: spec.Replication.MaxBatchBytes, MaxBufferedBytes: spec.Replication.MaxBufferedBytes})
+		feed, ferr = replication.Open(filepath.Join(dir, "replication", "feed"), opts)
 		if ferr != nil {
 			return nil, fmt.Errorf("dataset %q: replication: %w", spec.Name, ferr)
 		}
 	}
+	// Qualquer saída com erro daqui em diante fecha o feed (antes do Resume o
+	// Close não toca o disco; depois dele, para o gravador).
+	//
+	// Task 6: depois do Resume a subida abortada fecha com Close(&fp, budget),
+	// a impressão dos Stores recuperados, porque nada mutou o Store: a
+	// próxima subida retoma a mesma epoch. Aqui, sem impressão, Close(nil, 0).
+	opened := false
+	defer func() {
+		if !opened && feed != nil {
+			_ = feed.Close(nil, 0)
+			feed.Wait()
+		}
+	}()
 	// O schema é compilado DENTRO do Open, pelo callback dos contadores: as
 	// definições precisam do schema, e o replay da recovery precisa das
 	// definições. É o mesmo Compile de sempre, no mesmo dicionário — só que
@@ -560,6 +591,13 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
+	}
+	// Task 6: o Resume recebe a impressão dos Stores recuperados. O replay da
+	// recovery não publica, então nada chega ao feed antes daqui.
+	if feed != nil {
+		if _, err := feed.Resume(replication.Fingerprint{}); err != nil {
+			return nil, closingStore(st, fmt.Errorf("dataset %q: replication: %w", spec.Name, err))
+		}
 	}
 	compilado := comp.Compiled()
 	if compilado == nil {
@@ -744,6 +782,7 @@ func (s *Server) openDataset(spec *schema.DatasetSpec, log *logging.Logger) (*da
 		return nil, failing(err)
 	}
 	d.irma = irma
+	opened = true
 	return d, nil
 }
 
@@ -1337,6 +1376,9 @@ func (s *Server) encerra() error {
 	s.seriesDelivery.Close()
 	s.forCounterMetrics()
 	errs = append(errs, s.closeDatasets())
+	// Task 6: o fim da vida do feed vem por último entre os datasets: até o
+	// http.Shutdown os seguidores ainda drenam a cauda, inclusive do disco.
+	s.waitFeeds()
 	// A tabela de usuários fecha por último: até aqui o http.Server ainda
 	// podia estar drenando requests autenticados contra ela.
 	if s.users != nil {

@@ -111,13 +111,14 @@ type frame struct {
 }
 
 // batch reconstrói o Batch que o quadro representa, com a epoch do segmento
-// em que ele foi lido (hex, como a do Stream). Messages = To − From + 1 e
-// bytes é a mesma estimativa de memória que o Stream usa (entryBytes), pois o
-// cache é contabilizado em bytes de memória, não de disco.
+// em que ele foi lido (hex, como a do Stream) e o EndPos do quadro.
+// Messages = To − From + 1 e bytes é a mesma estimativa de memória que o
+// Stream usa (entryBytes), pois o cache é contabilizado em bytes de memória,
+// não de disco.
 func (f frame) batch(epoch string) *Batch {
 	b := &Batch{
 		Epoch: epoch, From: f.From, To: f.To, At: f.At, Reason: f.Reason,
-		Messages: int(f.To - f.From + 1), Entries: f.Entries,
+		Messages: int(f.To - f.From + 1), Entries: f.Entries, EndPos: f.EndPos,
 	}
 	for i := range f.Entries {
 		b.bytes += entryBytes(f.Entries[i])

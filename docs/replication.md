@@ -1,9 +1,9 @@
 # Replicação master/follower
 
 Um dataset pode publicar uma fila de alterações para followers. A fila é
-volátil e limitada: o master nunca bloqueia a ingestão por causa de um
-follower lento. O bloco é fechado pelo primeiro limite atingido: intervalo,
-quantidade de mensagens recebidas, tamanho do lote ou memória total retida.
+limitada e o master nunca bloqueia a ingestão por causa de um follower lento.
+O bloco é fechado pelo primeiro limite atingido: intervalo, quantidade de
+mensagens recebidas, tamanho do lote ou memória total retida.
 
 ```yaml
 replication:
@@ -15,21 +15,60 @@ replication:
   flushInterval: 5s       # 0s a 60s; começa na primeira alteração
   maxMessages: 10000      # conta antes da deduplicação
   maxBatchBytes: 8MiB
-  maxBufferedBytes: 64MiB
+  maxBufferedBytes: 64MiB  # no master habilitado, pelo menos 3 × maxBatchBytes
+  maxDiskBytes: 2GiB       # só no master; mínimo 8MiB e 4 × maxBatchBytes
+  publishHistory: true     # só no master; padrão true
   targets: [replica_kafka] # opcional, só no master; nomes de kafkaTargets:
+  periodicSnapshot: 24h    # opcional, só no master e só com targets; 1h a 8760h
 ```
+
+Em todo master habilitado, com ou sem `targets`, `maxBufferedBytes` precisa ser
+pelo menos o triplo de `maxBatchBytes`: três lotes coexistem no buffer (o
+intervalo ativo, um lote na fila de gravação e um lote arrendado). Um lote
+arrendado (pelo publicador enquanto o copia para o próprio buffer, ou por um
+follower enquanto o envia) continua contando no buffer até ser solto, mesmo
+depois de descartado; sem essa folga, a próxima escrita invalidaria o
+intervalo retido. A carga recusa o dataset que não cumpre o piso.
+
+As três chaves abaixo só valem em master habilitado (`enabled: true`,
+`role: master`); num follower ou com `enabled: false` a carga as recusa,
+nomeando a chave, mesmo `publishHistory: false`.
+
+- `maxDiskBytes`: teto de disco do feed (ver [Feed em disco](#feed-em-disco)),
+  com padrão de 2 GiB. Precisa ser de pelo menos 8 MiB e de pelo menos
+  4 × `maxBatchBytes`; valor vazio ou abaixo do piso é recusado.
+- `publishHistory`: padrão `true`; aceita só booleano.
+- `periodicSnapshot`: de `1h` a `8760h` (365 dias), em segundos inteiros.
+  Exige `targets`. Omitida, fica desligada, e `0s` é recusado: não desliga,
+  nem é arredondado. Fração de segundo, valor fora da faixa e sufixo `d`
+  também são recusados.
+
+### Feed em disco
+
+O master grava o feed em `<dataset>/replication/feed/`, num log de segmentos:
+cada lote fechado vira um quadro com CRC, e cada segmento tem até
+`maxDiskBytes/8` (entre 1 MiB e 64 MiB). A gravação é de uma goroutine própria
+do feed, nunca da ingestão. A retenção é por bytes: quando o log passa de
+`maxDiskBytes`, os segmentos mais antigos são apagados inteiros e o piso do
+feed sobe. É esse piso, e não a memória, que limita até onde um follower ou um
+publicador pode estar atrasado.
+
+A memória (`maxBufferedBytes`) é um cache dos lotes mais recentes. Um lote só
+sai dela depois de gravado no disco, e sair dela não cria lacuna: quem pedir um
+cursor anterior lê do disco, com quadros consecutivos agrupados até
+`maxBatchBytes` e `maxMessages`. Erro de gravação (disco cheio, EIO) não para a
+ingestão: o lote fica na memória e a gravação é retentada, de 100 ms a 5 s; a
+lacuna só vem se a memória lotar de lotes ainda não gravados. Uma falha de
+`fdatasync` declara a lacuna na hora, porque o log fica inservível até ser
+apagado.
 
 `targets` lista destinos Kafka que também recebem o feed, além dos followers.
 Cada item é o nome de um destino declarado na lista global `kafkaTargets:` do
 `nishidb.yaml`, com a mesma regra de nome (`a-z`, `0-9` e `_`, até 64
 caracteres). `file` não vale aqui: a replicação não tem saída em arquivo. A
 chave só é aceita com `enabled: true` e `role: master`; lista vazia, item
-repetido ou item que não seja texto são recusados na carga do dataset. Com
-`targets` declarado, `maxBufferedBytes` precisa ser pelo menos o dobro de
-`maxBatchBytes`: um lote arrendado (pelo publicador enquanto o copia para o
-próprio buffer, ou por um follower enquanto o envia) continua contando no
-buffer até ser solto, mesmo depois de descartado; sem a folga de um lote
-inteiro, a próxima escrita invalidaria o intervalo retido. O comportamento da publicação é descrito em
+repetido ou item que não seja texto são recusados na carga do dataset. O
+comportamento da publicação é descrito em
 [Publicação em Kafka](#publicação-em-kafka).
 
 Updates consecutivos da mesma entidade são consolidados no estado completo já
@@ -60,10 +99,13 @@ lote depois do cursor, a leitura responde na hora que a fila foi fechada, sem
 esperar.
 
 O campo `invalidations` do status conta as perdas do intervalo inteiro, o
-ativo e o retido. Isso acontece por invalidação explícita, ou quando um
-registro não cabe na memória nem depois de liberar todos os lotes retidos. A
-remoção de lotes antigos por memória conta em `evictedBatches`, não aqui. Nos
-dois casos, followers que ficaram atrás do novo piso precisam ressincronizar.
+ativo e o retido. Isso acontece por invalidação explícita; quando um registro
+não cabe na memória nem depois de liberar os lotes já gravados; quando o
+disco não consegue gravar um lote (quadro grande demais, falha de `fdatasync`);
+ou quando um lote retido no disco não pode ser lido (quadro corrompido). A
+remoção de lotes antigos da memória conta em `evictedBatches` e não cria
+lacuna; a retenção do disco sobe o piso sem contar aqui. Followers que ficaram
+atrás do piso precisam ressincronizar.
 
 O snapshot carrega as versões visíveis do dataset e da tabela histórica junto
 com um cursor. O follower aplica esse estado pelo writer normal, reaplica o
@@ -96,8 +138,8 @@ esconder ou expirar linhas que o master ainda mantém (débito 131).
 
 As rotas de replicação exigem ADMIN, usam o TLS/autenticação do servidor e
 retornam conflito em vez de pular uma lacuna silenciosamente. O cliente
-reconecta com backoff quando o master fica offline. Promoção a master, failover
-e log durável de replicação permanecem fora desta versão.
+reconecta com backoff quando o master fica offline. Promoção a master e
+failover permanecem fora desta versão.
 
 No modo `follower`, o servidor não consome Kafka nem executa o coletor de TTL,
 alarmes, emissões ou reconstruções dependentes do relógio local; ele aplica os
@@ -113,9 +155,10 @@ O master pode publicar o mesmo feed num tópico Kafka, em JSON, além de servi-l
 aos followers por HTTP. O publicador funciona como um follower interno: lê os
 mesmos lotes, na mesma ordem, e escreve um registro Kafka por entrada (o
 `retain` vira um registro em cada partição). Ele nunca
-segura a ingestão. Se o Kafka ficar lento ou fora do ar, o feed segue o limite
-de memória de sempre, e o publicador se recupera republicando o estado inteiro
-no próprio tópico. O consumidor do tópico nunca precisa das rotas HTTP nem de
+segura a ingestão. Se o Kafka ficar lento ou fora do ar, o feed segue gravando
+no disco dentro de `maxDiskBytes`, e o publicador lê do disco o que atrasou; se
+a retenção apagar o que ele ainda não leu, ele se recupera republicando o
+estado inteiro no próprio tópico. O consumidor do tópico nunca precisa das rotas HTTP nem de
 credencial ADMIN.
 
 ![Publicação da replicação em Kafka: reset, snapshot, snapshot_end e tail, com os caminhos de lacuna, falha de entrega e mudança de partições](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/replication_kafka_flow.puml)
@@ -144,7 +187,7 @@ replication:
   enabled: true
   role: master
   maxBatchBytes: 8MiB
-  maxBufferedBytes: 64MiB   # com targets, pelo menos 2 × maxBatchBytes
+  maxBufferedBytes: 64MiB   # pelo menos 3 × maxBatchBytes no master habilitado
   targets: [alarms_cdc]
 ```
 
@@ -153,7 +196,8 @@ subida recusa, com exit 1 e uma mensagem que nomeia o problema:
 
 - `targets` num dataset sem `enabled: true` ou com `role: follower`;
 - lista vazia, nome repetido, nome inválido ou `file`;
-- `maxBufferedBytes` menor que o dobro de `maxBatchBytes`;
+- `maxBufferedBytes` menor que o triplo de `maxBatchBytes` (vale para todo
+  master habilitado, com ou sem `targets`);
 - destino que não existe em `kafkaTargets:`;
 - destino que também é `emit.target` de algum contador. Um tópico carrega um
   formato de envelope só;
@@ -355,11 +399,10 @@ poderia pôr um `update` antigo depois do `delete` da mesma key.
 
 O publicador copia o lote para o próprio buffer e devolve o lote ao feed antes
 de esperar o Kafka. Um broker travado não prende memória do feed, que os
-followers compartilham. Descartar só esse lote enquanto a entrega tenta de novo
-não cria lacuna, porque o piso do feed passa a ser o fim dele, que é o cursor
-novo do publicador. A continuidade se perde, com `reset` por lacuna, só quando
-o feed descarta lotes que o publicador ainda não leu, ou invalida o intervalo
-retido.
+followers compartilham. Descartar esse lote da memória enquanto a entrega tenta
+de novo não cria lacuna: ele já está gravado no disco. A continuidade se perde,
+com `reset` por lacuna, só quando a retenção do disco apaga lotes que o
+publicador ainda não leu, ou o feed invalida o intervalo retido.
 
 ### Estados e falhas
 
@@ -397,7 +440,7 @@ silêncio.
 ### Dimensionamento
 
 Enquanto o snapshot anda, o feed tem de reter todas as alterações feitas desde
-o cursor do `reset`: são elas que o tail entrega depois. Se o buffer do feed
+o cursor do `reset`: são elas que o tail entrega depois. Se o disco do feed
 não comportar o que a ingestão produz durante um snapshot inteiro, o cursor se
 perde, o publicador recomeça com `reset` por lacuna, e o próximo snapshot tende
 a acabar do mesmo jeito. O publicador então republica o dataset em laço e nunca
@@ -405,13 +448,13 @@ alcança o tail.
 
 A conta a fazer:
 
-    maxBufferedBytes > duração do snapshot × alterações por segundo × custo por entrada
+    maxDiskBytes > duração do snapshot × alterações por segundo × custo por entrada
 
-O custo de uma entrada retida é de cerca de 192 bytes, mais o nome da tabela,
-a key e o payload dela. A consolidação de updates seguidos da mesma entidade reduz a conta. A
+O custo de uma entrada no disco é de cerca de 44 bytes, mais o nome da tabela,
+a key e o payload dela (na memória, cerca de 192 bytes mais os mesmos campos). A consolidação de updates seguidos da mesma entidade reduz a conta. A
 duração e o número de linhas de cada snapshot saem no log
-`replication.kafka.snapshot.completed`. Com `targets` declarado,
-`maxBufferedBytes` também precisa ser pelo menos o dobro de `maxBatchBytes`.
+`replication.kafka.snapshot.completed`. Em todo master habilitado,
+`maxBufferedBytes` também precisa ser pelo menos o triplo de `maxBatchBytes`.
 
 Quando o laço acontece, ele aparece de duas formas:
 
@@ -421,7 +464,9 @@ Quando o laço acontece, ele aparece de duas formas:
   `stage=snapshot` (perdeu no meio) ou `stage=tail_start` (perdeu entre o
   `snapshot_end` e o primeiro lote do tail), e com a duração do snapshot.
 
-O remédio é subir `maxBufferedBytes`. A proteção atual só detecta o laço.
+O remédio é subir `maxDiskBytes`, que é o que limita a janela retida (a
+mensagem do log ainda cita `maxBufferedBytes`). A proteção atual só detecta o
+laço.
 Com `stage=snapshot`, o publicador espera 200 ms antes do próximo snapshot;
 com `stage=tail_start`, recomeça na hora (débito 132).
 

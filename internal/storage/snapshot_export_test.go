@@ -142,10 +142,14 @@ func TestChunkedSnapshotPlusTailConvergesUnderConcurrentWrites(t *testing.T) {
 		feed.Publish(table, op, rec, at)
 	}})
 	var err error
-	feed, err = replication.New(replication.Options{Interval: 0, MaxMessages: 1000, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 64 << 20})
+	feed, err = replication.Open(t.TempDir(), replication.Options{Interval: 0, MaxMessages: 1000, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 64 << 20, MaxDiskBytes: 8 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := feed.Resume(replication.Fingerprint{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = feed.Close(nil, 5*time.Second); feed.Wait() })
 	// Dois escritores em espaços de keys disjuntos: um determinístico, colado
 	// às aberturas de snapshot e às emissões, e um em goroutine própria.
 	sync1 := newConvergenceWriter(t, s, "a", 40)

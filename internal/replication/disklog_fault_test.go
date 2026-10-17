@@ -62,8 +62,8 @@ func TestDiskLogWriteFailureIsRetryableWithoutWipe(t *testing.T) {
 	failWritesWithGarbage(3, isFrameWrite)
 
 	for i := 0; i < 3; i++ {
-		if _, err := l.append(fb, from, to, endPos); !errors.Is(err, errInjected) {
-			t.Fatalf("tentativa %d: err = %v, esperado a falha injetada", i, err)
+		if _, err := l.append(fb, from, to, endPos); !errors.Is(err, errInjected) || errors.Is(err, errLogFailed) {
+			t.Fatalf("tentativa %d: err = %v, esperado a falha injetada, retentável (sem errLogFailed)", i, err)
 		}
 		if gotTo, gotPos := l.position(); gotTo != lastTo || gotPos != pos || l.bytes() != 64+196 {
 			t.Fatalf("tentativa %d mexeu no log: posição %d/%d, bytes %d", i, gotTo, gotPos, l.bytes())
@@ -202,8 +202,8 @@ func TestDiskLogFsyncFailureIsStickyUntilWipe(t *testing.T) {
 		l, _ := newTestLog(t, 1<<20, 1<<30)
 		appendSeqs(t, l, 1, 100)
 		failOnce()
-		if err := l.sync(); !errors.Is(err, errInjected) {
-			t.Fatalf("sync = %v", err)
+		if err := l.sync(); !errors.Is(err, errInjected) || !errors.Is(err, errLogFailed) {
+			t.Fatalf("sync = %v, quer a falha injetada envolvida em errLogFailed", err)
 		}
 		// O disco "voltou": o log segue falho.
 		if err := l.sync(); !errors.Is(err, errInjected) {
@@ -223,8 +223,8 @@ func TestDiskLogFsyncFailureIsStickyUntilWipe(t *testing.T) {
 		}
 		failOnce()
 		fb, from, to, endPos := frameFor(l, 1, frame1000)
-		if _, err := l.append(fb, from, to, endPos); !errors.Is(err, errInjected) {
-			t.Fatalf("append que rotaciona = %v", err)
+		if _, err := l.append(fb, from, to, endPos); !errors.Is(err, errInjected) || !errors.Is(err, errLogFailed) {
+			t.Fatalf("append que rotaciona = %v, quer a falha injetada envolvida em errLogFailed", err)
 		}
 		if files := segmentFiles(t, dir); len(files) != 1 {
 			t.Fatalf("o segmento novo não deveria existir: %v", files)

@@ -29,7 +29,7 @@ import (
 
 // manualFeed é o feed que só fecha lote no Flush (o intervalo não roda sem
 // Start): o teste escolhe o que vai junto num lote.
-var manualFeed = replication.Options{Interval: time.Second, MaxMessages: 1000, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 8 << 20}
+var manualFeed = replication.Options{Interval: time.Second, MaxMessages: 1000, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 8 << 20, MaxDiskBytes: 8 << 20}
 
 // A subida publica, em CADA partição: o reset (startup, com o cursor do
 // feed), as linhas do snapshot que caem nela e o snapshot_end com a contagem
@@ -164,12 +164,15 @@ func TestEntityKeyAndHistoryRowIDKeysKeepPerKeyOrder(t *testing.T) {
 	}
 }
 
-// Com o broker parado, o feed despeja o intervalo do publicador. Ao voltar,
-// o publicador publica um reset gap na MESMA epoch, com cursor maior, e um
-// snapshot completo — nunca salta o intervalo perdido.
+// Com o broker parado, o feed perde o intervalo do publicador: o despejo da
+// memória não basta (o lote despejado continua no disco), então o volume
+// publicado passa do teto do DISCO e a retenção apaga o segmento do cursor
+// do publicador. Ao voltar, o publicador publica um reset gap na MESMA
+// epoch, com cursor maior, e um snapshot completo — nunca salta o intervalo
+// perdido.
 func TestResyncAfterEvictionPublishesNewReset(t *testing.T) {
 	h := newHarness(t, harnessOpts{partitions: 3,
-		feed: replication.Options{Interval: 0, MaxMessages: 100, MaxBatchBytes: 4096, MaxBufferedBytes: 8192}})
+		feed: replication.Options{Interval: 0, MaxMessages: 100, MaxBatchBytes: 4096, MaxBufferedBytes: 256 << 10, MaxDiskBytes: 8 << 20}})
 	for i := range 3 {
 		h.seed("seed-"+strconv.Itoa(i), 1)
 	}
@@ -195,9 +198,15 @@ func TestResyncAfterEvictionPublishesNewReset(t *testing.T) {
 	for i := range 200 {
 		last = h.upsert("evict-"+strconv.Itoa(i), int64(i))
 	}
-	if after := h.feed.Status().AvailableAfter; after <= first {
-		t.Fatalf("o feed não despejou o intervalo do publicador: availableAfter=%d, lote do publicador até %d", after, first)
+	// ~9,6 MiB numa key só: passa dos 8 MiB do disco, e a retenção (ou, com o
+	// gravador atrás, a memória cheia de lotes não gravados) leva o cursor do
+	// publicador para baixo do piso.
+	bulk := payloadOf(t, h.base, namedValue{"identifier", str("bulk")},
+		namedValue{"persistent", doc(`{"blob":"` + strings.Repeat("b", 64<<10) + `"}`)})
+	for range 150 {
+		last = h.upsertPayload("bulk", bulk)
 	}
+	waitFor(t, "piso do feed acima do lote do publicador", func() bool { return h.feed.Status().AvailableAfter > first })
 	blocking.Store(false)
 	close(release)
 
@@ -241,8 +250,8 @@ func TestResyncAfterEvictionPublishesNewReset(t *testing.T) {
 			seen[m.key] = true
 		}
 	}
-	if len(seen) != 3+1+200 {
-		t.Errorf("snapshot pós-lacuna com %d keys, quer 204", len(seen))
+	if len(seen) != 3+1+200+1 {
+		t.Errorf("snapshot pós-lacuna com %d keys, quer 205", len(seen))
 	}
 	if s := h.pub.Stats(); s.Snapshots["gap"] != 1 {
 		t.Errorf("snapshots por lacuna = %d, quer 1: %+v", s.Snapshots["gap"], s)
@@ -468,7 +477,7 @@ func TestShutdownDrainsTail(t *testing.T) {
 	}
 	// As 50 mudanças ainda estão no intervalo aberto: é o Close do feed que
 	// fecha o lote, como no encerramento do servidor.
-	h.feed.Close()
+	_ = h.feed.Close(nil, 10*time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := h.pub.Close(ctx); err != nil {
@@ -524,7 +533,7 @@ func TestShutdownBoundedWithUnreachableBroker(t *testing.T) {
 	}
 	h.feed.Flush(time.Now(), "test")
 	waitFor(t, "lote entregue ao produtor", func() bool { return counting.produced.Load() == snapshotRecords+20 })
-	h.feed.Close()
+	_ = h.feed.Close(nil, 10*time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	started := time.Now()
@@ -570,8 +579,11 @@ func TestDeleteEnvelopeCarriesLastStateEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(c.Close)
-	feed, err := replication.New(manualFeed)
+	feed, err := replication.Open(t.TempDir(), manualFeed)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := feed.Resume(replication.Fingerprint{}); err != nil {
 		t.Fatal(err)
 	}
 	var clock atomic.Int64
@@ -733,13 +745,16 @@ func TestPartitionIncreaseForcesReset(t *testing.T) {
 // solta o lease — o feed segue despejando lotes sem perder intervalo.
 func TestRenderErrorFailsPublisherWithoutBlockingFeed(t *testing.T) {
 	h := newHarness(t, harnessOpts{partitions: 3,
-		feed: replication.Options{Interval: 0, MaxMessages: 100, MaxBatchBytes: 2048, MaxBufferedBytes: 2048}})
+		feed: replication.Options{Interval: 0, MaxMessages: 100, MaxBatchBytes: 2048, MaxBufferedBytes: 6144}})
 	h.pub.Start()
 	h.readUntil("snapshot vazio", snapshotEnds(3, 1))
 	// Um lote grande: segurado pelo lease, ele sozinho não deixaria espaço
 	// para as escritas seguintes, e o feed invalidaria o intervalo.
-	seq := h.feed.Publish("events", replication.Schema, types.Record{RowID: 99, Key: []byte("s"), Payload: make([]byte, 1800)}, time.Now())
+	seq := h.feed.Publish("events", replication.Schema, types.Record{RowID: 99, Key: []byte("s"), Payload: make([]byte, 5896)}, time.Now())
 	waitFor(t, "estado failed", func() bool { return h.pub.Stats().State == replicationkafka.StateFailed })
+	// Só lote gravado sai da memória: sem esperar o gravador, a escrita
+	// seguinte acharia o lote ainda na fila e invalidaria por outro motivo.
+	waitFor(t, "lote gravado no disco", func() bool { return h.feed.Status().DiskBytes > 0 })
 	s := h.pub.Stats()
 	if s.Errors["render_error"] != 1 || !strings.Contains(s.LastError, "has no envelope") {
 		t.Errorf("stats do failed: %+v", s)

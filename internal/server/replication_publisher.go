@@ -249,7 +249,28 @@ func startPublishers(d *dataset) {
 func (s *Server) closeFeeds() {
 	for _, d := range s.datasets {
 		if d.replication != nil {
-			d.replication.Close()
+			// Task 6: Close(&fp, budget) com a impressão dos Stores, depois de
+			// parados os produtores e feito o checkpoint. Sem impressão o feed
+			// fecha sem a marca limpa, e a próxima subida abre epoch nova.
+			if err := d.replication.Close(nil, feedCloseBudget); err != nil {
+				s.log.Warn("replication.feed.close_failed",
+					"the replication feed did not close cleanly (writer past the deadline or disk sync failure); the next start opens a new generation",
+					"dataset", d.nome, "error", err.Error())
+			}
+		}
+	}
+}
+
+// feedCloseBudget é o prazo para o gravador do feed drenar a fila no Close.
+const feedCloseBudget = 10 * time.Second
+
+// waitFeeds é o fim da vida dos feeds: junta as goroutines e fecha o log de
+// segmentos. Vem DEPOIS do closePublishers e do http.Shutdown, que ainda leem
+// do disco a cauda que publicadores e seguidores não receberam.
+func (s *Server) waitFeeds() {
+	for _, d := range s.datasets {
+		if d.replication != nil {
+			d.replication.Wait()
 		}
 	}
 }

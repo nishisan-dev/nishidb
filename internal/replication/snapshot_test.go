@@ -157,11 +157,7 @@ func copyEntry(e Entry) Entry {
 
 func newTestFeed(t *testing.T) *Stream {
 	t.Helper()
-	feed, err := New(Options{Interval: 0, MaxMessages: 100, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 4 << 20})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return feed
+	return openTestFeed(t, Options{Interval: 0, MaxMessages: 100, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 4 << 20})
 }
 
 type exportResult struct {

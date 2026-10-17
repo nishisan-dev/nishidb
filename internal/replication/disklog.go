@@ -78,6 +78,11 @@ var (
 	errEpochMismatch = errors.New("replication: epoch differs from the one on disk")
 	// errReleased é leitura por um handle já devolvido.
 	errReleased = errors.New("replication: segment handle released")
+	// errLogFailed envolve a falha de DURABILIDADE (fdatasync) que deixou o
+	// log falho: todo append e sync devolvem esse erro até o wipe. Ao
+	// contrário da falha de escrita, retentar não adianta; quem usa o log
+	// (o gravador do feed) declara a lacuna e faz o wipe.
+	errLogFailed = errors.New("replication: disk log failed a durability sync")
 	// errTailMismatch é a cauda do log em desacordo com o `state`.
 	errTailMismatch = errors.New("replication: log tail does not match the feed state")
 )
@@ -599,7 +604,8 @@ func (l *diskLog) position() (lastTo, endPos uint64) {
 //     cauda fica marcada como suja e a próxima chamada a trunca primeiro;
 //   - falha de DURABILIDADE (fdatasync) é PEGAJOSA até wipe, como o stickyErr
 //     do Store: depois de um fsync que falhou o kernel pode ter descartado as
-//     páginas sujas, e uma retentativa "bem-sucedida" mentiria.
+//     páginas sujas, e uma retentativa "bem-sucedida" mentiria. O erro vem
+//     envolvido em errLogFailed.
 //
 // Se o log for fechado durante a gravação, o quadro não é publicado, o que
 // foi escrito é desfeito e o erro é errLogClosed.
@@ -686,10 +692,7 @@ func (l *diskLog) append(frameBytes []byte, from, to, endPos uint64) (removed []
 	if rotate {
 		if tail != nil {
 			if err := fdatasyncFn(tail.f); err != nil {
-				l.mu.Lock()
-				l.err = err
-				l.mu.Unlock()
-				return nil, err
+				return nil, l.failDurability(err)
 			}
 		}
 		seg, err = l.createSegment(from, endPos-uint64(len(frameBytes)))
@@ -804,6 +807,16 @@ func (l *diskLog) createSegment(firstSeq, startPos uint64) (*segment, error) {
 	s := &segment{path: path, firstSeq: firstSeq, startPos: startPos, epoch: epoch, f: f, w: f, lastTo: firstSeq - 1, endPos: startPos}
 	s.size.Store(segmentHeaderSize)
 	return s, nil
+}
+
+// failDurability torna o log FALHO depois de um fdatasync que falhou e
+// devolve o erro pegajoso, envolvido em errLogFailed (o erro original segue
+// alcançável por errors.Is).
+func (l *diskLog) failDurability(err error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.err = fmt.Errorf("%w: %w", errLogFailed, err)
+	return l.err
 }
 
 func fdatasync(f *os.File) error {
@@ -927,10 +940,7 @@ func (l *diskLog) sync() error {
 		err := fdatasyncFn(cur.f)
 		l.unref(cur)
 		if err != nil {
-			l.mu.Lock()
-			l.err = err
-			l.mu.Unlock()
-			return err
+			return l.failDurability(err)
 		}
 	}
 	if gone {
