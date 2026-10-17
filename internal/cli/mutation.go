@@ -126,7 +126,11 @@ func postJSON(cmd, endereco, path string, body any, cred remoteCredential, desti
 
 // postJSONExpecting é postJSON com o status de sucesso explícito: a rota que
 // só REGISTRA o pedido (POST /v1/replication/resync) responde 202, e qualquer
-// outro status, inclusive o 200, segue o caminho da recusa.
+// outro status é recusa, por um de dois ramos. Um 2xx diferente de want (o
+// 200 de um servidor que não fala o contrato da rota) tem ramo próprio: não há
+// corpo de erro a ler, e a mensagem nomeia o status recebido e o esperado, com
+// ExitUsageError. Os demais status seguem remoteRefusal: a mensagem do corpo
+// de erro no stderr e o exit traduzido do código do protocolo.
 func postJSONExpecting(cmd, endereco, path string, body any, want int, cred remoteCredential, destination any, amb Context) int {
 	var corpo io.Reader
 	if body != nil {

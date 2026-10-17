@@ -117,9 +117,10 @@ type ReplicationSpec struct {
 	// nishidb.yaml, e por isso a existência do destino NÃO é conferida aqui.
 	Targets []string
 	// MaxDiskBytes é o teto do feed em disco deste dataset (segmentos do
-	// log de replicação). Padrão 2 GiB; só vale em master habilitado, e o
-	// piso é o maior entre 8 MiB e 4 × MaxBatchBytes. Aqui só se valida a
-	// forma: quem o consome é o stream de replicação, não o schema.
+	// log de replicação). Padrão 2 GiB; só vale em master habilitado, o
+	// piso é o maior entre 8 MiB e 4 × MaxBatchBytes e o teto é 256 GiB. Aqui
+	// só se validam a forma e a faixa: quem o consome é o stream de
+	// replicação, não o schema.
 	MaxDiskBytes int64
 	// PublishHistory diz se o feed também carrega as mudanças da tabela
 	// histórica irmã (`history:`). Padrão true — o ausente vale ligado, e por
@@ -1374,9 +1375,17 @@ func validateReplicationTargets(n *yaml.Node, r ReplicationSpec) ([]string, erro
 // replicationDefaultMaxDiskBytes é o padrão de `replication.maxDiskBytes`
 // (2 GiB), e replicationMinDiskBytes o piso absoluto (8 MiB): abaixo disso o
 // feed em disco não comporta nem um punhado de segmentos.
+//
+// replicationMaxDiskBytes é o teto (256 GiB). Cada segmento do log mantém um
+// descritor de arquivo aberto enquanto existe, e o segmento tem no máximo
+// 64 MiB (internal/replication, segmentBytesFor): 256 GiB são 4.096
+// descritores por dataset, e 1 TiB seriam 16.384, o que passa do limite de
+// descritores de um serviço comum e faria a gravação do feed falhar com
+// EMFILE no meio da operação, em vez de a carga recusar o valor na subida.
 const (
 	replicationDefaultMaxDiskBytes int64 = 2 << 30
 	replicationMinDiskBytes        int64 = 8 << 20
+	replicationMaxDiskBytes        int64 = 256 << 30
 )
 
 // Faixa de `replication.periodicSnapshot`: de 1 h a 365 d. Abaixo de uma hora
@@ -1389,8 +1398,9 @@ const (
 
 // validateReplicationDiskFeed lê as três chaves do feed em disco
 // (`maxDiskBytes`, `publishHistory`, `periodicSnapshot`) para r e confere os
-// pisos de memória e de disco do master habilitado. r já traz o restante do
-// bloco (enabled, role, tetos do buffer e targets) validado.
+// pisos de memória e de disco e o teto de disco do master habilitado. r já
+// traz o restante do bloco (enabled, role, tetos do buffer e targets)
+// validado.
 //
 // As três chaves só valem em master habilitado e são recusadas pelo mesmo
 // critério e com a mesma forma de mensagem de `replication.targets`: um
@@ -1408,7 +1418,8 @@ const (
 //     enquanto o envia) que continua contando até ser solto, mesmo depois de
 //     despejado (internal/replication, makeRoomLocked). Sem essa folga a
 //     próxima escrita não acharia espaço e invalidaria o intervalo retido.
-//   - maxDiskBytes >= 8 MiB e >= 4*maxBatchBytes.
+//   - maxDiskBytes >= 8 MiB e >= 4*maxBatchBytes, e no máximo 256 GiB
+//     (um descritor de arquivo aberto por segmento).
 //
 // periodicSnapshot é em segundos inteiros, de 1 h a 365 d, e só vale com
 // targets (o snapshot periódico existe para ressincronizar destinos Kafka);
@@ -1478,6 +1489,10 @@ func validateReplicationDiskFeed(raw *rawReplication, r *ReplicationSpec) error 
 	}
 	if r.MaxDiskBytes < replicationMinDiskBytes {
 		return specErrf("replication.maxDiskBytes (%d) must be at least %d (8MiB)", r.MaxDiskBytes, replicationMinDiskBytes)
+	}
+	if r.MaxDiskBytes > replicationMaxDiskBytes {
+		return specErrf("replication.maxDiskBytes (%d) must be at most %d (256GiB): each feed segment keeps a file descriptor open",
+			r.MaxDiskBytes, replicationMaxDiskBytes)
 	}
 	if r.MaxDiskBytes/4 < r.MaxBatchBytes {
 		return specErrf("replication.maxDiskBytes (%d) must be at least four times replication.maxBatchBytes (%d)",

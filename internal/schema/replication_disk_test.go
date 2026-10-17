@@ -95,6 +95,23 @@ func TestReplicationRejectsMaxDiskBytesBelowFloor(t *testing.T) {
 	parseReplicationRefusal(t, replicationYAML("enabled: true", `maxDiskBytes: ""`), "replication.maxDiskBytes must not be empty")
 }
 
+func TestReplicationRejectsMaxDiskBytesAboveTheCeiling(t *testing.T) {
+	// Teto: 256 GiB (um descritor aberto por segmento de até 64 MiB). Um
+	// byte acima é recusado com a mensagem PRÓPRIA da guarda, e não com a de
+	// outra (o units.Size aceita os dois valores); exatamente 256 GiB passa.
+	parseReplicationRefusal(t,
+		replicationYAML("enabled: true", "maxDiskBytes: 274877906945B"),
+		"replication.maxDiskBytes (274877906945) must be at most 274877906944 (256GiB): each feed segment keeps a file descriptor open")
+	s := parseOK(t, replicationYAML("enabled: true", "maxDiskBytes: 256GiB"))
+	if s.Replication.MaxDiskBytes != 274877906944 {
+		t.Fatalf("MaxDiskBytes = %d, quero 274877906944", s.Replication.MaxDiskBytes)
+	}
+	// O caso que motivou o teto: 1 TiB seriam 16.384 descritores.
+	parseReplicationRefusal(t,
+		replicationYAML("enabled: true", "maxDiskBytes: 1TiB"),
+		"replication.maxDiskBytes (1099511627776) must be at most 274877906944 (256GiB)")
+}
+
 func TestReplicationBufferFloorIsThreeBatches(t *testing.T) {
 	const want = "replication.maxBufferedBytes (3145727) must be at least three times replication.maxBatchBytes (1048576)"
 	// Sem targets: o piso vale para todo master habilitado, não só para quem

@@ -3,6 +3,7 @@ package cli_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -57,9 +58,18 @@ func TestCLIReplicationResyncCallsRoute(t *testing.T) {
 		t.Fatalf("a saída não confirma o pedido:\n%s", out)
 	}
 	// O estado do publicador sai na saída: com ele parado, o pedido só é
-	// atendido na próxima subida.
-	if !strings.Contains(out, "PUBLISHER STATE") || !strings.Contains(out, "failed") {
-		t.Fatalf("a saída não mostra o estado do publicador:\n%s", out)
+	// atendido na próxima subida. Cabeçalho e linha são conferidos campo a
+	// campo, separados por espaço como quem lê a saída por coluna: um
+	// cabeçalho com espaço dentro dá mais campos que a linha de dados.
+	rows := strings.Split(strings.TrimSpace(out), "\n")
+	if len(rows) != 2 {
+		t.Fatalf("a saída tem %d linhas, quero 2 (cabeçalho e confirmação):\n%s", len(rows), out)
+	}
+	if got, want := strings.Fields(rows[0]), []string{"DATASET", "DESTINATION", "REQUESTED", "STATE"}; !slices.Equal(got, want) {
+		t.Fatalf("cabeçalho = %q, quero %q", got, want)
+	}
+	if got, want := strings.Fields(rows[1]), []string{"events", "cdc", "yes", "failed"}; !slices.Equal(got, want) {
+		t.Fatalf("linha = %q, quero %q", got, want)
 	}
 
 	refusing, _ := fakeResyncServer(t, http.StatusNotFound,

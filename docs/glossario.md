@@ -1101,7 +1101,7 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | quadro (um lote fechado do feed gravado em disco: cabeçalho com magic, tamanho e CRC32C, e as entradas já consolidadas) | frame / appendFrame, decodeFrame | internal/replication |
 | segmento do feed (arquivo do log do feed, nomeado pela primeira sequence, com cabeçalho de 64 bytes) | segment / segmentHeader | internal/replication |
 | log de segmentos (o feed em disco: segmentos contíguos, retenção por bytes e índice esparso) | diskLog | internal/replication |
-| teto de disco do feed (limite do log de segmentos; padrão 2 GiB) | `replication.maxDiskBytes` / Options.MaxDiskBytes | internal/schema, internal/replication |
+| teto de disco do feed (limite do log de segmentos; padrão 2 GiB, de 8 MiB a 256 GiB) | `replication.maxDiskBytes` / Options.MaxDiskBytes | internal/schema, internal/replication |
 | tamanho de segmento (`clamp(maxDiskBytes/8, 1 MiB, 64 MiB)`) | segmentBytesFor | internal/replication |
 | posição em bytes (fim acumulado, em bytes de quadro desde o início da geração, do último quadro) | EndPos / Batch.EndPos, Status.EndPos, Position | internal/replication |
 | índice esparso (uma entrada em heap a cada ~1 MiB de segmento, para achar onde começa a leitura de um cursor) | indexEntry | internal/replication |

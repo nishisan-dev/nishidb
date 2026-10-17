@@ -1,6 +1,6 @@
 @startuml c4_container
 !define RECTANGLE class
-title NishiDB — containers (M1, com os dois listeners HTTP da Fase 11 e a saída da replicação)
+title NishiDB — containers (M1, com os dois listeners HTTP da Fase 11 e a replicação com feed em disco)
 
 skinparam componentStyle rectangle
 skinparam defaultTextAlignment center
@@ -15,8 +15,9 @@ package "nishidb (binário único)" {
   component "Materializer\ninternal/materializer" as mat
   component "Engine SQL\ninternal/query" as eng
   component "Storage\ninternal/storage\n+ internal/index" as sto
-  component "Feed de replicação\ninternal/replication" as feed
-  component "Publicador da replicação\ninternal/replicationkafka" as pub
+  component "Feed de replicação\ninternal/replication\n(cache em memória + log de\nsegmentos em disco, gravador próprio)" as feed
+  component "Publicador da replicação\ninternal/replicationkafka\n(checkpoint por destino)" as pub
+  component "_meta.replication\ninternal/metareplication" as metarepl
 }
 
 actor "Follower\n(outro nishidb, role: follower)" as follower #lightgray
@@ -29,6 +30,8 @@ database "Dataset em disco" as ds {
   file "metadata/fields.dict" as fdic
   file "checkpoint/manifest.bin" as man
   file "LOCK\n(flock exclusivo)" as lock
+  file "replication/feed/<sequence>.seg + state\n(log do feed, retenção por maxDiskBytes;\nmarca limpa e impressão dos Stores)" as feedlog
+  file "replication/kafka/<destino>.ckpt + .resync\n(checkpoint do publicador e\npedidos de snapshot)" as ckpt
 }
 
 queue "Kafka\n(M2 — fora do M1)" as kafka #lightgray
@@ -50,12 +53,18 @@ sto --> bmp
 sto --> fdic
 sto --> man
 sto --> lock
-sto --> feed : alterações depois do commit\n(master com replication.enabled)
+sto --> feed : Publish sob o wmu, depois do commit\n(master com replication.enabled; sem I/O)
+feed --> feedlog : gravador: quadros com CRC,\nretenção por bytes; state com a\nmarca limpa no encerramento
 follower --> srv : /v1/replication/*\n(ADMIN)
 srv --> feed : cursor, lotes, snapshot
-feed --> pub : lotes (Acquire)
+srv --> pub : POST /v1/replication/resync\n(ADMIN): RequestSnapshot grava o .resync
+feed --> pub : lotes (Acquire, da memória ou do disco)
 pub --> sto : snapshot em blocos curtos
-pub --> kafkaout : envelope JSON\n(reset, snapshot, snapshot_end, tail)
+pub --> ckpt : posição confirmada pelos acks;\nretoma dali no reinício limpo
+pub --> kafkaout : envelope JSON\n(reset, snapshot, snapshot_end, resume, tail)
+eng --> metarepl : SELECT * FROM _meta.replication
+metarepl ..> feed : Status (piso, produzido, disco, cache)
+metarepl ..> pub : Stats (estado, cursor, checkpoint, atraso)
 
 note right of eng
   lexer → parser → binder

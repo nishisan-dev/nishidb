@@ -26,6 +26,11 @@ func (s *Server) HandleReplicationResyncForTest(w http.ResponseWriter, r *http.R
 // PublishToFeedForTest publica uma entrada crua no feed do dataset, como o
 // writer faria. Serve para levar o publicador a um estado terminal: a entrada
 // de op Schema não tem envelope, e o publicador vai para failed (bug).
+//
+// Publica FORA do wmu do Store, ao contrário do writer: a sequence que ele
+// consome não corresponde a mutação nenhuma, e o Publish corre em paralelo a
+// qualquer Publish do writer. Só é seguro num teste sem ingestão concorrente
+// (nenhum Put, coletor, compaction ou rota de mutação em voo).
 func (s *Server) PublishToFeedForTest(dataset string, op replication.Operation, rec types.Record) uint64 {
 	return s.byNome[dataset].replication.Publish(dataset, op, rec, time.Now())
 }

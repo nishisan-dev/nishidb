@@ -175,9 +175,11 @@ type Stats struct {
 	// atrás de Cursor (a gravação no tail é no máximo uma por segundo), e
 	// durante um snapshot continua o do último ponto confirmado.
 	CheckpointCursor uint64 `json:"checkpointCursor"`
-	// CheckpointFound diz se há um .ckpt deste destino: lido na subida ou
-	// gravado nesta vida. Falso até lá (inclusive antes do Start), e aí
-	// CheckpointCursor zero não é um ponto gravado, é ausência.
+	// CheckpointFound diz se há um .ckpt LEGÍVEL deste destino: lido na
+	// subida (CRC e versão conferidos) ou gravado nesta vida. Um .ckpt que
+	// existe mas não pode ser lido vale ausente, com WARN, e deixa o campo
+	// falso. Falso até lá (inclusive antes do Start), e aí CheckpointCursor
+	// zero não é um ponto gravado, é ausência.
 	CheckpointFound bool `json:"checkpointFound"`
 	// LagBytes é o atraso em bytes de quadro do feed em disco: a posição do
 	// fim do último lote fechado menos a do cursor (durante o snapshot, a do

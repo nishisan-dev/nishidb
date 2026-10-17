@@ -1437,15 +1437,37 @@ func neverDecidingLife(t *testing.T, h *harness, above uint64, prefix string) (r
 // apaga o rewind: a vida seguinte reabre com uma sequence MAIOR que o topo,
 // mas a régua gravada no .ckpt é a da primeira reabertura, e o resultado é
 // rewind, e não a retomada que reusaria (epoch, sequence) já entregues.
+//
+// A leitura pára no primeiro resume NOVO (os de antes da reabertura são os da
+// vida que tirou o backup): sem isso, a retomada indevida só aparecia como o
+// segundo snapshot que nunca chega, uma falha por prazo que não nomeia a
+// causa.
 func TestRewindSurvivesALifeThatNeverDecided(t *testing.T) {
 	h, old, top := rewoundHarness(t, harnessOpts{partitions: 3, feed: manualFeed})
 	_, produced := neverDecidingLife(t, h, top, "ingested-")
+	resumesBefore := countOp(h.readAll(), "resume")
 	h.open()
 	if got := h.feed.Origin().ResumedSequence; got <= top || got != produced {
 		t.Fatalf("a vida seguinte reabriu em %d (topo antigo %d, produzido %d); o teste não prova nada", got, top, produced)
 	}
 	h.pub.Start()
+	all := h.readUntil("rewind ou retomada indevida", func(all []msg) bool {
+		return countOp(all, "resume") > resumesBefore || snapshotEnds(3, 2)(all)
+	})
+	if n := countOp(all, "resume"); n > resumesBefore {
+		t.Fatalf("retomou na epoch antiga %q depois de uma vida que não decidiu: %d resume novos, quer rewind:\n%s",
+			old, n-resumesBefore, dump(all))
+	}
 	assertRewind(t, h, old)
+}
+
+// countOp conta os registros com o op em todas as partições.
+func countOp(all []msg, op string) int {
+	n := 0
+	for _, c := range controlCount(all, op) {
+		n += c
+	}
+	return n
 }
 
 // Duas vidas seguidas sem decidir: a régua gravada é a da PRIMEIRA reabertura

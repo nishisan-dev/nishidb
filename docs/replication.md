@@ -1,9 +1,11 @@
 # Replicação master/follower
 
-Um dataset pode publicar uma fila de alterações para followers. A fila é
-limitada e o master nunca bloqueia a ingestão por causa de um follower lento.
-O bloco é fechado pelo primeiro limite atingido: intervalo, quantidade de
-mensagens recebidas, tamanho do lote ou memória total retida.
+Um dataset pode publicar um feed de alterações para followers e para tópicos
+Kafka. O feed é gravado em disco, limitado por bytes (`maxDiskBytes`), com os
+lotes mais recentes num cache em memória (`maxBufferedBytes`), e o master
+nunca bloqueia a ingestão por causa de um follower lento, de um broker fora ou
+do disco do feed. O lote é fechado pelo primeiro limite atingido: intervalo,
+quantidade de mensagens recebidas ou tamanho do lote.
 
 ```yaml
 replication:
@@ -16,7 +18,7 @@ replication:
   maxMessages: 10000      # conta antes da deduplicação
   maxBatchBytes: 8MiB
   maxBufferedBytes: 64MiB  # no master habilitado, pelo menos 3 × maxBatchBytes
-  maxDiskBytes: 2GiB       # só no master; mínimo 8MiB e 4 × maxBatchBytes
+  maxDiskBytes: 2GiB       # só no master; de 8MiB (e 4 × maxBatchBytes) a 256GiB
   publishHistory: true     # só no master; padrão true
   targets: [replica_kafka] # opcional, só no master; nomes de kafkaTargets:
   periodicSnapshot: 24h    # opcional, só no master e só com targets; 1h a 8760h
@@ -36,7 +38,11 @@ nomeando a chave, mesmo `publishHistory: false`.
 
 - `maxDiskBytes`: teto de disco do feed (ver [Feed em disco](#feed-em-disco)),
   com padrão de 2 GiB. Precisa ser de pelo menos 8 MiB e de pelo menos
-  4 × `maxBatchBytes`; valor vazio ou abaixo do piso é recusado.
+  4 × `maxBatchBytes`, e de no máximo 256 GiB; valor vazio, abaixo do piso ou
+  acima do teto é recusado, e não arredondado. O teto existe porque cada
+  segmento do log mantém um descritor de arquivo aberto: com segmentos de
+  64 MiB, 256 GiB são 4.096 descritores por dataset, e 1 TiB seriam 16.384.
+  Para escolher o valor, veja [Dimensionamento](#dimensionamento).
 - `publishHistory`: padrão `true`; aceita só booleano. Com `false`, a tabela
   histórica sai do feed inteiro: nem as linhas dela, nem o `retain` da
   retenção, nem o snapshot (HTTP e Kafka) a levam, e o
@@ -69,6 +75,15 @@ ingestão: o lote fica na memória e a gravação é retentada, de 100 ms a 5 s;
 lacuna só vem se a memória lotar de lotes ainda não gravados. Uma falha de
 `fdatasync` declara a lacuna na hora, porque o log fica inservível até ser
 apagado.
+
+O feed não faz fsync durante a operação: os segmentos só são sincronizados na
+rotação (o que fecha) e no encerramento limpo. Numa queda o feed é descartado
+de qualquer jeito (ver [Reinício limpo](#reinício-limpo)). A memória do feed
+fica limitada a `maxBufferedBytes` mais um lote por leitor que lê do disco,
+qualquer que seja `maxDiskBytes`: o índice em memória tem uma entrada por MiB
+de segmento, e não uma por lote.
+
+![Feed de replicação em disco: Publish sob o wmu, fila do gravador, gerações, log de segmentos com rotação e retenção por bytes, cache em memória, leitura da memória ou do disco, encerramento limpo, queda, subida (fresh, clean, crash) e rotação](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/replication_disk_feed.puml)
 
 ### Reinício limpo
 
@@ -533,7 +548,17 @@ retomada, nem `reset` na geração antiga. Limites conhecidos:
   snapshot completo. Com `periodicSnapshot` abaixo da retenção do tópico,
   toda partição recebe um marcador de controle antes de esvaziar;
 - só o publicador Kafka confere. Um master com apenas followers HTTP não
-  detecta o rewind (débito 141).
+  detecta o rewind (débito 141);
+- o rewind pode sair sem divergência real, do lado seguro. Uma vida que não
+  chega a decidir (o tópico ilegível a vida inteira) deixa no checkpoint a
+  régua da reabertura dela, mas continua ingerindo, e fecha limpa com o feed
+  ADIANTE da régua. Um backup frio tirado ENTRE essa vida e a seguinte guarda
+  os dois assim. A vida seguinte confere, retoma e publica no tópico as
+  alterações acima da régua. Restaurado esse backup, o topo do tópico está
+  acima da régua gravada, e a subida dá rewind, mesmo quando o tópico só
+  recebeu, acima da régua, o que o feed restaurado também tem. O custo é um
+  snapshot completo a mais; retomar com o feed realmente atrás do tópico
+  nunca acontece.
 
 #### Motivos do reset
 
@@ -703,12 +728,37 @@ silêncio.
 O disco do feed (`maxDiskBytes`) é o que o publicador pode atrasar sem perder a
 continuidade: com o broker fora, ele lê do disco tudo o que o feed reteve, e o
 `reset` por `gap` (ou por `retention`, na subida) só vem quando a retenção
-apaga o que ele ainda não entregou. A janela que o disco cobre é
+apaga o que ele ainda não entregou. A memória (`maxBufferedBytes`) não entra
+nessa conta: ela é só o cache dos lotes recentes, e despejar dela não cria
+lacuna. A janela que o disco cobre, em segundos, é
 
     maxDiskBytes / (alterações por segundo × custo por entrada)
 
 e é ela que deve passar da maior queda do broker que o destino precisa
 atravessar sem snapshot.
+
+O custo de uma entrada no disco é de cerca de 44 bytes, mais o nome da tabela,
+a key e o payload dela (na memória, cerca de 192 bytes mais os mesmos campos).
+A consolidação de updates seguidos da mesma entidade reduz a conta. Na
+prática, meça no próprio dataset: num destino atrasado, `lagBytes` dividido
+por `lagSequences` (em `_meta.replication` ou no `/v1/stats`) dá, com boa
+aproximação, o custo por alteração produzida, com a consolidação já
+descontada (o atraso em bytes não conta o intervalo ainda aberto).
+
+**Exemplo: o piloto CTP.** Medido em 16/10/2026: 412 alterações por segundo em
+média, 476 por segundo na hora de pico da tarde, e storms estimados em 2 a 3
+vezes a média. Cada entrada custa cerca de 2,3 KB, o que dá cerca de 0,95 MB/s,
+ou cerca de 3,4 GB por hora. A conta, com 1 GiB = 1.073.741.824 bytes:
+
+| `maxDiskBytes` | média (412/s) | pico (476/s) | storm 2× (824/s) | storm 3× (1.236/s) |
+|---|---|---|---|---|
+| 2 GiB (padrão) | ~38 min | ~33 min | ~19 min | ~13 min |
+| 8 GiB | ~2 h 31 min | ~2 h 11 min | ~1 h 15 min | ~50 min |
+| 256 GiB (teto) | ~80 h | ~70 h | ~40 h | ~27 h |
+
+O padrão é modesto de propósito: num dataset do porte do CTP ele não
+atravessa uma manutenção de broker de uma hora. Escolha o valor pela queda que
+precisa atravessar, e confira o espaço livre do disco do dataset.
 
 Enquanto o snapshot anda, o feed tem de reter todas as alterações feitas desde
 o cursor do `reset`: são elas que o tail entrega depois. Se o disco do feed
@@ -721,11 +771,12 @@ A conta a fazer:
 
     maxDiskBytes > duração do snapshot × alterações por segundo × custo por entrada
 
-O custo de uma entrada no disco é de cerca de 44 bytes, mais o nome da tabela,
-a key e o payload dela (na memória, cerca de 192 bytes mais os mesmos campos). A consolidação de updates seguidos da mesma entidade reduz a conta. A
-duração e o número de linhas de cada snapshot saem no log
-`replication.kafka.snapshot.completed`. Em todo master habilitado,
-`maxBufferedBytes` também precisa ser pelo menos o triplo de `maxBatchBytes`.
+A duração e o número de linhas de cada snapshot saem no log
+`replication.kafka.snapshot.completed`. No CTP, um snapshot de 30 minutos na
+hora de pico produz cerca de 476 × 1.800 × 2,3 KB ≈ 2,0 GB de feed: o padrão
+de 2 GiB fica no limite, e o valor certo ali é maior. Em todo master
+habilitado, `maxBufferedBytes` também precisa ser pelo menos o triplo de
+`maxBatchBytes`, mas subir `maxBufferedBytes` não alarga a janela retida.
 
 Quando o laço acontece, ele aparece de duas formas:
 
@@ -878,6 +929,26 @@ continua lendo o que lia.
 - **Campos novos no `/v1/stats`.** `replication.feed` ganha `diskBytes`,
   `diskSegments` e `diskErrors`, e cada item de `replication.delivery` ganha
   `lagBytes` e `checkpointCursor`.
+- **Chaves novas em `replication:`.** `maxDiskBytes` (padrão 2 GiB, de 8 MiB
+  a 256 GiB), `publishHistory` (padrão `true`, o legado) e `periodicSnapshot`
+  (omitida, desligada), as três só no master habilitado. Omitidas, o dataset
+  se comporta como antes, a não ser pelo feed em disco, que passa a existir
+  com o padrão.
+- **Piso de `maxBufferedBytes` sobe de 2× para 3× `maxBatchBytes`.** É a única
+  mudança que RECUSA uma configuração que a v0.14.x aceitava: um master
+  habilitado com `maxBufferedBytes` entre o dobro e o triplo de
+  `maxBatchBytes` deixa de subir, com a mensagem que nomeia as duas chaves. O
+  terceiro lote é o da fila do gravador em disco (ver o começo desta página).
+- **Feed em disco em `<dataset>/replication/`.** O diretório `feed/`
+  (segmentos `.seg` e o `state`) e o `kafka/` (`<destino>.ckpt` e
+  `<destino>.resync`) são novos na pasta do dataset. Backup e restauração
+  levam os dois junto do dataset (ver
+  [Conferência de rewind](#conferência-de-rewind)).
+- **Retenção do feed por bytes de disco.** O piso anunciado em
+  `availableAfter` pelo `GET /v1/replication/cursor` passa a subir com a
+  retenção do disco, e não mais com o despejo da memória, e o
+  `evictedBatches` do status deixa de significar perda: despejar da memória
+  não cria lacuna. Os campos e o 409 abaixo do piso são os mesmos.
 - **Séries novas.** `nishidb_replication_feed_disk_bytes`,
   `nishidb_replication_feed_disk_segments`,
   `nishidb_replication_feed_disk_errors_total`,

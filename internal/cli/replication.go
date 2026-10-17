@@ -29,6 +29,11 @@ import (
 // andamento se lê em `_meta.replication` (lastResetReason, lastSnapshotAt) ou
 // no /v1/stats. Com o publicador parado (blocked, failed, stopped) o pedido só
 // é atendido na próxima subida, e o estado impresso é o que avisa isso.
+//
+// As colunas saem alinhadas por espaços (tabwriter), e por isso todo
+// cabeçalho é uma palavra só: quem lê a saída por coluna (awk, cut) separa
+// por espaço, e um cabeçalho como "PUBLISHER STATE" viraria duas colunas
+// sobre uma célula só.
 
 const replicationUsage = "replication: use nishidb replication resync --server <host:porta> --dataset <nome> --destination <destino>\n"
 
@@ -75,7 +80,7 @@ func runReplicationResync(args []string, amb Context) int {
 		return code
 	}
 	return writeOutputWithContext(cmd, amb, func(w io.Writer) {
-		line(w, "DATASET", "DESTINATION", "REQUESTED", "PUBLISHER STATE")
+		line(w, "DATASET", "DESTINATION", "REQUESTED", "STATE")
 		requested := "no"
 		if resp.Requested {
 			requested = "yes"
