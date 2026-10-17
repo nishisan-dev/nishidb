@@ -1077,10 +1077,12 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | decisão na subida (a tabela que escolhe entre `resume` e `reset`, e o motivo) | Publisher.decide | internal/replicationkafka |
 | conferência de rewind (compara o feed reaberto com o `.ckpt` e com o topo do tópico, antes da tabela) | checkRewind / `replication.kafka.rewind` | internal/replicationkafka |
 | topo do tópico (o último registro de cada partição, com a epoch e a posição) | readTopicTail / topicMark | internal/replicationkafka |
-| partição esvaziada (início = fim > 0: desconhecida, nunca limpa) | errEmptiedPartition | internal/replicationkafka |
+| partição sem registro legível (esvaziada pela retenção do tópico, ou nunca escrita com `.ckpt` do mesmo tópico: força rewind, nunca retomada) | topicMark.unreadable / `topic_unreadable` em `replication.kafka.rewind` | internal/replicationkafka |
 | régua da conferência de rewind (a geração e a menor sequence de reabertura limpa desde a última decisão do destino; persistida, nunca sobe) | RulerEpoch, RulerSequence / pinRuler | internal/replicationkafka |
 | sequence da retomada (a sequence em que o feed reabriu limpo) | Origin.ResumedSequence | internal/replication |
 | rotação condicionada (troca de geração atômica, só a partir da epoch informada e com o feed aberto) | Stream.RotateFrom | internal/replication |
+| pendência de conferência (enquanto algum publicador do dataset não terminou a conferência de rewind, o `/v1/replication/batch` e o `/snapshot` respondem 503) | Stream.HoldForVerification / VerificationPending, Publisher.releaseVerification, Server.rejectVerificationPending | internal/replication, internal/replicationkafka, internal/server |
+| leitura conjunta de origem e posição (as duas sob o mesmo lock, sem corrida com a rotação) | Stream.OriginAndPosition | internal/replication |
 | impressão da renderização (o que entra no hash: tabelas publicadas, aliases declarados e `publishHistory`) | RenderSpec / FieldAlias | internal/replicationkafka, internal/server |
 | atraso em bytes (`EndPos` do feed menos a posição do cursor, na mesma geração) | LagBytes | internal/replicationkafka |
 | cursor do checkpoint (o cursor do último `.ckpt` gravado) | CheckpointCursor / `checkpointCursor` / `nishidb_replication_kafka_checkpoint_sequence` | internal/replicationkafka, internal/protocol |

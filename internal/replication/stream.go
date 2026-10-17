@@ -310,6 +310,9 @@ type Stream struct {
 	changed chan struct{}
 	closed  bool
 	stats   Status
+	// verificationHolds conta as conferências de rewind pendentes (ver
+	// HoldForVerification).
+	verificationHolds int
 
 	// Gravador. wake é sinalizado a cada lote novo; kick a cada mudança de
 	// geração, pedido de parada ou aborto (só kick interrompe o backoff).
@@ -556,6 +559,53 @@ func (s *Stream) Origin() Origin {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.origin
+}
+
+// OriginAndPosition devolve Origin e Position lidas na MESMA seção crítica.
+// Em duas chamadas, um Rotate de outro chamador (o rewind de outro destino
+// do mesmo dataset) entre as duas casaria a origem de uma geração com a
+// epoch da outra: a origem anterior com a epoch nova. É a leitura de quem
+// decide pela origem da geração cuja posição acabou de ler.
+func (s *Stream) OriginAndPosition() (origin Origin, epoch string, sequence, endPos uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.origin, s.epoch, s.sequence, s.endPos
+}
+
+// HoldForVerification registra uma conferência de rewind pendente e devolve
+// a função que a solta. É contável: cada chamada é uma pendência, e o feed
+// continua pendente até a última ser solta. A função devolvida é idempotente,
+// e só a primeira chamada dela solta a pendência.
+//
+// A pendência não muda nada no feed: Publish, Acquire e Rotate seguem como
+// sempre. Ela só é ANUNCIADA (VerificationPending), e quem a respeita é o
+// servidor HTTP, que não serve lote nem snapshot aos followers enquanto ela
+// vale. É o que impede o follower de retomar o tail de um backup restaurado
+// na mesma geração antes de o publicador Kafka decidir se o feed voltou no
+// tempo: se voltou, a conferência troca a geração ANTES de soltar a
+// pendência, e o follower recebe o 409 da geração nova em vez de lotes da
+// restaurada. O próprio publicador lê o feed pelo Acquire, sem passar pela
+// pendência: com dois destinos, um não espera a conferência do outro.
+func (s *Stream) HoldForVerification() (release func()) {
+	s.mu.Lock()
+	s.verificationHolds++
+	s.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			s.verificationHolds--
+			s.mu.Unlock()
+		})
+	}
+}
+
+// VerificationPending diz se alguma conferência de rewind registrada por
+// HoldForVerification ainda não foi solta.
+func (s *Stream) VerificationPending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.verificationHolds > 0
 }
 
 func entryBytes(e Entry) int64 {

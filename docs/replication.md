@@ -79,9 +79,11 @@ apagado.
 O feed não faz fsync durante a operação: os segmentos só são sincronizados na
 rotação (o que fecha) e no encerramento limpo. Numa queda o feed é descartado
 de qualquer jeito (ver [Reinício limpo](#reinício-limpo)). A memória do feed
-fica limitada a `maxBufferedBytes` mais um lote por leitor que lê do disco,
-qualquer que seja `maxDiskBytes`: o índice em memória tem uma entrada por MiB
-de segmento, e não uma por lote.
+fica limitada a `maxBufferedBytes`, mais o buffer de codificação do gravador
+(até 2 × `maxBatchBytes`, retido entre um lote e outro; um quadro maior só
+existe durante a própria gravação), mais um lote, e o buffer de leitura dele,
+por leitor que lê do disco. Isso vale qualquer que seja `maxDiskBytes`: o
+índice em memória tem uma entrada por MiB de segmento, e não uma por lote.
 
 ![Feed de replicação em disco: Publish sob o wmu, fila do gravador, gerações, log de segmentos com rotação e retenção por bytes, cache em memória, leitura da memória ou do disco, encerramento limpo, queda, subida (fresh, clean, crash) e rotação](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/replication_disk_feed.puml)
 
@@ -159,6 +161,23 @@ a MESMA geração, o follower retoma o tail do cursor que já aplicou; com gera�
 nova, ou depois de uma desconexão vinda de outro estado, baixa o snapshot. Se a
 retomada receber 409, cai no resync de sempre; um 410 é outra desconexão, e a
 próxima tentativa retoma o tail de novo.
+
+Num master com destino Kafka (`targets`), a retomada limpa só volta a servir
+os followers depois da [conferência de rewind](#conferência-de-rewind) de cada
+destino. O feed reaberto pode ser um backup restaurado, na MESMA geração e no
+passado, e um follower que já aplicou `sequence`s acima da reabertura
+receberia, como continuação, `sequence`s reusadas com outro conteúdo. Enquanto
+a conferência não termina, o `GET /v1/replication/batch` e o
+`GET /v1/replication/snapshot` respondem 503 (`INTERNAL`, com `Retry-After: 1`
+e a mensagem dizendo que a conferência de rewind está em curso); o
+`GET /v1/replication/cursor` continua respondendo. Para o follower, o 503 é
+desconexão: ele guarda o cursor, tenta de novo com backoff e não pede snapshot
+por causa dele. Se a conferência acha o rewind, o feed troca de geração ANTES
+de voltar a servir, e o follower recebe o 409 da geração nova e refaz o
+snapshot; senão, retoma o tail. Com a leitura do tópico falhando, a espera dura
+o tempo da falha: o master não serve o feed às cegas. O feed novo, o que nasce
+de queda e o master sem destino Kafka não esperam conferência nenhuma; neste
+último o rewind continua invisível para o follower (débito 141).
 
 Só falha de rede ou resposta HTTP de erro é desconexão. Uma alteração que o
 Store do follower recusa (erro local) leva a `resync_required` e a um snapshot
@@ -547,8 +566,12 @@ retomada, nem `reset` na geração antiga. Limites conhecidos:
   do tópico, a partição esvaziada faz a subida limpa publicar `rewind` e um
   snapshot completo. Com `periodicSnapshot` abaixo da retenção do tópico,
   toda partição recebe um marcador de controle antes de esvaziar;
-- só o publicador Kafka confere. Um master com apenas followers HTTP não
-  detecta o rewind (débito 141);
+- só o publicador Kafka confere. Num master com destino Kafka, os followers
+  HTTP esperam a conferência (503 no lote e no snapshot) e seguem a geração
+  nova do rewind (ver o follower em
+  [Reinício limpo](#reinício-limpo)); a conferência que falha por
+  infraestrutura os deixa esperando pelo mesmo tempo. Um master com apenas
+  followers HTTP não detecta o rewind (débito 141);
 - o rewind pode sair sem divergência real, do lado seguro. Uma vida que não
   chega a decidir (o tópico ilegível a vida inteira) deixa no checkpoint a
   régua da reabertura dela, mas continua ingerindo, e fecha limpa com o feed
@@ -934,11 +957,25 @@ continua lendo o que lia.
   (omitida, desligada), as três só no master habilitado. Omitidas, o dataset
   se comporta como antes, a não ser pelo feed em disco, que passa a existir
   com o padrão.
-- **Piso de `maxBufferedBytes` sobe de 2× para 3× `maxBatchBytes`.** É a única
-  mudança que RECUSA uma configuração que a v0.14.x aceitava: um master
-  habilitado com `maxBufferedBytes` entre o dobro e o triplo de
+- **Piso de `maxBufferedBytes` sobe de 2× para 3× `maxBatchBytes`.** Uma das
+  duas mudanças que RECUSAM uma configuração que a v0.14.x aceitava: um
+  master habilitado com `maxBufferedBytes` entre o dobro e o triplo de
   `maxBatchBytes` deixa de subir, com a mensagem que nomeia as duas chaves. O
   terceiro lote é o da fila do gravador em disco (ver o começo desta página).
+- **Broker com vírgula em `bootstrapServers` é recusado.** A outra mudança que
+  RECUSA uma configuração aceita pela v0.14.x: um item como `"a,b:9092"`
+  em `source.kafka.bootstrapServers`, `kafkaTargets[].bootstrapServers` ou
+  `alarmDelivery.kafka[].bootstrapServers` deixa de carregar, com a mensagem
+  que pede um broker por item. O item nunca conectava (o host seria `a,b`),
+  e o checkpoint do destino, que guarda os brokers juntados por vírgula, não
+  conseguiria gravá-lo.
+- **503 no lote e no snapshot durante a conferência de rewind.** No master com
+  destino Kafka que retoma limpo, o `GET /v1/replication/batch` e o
+  `GET /v1/replication/snapshot` respondem 503 até a conferência de rewind
+  terminar (ver [Reinício limpo](#reinício-limpo)). Nenhum código de erro
+  novo: a recusa usa `INTERNAL`, e o follower decide pelo status HTTP. Um
+  follower v0.14.x trata o 503 como qualquer erro HTTP: desconecta, espera
+  com backoff e tenta de novo, sem aplicar nada.
 - **Feed em disco em `<dataset>/replication/`.** O diretório `feed/`
   (segmentos `.seg` e o `state`) e o `kafka/` (`<destino>.ckpt` e
   `<destino>.resync`) são novos na pasta do dataset. Backup e restauração
@@ -982,7 +1019,10 @@ retomar a mesma geração:
    marca limpa com a impressão dos Stores. Se a posição de um Store não é
    legível (o checkpoint que falhou no fsync deixa o writer falho), o feed
    fecha sem a marca, com o WARN `replication.feed.closed_unclean`, e a
-   próxima subida abre uma geração nova.
+   próxima subida abre uma geração nova. Os feeds de todos os datasets fecham
+   em paralelo, com um prazo de 10 s para todos juntos; o feed cujo gravador
+   não termina no prazo fecha sem a marca, com o WARN
+   `replication.feed.close_failed`.
 6. Os publicadores drenam o que resta e param. A drenagem tem orçamento
    próprio de 10 s para todos os publicadores juntos, separado do prazo do
    servidor HTTP. Se o prazo vence (broker fora, tópico lento), sai um WARN

@@ -123,6 +123,10 @@ func appendHashString(b []byte, s string) []byte {
 // de o rewind conseguir rotacioná-lo: aí a subida sai sem publicar nada, e a
 // vida seguinte refaz a conferência sobre o mesmo feed.
 func (p *Publisher) startup(ctx context.Context) (reason ResetReason, ok bool, err error) {
+	// Toda saída solta a pendência de conferência do feed: a decisão já a
+	// soltou (decide), ou a subida sai por cancelamento ou pelo feed fechado,
+	// e o encerramento não pode deixar os followers presos a ela.
+	defer p.releaseVerification()
 	p.loadCheckpoint()
 	backoff := p.minBackoff
 	for {
@@ -191,9 +195,20 @@ func (p *Publisher) loadCheckpoint() {
 //
 // A conferência de rewind vem ANTES de tudo: um reset na epoch antiga de um
 // feed restaurado também colidiria com o que o tópico já tem.
+//
+// A origem e a epoch são lidas juntas (OriginAndPosition): em duas leituras,
+// o rewind de outro destino do mesmo dataset entre elas daria a origem limpa
+// com a epoch já rotacionada, e a linha 5 sairia startup em vez de rewind.
+//
+// A pendência de conferência do feed (registrada no New) é solta aqui, assim
+// que a conferência de rewind termina — ou não se aplica, com a origem que não
+// é limpa —, e no rewind só DEPOIS da rotação: o follower HTTP que volta a
+// ser servido já encontra a geração nova. O resto da tabela não muda a
+// geração do feed, e por isso não segura os followers: uma consulta de
+// partições que falha depois da conferência não os deixa sem resposta.
+// Enquanto a conferência falha por infraestrutura, a pendência continua.
 func (p *Publisher) decide(ctx context.Context) (ResetReason, error) {
-	origin := p.feed.Origin()
-	epoch, _, _ := p.feed.Position()
+	origin, epoch, _, _ := p.feed.OriginAndPosition()
 	if origin.Kind == replication.OriginClean {
 		ruler, err := p.pinRuler(epoch, origin.ResumedSequence)
 		if err != nil {
@@ -207,9 +222,11 @@ func (p *Publisher) decide(ctx context.Context) (ResetReason, error) {
 			if err := p.rotate(epoch); err != nil {
 				return 0, err
 			}
+			p.releaseVerification()
 			return ResetRewind, nil
 		}
 	}
+	p.releaseVerification()
 	c := p.ckpt
 	switch {
 	case !p.ckptFound || c.Topic != p.topic || !sameCluster(c.Bootstrap, p.bootstrap):

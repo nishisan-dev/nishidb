@@ -16,10 +16,20 @@ note over feed
   disco recebe ErrResyncRequired.
 end note
 
+== Montagem (New, antes de o HTTP subir) ==
+
+pub -> feed : feed retomado limpo (OriginClean)?\nHoldForVerification(): pendência de conferência
+note right of feed
+  Enquanto houver pendência, o servidor responde
+  503 ao /v1/replication/batch e ao /snapshot dos
+  followers HTTP (o /cursor segue): o follower
+  espera com backoff e guarda o cursor.
+end note
+
 == Subida: conferência de rewind e decisão ==
 
 pub -> ckpt : lê o .ckpt (ilegível vale ausente, com WARN)
-pub -> feed : Origin() e Position()
+pub -> feed : OriginAndPosition(): origem e epoch numa leitura só
 alt feed reaberto de fechamento limpo (OriginClean)
   pub -> ckpt : grava a régua {epoch, menor sequence de reabertura\ndesde a última decisão}; nunca sobe
   pub -> pub : .ckpt à frente da sequence da reabertura?\n(cursor confirmado, ou cursor do reset em curso)
@@ -45,6 +55,7 @@ alt feed reaberto de fechamento limpo (OriginClean)
     end note
   end
 end
+pub -> feed : solta a pendência (no rewind, só DEPOIS da rotação:\no follower volta a ser servido já na epoch nova e recebe 409);\ntambém em toda saída da subida e no Close
 pub -> pub : tabela, a primeira linha que casa:\n1 sem .ckpt / tópico ou cluster diferentes: startup\n2 impressão da renderização diferente: config_changed\n3 reset em curso no .ckpt: snapshot_failed\n4 pedido pendente no .resync: requested\n5 outra geração: crash, rewind (rotacionado) ou startup\n6 cursor abaixo do piso do feed: retention\n7 partições diferentes: partitions_changed\n8 periodicSnapshot vencido: periodic\n9 nenhuma: retoma
 
 alt retoma (linha 9)

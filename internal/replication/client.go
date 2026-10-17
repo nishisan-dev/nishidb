@@ -113,7 +113,10 @@ func isDisconnect(err error) bool {
 //  2. em catching_up, following ou na desconexão que veio de um dos dois, e
 //     com a MESMA epoch do master, segue pelo tail: é a retomada depois do
 //     reinício limpo do master. Um 409 cai no resync; um 410 (o master
-//     encerrando) é desconexão, e a próxima rodada tenta o tail de novo;
+//     encerrando) e um 503 (a conferência de rewind do master ainda
+//     pendente) são desconexão, que guarda o cursor, e a próxima rodada
+//     tenta o tail de novo. O 503 nunca leva ao snapshot: se a conferência
+//     achar o rewind, é a geração nova que manda o follower a ele;
 //  3. qualquer outro caso baixa um snapshot.
 func (c *Client) SyncOnce(ctx context.Context) error {
 	_, err := c.syncOnce(ctx)

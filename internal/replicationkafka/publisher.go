@@ -252,6 +252,9 @@ type Options struct {
 	// checkpointFault roda antes de cada gravação do .ckpt; um erro conta
 	// como falha da gravação.
 	checkpointFault func() error
+	// onVerificationRelease roda logo antes de a pendência de conferência ser
+	// solta, uma vez: é onde o teste lê a geração do feed nesse instante.
+	onVerificationRelease func()
 }
 
 // producer é o que o publicador usa do kgo.Client. Existe para o teste
@@ -338,6 +341,11 @@ type Publisher struct {
 	// ctrl é o lote do resume, enviado sem barreira de ack: ele é apurado
 	// pelo tail (reapControl) e na saída.
 	ctrl outBatch
+	// releaseVerification solta a pendência de conferência de rewind que o
+	// New registrou no feed (replication.Stream.HoldForVerification). É
+	// idempotente e nunca nil; fixada no New, é chamada pela goroutine do
+	// publicador (decide, startup) e pelo Close.
+	releaseVerification func()
 
 	mu      sync.Mutex
 	stats   Stats
@@ -361,6 +369,16 @@ type Publisher struct {
 
 // New valida as opções e monta o produtor, sem falar com o broker: um broker
 // fora do ar não impede a subida.
+//
+// Com o feed retomado de um fechamento limpo (OriginClean), registra nele a
+// pendência de conferência de rewind (replication.Stream.HoldForVerification):
+// enquanto ela vale, o servidor não serve o feed aos followers HTTP. Fica no
+// New, e não no Start, porque o servidor monta os publicadores ANTES de subir
+// o HTTP, e o Start vem depois dele: registrada no Start, a pendência
+// deixaria uma janela em que o follower retomaria o tail de um backup
+// restaurado. Por isso o New vem DEPOIS do Resume do feed. A pendência é
+// solta quando a conferência termina (decide), em qualquer saída da subida e
+// no Close, inclusive o Close sem Start.
 func New(o Options) (*Publisher, error) {
 	switch {
 	case o.Dataset == "":
@@ -482,6 +500,17 @@ func New(o Options) (*Publisher, error) {
 	// O contexto de vida é PRÓPRIO, e não o do servidor: o encerramento
 	// fecha o feed e deixa o publicador drenar a cauda antes de cancelar.
 	p.ctx, p.cancel = context.WithCancel(context.Background())
+	// Por último, depois de toda recusa: o New que falha não deixa pendência
+	// que ninguém soltaria.
+	p.releaseVerification = func() {}
+	if o.Feed.Origin().Kind == replication.OriginClean {
+		release := o.Feed.HoldForVerification()
+		p.releaseVerification = release
+		if hook := o.onVerificationRelease; hook != nil {
+			var once sync.Once
+			p.releaseVerification = func() { once.Do(func() { hook(); release() }) }
+		}
+	}
 	return p, nil
 }
 
@@ -521,6 +550,9 @@ func (p *Publisher) Close(ctx context.Context) error {
 		}
 		p.cancel()
 		<-p.done
+		// O laço solta a pendência ao sair da subida; sem Start, só o Close
+		// a solta.
+		p.releaseVerification()
 		// O laço só sai depois de ter todas as promises de volta, ou por
 		// cancelamento; o Flush aqui cobre o resto, limitado pelo mesmo ctx.
 		if err := p.client.Flush(ctx); err != nil && p.closeErr == nil {
@@ -547,7 +579,14 @@ func (p *Publisher) Stats() Stats {
 	}
 	// A posição em bytes recomeça do zero a cada geração: comparada com a de
 	// outra geração, ou atrás da do cursor, ela não mede atraso nenhum.
-	if epoch == p.lagEpoch && endPos >= p.lagPos {
+	//
+	// Sem atraso em sequences também não há atraso em bytes. O snapshot lê o
+	// cursor COM o intervalo ativo (as alterações já publicadas e ainda não
+	// fechadas em lote, que ele cobre) e a posição em bytes SEM ele, que só
+	// existe no lote fechado: quando esse lote fecha, a posição do feed passa
+	// da do cursor sem nada a entregar, e o atraso ficaria parado acima de
+	// zero com o feed ocioso.
+	if produced > p.lagBase && epoch == p.lagEpoch && endPos >= p.lagPos {
 		s.LagBytes = endPos - p.lagPos
 	}
 	return s

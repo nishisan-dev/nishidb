@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,13 +41,21 @@ func TestReplicationStatsPublishesTheLagInBytes(t *testing.T) {
 	// Segura só o Produce do tópico da replicação: a ingestão do `src` segue.
 	// Registrado DEPOIS do servidor, o Cleanup solta o broker ANTES do
 	// encerramento, que drena a cauda.
+	//
+	// O kgo negocia Produce v13 com o kfake, e nessa versão o tópico vai pelo
+	// TopicID: o nome chega vazio. Casar só pelo nome nunca segurava nada, e
+	// o teste passava quando uma amostra caía, por sorte, entre o flush e o
+	// ack. O held é o que impede o teste de passar sem o broker segurado.
+	cdcID := cluster.TopicInfo("cdc").TopicID
 	release := make(chan struct{})
 	var once sync.Once
+	var held atomic.Bool
 	t.Cleanup(func() { once.Do(func() { close(release) }) })
 	cluster.ControlKey(int16(kmsg.Produce), func(req kmsg.Request) (kmsg.Response, error, bool) {
 		cluster.KeepControl()
 		for _, topic := range req.(*kmsg.ProduceRequest).Topics {
-			if topic.Topic == "cdc" {
+			if topic.Topic == "cdc" || topic.TopicID == cdcID {
+				held.Store(true)
 				cluster.SleepControl(func() { <-release })
 				break
 			}
@@ -76,11 +85,11 @@ func TestReplicationStatsPublishesTheLagInBytes(t *testing.T) {
 		want := fmt.Sprintf("%s{%s} %d\n", metrics.MetReplicationKafkaLagBytes, labels, d.LagBytes)
 		// Parada a entrega, o atraso só cresce até a ingestão terminar: os
 		// dois lados convergem para o mesmo número diferente de zero.
-		if d.LagSequences > 0 && d.LagBytes > 0 && rep.Feed.InputEntries == 4 && strings.Contains(exposition, want) {
+		if held.Load() && d.LagSequences > 0 && d.LagBytes > 0 && rep.Feed.InputEntries == 4 && strings.Contains(exposition, want) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("lagBytes no /v1/stats e no /metrics não convergiram para um atraso: %+v\n%s", d, exposition)
+			t.Fatalf("lagBytes no /v1/stats e no /metrics não convergiram para um atraso (broker segurado: %v): %+v\n%s", held.Load(), d, exposition)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

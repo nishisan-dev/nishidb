@@ -77,11 +77,12 @@ func (p *Publisher) run(ctx context.Context) {
 				"cursor", p.cursor)
 			return
 		case errors.Is(err, replication.ErrResyncRequired):
-			if epoch, _, _ := p.feed.Position(); epoch != p.workEpoch {
+			if origin, epoch, _, _ := p.feed.OriginAndPosition(); epoch != p.workEpoch {
 				// A epoch do feed mudou debaixo do publicador: é a linha 5 da
 				// decisão da subida (o rewind de outro destino rotacionou o
-				// feed), e não uma lacuna na mesma geração.
-				needSnapshot, reason = true, generationReason(p.feed.Origin(), p.workEpoch)
+				// feed), e não uma lacuna na mesma geração. Origem e epoch
+				// lidas juntas, como no decide.
+				needSnapshot, reason = true, generationReason(origin, p.workEpoch)
 				break
 			}
 			if needSnapshot {

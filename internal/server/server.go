@@ -1467,7 +1467,8 @@ func (s *Server) Close() error { return s.encerra() }
 //  5. closeFeeds: com a posição agora estável, cada feed fecha com a impressão
 //     dos Stores e a marca limpa — sem ela, se a posição de um Store
 //     publicado não é legível (o checkpoint que falhou no fsync deixa o
-//     writer falho).
+//     writer falho). Os feeds fecham em paralelo, com o orçamento total
+//     feedCloseBudget.
 //  6. closePublishers: os publicadores drenam a cauda para o Kafka, com
 //     orçamento PRÓPRIO (publisherCloseBudget), separado do prazo do Shutdown,
 //     e gravam o checkpoint deles.

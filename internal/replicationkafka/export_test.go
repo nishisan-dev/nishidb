@@ -24,6 +24,10 @@ func WithTopicReadHook(o *Options, fn func() error) { o.beforeTopicRead = fn }
 // conta como falha da gravação.
 func WithCheckpointFault(o *Options, fn func() error) { o.checkpointFault = fn }
 
+// WithVerificationReleaseHook roda fn logo antes de o publicador soltar a
+// pendência de conferência de rewind do feed, uma vez.
+func WithVerificationReleaseHook(o *Options, fn func()) { o.onVerificationRelease = fn }
+
 // CheckpointFile expõe o conteúdo do .ckpt ao teste externo, para montar o
 // cenário de cada linha da decisão da subida.
 type CheckpointFile = checkpointFile

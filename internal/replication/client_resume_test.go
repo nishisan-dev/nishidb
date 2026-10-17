@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -254,6 +255,65 @@ func TestFollowerResumeConflictResyncsAndGoneRetriesTheTail(t *testing.T) {
 	}
 	if n := m.count("/v1/replication/snapshot"); n != 2 {
 		t.Fatalf("snapshots pedidos = %d, quero 2: o 409 leva ao snapshot", n)
+	}
+}
+
+// O 503 do master com a conferência de rewind pendente é desconexão no
+// Follow: o follower espera com backoff, guarda o cursor e a retomada, e não
+// pede snapshot por causa dele. Quando o master volta a servir, o tail
+// continua do cursor aplicado, sem snapshot.
+func TestFollowRetriesTheTailWhileTheMasterAnswersUnavailable(t *testing.T) {
+	m := newFakeMaster(t, "e1", 3)
+	c, applied := followingClient(t, m)
+	var unavailable atomic.Bool
+	unavailable.Store(true)
+	m.set(func(m *fakeMaster) {
+		m.status.Produced = 5
+		tail := batchFrom("e1", 5)
+		m.batch = func(after uint64) (int, *Batch) {
+			if unavailable.Load() {
+				return http.StatusServiceUnavailable, nil
+			}
+			return tail(after)
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Follow(ctx) }()
+	var stopOnce sync.Once
+	stop := func() { stopOnce.Do(func() { cancel(); <-done }) }
+	defer stop()
+	deadline := time.Now().Add(10 * time.Second)
+	for m.count("/v1/replication/batch") < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("o follower parou de tentar o tail: %d lote(s) pedidos", m.count("/v1/replication/batch"))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := m.count("/v1/replication/snapshot"); n != 1 {
+		t.Fatalf("snapshots pedidos = %d com o master respondendo 503, quero só o inicial", n)
+	}
+	if state, epoch, cursor := c.Replica.State(); state != ReplicaDisconnected || epoch != "e1" || cursor != 3 {
+		t.Fatalf("com o master respondendo 503: %s %s %d, quero disconnected e1 3", state, epoch, cursor)
+	}
+	unavailable.Store(false)
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		if state, _, cursor := c.Replica.State(); state == ReplicaFollowing && cursor == 5 {
+			break
+		}
+		if time.Now().After(deadline) {
+			state, epoch, cursor := c.Replica.State()
+			t.Fatalf("o tail não retomou depois do 503: %s %s %d", state, epoch, cursor)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := m.count("/v1/replication/snapshot"); n != 1 {
+		t.Fatalf("snapshots pedidos = %d depois do 503, quero só o inicial: a retomada é pelo tail", n)
+	}
+	stop()
+	if got := *applied; len(got) != 2 || got[0] != 4 || got[1] != 5 {
+		t.Fatalf("entradas aplicadas = %v, quero [4 5]", got)
 	}
 }
 

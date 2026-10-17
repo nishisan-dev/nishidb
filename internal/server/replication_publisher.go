@@ -293,7 +293,16 @@ func startPublishers(d *dataset) {
 // Idempotente, como o Close do feed: num segundo encerramento os Stores já
 // estão fechados, o Close devolve o desfecho do primeiro, e nada é avisado
 // de novo.
+//
+// Os feeds fecham em PARALELO, como os publicadores (closePublishers), com o
+// orçamento TOTAL feedCloseBudget, contado antes da primeira impressão: cada
+// Close recebe o que resta dele. Em série, cada dataset somaria até o prazo
+// inteiro ao encerramento, que cresceria com o número de datasets de
+// gravador lento (disco cheio, EIO em retentativa). A impressão de cada dataset é lida
+// em série, antes do Close dele: ela só lê a posição de escrita do Store.
 func (s *Server) closeFeeds() {
+	deadline := time.Now().Add(feedCloseBudget)
+	var wg sync.WaitGroup
 	for _, d := range s.datasets {
 		if d.replication == nil {
 			continue
@@ -307,21 +316,27 @@ func (s *Server) closeFeeds() {
 		case cause == nil:
 			fp = &f
 		}
-		if err := d.replication.Close(fp, feedCloseBudget); err != nil {
-			s.log.Warn("replication.feed.close_failed",
-				"the replication feed did not close cleanly (writer past the deadline, disk sync or state write failure, or a change that reached it after the close); the next start opens a new generation",
-				"dataset", d.nome, "error", err.Error())
-			continue
-		}
-		if fp == nil {
-			s.log.Warn("replication.feed.closed_unclean",
-				"the replication feed closed without its clean mark because the dataset position is not trustworthy; the next start opens a new generation",
-				"dataset", d.nome, "error", cause.Error())
-		}
+		wg.Add(1)
+		go func(d *dataset, fp *replication.Fingerprint, cause error) {
+			defer wg.Done()
+			if err := d.replication.Close(fp, max(time.Until(deadline), 0)); err != nil {
+				s.log.Warn("replication.feed.close_failed",
+					"the replication feed did not close cleanly (writer past the deadline, disk sync or state write failure, or a change that reached it after the close); the next start opens a new generation",
+					"dataset", d.nome, "error", err.Error())
+				return
+			}
+			if fp == nil {
+				s.log.Warn("replication.feed.closed_unclean",
+					"the replication feed closed without its clean mark because the dataset position is not trustworthy; the next start opens a new generation",
+					"dataset", d.nome, "error", cause.Error())
+			}
+		}(d, fp, cause)
 	}
+	wg.Wait()
 }
 
-// feedCloseBudget é o prazo para o gravador do feed drenar a fila no Close.
+// feedCloseBudget é o prazo TOTAL para os gravadores dos feeds drenarem a
+// fila no Close: os feeds fecham em paralelo (closeFeeds).
 const feedCloseBudget = 10 * time.Second
 
 // waitFeeds é o fim da vida dos feeds: junta as goroutines e fecha o log de

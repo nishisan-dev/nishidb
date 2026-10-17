@@ -37,6 +37,9 @@ func (s *Server) handleReplicationCursor(w http.ResponseWriter, r *http.Request)
 // encerramento que a solta. Feed fechado e encerramento respondem 410 (o
 // master está saindo; o follower desconecta e retoma o tail na volta), e não
 // 409, que o mandaria refazer o snapshot.
+//
+// Com a conferência de rewind de um destino Kafka pendente, responde 503
+// antes de ler o feed (ver rejectVerificationPending).
 func (s *Server) handleReplicationBatch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.rejectSimples(w, r, http.MethodGet)
@@ -51,6 +54,10 @@ func (s *Server) handleReplicationBatch(w http.ResponseWriter, r *http.Request) 
 	after, err := strconv.ParseUint(r.URL.Query().Get("after"), 10, 64)
 	if epoch == "" || err != nil {
 		s.reject(w, r, http.StatusBadRequest, d.nome, protocol.ErrorDetail{Code: protocol.CodeBadRequest, Message: "epoch and after are required"})
+		return
+	}
+	if d.replication.VerificationPending() {
+		s.rejectVerificationPending(w, r, d.nome)
 		return
 	}
 	ctx, cancel := s.mutationContext(r)
@@ -77,6 +84,10 @@ func (s *Server) handleReplicationBatch(w http.ResponseWriter, r *http.Request) 
 //
 // Mesmo ctx do batch: o encerramento interrompe a exportação em voo, que
 // segura snapshots do Store, e a resposta que ainda não começou sai 410.
+//
+// A conferência de rewind pendente também responde 503 aqui: o snapshot da
+// geração restaurada seria descartado logo depois pelo rewind, e o follower
+// o refaria inteiro na geração nova.
 func (s *Server) handleReplicationSnapshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.rejectSimples(w, r, http.MethodGet)
@@ -87,6 +98,10 @@ func (s *Server) handleReplicationSnapshot(w http.ResponseWriter, r *http.Reques
 		s.reject(w, r, http.StatusNotFound, "", protocol.ErrorDetail{Code: protocol.CodeUnknownDataset, Message: "replication is not enabled for this dataset"})
 		return
 	}
+	if d.replication.VerificationPending() {
+		s.rejectVerificationPending(w, r, d.nome)
+		return
+	}
 	tables := make([]replication.SnapshotTable, 0, 2)
 	for _, source := range []*dataset{d, d.publishedHistory()} {
 		if source == nil {
@@ -95,6 +110,31 @@ func (s *Server) handleReplicationSnapshot(w http.ResponseWriter, r *http.Reques
 		tables = append(tables, replication.SnapshotTable{Name: source.nome, History: source.ehHistorico, Source: source.st})
 	}
 	s.streamReplicationSnapshot(w, r, d.nome, d.replication, tables, replicationSnapshotChunkRows)
+}
+
+// rejectVerificationPending responde 503 ao follower enquanto um publicador
+// Kafka do dataset não terminou a conferência de rewind da subida
+// (replication.Stream.VerificationPending). O feed retomado de um fechamento
+// limpo pode ser um backup restaurado na MESMA geração: servir o tail dele
+// antes da conferência deixaria o follower, que já aplicou sequences acima
+// da reabertura, receber como continuação sequences reusadas com outro
+// conteúdo — o defeito que o débito 141 registra, e que continua só no
+// master sem destino Kafka, onde não há quem confira. Com o rewind, a conferência troca a geração antes
+// de soltar a pendência, e o follower recebe o 409 da geração nova.
+//
+// 503 é a desconexão retentável do follower (Client.Follow): ele espera com
+// backoff, guarda o cursor e a retomada do tail, e não pede snapshot por
+// causa dele. O GET /v1/replication/cursor continua respondendo. O código é
+// o INTERNAL, que as outras recusas destas rotas já usam: o follower decide
+// pelo status HTTP, e um código novo obrigaria o SQLSTATE no driver JDBC e
+// a exceção no client Python para rotas que nenhum dos dois chama. A
+// mensagem é o que distingue a recusa.
+func (s *Server) rejectVerificationPending(w http.ResponseWriter, r *http.Request, name string) {
+	w.Header().Set("Retry-After", "1")
+	s.reject(w, r, http.StatusServiceUnavailable, name, protocol.ErrorDetail{
+		Code:    protocol.CodeInternal,
+		Message: "the replication feed is waiting for the rewind check of its Kafka destinations (the dataset may be a restored backup); retry later",
+	})
 }
 
 // handleReplicationResync pede o snapshot sob demanda de um destino Kafka do

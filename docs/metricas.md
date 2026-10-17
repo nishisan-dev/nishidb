@@ -368,7 +368,9 @@ recusando ou fora do ar.
 `feed_disk_bytes`, diz quanto do disco ainda espera por este destino: quando
 ele encosta no tamanho do feed, a retenção está a um segmento de abrir a
 lacuna desse destino. Zero quando o feed
-já está noutra geração. `checkpoint_sequence` é o ponto que a próxima subida
+já está noutra geração, e zero quando `lag_sequences` é zero: sem alteração a
+entregar, não há atraso em bytes, mesmo depois de um snapshot tirado com
+alterações ainda fora de lote. `checkpoint_sequence` é o ponto que a próxima subida
 retoma sem snapshot; fica atrás do cursor confirmado (o `.ckpt` do tail é
 gravado no máximo uma vez por segundo), e a diferença é o que o destino recebe
 de novo depois de um reinício. A mesma leitura sai por SQL, uma linha por

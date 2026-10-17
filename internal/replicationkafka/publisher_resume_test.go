@@ -1076,6 +1076,31 @@ func TestLagBytesTracksFeedPositionAndClampsAfterRotate(t *testing.T) {
 	}
 }
 
+// O snapshot tirado com o intervalo ativo aberto cobre as alterações dele (o
+// cursor é a sequence produzida), mas a posição em bytes do cursor é a do
+// último lote FECHADO. Fechado o intervalo, o feed fica ocioso, sem nada a
+// entregar: o atraso é zero em sequences e em bytes.
+func TestLagBytesIsZeroWhenTheSnapshotCoveredTheActiveInterval(t *testing.T) {
+	h := newHarness(t, harnessOpts{partitions: 3, feed: manualFeed})
+	h.upsert("closed", 1)
+	h.feed.Flush(time.Now(), "test")
+	open := h.upsert("open", 1)
+	before := h.feed.Status().EndPos
+	h.pub.Start()
+	h.readUntil("snapshot da subida", snapshotEnds(3, 1))
+	waitFor(t, "following", func() bool { return h.pub.Stats().State == replicationkafka.StateFollowing })
+	if s := h.pub.Stats(); s.Cursor != open {
+		t.Fatalf("pré-condição: o snapshot cobriu até %d, quero o intervalo ativo inteiro (%d)", s.Cursor, open)
+	}
+	h.feed.Flush(time.Now(), "test")
+	if after := h.feed.Status().EndPos; after <= before {
+		t.Fatalf("pré-condição: o intervalo fechado não avançou a posição do feed (%d → %d); o teste não prova nada", before, after)
+	}
+	if s := h.pub.Stats(); s.LagSequences != 0 || s.LagBytes != 0 {
+		t.Fatalf("feed ocioso depois do snapshot: lagSequences %d, lagBytes %d; quero os dois zero", s.LagSequences, s.LagBytes)
+	}
+}
+
 // O .ckpt com a posição do cursor À FRENTE da do feed (um .ckpt mais novo que
 // o `state`) não dá a volta no atraso em bytes: ele sai zero.
 func TestLagBytesNeverWrapsWhenCheckpointPositionIsAhead(t *testing.T) {
