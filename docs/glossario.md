@@ -1064,6 +1064,16 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | validador de JSON do envelope (decide se uma coluna json sai inline ou como string) | validJSON | internal/replicationkafka |
 | orçamento da drenagem (o prazo próprio dos publicadores no encerramento) | publisherCloseBudget | internal/server |
 | rótulo do estado do publicador (o label da série one-hot de estado) | LabelPublisherState / `state` | internal/metrics |
+| checkpoint do publicador (arquivo por destino com o ponto confirmado pelo Kafka e a identidade do tópico) | checkpointFile / arquivo `<destino>.ckpt` | internal/replicationkafka |
+| epoch alvo (a epoch do reset em curso enquanto o snapshot não termina) | TargetEpoch / TargetCursor | internal/replicationkafka |
+| contador de pedido de snapshot (persistido e nunca apagado; o pedido está pendente quando passa do consumido) | arquivo `<destino>.resync` / requestResync, pendingResync | internal/replicationkafka |
+| pedido consumido (o último valor do contador que um snapshot já atendeu) | ResyncConsumed | internal/replicationkafka |
+| hash de renderização (impressão das tabelas publicadas, dos aliases e de `publishHistory`) | RenderHash | internal/replicationkafka |
+| fim do último snapshot (instante do último `snapshot_end` confirmado; base do snapshot periódico) | LastSnapshotEnd | internal/replicationkafka |
+| bootstrap canônico (lista de brokers aparada, ordenada e sem repetição) | canonicalBootstrapList | internal/replicationkafka |
+| header de motivo (segundo header do `reset`, com o motivo) | `nishidb-reason` / HeaderReason, ReasonHeader | internal/replicationkafka |
+| marcador de retomada (controle na mesma epoch depois do reinício limpo, sem snapshot) | `resume` / OpResume, AppendResume | internal/replicationkafka |
+| epoch anterior (chave opcional do `reset` com a epoch substituída) | `previousEpoch` | internal/replicationkafka |
 ## Feed de replicação em disco
 
 | PT-BR | Identificador/contrato | Dono |

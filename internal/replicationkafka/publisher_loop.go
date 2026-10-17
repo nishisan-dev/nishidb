@@ -164,13 +164,13 @@ func (p *Publisher) snapshot(ctx context.Context, reason ResetReason) (produced 
 			"reason", reason.String(), "epoch", h.Epoch, "cursor", h.Cursor, "partitions", n)
 		b := &p.chunks[p.chunk]
 		start := len(b.buf)
-		buf, rerr := p.renderer.AppendReset(b.buf, h.Epoch, reason, h.Cursor, h.At)
+		buf, rerr := p.renderer.AppendReset(b.buf, h.Epoch, "", reason, h.Cursor, h.At)
 		if rerr != nil {
 			return p.halt(StateFailed, ErrorRender, rerr, 0, "")
 		}
 		b.buf = buf
 		for part := range n {
-			b.addControl(OpReset, int32(part), start, len(b.buf))
+			b.addReset(reason, int32(part), start, len(b.buf))
 		}
 		if err := p.checkSizes(b); err != nil {
 			return err
@@ -437,7 +437,7 @@ func (p *Publisher) checkSizes(b *outBatch) error {
 		r := &b.recs[i]
 		key := b.key(r)
 		size := int64(len(key)) + int64(r.valEnd-r.valueStart()) +
-			int64(len(HeaderOp)+len(OpHeader(r.op))) + recordOverheadBytes
+			int64(r.headerBytes()) + recordOverheadBytes
 		if size <= p.messageBytes {
 			continue
 		}

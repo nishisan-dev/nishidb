@@ -2,6 +2,7 @@ package replicationkafka_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"go/parser"
 	"go/token"
@@ -201,8 +202,14 @@ func TestEnvelopeGolden(t *testing.T) {
 				Record: types.Record{RowID: 8000}})
 		}, `{"epoch":"0123456789abcdef0123456789abcdef","sequence":100,"dataset":"events","table":"events_history","op":"retain","floor":8000,"at":"2026-09-21T14:13:29.000Z"}`},
 		{"reset", func(dst []byte) ([]byte, error) {
-			return r.AppendReset(dst, goldenEpoch, replicationkafka.ResetGap, 100, snapAt)
+			return r.AppendReset(dst, goldenEpoch, "", replicationkafka.ResetGap, 100, snapAt)
 		}, `{"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"reset","reason":"gap","cursor":100,"at":"2026-09-21T14:13:29.000Z"}`},
+		{"reset with previous epoch", func(dst []byte) ([]byte, error) {
+			return r.AppendReset(dst, goldenEpoch, goldenPreviousEpoch, replicationkafka.ResetCrash, 0, snapAt)
+		}, `{"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"reset","reason":"crash","previousEpoch":"fedcba9876543210fedcba9876543210","cursor":0,"at":"2026-09-21T14:13:29.000Z"}`},
+		{"resume", func(dst []byte) ([]byte, error) {
+			return r.AppendResume(dst, goldenEpoch, 100, snapAt), nil
+		}, `{"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"resume","cursor":100,"at":"2026-09-21T14:13:29.000Z"}`},
 		{"snapshot_end", func(dst []byte) ([]byte, error) {
 			return r.AppendSnapshotEnd(dst, goldenEpoch, 100, 17, snapAt), nil
 		}, `{"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"snapshot_end","cursor":100,"count":17,"at":"2026-09-21T14:13:29.000Z"}`},
@@ -221,32 +228,143 @@ func TestEnvelopeGolden(t *testing.T) {
 	}
 }
 
-// Os quatro motivos de reset são a lista fechada do contrato, e o motivo fora
-// dela é recusado em vez de sair como string vazia.
+// goldenPreviousEpoch é a epoch da geração que o reset dos testes substitui.
+const goldenPreviousEpoch = "fedcba9876543210fedcba9876543210"
+
+// Os dez motivos de reset são a lista fechada do contrato, na ordem em que
+// foram publicados, e o motivo fora dela é recusado em vez de sair como string
+// vazia. Os valores numéricos e as grafias são LITERAIS: o contrato é o que
+// está escrito aqui, e não o que a tabela do código devolve.
 func TestResetReasonsSpellTheContract(t *testing.T) {
 	r, _, _ := newGoldenRenderer(t)
-	want := map[replicationkafka.ResetReason]string{
-		replicationkafka.ResetStartup:           "startup",
-		replicationkafka.ResetGap:               "gap",
-		replicationkafka.ResetSnapshotFailed:    "snapshot_failed",
-		replicationkafka.ResetPartitionsChanged: "partitions_changed",
+	want := []struct {
+		reason replicationkafka.ResetReason
+		value  uint8
+		name   string
+	}{
+		{replicationkafka.ResetStartup, 1, "startup"},
+		{replicationkafka.ResetGap, 2, "gap"},
+		{replicationkafka.ResetSnapshotFailed, 3, "snapshot_failed"},
+		{replicationkafka.ResetPartitionsChanged, 4, "partitions_changed"},
+		{replicationkafka.ResetCrash, 5, "crash"},
+		{replicationkafka.ResetRewind, 6, "rewind"},
+		{replicationkafka.ResetRetention, 7, "retention"},
+		{replicationkafka.ResetConfigChanged, 8, "config_changed"},
+		{replicationkafka.ResetRequested, 9, "requested"},
+		{replicationkafka.ResetPeriodic, 10, "periodic"},
 	}
-	for reason, name := range want {
-		got, err := r.AppendReset(nil, goldenEpoch, reason, 1, goldenAt)
+	for _, w := range want {
+		if uint8(w.reason) != w.value {
+			t.Errorf("motivo %q vale %d; quer %d (a ordem do contrato)", w.name, w.reason, w.value)
+		}
+		got, err := r.AppendReset(nil, goldenEpoch, "", w.reason, 1, goldenAt)
 		if err != nil {
-			t.Fatalf("%s: %v", name, err)
+			t.Fatalf("%s: %v", w.name, err)
 		}
-		if !bytes.Contains(got, []byte(`"reason":"`+name+`"`)) || reason.String() != name {
-			t.Errorf("motivo %d: envelope %s, String %q; quer %q", reason, got, reason.String(), name)
+		if !bytes.Contains(got, []byte(`"reason":"`+w.name+`"`)) {
+			t.Errorf("motivo %q: envelope %s não traz o reason certo", w.name, got)
+		}
+		if w.reason.String() != w.name {
+			t.Errorf("motivo %q: String() = %q", w.name, w.reason.String())
+		}
+		if h := string(replicationkafka.ReasonHeader(w.reason)); h != w.name {
+			t.Errorf("motivo %q: ReasonHeader = %q", w.name, h)
 		}
 	}
-	for _, bad := range []replicationkafka.ResetReason{0, 5, 255} {
-		got, err := r.AppendReset([]byte("PFX"), goldenEpoch, bad, 1, goldenAt)
+	for _, bad := range []replicationkafka.ResetReason{0, 11, 255} {
+		got, err := r.AppendReset([]byte("PFX"), goldenEpoch, "", bad, 1, goldenAt)
 		if !errors.Is(err, replicationkafka.ErrUnknownResetReason) {
 			t.Errorf("motivo %d: err = %v, quer ErrUnknownResetReason", bad, err)
 		}
 		if string(got) != "PFX" {
 			t.Errorf("motivo %d: dst = %q, quer intacto", bad, got)
+		}
+		if h := replicationkafka.ReasonHeader(bad); h != nil {
+			t.Errorf("motivo %d: ReasonHeader = %q, quer nil", bad, h)
+		}
+		if bad.String() != "" {
+			t.Errorf("motivo %d: String() = %q, quer vazio", bad, bad.String())
+		}
+	}
+}
+
+// O valor do header de motivo é compartilhado entre todos os registros: o
+// slice devolvido tem a capacidade limitada ao comprimento, então um append do
+// chamador copia em vez de escrever na tabela e corromper o header dos
+// próximos registros.
+func TestReasonHeaderCapacityIsBounded(t *testing.T) {
+	for _, reason := range []replicationkafka.ResetReason{
+		replicationkafka.ResetStartup, replicationkafka.ResetGap, replicationkafka.ResetPartitionsChanged,
+		replicationkafka.ResetPeriodic,
+	} {
+		h := replicationkafka.ReasonHeader(reason)
+		if cap(h) != len(h) {
+			t.Errorf("motivo %q: cap = %d, len = %d; quer a capacidade limitada", reason, cap(h), len(h))
+		}
+		before := reason.String()
+		_ = append(h, 'X', 'X', 'X')
+		if reason.String() != before {
+			t.Errorf("motivo %q: o append do chamador escreveu na tabela (agora %q)", before, reason.String())
+		}
+	}
+}
+
+// previousEpoch vazia some do envelope: o primeiro reset de um destino não
+// tem geração anterior, e a chave com string vazia sugeriria uma epoch que
+// não existe. Preenchida, sai logo depois de `reason` e antes de `cursor`, e
+// uma segunda epoch anterior não herda a primeira (o cache é por valor).
+func TestResetOmitsEmptyPreviousEpoch(t *testing.T) {
+	r, _, _ := newGoldenRenderer(t)
+	empty, err := r.AppendReset(nil, goldenEpoch, "", replicationkafka.ResetStartup, 5, goldenAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(empty, []byte("previousEpoch")) {
+		t.Errorf("previousEpoch vazia devia ser omitida: %s", empty)
+	}
+	const wantEmpty = `{"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"reset","reason":"startup","cursor":5,"at":"2026-09-21T14:13:22.456Z"}`
+	if string(empty) != wantEmpty {
+		t.Errorf("reset sem previousEpoch:\n got %s\nwant %s", empty, wantEmpty)
+	}
+
+	first, err := r.AppendReset(nil, goldenEpoch, goldenPreviousEpoch, replicationkafka.ResetStartup, 5, goldenAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantFirst = `{"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"reset","reason":"startup","previousEpoch":"fedcba9876543210fedcba9876543210","cursor":5,"at":"2026-09-21T14:13:22.456Z"}`
+	if string(first) != wantFirst {
+		t.Errorf("reset com previousEpoch:\n got %s\nwant %s", first, wantFirst)
+	}
+	second, err := r.AppendReset(nil, goldenEpoch, "aaaa", replicationkafka.ResetStartup, 5, goldenAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(second, []byte(`"previousEpoch":"aaaa","cursor"`)) || bytes.Contains(second, []byte("fedcba")) {
+		t.Errorf("a segunda previousEpoch herdou a primeira: %s", second)
+	}
+	// Vazia de novo depois de preenchida: o cache não pode vazar a chave.
+	again, err := r.AppendReset(nil, goldenEpoch, "", replicationkafka.ResetStartup, 5, goldenAt)
+	if err != nil || string(again) != wantEmpty {
+		t.Errorf("reset sem previousEpoch depois de um com: %s (%v)", again, err)
+	}
+}
+
+// O resume é um marcador de controle sem `sequence`, `reason` nem `record`:
+// só o cursor de onde o tail continua. Appenda em dst, sem sobrescrever.
+func TestResumeMarkerShape(t *testing.T) {
+	r, _, _ := newGoldenRenderer(t)
+	got := r.AppendResume([]byte("PFX"), goldenEpoch, 4321, goldenAt)
+	const want = `PFX{"epoch":"0123456789abcdef0123456789abcdef","dataset":"events","op":"resume","cursor":4321,"at":"2026-09-21T14:13:22.456Z"}`
+	if string(got) != want {
+		t.Errorf("resume:\n got %s\nwant %s", got, want)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(got[3:], &m); err != nil {
+		t.Fatalf("resume não é JSON válido: %v", err)
+	}
+	for _, k := range []string{"sequence", "reason", "record", "previousEpoch"} {
+		if _, ok := m[k]; ok {
+			t.Errorf("resume não devia ter a chave %q: %s", k, got)
 		}
 	}
 }
@@ -257,7 +375,7 @@ func TestOpHeaderSpellsEveryOp(t *testing.T) {
 		replicationkafka.OpInsert: "insert", replicationkafka.OpUpdate: "update",
 		replicationkafka.OpDelete: "delete", replicationkafka.OpSnapshot: "snapshot",
 		replicationkafka.OpRetain: "retain", replicationkafka.OpReset: "reset",
-		replicationkafka.OpSnapshotEnd: "snapshot_end",
+		replicationkafka.OpSnapshotEnd: "snapshot_end", replicationkafka.OpResume: "resume",
 	}
 	for op, name := range want {
 		if got := string(replicationkafka.OpHeader(op)); got != name || op.String() != name {
@@ -267,11 +385,17 @@ func TestOpHeaderSpellsEveryOp(t *testing.T) {
 	if h := replicationkafka.OpHeader(0); h != nil {
 		t.Errorf("op inválido devolveu header %q", h)
 	}
+	if h := replicationkafka.OpHeader(9); h != nil {
+		t.Errorf("op 9 devolveu header %q; o último op do contrato é o resume (8)", h)
+	}
 	if h := replicationkafka.OpHeader(99); h != nil {
 		t.Errorf("op 99 devolveu header %q", h)
 	}
 	if replicationkafka.HeaderOp != "nishidb-op" {
 		t.Errorf("HeaderOp = %q", replicationkafka.HeaderOp)
+	}
+	if replicationkafka.HeaderReason != "nishidb-reason" {
+		t.Errorf("HeaderReason = %q", replicationkafka.HeaderReason)
 	}
 }
 

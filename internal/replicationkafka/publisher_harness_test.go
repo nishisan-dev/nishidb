@@ -307,7 +307,11 @@ type msg struct {
 	offset    int64
 	key       string
 	header    string
-	env       map[string]any
+	// reasonHeader é o valor do header nishidb-reason ("" quando ausente) e
+	// headerKeys são as chaves de TODOS os headers, na ordem do registro.
+	reasonHeader string
+	headerKeys   []string
+	env          map[string]any
 }
 
 func (m msg) op() string { s, _ := m.env["op"].(string); return s }
@@ -394,8 +398,12 @@ func decode(t *testing.T, r *kgo.Record) msg {
 	t.Helper()
 	m := msg{partition: r.Partition, offset: r.Offset, key: string(r.Key)}
 	for _, hd := range r.Headers {
-		if hd.Key == replicationkafka.HeaderOp {
+		m.headerKeys = append(m.headerKeys, hd.Key)
+		switch hd.Key {
+		case replicationkafka.HeaderOp:
 			m.header = string(hd.Value)
+		case replicationkafka.HeaderReason:
+			m.reasonHeader = string(hd.Value)
 		}
 	}
 	d := json.NewDecoder(bytes.NewReader(r.Value))

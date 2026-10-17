@@ -31,6 +31,39 @@ import (
 // Start): o teste escolhe o que vai junto num lote.
 var manualFeed = replication.Options{Interval: time.Second, MaxMessages: 1000, MaxBatchBytes: 1 << 20, MaxBufferedBytes: 8 << 20, MaxDiskBytes: 8 << 20}
 
+// O reset sai com DOIS headers (nishidb-op e nishidb-reason, nessa ordem) e
+// o motivo do header é o `reason` do corpo; todo outro registro sai só com o
+// nishidb-op. É o que deixa o consumidor rotear o reset sem abrir o JSON.
+func TestResetCarriesReasonHeader(t *testing.T) {
+	h := newHarness(t, harnessOpts{partitions: 3, history: true})
+	for i := range 12 {
+		h.upsert("alarm-"+strconv.Itoa(i), int64(i))
+	}
+	h.historyRow("alarm-0", 0)
+	h.pub.Start()
+	all := h.readUntil("snapshot de subida", snapshotEnds(3, 1))
+	resets, others := 0, 0
+	for _, m := range all {
+		if m.op() == "reset" {
+			resets++
+			if !slices.Equal(m.headerKeys, []string{"nishidb-op", "nishidb-reason"}) || m.header != "reset" ||
+				m.reasonHeader != "startup" || m.reasonHeader != m.str("reason") {
+				t.Errorf("reset da partição %d: headers %v op=%q reason=%q, quer [nishidb-op nishidb-reason] reset/startup",
+					m.partition, m.headerKeys, m.header, m.reasonHeader)
+			}
+			continue
+		}
+		others++
+		if !slices.Equal(m.headerKeys, []string{"nishidb-op"}) || m.reasonHeader != "" || m.header != m.op() {
+			t.Errorf("registro %q da partição %d: headers %v reason=%q, quer só nishidb-op=%q",
+				m.op(), m.partition, m.headerKeys, m.reasonHeader, m.op())
+		}
+	}
+	if resets != 3 || others == 0 {
+		t.Errorf("resets=%d (quer 3, um por partição), outros=%d (quer > 0)", resets, others)
+	}
+}
+
 // A subida publica, em CADA partição: o reset (startup, com o cursor do
 // feed), as linhas do snapshot que caem nela e o snapshot_end com a contagem
 // DELA. O retain da histórica também vai a todas as partições.

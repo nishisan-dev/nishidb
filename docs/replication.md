@@ -296,7 +296,9 @@ Os marcadores de controle não têm `record`:
 
 Os três usam a key fixa `__nishidb_control__` e são publicados uma vez em
 CADA partição do tópico. Todo registro, de dado ou de controle, leva o header
-`nishidb-op` com o `op`, para o consumidor rotear sem abrir o JSON.
+`nishidb-op` com o `op`, para o consumidor rotear sem abrir o JSON. O `reset`
+leva, além dele, o header `nishidb-reason` com o motivo (a mesma grafia do
+`reason` do corpo).
 
 ### Ciclo de vida: reset, snapshot e tail
 
@@ -495,6 +497,25 @@ em sequências, registros entregues, snapshots por motivo, erros por motivo,
 Os motivos de snapshot e de erro e os estados existem desde a subida, em
 zero, para que um alerta sobre eles funcione antes da primeira ocorrência. Os
 detalhes de cada série estão em [metricas.md](metricas.md).
+
+### Mudanças de contrato desde a v0.14
+
+O envelope Kafka e o `/v1/replication/*` saíram na v0.14.x. Toda mudança de
+contrato feita depois dela é aditiva: um consumidor que não conhece o item novo
+continua lendo o que lia.
+
+- **Header `nishidb-reason` no `reset`.** Todo `reset` sai agora com DOIS
+  headers, `nishidb-op: reset` e `nishidb-reason: <motivo>`, o motivo na mesma
+  grafia do `reason` do corpo (hoje `startup`, `gap`, `snapshot_failed` ou
+  `partitions_changed`). O consumidor decide sem abrir o JSON. Os demais
+  registros seguem só com o `nishidb-op`. Mudança aditiva: o corpo do `reset`
+  não mudou.
+
+**Defeito conhecido da v0.14.x.** Quando um lote do feed fechava por tamanho
+(`maxBatchBytes`) antes de a alteração seguinte entrar, ele anunciava a
+numeração dela sem incluí-la, e a alteração da fronteira se perdia no
+publicador Kafka e no follower HTTP. O defeito foi corrigido a partir desta
+versão. A v0.14.x, de uso interno, não recebe correção.
 
 ### Encerramento
 

@@ -79,10 +79,18 @@ var states = [...]string{StateSnapshotting, StateFollowing, StateRetrying, State
 // States devolve a lista fechada de estados, para as métricas.
 func States() []string { return append([]string(nil), states[:]...) }
 
+// snapshotReasons é a lista fechada dos motivos que o publicador EMITE hoje e
+// que viram série em Stats.Snapshots e nas métricas. É um subconjunto dos
+// ResetReason: os seis motivos do contrato novo (crash, rewind, retention,
+// config_changed, requested, periodic) já existem no envelope, mas só entram
+// aqui quando o laço passar a emitir cada um. Uma série que nasce antes do
+// emissor seria uma série eternamente em zero, que um alarme sobre ela
+// confundiria com "não aconteceu".
 var snapshotReasons = [...]ResetReason{ResetStartup, ResetGap, ResetSnapshotFailed, ResetPartitionsChanged}
 
-// SnapshotReasons devolve a lista fechada de motivos de snapshot (os mesmos
-// do reset), na grafia de Stats.Snapshots.
+// SnapshotReasons devolve a lista fechada de motivos de snapshot emitidos (um
+// subconjunto dos motivos de reset, ver snapshotReasons), na grafia de
+// Stats.Snapshots.
 func SnapshotReasons() []string {
 	out := make([]string, len(snapshotReasons))
 	for i, r := range snapshotReasons {
