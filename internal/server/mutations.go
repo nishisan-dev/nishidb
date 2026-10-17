@@ -203,7 +203,7 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 // automático usaria (s.cfg.Compaction(), validado no parse mesmo com
 // storage.compaction.enabled: false) — é assim que a rota funciona no modo
 // manual puro, o caso de uso central: operador desligou o laço e opera na
-// mão. ctx vem de ctxOfMutacao (server.go): um cliente que desiste (timeout,
+// mão. ctx vem de mutationContext (server.go): um cliente que desiste (timeout,
 // conexão caída) cancela a passada em andamento, com segurança (godoc de
 // CompactaUmaVez) — e o SERVIDOR encerrando (SIGTERM) faz o mesmo, o que
 // r.Context() sozinho não cobre (Important 1 da revisão final).
@@ -227,7 +227,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, ratio := s.cfg.Compaction()
-	ctx, cancel := s.ctxOfMutacao(r)
+	ctx, cancel := s.mutationContext(r)
 	defer cancel()
 
 	results, parcial := processDatasets(targets, func(d *dataset) (protocol.CompactDataset, error) {

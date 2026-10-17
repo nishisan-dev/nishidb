@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/replication"
 	"github.com/nishisan-dev/nishidb/internal/replicationkafka"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
 // publisherCloseBudget é o orçamento PRÓPRIO da drenagem dos publicadores no
@@ -189,12 +191,14 @@ func (s *Server) openReplicationPublishers(log *logging.Logger) error {
 		tables := []replication.SnapshotTable{{Name: d.nome, Source: d.st}}
 		historyName := ""
 		var history replicationkafka.FieldSource
-		if d.irma != nil {
-			tables = append(tables, replication.SnapshotTable{Name: d.irma.nome, History: true, Source: d.irma.st})
-			historyName = d.irma.nome
+		// Só a histórica PUBLICADA entra: com `publishHistory: false` ela
+		// fica fora do snapshot do publicador, como já fica fora do tail.
+		if h := d.publishedHistory(); h != nil {
+			tables = append(tables, replication.SnapshotTable{Name: h.nome, History: true, Source: h.st})
+			historyName = h.nome
 			// O Compiled PRÓPRIO da irmã (openHistory), e não o do base: é
 			// ele que resolve as colunas da histórica pelo FieldID.
-			history = d.irma.sch
+			history = h.sch
 		}
 		for _, name := range d.spec.Replication.Targets {
 			target, ok := targets[name]
@@ -235,28 +239,49 @@ func startPublishers(d *dataset) {
 	}
 }
 
-// closeFeeds fecha os feeds de replicação. Vem ANTES do http.Shutdown no
-// encerra(): o Close acorda o long-poll de todo seguidor, que recebe o fim do
-// feed na hora em vez de segurar a requisição até o prazo do Shutdown; e é
-// o Close que faz o flush do intervalo ativo e deixa os publicadores drenarem
-// a cauda e saírem. Idempotente, como o Close do feed.
+// closeFeeds fecha os feeds de replicação com a impressão dos Stores e a marca
+// limpa: a próxima subida, com a impressão igual, retoma a MESMA epoch e
+// sequence, e nenhum consumidor refaz o snapshot. No encerra() vem DEPOIS do
+// http.Shutdown, do stopStoreProducers e do checkpointStores, porque só aí a
+// posição de escrita está estável: uma mudança publicada depois da leitura da
+// impressão a desmentiria, e uma depois do Close derruba a marca limpa (o feed
+// emite o ERROR replication.feed.publish_after_close). Na subida abortada vem
+// direto, porque nada mutou os Stores desde o Resume.
 //
-// O que for publicado DEPOIS do Close é descartado pelo feed: passadas de
-// expiração, retenção ou reconstrução ainda em voo, e as rotas ADMIN que
-// escrevem até o http.Shutdown. Nada se perde do dataset — a mudança está no
-// disco —, e a próxima subida abre uma epoch nova e publica `reset` e um
-// snapshot completo, que a inclui.
+// O Close faz o flush do intervalo ativo e acorda os leitores: os
+// publicadores drenam a cauda em seguida (closePublishers). Sem a marca limpa
+// — posição de um Store publicado ilegível (o writer falho do checkpoint que
+// não fez o fsync), gravador além do prazo ou sync do feed falho — a próxima
+// subida abre uma epoch nova, e os consumidores refazem o snapshot; o WARN
+// diz qual dos casos.
+//
+// Idempotente, como o Close do feed: num segundo encerramento os Stores já
+// estão fechados, o Close devolve o desfecho do primeiro, e nada é avisado
+// de novo.
 func (s *Server) closeFeeds() {
 	for _, d := range s.datasets {
-		if d.replication != nil {
-			// Task 6: Close(&fp, budget) com a impressão dos Stores, depois de
-			// parados os produtores e feito o checkpoint. Sem impressão o feed
-			// fecha sem a marca limpa, e a próxima subida abre epoch nova.
-			if err := d.replication.Close(nil, feedCloseBudget); err != nil {
-				s.log.Warn("replication.feed.close_failed",
-					"the replication feed did not close cleanly (writer past the deadline or disk sync failure); the next start opens a new generation",
-					"dataset", d.nome, "error", err.Error())
-			}
+		if d.replication == nil {
+			continue
+		}
+		var fp *replication.Fingerprint
+		f, cause := s.feedFingerprint(d)
+		switch {
+		case errors.Is(cause, storage.ErrDatasetClosed):
+			_ = d.replication.Close(nil, 0)
+			continue
+		case cause == nil:
+			fp = &f
+		}
+		if err := d.replication.Close(fp, feedCloseBudget); err != nil {
+			s.log.Warn("replication.feed.close_failed",
+				"the replication feed did not close cleanly (writer past the deadline, disk sync or state write failure, or a change that reached it after the close); the next start opens a new generation",
+				"dataset", d.nome, "error", err.Error())
+			continue
+		}
+		if fp == nil {
+			s.log.Warn("replication.feed.closed_unclean",
+				"the replication feed closed without its clean mark because the dataset position is not trustworthy; the next start opens a new generation",
+				"dataset", d.nome, "error", cause.Error())
 		}
 	}
 }
@@ -265,8 +290,8 @@ func (s *Server) closeFeeds() {
 const feedCloseBudget = 10 * time.Second
 
 // waitFeeds é o fim da vida dos feeds: junta as goroutines e fecha o log de
-// segmentos. Vem DEPOIS do closePublishers e do http.Shutdown, que ainda leem
-// do disco a cauda que publicadores e seguidores não receberam.
+// segmentos. Vem DEPOIS do closePublishers, que ainda lê do disco a cauda que
+// os publicadores não receberam.
 func (s *Server) waitFeeds() {
 	for _, d := range s.datasets {
 		if d.replication != nil {

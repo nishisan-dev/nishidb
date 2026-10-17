@@ -1316,8 +1316,9 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 
 // validateReplicationTargets decodifica `replication.targets` e o confere
 // contra o restante do bloco já validado em r (enabled e role), devolvendo a
-// lista a publicar — nil quando a chave não veio. Só lista de strings explícitas é aceita: nulo, escalar e lista vazia são
-// recusados, como em `emit.target`, em vez de lidos como "sem destino".
+// lista a publicar — nil quando a chave não veio. Só lista de strings
+// explícitas é aceita: nulo, escalar e lista vazia são recusados, como em
+// `emit.target`, em vez de lidos como "sem destino".
 //
 // O nome segue a MESMA regra dos destinos nomeados de `emit.target` e de
 // `kafkaTargets:` (ValidDeliveryName), e `file` é recusado porque a

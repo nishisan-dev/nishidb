@@ -1367,9 +1367,13 @@ func TestCloseSyncFailureSkipsCleanMark(t *testing.T) {
 	fdatasyncFn = func(*os.File) error { return errInjected }
 	err := s.Close(&testFP, 5*time.Second)
 	fdatasyncFn = realSync
+	diskErrors := s.Status().DiskErrors
 	s.Wait()
 	if !errors.Is(err, errInjected) {
 		t.Errorf("Close com sync falho devolveu %v, quer a falha injetada", err)
+	}
+	if diskErrors != 1 {
+		t.Errorf("diskErrors = %d depois do sync falho do Close, quer 1", diskErrors)
 	}
 	if st, _, _ := readFeedState(dir); st.Clean {
 		t.Fatal("o Close gravou clean depois de um sync que falhou")
@@ -1415,8 +1419,8 @@ func TestDurabilityFailureBecomesGapAndHeals(t *testing.T) {
 		}
 		publishBatch()
 	}
-	if st := s.Status(); st.Invalidations != 1 {
-		t.Fatalf("falha de fdatasync na rotação: %+v, quer exatamente uma invalidação", st)
+	if st := s.Status(); st.Invalidations != 1 || st.DiskErrors != 1 {
+		t.Fatalf("falha de fdatasync na rotação: %+v, quer exatamente uma invalidação e um erro de disco", st)
 	}
 	if !strings.Contains(logs.String(), `"cause":"durability"`) {
 		t.Fatalf("sem WARN de lacuna por durabilidade:\n%s", logs.String())

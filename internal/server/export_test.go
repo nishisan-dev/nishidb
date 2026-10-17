@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
+	"github.com/nishisan-dev/nishidb/internal/replication"
 	"github.com/nishisan-dev/nishidb/internal/series"
 )
 
@@ -152,4 +153,23 @@ func (s *Server) EmitOnceForTest(dataset string) error {
 		}
 	}
 	return nil
+}
+
+// FollowerStateForTest devolve o estado, a epoch e o cursor aplicado do
+// follower do dataset, que o /v1/health só mostra fora de following.
+func (s *Server) FollowerStateForTest(dataset string) (replication.ReplicaState, string, uint64) {
+	d := s.byNome[dataset]
+	if d == nil || d.follower == nil {
+		return "", "", 0
+	}
+	return d.follower.Replica.State()
+}
+
+// UseStoreClockForTest troca o relógio do Store do dataset (o da expiração).
+// Chamado antes do Run: o prazo mínimo de TTL é de um minuto, e o teste do
+// encerramento precisa de linhas vencidas na primeira passada do coletor.
+func (s *Server) UseStoreClockForTest(dataset string, now func() time.Time) {
+	if d := s.byNome[dataset]; d != nil {
+		d.st.UsaRelogio(now)
+	}
 }

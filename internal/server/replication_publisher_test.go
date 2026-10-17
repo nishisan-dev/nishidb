@@ -137,17 +137,12 @@ func TestReplicationPublisherPublishesSnapshotAndTailThroughTheServer(t *testing
 		}
 	}
 
-	// Linhas que existem ANTES da subida: uma primeira vida do servidor as
-	// ingere pelo caminho real e encerra. Na segunda vida (epoch nova), são
-	// as que só o snapshot entrega.
-	first, err := server.Novo(a.load(), server.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	stopFirst := startWebhookServer(t, first)
-	produce(`{"id":"k1","status":"open"}`, `{"id":"k2","status":"open"}`)
-	waitIngestionAplicarPeloMenos(t, first, "events", 2, 20*time.Second)
-	stopFirst()
+	// Linhas que existem ANTES da subida, ingeridas offline pelo `nishidb
+	// ingest` (base e histórica): o feed nasce agora, e são as que só o
+	// snapshot entrega. Uma primeira vida do servidor não serve mais para
+	// isso: o encerramento limpo mantém a epoch, e o tópico teria as duas
+	// vidas sob a mesma epoch.
+	ingestOfflineAtKafkaStart(t, a, "events", `{"id":"k1","status":"open"}`, `{"id":"k2","status":"open"}`)
 
 	srv, err := server.Novo(a.load(), server.Options{})
 	if err != nil {
@@ -501,9 +496,11 @@ func TestReplicationStatsBlockFollowsTheFeed(t *testing.T) {
 	}
 }
 
-// O encerramento fecha o feed ANTES do http.Shutdown: o long-poll de um
-// seguidor à espera de lote recebe 410 na hora, e o encerramento não gasta o
-// prazo de 15 s do Shutdown esperando por ele.
+// O encerramento solta o long-poll de um seguidor à espera de lote antes de o
+// http.Shutdown esperar por ele: o handler espera sob o ctx do Run, e o
+// cancelamento responde 410 na hora (o master está saindo; nunca 409, que
+// mandaria o follower ao snapshot). O encerramento não gasta o prazo de 15 s
+// do Shutdown, mesmo com o feed fechando só depois dele.
 func TestShutdownReleasesFollowerLongPollBeforeHTTPShutdown(t *testing.T) {
 	a := newEnv(t)
 	a.writeDataset("master", strings.Replace(fmt.Sprintf(replicatedWithoutSource, "master", "master", "x"), "  targets: [x]\n", "", 1))
@@ -542,12 +539,12 @@ func TestShutdownReleasesFollowerLongPollBeforeHTTPShutdown(t *testing.T) {
 			t.Fatalf("Run: %v", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("o encerramento ficou preso no long-poll do seguidor: o feed não fechou antes do http.Shutdown")
+		t.Fatal("o encerramento ficou preso no long-poll do seguidor: o handler não saiu pelo ctx do Run")
 	}
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
 		t.Errorf("o encerramento levou %v com um long-poll em voo", elapsed)
 	}
 	if got := <-status; got != http.StatusGone {
-		t.Errorf("long-poll terminou com %d, quero 410 (feed fechado)", got)
+		t.Errorf("long-poll terminou com %d, quero 410 (master encerrando)", got)
 	}
 }

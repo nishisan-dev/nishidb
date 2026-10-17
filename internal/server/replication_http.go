@@ -29,6 +29,12 @@ func (s *Server) handleReplicationCursor(w http.ResponseWriter, r *http.Request)
 // handleReplicationBatch blocks until a batch is available or the request is
 // cancelled. A missing/expired cursor is deliberately a conflict: followers
 // must perform the snapshot protocol instead of silently skipping data.
+//
+// O long-poll espera sob o ctx da requisição composto com o do Run
+// (mutationContext): o http.Shutdown não cancela requisição em voo, e é o
+// encerramento que a solta. Feed fechado e encerramento respondem 410 (o
+// master está saindo; o follower desconecta e retoma o tail na volta), e não
+// 409, que o mandaria refazer o snapshot.
 func (s *Server) handleReplicationBatch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.rejectSimples(w, r, http.MethodGet)
@@ -45,11 +51,13 @@ func (s *Server) handleReplicationBatch(w http.ResponseWriter, r *http.Request) 
 		s.reject(w, r, http.StatusBadRequest, d.nome, protocol.ErrorDetail{Code: protocol.CodeBadRequest, Message: "epoch and after are required"})
 		return
 	}
-	b, release, err := d.replication.Acquire(r.Context(), epoch, after)
+	ctx, cancel := s.mutationContext(r)
+	defer cancel()
+	b, release, err := d.replication.Acquire(ctx, epoch, after)
 	if err != nil {
 		status := http.StatusConflict
 		code := protocol.CodeInternal
-		if errors.Is(err, replication.ErrClosed) {
+		if errors.Is(err, replication.ErrClosed) || s.shuttingDown() {
 			status = http.StatusGone
 		}
 		s.reject(w, r, status, d.nome, protocol.ErrorDetail{Code: code, Message: err.Error()})
@@ -60,9 +68,13 @@ func (s *Server) handleReplicationBatch(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleReplicationSnapshot exporta, em streaming, a geração lógica corrente do
-// dataset e da tabela histórica irmã. O cursor do feed é lido antes da
-// varredura (ver replication.ExportSnapshot), e o follower reaplica o tail
-// depois dele.
+// dataset e da tabela histórica irmã (só quando ela é publicada: com
+// `publishHistory: false` o snapshot leva só a base). O cursor do feed é lido
+// antes da varredura (ver replication.ExportSnapshot), e o follower reaplica o
+// tail depois dele.
+//
+// Mesmo ctx do batch: o encerramento interrompe a exportação em voo, que
+// segura snapshots do Store, e a resposta que ainda não começou sai 410.
 func (s *Server) handleReplicationSnapshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.rejectSimples(w, r, http.MethodGet)
@@ -74,13 +86,19 @@ func (s *Server) handleReplicationSnapshot(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	tables := make([]replication.SnapshotTable, 0, 2)
-	for _, source := range []*dataset{d, d.irma} {
+	for _, source := range []*dataset{d, d.publishedHistory()} {
 		if source == nil {
 			continue
 		}
 		tables = append(tables, replication.SnapshotTable{Name: source.nome, History: source.ehHistorico, Source: source.st})
 	}
 	s.streamReplicationSnapshot(w, r, d.nome, d.replication, tables, replicationSnapshotChunkRows)
+}
+
+// shuttingDown diz se o servidor está encerrando (o ctx do Run cancelado). Sem
+// Run (teste que chama o handler direto) é false.
+func (s *Server) shuttingDown() bool {
+	return s.vidaCtx != nil && s.vidaCtx.Err() != nil
 }
 
 // replicationSnapshotChunkRows é quantas linhas cada snapshot curto do
@@ -108,7 +126,9 @@ func (s *Server) streamReplicationSnapshot(w http.ResponseWriter, r *http.Reques
 	out := bufio.NewWriterSize(w, replicationSnapshotBufferBytes)
 	started := false
 	separator := false
-	err := replication.ExportSnapshot(r.Context(), feed, tables, chunkRows, func(h replication.SnapshotHeader) error {
+	ctx, cancel := s.mutationContext(r)
+	defer cancel()
+	err := replication.ExportSnapshot(ctx, feed, tables, chunkRows, func(h replication.SnapshotHeader) error {
 		epoch, err := json.Marshal(h.Epoch)
 		if err != nil {
 			return err
@@ -145,7 +165,11 @@ func (s *Server) streamReplicationSnapshot(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !started {
-		s.reject(w, r, http.StatusInternalServerError, name, protocol.ErrorDetail{Code: protocol.CodeInternal, Message: err.Error()})
+		status := http.StatusInternalServerError
+		if s.shuttingDown() {
+			status = http.StatusGone
+		}
+		s.reject(w, r, status, name, protocol.ErrorDetail{Code: protocol.CodeInternal, Message: err.Error()})
 		return
 	}
 	s.log.Warn("replication.snapshot_aborted", "snapshot interrupted mid-stream; connection aborted", "dataset", name, "error", err.Error())

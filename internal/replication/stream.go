@@ -214,8 +214,10 @@ type Status struct {
 	// instante (cabeçalhos incluídos).
 	DiskBytes    int64 `json:"-"`
 	DiskSegments int   `json:"-"`
-	// DiskErrors conta as falhas de disco do feed (gravação, religação do
-	// log, limpeza da retenção, leitura). Cada retentativa que falha conta.
+	// DiskErrors conta as falhas de disco do feed: gravação, religação do
+	// log, limpeza da retenção, leitura, durabilidade do gravador (o
+	// fdatasync que vira lacuna na hora), regravação do `state` no Rotate e
+	// sync do Close. Cada retentativa que falha conta.
 	DiskErrors uint64 `json:"-"`
 	// EndPos é a posição em bytes do fim do último lote fechado.
 	EndPos uint64 `json:"-"`
@@ -784,8 +786,8 @@ func (s *Stream) Invalidate() {
 //
 // Faz I/O SÍNCRONO: a regravação do `state` (writeFeedState, com fsync do
 // arquivo e do diretório) acontece antes de voltar. Por isso o Rotate NUNCA
-// pode ser chamado sob o wmu do Store nem de dentro do Publish: é chamada do
-// publicador, na decisão de rewind da subida.
+// pode ser chamado sob o wmu do Store nem de dentro do Publish: será chamada
+// pelo publicador na decisão de rewind.
 func (s *Stream) Rotate(reason string) {
 	raw := newEpoch()
 	s.mu.Lock()
@@ -984,7 +986,10 @@ func (s *Stream) runWriter() {
 		case errors.Is(err, errLogFailed):
 			// fdatasync falhou: o log fica falho até o wipe, e retentar
 			// devolveria o mesmo erro para sempre. A lacuna vem NA HORA, e a
-			// religação da geração nova apaga o log e o cura.
+			// religação da geração nova apaga o log e o cura. A falha conta
+			// como erro de disco além de lacuna: sem isso o operador veria a
+			// invalidação sem a causa.
+			s.countDiskError()
 			s.gap(b, "durability", err)
 		case errors.Is(err, errNotContiguous), errors.Is(err, errBadAppend), errors.Is(err, errLogUnbound):
 			// O log recusou o quadro sem gravar: repetir daria o mesmo erro.
@@ -1015,6 +1020,14 @@ func (s *Stream) gap(b *Batch, cause string, err error) {
 	s.log.Warn("replication.feed.gap",
 		"the replication feed dropped its retained interval; consumers resynchronize",
 		"cause", cause, "from", b.From, "to", b.To, "error", err.Error())
+}
+
+// countDiskError conta uma falha de disco que não passa pelo diskError (que
+// também avisa e espera): a lacuna por durabilidade e o sync do Close.
+func (s *Stream) countDiskError() {
+	s.mu.Lock()
+	s.stats.DiskErrors++
+	s.mu.Unlock()
 }
 
 // diskError conta a falha, emite o WARN no máximo a cada diskWarnInterval e,
@@ -1406,6 +1419,9 @@ func (s *Stream) close(fp *Fingerprint, deadline time.Duration) error {
 		return errCloseDeadline
 	}
 	syncErr := s.disk.sync()
+	if syncErr != nil {
+		s.countDiskError()
+	}
 	if fp == nil {
 		return syncErr
 	}

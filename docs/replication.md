@@ -37,7 +37,15 @@ nomeando a chave, mesmo `publishHistory: false`.
 - `maxDiskBytes`: teto de disco do feed (ver [Feed em disco](#feed-em-disco)),
   com padrão de 2 GiB. Precisa ser de pelo menos 8 MiB e de pelo menos
   4 × `maxBatchBytes`; valor vazio ou abaixo do piso é recusado.
-- `publishHistory`: padrão `true`; aceita só booleano.
+- `publishHistory`: padrão `true`; aceita só booleano. Com `false`, a tabela
+  histórica sai do feed inteiro: nem as linhas dela, nem o `retain` da
+  retenção, nem o snapshot (HTTP e Kafka) a levam, e o
+  `GET /v1/replication/cursor` anuncia `"historyExcluded": true`. O snapshot
+  passa a ter só a base. Escrita num dataset sem `history:`, a chave não tem
+  efeito (sem histórica o cursor já anuncia `historyExcluded`), e a subida
+  avisa com o WARN `replication.publish_history_without_history`.
+  Mudar a chave exige reinício, e o reinício abre uma geração nova (ver
+  [Reinício limpo](#reinício-limpo)).
 - `periodicSnapshot`: de `1h` a `8760h` (365 dias), em segundos inteiros.
   Exige `targets`. Omitida, fica desligada, e `0s` é recusado: não desliga,
   nem é arredondado. Fração de segundo, valor fora da faixa e sufixo `d`
@@ -61,6 +69,41 @@ ingestão: o lote fica na memória e a gravação é retentada, de 100 ms a 5 s;
 lacuna só vem se a memória lotar de lotes ainda não gravados. Uma falha de
 `fdatasync` declara a lacuna na hora, porque o log fica inservível até ser
 apagado.
+
+### Reinício limpo
+
+O feed sobrevive ao reinício limpo do master: a geração (`epoch`) e a
+numeração (`sequence`) continuam, e o que a vida anterior gravou continua
+servível do disco. Um follower e um consumidor que estavam em dia seguem do
+mesmo cursor.
+
+No encerramento o feed grava, junto do estado dele, a marca de fechamento
+limpo e a **impressão dos Stores**: a posição de escrita do dataset base e,
+quando a histórica é publicada, a da tabela histórica (segmento, fim do último
+registro, próximo `rowID` e piso da retenção). Na subida, depois da
+recuperação dos dois Stores, a impressão gravada é comparada com a posição
+recuperada. A geração continua só quando a marca existe, a impressão bate e o
+fim do log confere. Qualquer outro caso é tratado como queda: o log é apagado,
+nasce uma geração nova, a numeração volta a 0, e followers e publicadores
+refazem o snapshot. Isso inclui:
+
+- queda do processo, ou encerramento que não conseguiu gravar a marca limpa
+  (WARN `replication.feed.close_failed` ou `replication.feed.closed_unclean`);
+- mutação feita com o servidor parado, como um `nishidb ingest`, inclusive uma
+  que mexa só na tabela histórica publicada;
+- alteração que chegou ao feed depois de ele fechar (ERROR
+  `replication.feed.publish_after_close`) ou antes de ele decidir a geração
+  (ERROR `replication.feed.publish_before_resume`);
+- troca de `publishHistory` num dataset com `history:`, que muda o que entra
+  na impressão.
+
+A decisão sai no log de subida, no INFO `replication.feed.resumed`, com o
+`origin` (`fresh` na primeira subida, `clean` na retomada, `crash` na geração
+nova depois de queda; `rotated` é a geração aberta em operação, e não sai na
+subida), a `epoch`, a `sequence` e, quando a geração anterior é
+conhecida e foi descartada, a `previousEpoch`. A subida que aborta depois de um dataset já ter decidido a
+geração (outro dataset não abre, por exemplo) fecha o feed dele limpo: nada
+mudou o Store, e a próxima subida retoma a mesma geração.
 
 `targets` lista destinos Kafka que também recebem o feed, além dos followers.
 Cada item é o nome de um destino declarado na lista global `kafkaTargets:` do
@@ -91,7 +134,33 @@ receber o `delete` de uma chave que nunca viu.
 O follower começa pelo `GET /v1/replication/cursor`. Se a geração e o cursor
 ainda estiverem cobertos, ele lê `GET /v1/replication/batch` e confirma cada
 lote depois de aplicá-lo. Se a geração mudou ou a retenção criou uma lacuna,
-recebe conflito e deve chamar `GET /v1/replication/snapshot`.
+recebe conflito (409) e deve chamar `GET /v1/replication/snapshot`.
+
+O follower que fica no ar enquanto o master reinicia de forma limpa atravessa o
+reinício sem snapshot. No encerramento do master, o long-poll do batch responde
+410 na hora (o master está saindo), e o follower vai para `disconnected`,
+lembrando que estava em `catching_up` ou `following`. Quando o master volta com
+a MESMA geração, o follower retoma o tail do cursor que já aplicou; com geração
+nova, ou depois de uma desconexão vinda de outro estado, baixa o snapshot. Se a
+retomada receber 409, cai no resync de sempre; um 410 é outra desconexão, e a
+próxima tentativa retoma o tail de novo.
+
+Só falha de rede ou resposta HTTP de erro é desconexão. Uma alteração que o
+Store do follower recusa (erro local) leva a `resync_required` e a um snapshot
+novo, e não à retomada do tail que falhou; sai o ERROR
+`replication.follower.apply_failed`, com a `sequence` e a tabela da entrada,
+uma vez por ocorrência. Enquanto a falha se repete, o intervalo entre as
+tentativas cresce de 200 ms até 5 s, mesmo com os snapshots dando certo, e só
+volta ao mínimo quando o tail volta a andar.
+
+O follower que declara `history:` exige que o master publique a histórica.
+Diante de um master que anuncia `historyExcluded` (o master sem `history:` ou
+com `publishHistory: false`), ele vai para o estado
+`history_unavailable`, emite o ERROR `replication.follower.history_unavailable`
+(uma vez por ocorrência) e não aplica nada: nem snapshot nem tail. Continua
+consultando o cursor com backoff, e sai do estado quando o master volta a
+publicar a histórica, pelo snapshot. Assim a irmã do follower não fica vazia em
+silêncio.
 
 Depois que a fila é fechada, os lotes ainda retidos continuam sendo entregues,
 inclusive o último, fechado pelo próprio encerramento. Quando não resta nenhum
@@ -107,8 +176,8 @@ remoção de lotes antigos da memória conta em `evictedBatches` e não cria
 lacuna; a retenção do disco sobe o piso sem contar aqui. Followers que ficaram
 atrás do piso precisam ressincronizar.
 
-O snapshot carrega as versões visíveis do dataset e da tabela histórica junto
-com um cursor. O follower aplica esse estado pelo writer normal, reaplica o
+O snapshot carrega as versões visíveis do dataset e, quando ela é publicada, da
+tabela histórica, junto com um cursor. O follower aplica esse estado pelo writer normal, reaplica o
 tail depois do cursor e libera consultas apenas quando chega a `following`;
 durante o resync o estado anterior não é exposto. Linhas históricas preservam
 seu `rowID`, portanto uma sobreposição entre snapshot e tail é idempotente. Um
@@ -129,7 +198,7 @@ começar, o master derruba a conexão em vez de fechar o JSON: a conexão cai
 pede o snapshot de novo.
 
 O estado da réplica passa por `empty`, `syncing`, `catching_up`, `following`,
-`disconnected` e `resync_required`. O instante de escrita de cada linha vem no
+`disconnected`, `resync_required` e `history_unavailable`. O instante de escrita de cada linha vem no
 payload do master, mas o instante com que o follower o compara é o do relógio
 LOCAL: a visibilidade pelo TTL nas consultas e a expiração oportunista da
 compaction do follower andam pelo relógio dele, e não pelo `at` recebido do
@@ -239,9 +308,11 @@ As duas linhas são bytes do teste de referência do envelope
 `severity` tem o alias `sev`, `persistent` é uma coluna `json` e `probe_ip`,
 extraída de `persistent`, é uma coluna derivada, que não entra no `record`.
 
-- `epoch`: a geração do feed, 32 caracteres hexadecimais aleatórios. Muda a
-  cada reinício do master, e só nele. O valor não tem ordem: a geração corrente
-  é a do último `reset` visto na partição.
+- `epoch`: a geração do feed, 32 caracteres hexadecimais aleatórios. Muda
+  quando o master sobe depois de queda (ou de mutação com ele parado); o
+  reinício limpo mantém a mesma (ver [Reinício limpo](#reinício-limpo)). O
+  valor não tem ordem: a geração corrente é a do último `reset` visto na
+  partição.
 - `sequence`: a posição da entrada no feed. Cresce dentro de uma geração, mas
   tem buracos. Updates seguidos da mesma entidade são consolidados no último
   estado, e a posição dos intermediários some. Não use a contiguidade para
@@ -323,8 +394,9 @@ reaplica as alterações seguintes por cima, e o estado converge.
 Uma nova reconstrução começa por quatro motivos, que são o `reason` do `reset`:
 
 - `startup`: a subida do master. **Todo reinício do master republica o dataset
-  inteiro no tópico**, com geração nova. Não há checkpoint do publicador, e o
-  tópico e o consumidor devem ser dimensionados para isso;
+  inteiro no tópico**: com a mesma geração depois do reinício limpo, e com
+  geração nova depois de queda. O publicador ainda não retoma de onde parou, e
+  o tópico e o consumidor devem ser dimensionados para isso;
 - `gap`: o feed descartou alterações que o publicador ainda não tinha lido,
   ou invalidou o intervalo retido, porque o Kafka ficou lento ou fora e o
   buffer do feed encheu. A geração
@@ -504,6 +576,23 @@ O envelope Kafka e o `/v1/replication/*` saíram na v0.14.x. Toda mudança de
 contrato feita depois dela é aditiva: um consumidor que não conhece o item novo
 continua lendo o que lia.
 
+- **`historyExcluded` no `GET /v1/replication/cursor`.** O cursor anuncia
+  `"historyExcluded": true` sempre que o master não publica uma tabela
+  histórica: com `publishHistory: false` e também no dataset sem `history:`. O
+  campo é omitido quando a histórica é publicada, e o ausente vale o legado:
+  a histórica é publicada.
+- **Estado `history_unavailable` do follower.** O follower que declara
+  `history:` e encontra um master com `historyExcluded` (sem histórica ou com
+  `publishHistory: false`) para nesse estado, sem aplicar nada, em vez de
+  seguir com a histórica vazia. O follower sem `history:` segue o mesmo
+  master normalmente. Limite: um master v0.14.x não manda o campo, e um
+  follower novo com `history:` diante de um master v0.14.x SEM `history:`
+  continua com a tabela histórica vazia, como antes.
+- **A geração sobrevive ao reinício limpo.** Antes, toda subida do master abria
+  uma `epoch` nova; agora o reinício limpo mantém a `epoch` e a `sequence`, e
+  um `reset` de `startup` pode sair com a mesma `epoch` da vida anterior. As
+  regras do consumidor já cobrem o caso (um `reset` na mesma geração, como o
+  de `gap`).
 - **Header `nishidb-reason` no `reset`.** Todo `reset` sai agora com DOIS
   headers, `nishidb-op: reset` e `nishidb-reason: <motivo>`, o motivo na mesma
   grafia do `reason` do corpo (hoje `startup`, `gap`, `snapshot_failed` ou
@@ -519,11 +608,31 @@ versão. A v0.14.x, de uso interno, não recebe correção.
 
 ### Encerramento
 
-No encerramento, os feeds fecham primeiro: o fechamento entrega o lote que
-estava aberto, e os publicadores drenam o que resta e param. A drenagem tem
-orçamento próprio de 10 s para todos os publicadores juntos, separado do prazo
-do servidor HTTP. Se o prazo vence (broker fora, tópico lento), sai um WARN
-`replication.publisher.close_failed` e o encerramento continua. Nada se perde:
-o estado está no disco, e a próxima subida publica `reset` e um snapshot
-completo. Um snapshot em curso no encerramento continua dentro do orçamento;
-se o prazo vence antes do fim, ele é abandonado sem `snapshot_end`.
+O encerramento do master segue uma ordem, e é ela que deixa o reinício limpo
+retomar a mesma geração:
+
+1. A ingestão para, e os long-polls dos followers e os snapshots HTTP em curso
+   saem: o long-poll responde 410, e o snapshot que ainda não começou a
+   responder também.
+2. O servidor HTTP para, inclusive as rotas que mudam o dataset
+   (`/v1/compact`).
+3. Compaction, expiração e retenção param em todo dataset. Uma passada em voo
+   termina antes, e o que ela publica entra no feed.
+4. Todo dataset, com ou sem ingestão Kafka, faz checkpoint (a tabela histórica
+   primeiro). Se o checkpoint falha, sai o WARN
+   `datasets.shutdown_checkpoint_failed`, o encerramento continua e a próxima
+   subida reaplica a cauda.
+5. O feed fecha: entrega o lote que estava aberto, grava o que falta e grava a
+   marca limpa com a impressão dos Stores. Se a posição de um Store não é
+   legível (o checkpoint que falhou no fsync deixa o writer falho), o feed
+   fecha sem a marca, com o WARN `replication.feed.closed_unclean`, e a
+   próxima subida abre uma geração nova.
+6. Os publicadores drenam o que resta e param. A drenagem tem orçamento
+   próprio de 10 s para todos os publicadores juntos, separado do prazo do
+   servidor HTTP. Se o prazo vence (broker fora, tópico lento), sai um WARN
+   `replication.publisher.close_failed` e o encerramento continua. Nada se
+   perde: o estado está no disco, e a próxima subida publica `reset` e um
+   snapshot completo. Um snapshot em curso no encerramento continua dentro do
+   orçamento; se o prazo vence antes do fim, ele é abandonado sem
+   `snapshot_end`.
+7. Os datasets fecham, e só então o log do feed.

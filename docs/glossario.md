@@ -1104,6 +1104,15 @@ Escolhas que o juiz do G3 fechou e que valem para os grupos seguintes:
 | fim da vida do feed (junta as goroutines e fecha o log) | Wait | internal/replication |
 | histórica excluída (o feed não carrega a tabela histórica) | `replication.publishHistory` / Options.ExcludeHistory, Status.HistoryExcluded (`historyExcluded`) | internal/schema, internal/replication |
 | snapshot periódico (intervalo de republicação do snapshot aos destinos Kafka) | `replication.periodicSnapshot` | internal/schema |
+| reinício limpo (subida que retoma a mesma geração e sequence do feed) | OriginClean / `origin=clean` em `replication.feed.resumed` | internal/replication, internal/server |
+| produtores do Store (compaction, expiração e retenção, parados antes do fechamento do feed) | stopStoreProducers | internal/server |
+| checkpoint do encerramento (checkpoint do par base+histórica de todo dataset, antes de ler a impressão) | checkpointStores / `datasets.shutdown_checkpoint_failed` | internal/server |
+| histórica publicada (a irmã entra no tail, nos `retain`, no snapshot e na impressão) | publishedHistory | internal/server |
+| histórica indisponível (follower que exige a histórica diante de master que não a publica; nada é aplicado) | ReplicaHistoryUnavailable / `history_unavailable`, ErrHistoryNotPublished | internal/replication |
+| exige a histórica (follower com `history:` declarado) | Client.RequireHistory | internal/replication, internal/server |
+| desconexão retomável (desconexão vinda de `catching_up`/`following`: com a mesma geração, o tail retoma sem snapshot) | Replica.resumable / TailCursor | internal/replication |
+| erro local do apply (falha ao aplicar um lote no follower: resync, ERROR uma vez por ocorrência e backoff crescente) | ApplyError / ErrApplyFailed / `replication.follower.apply_failed` | internal/replication |
+| contexto de mutação (cancela com o request ou com o encerramento do servidor) | mutationContext | internal/server |
 
 ## Escopo do contador e comparação linear (issue #61)
 

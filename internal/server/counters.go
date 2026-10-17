@@ -5,7 +5,7 @@
 // São rotas, e não SQL, porque não são leitura: a auditoria varre o dataset
 // inteiro segurando um snapshot, e a reconstrução segura o writer. As duas são
 // síncronas — a resposta sai depois do trabalho feito —, e é por isso que
-// correm sob o ctxOfMutacao: uma varredura de segundos tem de honrar o SIGTERM.
+// correm sob o mutationContext: uma varredura de segundos tem de honrar o SIGTERM.
 // A leitura dos contadores continua sendo `SELECT … FROM _counters.<nome>`.
 
 package server
@@ -48,7 +48,7 @@ func (s *Server) handleAuditOfCounters(w http.ResponseWriter, r *http.Request) {
 		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
-	ctx, cancel := s.ctxOfMutacao(r)
+	ctx, cancel := s.mutationContext(r)
 	defer cancel()
 
 	results, parcial := processDatasets(targets, func(d *dataset) (protocol.DatasetAudit, error) {
@@ -99,7 +99,7 @@ func (s *Server) handleRebuildOfCounters(w http.ResponseWriter, r *http.Request)
 		s.reject(w, r, status, datasetDesconhecido, *fail)
 		return
 	}
-	ctx, cancel := s.ctxOfMutacao(r)
+	ctx, cancel := s.mutationContext(r)
 	defer cancel()
 
 	results, parcial := processDatasets(targets, func(d *dataset) (protocol.DatasetRebuild, error) {
