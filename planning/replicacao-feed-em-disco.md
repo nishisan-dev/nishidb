@@ -1,6 +1,6 @@
 # Feed de replicação em disco e checkpoint do publicador — desenho
 
-Estado: **rascunho em revisão** (16/10/2026). Plano de implementação em
+Estado: **aprovado pelo usuário** (16/10/2026) e implementado no branch `feature/replication-disk-feed`. Plano de implementação em
 `planning/replicacao-feed-em-disco-plano.md`, escrito depois da aprovação deste
 desenho.
 
